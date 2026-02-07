@@ -9,7 +9,9 @@ use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -85,32 +87,23 @@ impl ContextManager {
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model_info = turn_context.client.get_model_info();
-        let personality = turn_context
-            .personality
-            .or(turn_context.client.config().personality);
-        let base_instructions = model_info.get_model_instructions(personality);
-        let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
+        let model_info = &turn_context.model_info;
+        let personality = turn_context.personality.or(turn_context.config.personality);
+        let base_instructions = BaseInstructions {
+            text: model_info.get_model_instructions(personality),
+        };
+        self.estimate_token_count_with_base_instructions(&base_instructions)
+    }
+
+    pub(crate) fn estimate_token_count_with_base_instructions(
+        &self,
+        base_instructions: &BaseInstructions,
+    ) -> Option<i64> {
+        let base_tokens =
+            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
-            acc + match item {
-                ResponseItem::GhostSnapshot { .. } => 0,
-                ResponseItem::Reasoning {
-                    encrypted_content: Some(content),
-                    ..
-                }
-                | ResponseItem::Compaction {
-                    encrypted_content: content,
-                } => {
-                    let reasoning_bytes = estimate_reasoning_length(content.len());
-                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
-                        .unwrap_or(i64::MAX)
-                }
-                item => {
-                    let serialized = serde_json::to_string(item).unwrap_or_default();
-                    i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
-                }
-            }
+            acc.saturating_add(estimate_item_token_count(item))
         });
 
         Some(base_tokens.saturating_add(items_tokens))
@@ -125,6 +118,15 @@ impl ContextManager {
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
             normalize::remove_corresponding_for(&mut self.items, &removed);
+        }
+    }
+
+    pub(crate) fn remove_last_item(&mut self) -> bool {
+        if let Some(removed) = self.items.pop() {
+            normalize::remove_corresponding_for(&mut self.items, &removed);
+            true
+        } else {
+            false
         }
     }
 
@@ -144,7 +146,7 @@ impl ContextManager {
 
         match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
-                let Some(content_items) = output.content_items.as_mut() else {
+                let Some(content_items) = output.content_items_mut() else {
                     return false;
                 };
                 let mut replaced = false;
@@ -207,36 +209,42 @@ impl ContextManager {
         );
     }
 
-    fn get_non_last_reasoning_items_tokens(&self) -> usize {
-        // get reasoning items excluding all the ones after the last user message
+    fn get_non_last_reasoning_items_tokens(&self) -> i64 {
+        // Get reasoning items excluding all the ones after the last user message.
         let Some(last_user_index) = self
             .items
             .iter()
             .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
         else {
-            return 0usize;
+            return 0;
         };
 
-        let total_reasoning_bytes = self
-            .items
+        self.items
             .iter()
             .take(last_user_index)
-            .filter_map(|item| {
-                if let ResponseItem::Reasoning {
-                    encrypted_content: Some(content),
-                    ..
-                } = item
-                {
-                    Some(content.len())
-                } else {
-                    None
-                }
+            .filter(|item| {
+                matches!(
+                    item,
+                    ResponseItem::Reasoning {
+                        encrypted_content: Some(_),
+                        ..
+                    }
+                )
             })
-            .map(estimate_reasoning_length)
-            .fold(0usize, usize::saturating_add);
+            .fold(0i64, |acc, item| {
+                acc.saturating_add(estimate_item_token_count(item))
+            })
+    }
 
-        let token_estimate = approx_tokens_from_byte_count(total_reasoning_bytes);
-        token_estimate as usize
+    fn get_trailing_codex_generated_items_tokens(&self) -> i64 {
+        let mut total = 0i64;
+        for item in self.items.iter().rev() {
+            if !is_codex_generated_item(item) {
+                break;
+            }
+            total = total.saturating_add(estimate_item_token_count(item));
+        }
+        total
     }
 
     /// When true, the server already accounted for past reasoning tokens and
@@ -247,10 +255,13 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
+        let trailing_codex_generated_tokens = self.get_trailing_codex_generated_items_tokens();
         if server_reasoning_included {
-            last_tokens
+            last_tokens.saturating_add(trailing_codex_generated_tokens)
         } else {
-            last_tokens.saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+            last_tokens
+                .saturating_add(self.get_non_last_reasoning_items_tokens())
+                .saturating_add(trailing_codex_generated_tokens)
         }
     }
 
@@ -269,19 +280,23 @@ impl ContextManager {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
             ResponseItem::FunctionCallOutput { call_id, output } => {
-                let truncated =
-                    truncate_text(output.content.as_str(), policy_with_serialization_budget);
-                let truncated_items = output.content_items.as_ref().map(|items| {
-                    truncate_function_output_items_with_policy(
-                        items,
-                        policy_with_serialization_budget,
-                    )
-                });
+                let body = match &output.body {
+                    FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
+                        truncate_text(content, policy_with_serialization_budget),
+                    ),
+                    FunctionCallOutputBody::ContentItems(items) => {
+                        FunctionCallOutputBody::ContentItems(
+                            truncate_function_output_items_with_policy(
+                                items,
+                                policy_with_serialization_budget,
+                            ),
+                        )
+                    }
+                };
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
-                        content: truncated,
-                        content_items: truncated_items,
+                        body,
                         success: output.success,
                     },
                 }
@@ -330,6 +345,33 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
+}
+
+fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+    match item {
+        ResponseItem::GhostSnapshot { .. } => 0,
+        ResponseItem::Reasoning {
+            encrypted_content: Some(content),
+            ..
+        }
+        | ResponseItem::Compaction {
+            encrypted_content: content,
+        } => {
+            let reasoning_bytes = estimate_reasoning_length(content.len());
+            i64::try_from(approx_tokens_from_byte_count(reasoning_bytes)).unwrap_or(i64::MAX)
+        }
+        item => {
+            let serialized = serde_json::to_string(item).unwrap_or_default();
+            i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
+        }
+    }
+}
+
+pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
+    ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {

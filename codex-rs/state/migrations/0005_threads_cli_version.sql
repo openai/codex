@@ -1,0 +1,1 @@
+ALTER TABLE threads ADD COLUMN cli_version TEXT NOT NULL DEFAULT '';

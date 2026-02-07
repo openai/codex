@@ -1,3 +1,8 @@
+//! Shared model metadata types exchanged between Codex services and clients.
+//!
+//! These types are serialized across core, TUI, app-server, and SDK boundaries, so field defaults
+//! are used to preserve compatibility when older payloads omit newly introduced attributes.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -41,6 +46,38 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+}
+
+/// Canonical user-input modality tags advertised by a model.
+#[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    JsonSchema,
+    TS,
+    EnumIter,
+    Hash,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum InputModality {
+    /// Plain text turns and tool payloads.
+    Text,
+    /// Image attachments included in user turns.
+    Image,
+}
+
+/// Backward-compatible default when `input_modalities` is omitted on the wire.
+///
+/// Legacy payloads predate modality metadata, so we conservatively assume both text and images are
+/// accepted unless a preset explicitly narrows support.
+pub fn default_input_modalities() -> Vec<InputModality> {
+    vec![InputModality::Text, InputModality::Image]
 }
 
 /// A reasoning effort option that can be surfaced for a model.
@@ -88,6 +125,9 @@ pub struct ModelPreset {
     pub show_in_picker: bool,
     /// whether this model is supported in the api
     pub supported_in_api: bool,
+    /// Input modalities accepted when composing user turns for this preset.
+    #[serde(default = "default_input_modalities")]
+    pub input_modalities: Vec<InputModality>,
 }
 
 /// Visibility of a model in the picker or APIs.
@@ -206,6 +246,9 @@ pub struct ModelInfo {
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
     pub experimental_supported_tools: Vec<String>,
+    /// Input modalities accepted by the backend for this model.
+    #[serde(default = "default_input_modalities")]
+    pub input_modalities: Vec<InputModality>,
 }
 
 impl ModelInfo {
@@ -292,6 +335,7 @@ impl ModelInstructionsVariables {
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         if let Some(personality) = personality {
             match personality {
+                Personality::None => Some(String::new()),
                 Personality::Friendly => self.personality_friendly.clone(),
                 Personality::Pragmatic => self.personality_pragmatic.clone(),
             }
@@ -350,6 +394,7 @@ impl From<ModelInfo> for ModelPreset {
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,
+            input_modalities: info.input_modalities,
         }
     }
 }
@@ -460,6 +505,7 @@ mod tests {
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
+            input_modalities: default_input_modalities(),
         }
     }
 
@@ -501,6 +547,10 @@ mod tests {
             model.get_model_instructions(Some(Personality::Pragmatic)),
             "Hello\n"
         );
+        assert_eq!(
+            model.get_model_instructions(Some(Personality::None)),
+            "Hello\n"
+        );
         assert_eq!(model.get_model_instructions(None), "Hello\n");
 
         let model_no_personality = test_model(Some(ModelMessages {
@@ -517,6 +567,10 @@ mod tests {
         );
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Pragmatic)),
+            "Hello\n"
+        );
+        assert_eq!(
+            model_no_personality.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
         assert_eq!(model_no_personality.get_model_instructions(None), "Hello\n");
@@ -559,6 +613,10 @@ mod tests {
             Some("pragmatic".to_string())
         );
         assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
+        );
+        assert_eq!(
             personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
@@ -577,6 +635,10 @@ mod tests {
             None
         );
         assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
+        );
+        assert_eq!(
             personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
@@ -593,6 +655,10 @@ mod tests {
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
             Some("pragmatic".to_string())
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
         );
         assert_eq!(personality_variables.get_personality_message(None), None);
     }

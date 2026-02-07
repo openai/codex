@@ -45,6 +45,7 @@ codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+dirs = { workspace = true }
 dunce = { workspace = true }
 encoding_rs = { workspace = true }
 env-flags = { workspace = true }
@@ -56,14 +57,20 @@ indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
-mcp-types = { workspace = true }
 multimap = { workspace = true }
+notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -101,6 +108,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+zip = { workspace = true }
 
 [features]
 deterministic_process_ids = []

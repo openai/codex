@@ -238,7 +238,10 @@ fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Re
         .collect();
     let new_body = filtered_arms.join(" | ");
     content = format!("{prefix}{new_body}{suffix}");
-    content = prune_unused_type_imports(content, &new_body);
+    let import_usage_scope = split_type_alias(&content)
+        .map(|(_, body, _)| body)
+        .unwrap_or_else(|| new_body.clone());
+    content = prune_unused_type_imports(content, &import_usage_scope);
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
@@ -296,7 +299,10 @@ fn filter_experimental_fields_in_ts_file(
     let prefix = &content[..open_brace + 1];
     let suffix = &content[close_brace..];
     content = format!("{prefix}{new_inner}{suffix}");
-    content = prune_unused_type_imports(content, &new_inner);
+    let import_usage_scope = split_type_alias(&content)
+        .map(|(_, body, _)| body)
+        .unwrap_or_else(|| new_inner.clone());
+    content = prune_unused_type_imports(content, &import_usage_scope);
     fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
@@ -1402,8 +1408,8 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn generated_ts_has_no_optional_nullable_fields() -> Result<()> {
-        // Assert that there are no types of the form "?: T | null" in the generated TS files.
+    fn generated_ts_optional_nullable_fields_only_in_params() -> Result<()> {
+        // Assert that "?: T | null" only appears in generated *Params types.
         let output_dir = std::env::temp_dir().join(format!("codex_ts_types_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
 
@@ -1463,6 +1469,13 @@ mod tests {
                 }
 
                 if matches!(path.extension().and_then(|ext| ext.to_str()), Some("ts")) {
+                    // Only allow "?: T | null" in objects representing JSON-RPC requests,
+                    // which we assume are called "*Params".
+                    let allow_optional_nullable = path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .is_some_and(|stem| stem.ends_with("Params"));
+
                     let contents = fs::read_to_string(&path)?;
                     if contents.contains("| undefined") {
                         undefined_offenders.push(path.clone());
@@ -1583,9 +1596,11 @@ mod tests {
                         }
 
                         // If the last non-whitespace before ':' is '?', then this is an
-                        // optional field with a nullable type (i.e., "?: T | null"),
-                        // which we explicitly disallow.
-                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?') {
+                        // optional field with a nullable type (i.e., "?: T | null").
+                        // These are only allowed in *Params types.
+                        if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?')
+                            && !allow_optional_nullable
+                        {
                             let line_number =
                                 contents[..abs_idx].chars().filter(|c| *c == '\n').count() + 1;
                             let offending_line_end = contents[line_start_idx..]
@@ -1613,12 +1628,12 @@ mod tests {
             "Generated TypeScript still includes unions with `undefined` in {undefined_offenders:?}"
         );
 
-        // If this assertion fails, it means a field was generated as
-        // "?: T | null" — i.e., both optional (undefined) and nullable (null).
-        // We only want either "?: T" or ": T | null".
+        // If this assertion fails, it means a field was generated as "?: T | null",
+        // which is both optional (undefined) and nullable (null), for a type not ending
+        // in "Params" (which represent JSON-RPC requests).
         assert!(
             optional_nullable_offenders.is_empty(),
-            "Generated TypeScript has optional fields with nullable types (disallowed '?: T | null'), add #[ts(optional)] to fix:\n{optional_nullable_offenders:?}"
+            "Generated TypeScript has optional nullable fields outside *Params types (disallowed '?: T | null'):\n{optional_nullable_offenders:?}"
         );
 
         Ok(())
@@ -1733,6 +1748,50 @@ mod tests {
         assert_eq!(filtered.contains("unstableField"), false);
         assert_eq!(filtered.contains("stableField"), true);
         assert_eq!(filtered.contains("otherStableField"), true);
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_type_fields_ts_filter_keeps_imports_used_in_intersection_suffix() -> Result<()>
+    {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
+        fs::create_dir_all(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+        let path = output_dir.join("Config.ts");
+        let content = r#"import type { JsonValue } from "../serde_json/JsonValue";
+import type { Keep } from "./Keep";
+
+export type Config = { stableField: Keep, unstableField: string | null } & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });
+"#;
+        fs::write(&path, content)?;
+
+        static CUSTOM_FIELD: crate::experimental_api::ExperimentalField =
+            crate::experimental_api::ExperimentalField {
+                type_name: "Config",
+                field_name: "unstableField",
+                reason: "custom/unstableField",
+            };
+        filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
+
+        let filtered = fs::read_to_string(&path)?;
+        assert_eq!(filtered.contains("unstableField"), false);
+        assert_eq!(
+            filtered.contains(r#"import type { JsonValue } from "../serde_json/JsonValue";"#),
+            true
+        );
+        assert_eq!(
+            filtered.contains(r#"import type { Keep } from "./Keep";"#),
+            true
+        );
         Ok(())
     }
 

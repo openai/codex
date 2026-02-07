@@ -1,0 +1,70 @@
+name: 💻 CLI Bug
+description: Report an issue in the Codex CLI
+labels:
+  - bug
+  - needs triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting a new issue, please search for existing issues to see if your issue has already been reported.
+        If it has, please add a 👍 reaction (no need to leave a comment) to the existing issue instead of creating a new one.
+
+        Make sure you are running the [latest](https://npmjs.com/package/@openai/codex) version of Codex CLI. The bug you are experiencing may already have been fixed.
+
+  - type: input
+    id: version
+    attributes:
+      label: What version of Codex CLI is running?
+      description: use `codex --version`
+    validations:
+      required: true
+  - type: input
+    id: plan
+    attributes:
+      label: What subscription do you have?
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Which model were you using?
+      description: Like `gpt-5.2`, `gpt-5.2-codex`, etc.
+  - type: input
+    id: platform
+    attributes:
+      label: What platform is your computer?
+      description: |
+        For macOS and Linux: copy the output of `uname -mprs`
+        For Windows: copy the output of `"$([Environment]::OSVersion | ForEach-Object VersionString) $(if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" })"` in the PowerShell console
+  - type: input
+    id: terminal
+    attributes:
+      label: What terminal emulator and version are you using (if applicable)?
+      description: Also note any multiplexer in use (screen / tmux / zellij)
+      description: |
+        E.g, VSCode, Terminal.app, iTerm2, Ghostty, Windows Terminal (WSL / PowerShell)
+  - type: textarea
+    id: actual
+    attributes:
+      label: What issue are you seeing?
+      description: Please include the full error messages and prompts with PII redacted. If possible, please provide text instead of a screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What steps can reproduce the bug?
+      description: Explain the bug and provide a code snippet that can reproduce it. Please include thread id if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What is the expected behavior?
+      description: If possible, please provide text instead of a screenshot.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional information
+      description: Is there anything else you think we should know?

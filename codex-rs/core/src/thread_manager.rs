@@ -11,6 +11,8 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::file_watcher::FileWatcher;
+use crate::file_watcher::FileWatcherEvent;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -31,11 +33,55 @@ use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
+use tokio::runtime::Handle;
+#[cfg(any(test, feature = "test-support"))]
+use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+
+fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Ok(handle) = Handle::try_current()
+        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
+    {
+        // The real watcher spins background tasks that can starve the
+        // current-thread test runtime and cause event waits to time out.
+        // Integration tests compile with the `test-support` feature.
+        warn!("using noop file watcher under current-thread test runtime");
+        return Arc::new(FileWatcher::noop());
+    }
+
+    let file_watcher = match FileWatcher::new(codex_home) {
+        Ok(file_watcher) => Arc::new(file_watcher),
+        Err(err) => {
+            warn!("failed to initialize file watcher: {err}");
+            Arc::new(FileWatcher::noop())
+        }
+    };
+
+    let mut rx = file_watcher.subscribe();
+    let skills_manager = Arc::clone(&skills_manager);
+    if let Ok(handle) = Handle::try_current() {
+        handle.spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        skills_manager.clear_cache();
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    } else {
+        warn!("file watcher listener skipped: no Tokio runtime available");
+    }
+
+    file_watcher
+}
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -62,6 +108,7 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
+    file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
@@ -76,15 +123,15 @@ impl ThreadManager {
         session_source: SessionSource,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
+        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
+        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(
-                    codex_home.clone(),
-                    auth_manager.clone(),
-                )),
-                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
+                skills_manager,
+                file_watcher,
                 auth_manager,
                 session_source,
                 #[cfg(any(test, feature = "test-support"))]
@@ -116,16 +163,19 @@ impl ThreadManager {
     ) -> Self {
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
+        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
+        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
-                    codex_home.clone(),
+                    codex_home,
                     auth_manager.clone(),
                     provider,
                 )),
-                skills_manager: Arc::new(SkillsManager::new(codex_home)),
+                skills_manager,
+                file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 #[cfg(any(test, feature = "test-support"))]
@@ -141,6 +191,10 @@ impl ThreadManager {
 
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
+    }
+
+    pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
+        self.state.file_watcher.subscribe()
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
@@ -380,6 +434,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
+        self.file_watcher.register_config(&config);
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -387,6 +442,7 @@ impl ThreadManagerState {
             auth_manager,
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
+            Arc::clone(&self.file_watcher),
             initial_history,
             session_source,
             agent_control,
@@ -462,6 +518,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
     fn assistant_msg(text: &str) -> ResponseItem {
@@ -472,6 +529,7 @@ mod tests {
                 text: text.to_string(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 

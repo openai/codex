@@ -5,7 +5,6 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -1452,6 +1451,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
                 text: remote_summary.to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -1463,7 +1463,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let mut builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
-        config.features.enable(Feature::RemoteCompaction);
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
@@ -1492,7 +1491,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let mut resume_builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
-        config.features.enable(Feature::RemoteCompaction);
     });
     let resumed = resume_builder
         .resume(&server, home, rollout_path)
@@ -2275,6 +2273,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -2288,7 +2287,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
-            config.features.enable(Feature::RemoteCompaction);
         })
         .build(&server)
         .await
@@ -2395,6 +2393,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
             end_turn: None,
+            phase: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -2408,7 +2407,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
-            config.features.enable(Feature::RemoteCompaction);
         })
         .build(&server)
         .await

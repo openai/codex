@@ -18,10 +18,6 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
-fn sse_completed(id: &str) -> String {
-    sse(vec![ev_response_created(id), ev_completed(id)])
-}
-
 fn collab_mode_with_mode_and_instructions(
     mode: ModeKind,
     instructions: Option<&str>,
@@ -37,7 +33,7 @@ fn collab_mode_with_mode_and_instructions(
 }
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
-    collab_mode_with_mode_and_instructions(ModeKind::Custom, instructions)
+    collab_mode_with_mode_and_instructions(ModeKind::Default, instructions)
 }
 
 fn developer_texts(input: &[Value]) -> Vec<String> {
@@ -72,7 +68,11 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
 
@@ -100,7 +100,11 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
 
@@ -144,7 +148,11 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "turn instructions";
@@ -182,7 +190,11 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "override instructions";
@@ -226,7 +238,11 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let base_text = "base instructions";
@@ -282,8 +298,16 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let first_text = "first instructions";
@@ -354,8 +378,16 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "same instructions";
@@ -423,11 +455,19 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
-    let code_text = "code mode instructions";
+    let default_text = "default mode instructions";
     let plan_text = "plan mode instructions";
 
     test.codex
@@ -440,8 +480,8 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
-                ModeKind::Code,
-                Some(code_text),
+                ModeKind::Default,
+                Some(default_text),
             )),
             personality: None,
         })
@@ -488,9 +528,9 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
-    let code_text = collab_xml(code_text);
+    let default_text = collab_xml(default_text);
     let plan_text = collab_xml(plan_text);
-    assert_eq!(count_exact(&dev_texts, &code_text), 1);
+    assert_eq!(count_exact(&dev_texts, &default_text), 1);
     assert_eq!(count_exact(&dev_texts, &plan_text), 1);
 
     Ok(())
@@ -501,8 +541,16 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "mode-stable instructions";
@@ -517,7 +565,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
-                ModeKind::Code,
+                ModeKind::Default,
                 Some(collab_text),
             )),
             personality: None,
@@ -545,7 +593,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_mode_and_instructions(
-                ModeKind::Code,
+                ModeKind::Default,
                 Some(collab_text),
             )),
             personality: None,
@@ -576,8 +624,16 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let mut builder = test_codex();
     let initial = builder.build(&server).await?;
@@ -642,9 +698,14 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
+    let current_model = test.session_configured.model.clone();
 
     test.codex
         .submit(Op::OverrideTurnContext {
@@ -655,7 +716,14 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             model: None,
             effort: None,
             summary: None,
-            collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: current_model,
+                    reasoning_effort: None,
+                    developer_instructions: Some("".to_string()),
+                },
+            }),
             personality: None,
         })
         .await?;

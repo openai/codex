@@ -65,6 +65,19 @@
         }
       ]
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -111,19 +124,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -133,7 +137,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -233,6 +237,13 @@
       ],
       "type": "string"
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "ReasoningItemContent": {
       "oneOf": [
         {
@@ -324,6 +335,16 @@
               ],
               "writeOnly": true
             },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "role": {
               "type": "string"
             },
@@ -400,7 +421,7 @@
               ]
             },
             "id": {
-              "description": "Set when using the chat completions API.",
+              "description": "Legacy id field retained for compatibility with older payloads.",
               "type": [
                 "string",
                 "null"

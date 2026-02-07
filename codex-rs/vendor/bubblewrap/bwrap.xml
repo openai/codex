@@ -1,0 +1,648 @@
+<?xml version="1.0"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.3//EN"
+               "http://www.oasis-open.org/docbook/xml/4.3/docbookx.dtd" [
+]>
+<refentry id="bwrap">
+
+<refentryinfo>
+  <title>bwrap</title>
+  <productname>Containers</productname>
+  <authorgroup>
+    <author>
+      <contrib>Developer</contrib>
+      <firstname>Alexander</firstname>
+      <surname>Larsson</surname>
+    </author>
+    <author>
+      <contrib>Developer</contrib>
+      <firstname>Colin</firstname>
+      <surname>Walters</surname>
+    </author>
+  </authorgroup>
+</refentryinfo>
+
+<refmeta>
+  <refentrytitle>bwrap</refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo class="manual">User Commands</refmiscinfo>
+</refmeta>
+
+<refnamediv>
+  <refname>bwrap</refname>
+  <refpurpose>container setup utility</refpurpose>
+</refnamediv>
+
+<refsynopsisdiv>
+<cmdsynopsis>
+<command>bwrap</command>
+<arg choice="opt" rep="repeat"><replaceable>OPTION</replaceable></arg>
+<arg choice="opt"><replaceable>COMMAND</replaceable></arg>
+</cmdsynopsis>
+</refsynopsisdiv>
+
+<refsect1><title>Description</title>
+<para>
+  <command>bwrap</command> is a unprivileged low-level sandboxing tool
+  (optionally setuid on older distributions). You
+  are unlikely to use it directly from the commandline, although that is possible.
+</para>
+<para>
+  It works by creating a new, completely empty, filesystem namespace where the root
+  is on a tmpfs that is invisible from the host, and which will be automatically
+  cleaned up when the last process exits. You can then use commandline options to
+  construct the root filesystem and process environment for the command to run in
+  the namespace.
+</para>
+<para>
+  By default, <command>bwrap</command> creates a new mount namespace for the sandbox.
+  Optionally it also sets up new user, ipc, pid, network and uts namespaces (but note the
+  user namespace is required if bwrap is not installed setuid root).
+  The application in the sandbox can be made to run with a different UID and GID.
+</para>
+<para>
+  If needed (e.g. when using a PID namespace) <command>bwrap</command>
+  is running a minimal pid 1 process in the sandbox that is
+  responsible for reaping zombies. It also detects when the initial
+  application process (pid 2) dies and reports its exit status back to
+  the original spawner.  The pid 1 process exits to clean up the
+  sandbox when there are no other processes in the sandbox left.
+</para>
+</refsect1>
+
+<refsect1><title>Options</title>
+  <para>
+    When options are used multiple times, the last option wins, unless otherwise
+    specified.
+  </para>
+  <para>General options:</para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--help</option></term>
+      <listitem><para>Print help and exit</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--version</option></term>
+      <listitem><para>Print version</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--args <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+        Parse nul-separated arguments from the given file descriptor.
+        This option can be used multiple times to parse options from
+        multiple sources.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--argv0 <arg choice="plain">VALUE</arg></option></term>
+      <listitem><para>Set argv[0] to the value <arg choice="plain">VALUE</arg> before running the program</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--level-prefix</option></term>
+      <listitem>
+        <para>
+          Prefix each line of diagnostic output with a numeric severity
+          level enclosed in angle brackets.
+          The severity levels used are based on the constants used by
+          <citerefentry><refentrytitle>syslog</refentrytitle><manvolnum>3</manvolnum></citerefentry>:
+          for example, <literal>&lt;4&gt;</literal> indicates a warning,
+          because <literal>LOG_WARNING</literal> has numeric value 4.
+          Numbers smaller than 4 indicate fatal errors, and numbers larger
+          than 4 indicate informational messages.
+          These prefixes can be parsed by tools compatible with
+          <literal>logger --prio-prefix</literal> (see
+          <citerefentry><refentrytitle>logger</refentrytitle><manvolnum>1</manvolnum></citerefentry>)
+          or <literal>systemd-cat --level-prefix=1</literal> (see
+          <citerefentry><refentrytitle>systemd-cat</refentrytitle><manvolnum>1</manvolnum></citerefentry>).
+        </para>
+      </listitem>
+    </varlistentry>
+  </variablelist>
+  <para>Options related to kernel namespaces:</para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--unshare-user</option></term>
+      <listitem><para>Create a new user namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-user-try</option></term>
+      <listitem><para>Create a new user namespace if possible else skip it</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-ipc</option></term>
+      <listitem><para>Create a new ipc namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-pid</option></term>
+      <listitem><para>Create a new pid namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-net</option></term>
+      <listitem><para>Create a new network namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-uts</option></term>
+      <listitem><para>Create a new uts namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-cgroup</option></term>
+      <listitem><para>Create a new cgroup namespace</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-cgroup-try</option></term>
+      <listitem><para>Create a new cgroup namespace if possible else skip it</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unshare-all</option></term>
+      <listitem><para>Unshare all possible namespaces. Currently equivalent with: <option>--unshare-user-try</option> <option>--unshare-ipc</option> <option>--unshare-pid</option> <option>--unshare-net</option> <option>--unshare-uts</option> <option>--unshare-cgroup-try</option></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--share-net</option></term>
+      <listitem><para>Retain the network namespace, overriding an earlier <option>--unshare-all</option> or <option>--unshare-net</option></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--userns <arg choice="plain">FD</arg></option></term>
+      <listitem><para>Use an existing user namespace instead of creating a new one. The namespace must fulfil the permission requirements for setns(), which generally means that it must be a descendant of the currently active user namespace, owned by the same user. </para>
+      <para>This is incompatible with --unshare-user, and doesn't work in the setuid version of bubblewrap.</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--userns2 <arg choice="plain">FD</arg></option></term>
+      <listitem><para>After setting up the new namespace, switch into the specified namespace. For this to work the specified namespace must be a descendant of the user namespace used for the setup, so this is only useful in combination with --userns.</para>
+      <para>This is useful because sometimes bubblewrap itself creates nested user namespaces (to work around some kernel issues) and --userns2 can be used to enter these.</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--disable-userns</option></term>
+      <listitem><para>
+        Prevent the process in the sandbox from creating further user namespaces,
+        so that it cannot rearrange the filesystem namespace or do other more
+        complex namespace modification.
+        This is currently implemented by setting the
+        <literal>user.max_user_namespaces</literal> sysctl to 1, and then
+        entering a nested user namespace which is unable to raise that limit
+        in the outer namespace.
+        This option requires <option>--unshare-user</option>, and doesn't work
+        in the setuid version of bubblewrap.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--assert-userns-disabled</option></term>
+      <listitem><para>
+        Confirm that the process in the sandbox has been prevented from
+        creating further user namespaces, but without taking any particular
+        action to prevent that. For example, this can be combined with
+        <option>--userns</option> to check that the given user namespace
+        has already been set up to prevent the creation of further user
+        namespaces.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--pidns <arg choice="plain">FD</arg></option></term>
+      <listitem><para>Use an existing pid namespace instead of creating one. This is often used with --userns, because the pid namespace must be owned by the same user namespace that bwrap uses. </para>
+      <para>Note that this can be combined with --unshare-pid, and in that case it means that the sandbox will be in its own pid namespace, which is a child of the passed in one.</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--uid <arg choice="plain">UID</arg></option></term>
+      <listitem><para>Use a custom user id in the sandbox (requires <option>--unshare-user</option>)</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--gid <arg choice="plain">GID</arg></option></term>
+      <listitem><para>Use a custom group id in the sandbox (requires <option>--unshare-user</option>)</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--hostname <arg choice="plain">HOSTNAME</arg></option></term>
+      <listitem><para>Use a custom hostname in the sandbox (requires <option>--unshare-uts</option>)</para></listitem>
+    </varlistentry>
+  </variablelist>
+  <para>Options about environment setup:</para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--chdir <arg choice="plain">DIR</arg></option></term>
+      <listitem><para>Change directory to <arg choice="plain">DIR</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--setenv <arg choice="plain">VAR</arg> <arg choice="plain">VALUE</arg></option></term>
+      <listitem><para>Set an environment variable</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--unsetenv <arg choice="plain">VAR</arg></option></term>
+      <listitem><para>Unset an environment variable</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--clearenv</option></term>
+      <listitem><para>Unset all environment variables, except for
+        <envar>PWD</envar> and any that are subsequently set by
+        <option>--setenv</option></para></listitem>
+    </varlistentry>
+  </variablelist>
+  <para>Options for monitoring the sandbox from the outside:</para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--lock-file <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>
+        Take a lock on <arg choice="plain">DEST</arg> while the sandbox is running.
+        This option can be used multiple times to take locks on multiple files.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--sync-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>Keep this file descriptor open while the sandbox is running</para></listitem>
+    </varlistentry>
+  </variablelist>
+  <para>
+    Filesystem related options. These are all operations that modify the filesystem directly, or
+    mounts stuff in the filesystem. These are applied in the order they are given as arguments.
+  </para>
+  <para>
+    Any missing parent directories that are required to create a specified destination are
+    automatically created as needed. Their permissions are normally set to 0755
+    (rwxr-xr-x). However, if a <option>--perms</option> option is in effect, and
+    it sets the permissions for group or other to zero, then newly-created
+    parent directories will also have their corresponding permission set to zero.
+    <option>--size</option> modifies the size of the created mount when preceding a
+    <option>--tmpfs</option> action; <option>--perms</option> and <option>--size</option>
+    can be combined.
+  </para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--perms <arg choice="plain">OCTAL</arg></option></term>
+      <listitem><para>This option does nothing on its own, and must be followed
+        by one of the options that it affects. It sets the permissions
+        for the next operation to <arg choice="plain">OCTAL</arg>.
+        Subsequent operations are not affected: for example,
+        <literal>--perms 0700 --tmpfs /a --tmpfs /b</literal> will mount
+        <filename>/a</filename> with permissions 0700, then return to
+        the default permissions for <filename>/b</filename>.
+        Note that <option>--perms</option> and <option>--size</option> can be
+        combined: <literal>--perms 0700 --size 10485760 --tmpfs /s</literal> will apply
+        permissions as well as a maximum size to the created tmpfs.</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--size <arg choice="plain">BYTES</arg></option></term>
+      <listitem><para>This option does nothing on its own, and must be followed
+        by <literal>--tmpfs</literal>. It sets the size in bytes for the next tmpfs.
+        For example, <literal>--size 10485760 --tmpfs /tmp</literal> will create a tmpfs
+        at <filename>/tmp</filename> of size 10MiB. Subsequent operations are not
+        affected: for example,
+        <literal>--size 10485760 --tmpfs /a --tmpfs /b</literal> will mount
+        <filename>/a</filename> with size 10MiB, then return to the default size for
+        <filename>/b</filename>.
+        Note that <option>--perms</option> and <option>--size</option> can be
+        combined: <literal>--size 10485760 --perms 0700 --tmpfs /s</literal> will apply
+        permissions as well as a maximum size to the created tmpfs.</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--bind <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Bind mount the host path <arg choice="plain">SRC</arg> on <arg choice="plain">DEST</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--bind-try <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Equal to <option>--bind</option> but ignores non-existent <arg choice="plain">SRC</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--dev-bind <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Bind mount the host path <arg choice="plain">SRC</arg> on <arg choice="plain">DEST</arg>, allowing device access</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--dev-bind-try <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Equal to <option>--dev-bind</option> but ignores non-existent <arg choice="plain">SRC</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--ro-bind <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Bind mount the host path <arg choice="plain">SRC</arg> readonly on <arg choice="plain">DEST</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--ro-bind-try <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Equal to <option>--ro-bind</option> but ignores non-existent <arg choice="plain">SRC</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--remount-ro <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Remount the path <arg choice="plain">DEST</arg> as readonly.  It works only on the specified mount point, without changing any other mount point under the specified path</para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--overlay-src <arg choice="plain">SRC</arg></option></term>
+      <listitem>
+        <para>
+          This option does nothing on its own, and must be followed by one of
+          the other <literal>overlay</literal> options. It specifies a host
+          path from which files should be read if they aren't present in a
+          higher layer.
+        </para>
+        <para>
+          This option can be used multiple times to provide multiple sources.
+          The sources are overlaid in the order given, with the first source on
+          the command line at the bottom of the stack: if a given path to be
+          read exists in more than one source, the file is read from the last
+          such source specified.
+        </para>
+        <para>
+          (For readers familiar with overlayfs, note that this is the
+          reverse of the order used by the kernel's <literal>lowerdir</literal>
+          mount option.)
+        </para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--overlay <arg choice="plain">RWSRC</arg> <arg choice="plain">WORKDIR</arg> <arg choice="plain">DEST</arg></option></term>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--tmp-overlay <arg choice="plain">DEST</arg></option></term>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--ro-overlay <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>
+          Use overlayfs to mount the host paths specified by
+          <arg choice="plain">RWSRC</arg> and all immediately preceding
+          <option>--overlay-src</option> on <arg choice="plain">DEST</arg>.
+          <arg choice="plain">DEST</arg> will contain the union of all the files
+          in all the layers.
+        </para>
+        <para>
+          With <arg choice="plain">--overlay</arg> all writes will go to
+          <arg choice="plain">RWSRC</arg>. Reads will come preferentially from
+          <arg choice="plain">RWSRC</arg>, and then from any
+          <option>--overlay-src</option> paths.
+          <arg choice="plain">WORKDIR</arg> must be an empty directory on the
+          same filesystem as <arg choice="plain">RWSRC</arg>, and is used
+          internally by the kernel.
+        </para>
+        <para>
+          With <arg choice="plain">--tmp-overlay</arg> all writes will go to
+          the tmpfs that hosts the sandbox root, in a location not accessible
+          from either the host or the child process. Writes will therefore not
+          be persisted across multiple runs.
+        </para>
+        <para>
+          With <arg choice="plain">--ro-overlay</arg> the filesystem will be
+          mounted read-only. This option requires at least two
+          <option>--overlay-src</option> to precede it.
+        </para>
+        <para>
+          None of these options are available in the setuid version of
+          bubblewrap. Using <arg choice="plain">--ro-overlay</arg> or providing
+          more than one <option>--overlay-src</option> requires a Linux kernel
+          version of 4.0 or later.
+        </para>
+        <para>
+          Due to limitations of overlayfs, no host directory given via
+          <arg choice="plain">--overlay-src</arg> or
+          <arg choice="plain">--overlay</arg> may be an ancestor of another,
+          after resolving symlinks. Depending on version, the Linux kernel may
+          or may not enforce this, but if not then overlayfs's behavior is
+          undefined.
+        </para>
+        <para>
+          For more information see the Overlay Filesystem documentation in the
+          Linux kernel at
+          https://www.kernel.org/doc/Documentation/filesystems/overlayfs.txt
+        </para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--proc <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Mount procfs on <arg choice="plain">DEST</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--dev <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Mount new devtmpfs on <arg choice="plain">DEST</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--tmpfs <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Mount new tmpfs on <arg choice="plain">DEST</arg>.
+          If the previous option was <option>--perms</option>, it sets the
+          mode of the tmpfs. Otherwise, the tmpfs has mode 0755.
+          If the previous option was <option>--size</option>, it sets the
+          size in bytes of the tmpfs. Otherwise, the tmpfs has the default size.</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--mqueue <arg choice="plain">DEST</arg></option></term>
+      <listitem><para>Mount new mqueue on <arg choice="plain">DEST</arg></para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--dir <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Create a directory at <arg choice="plain">DEST</arg>.
+          If the directory already exists, its permissions are unmodified,
+          ignoring <option>--perms</option> (use <option>--chmod</option>
+          if the permissions of an existing directory need to be changed).
+          If the directory is newly created and the previous option was
+          <option>--perms</option>, it sets the mode of the directory.
+          Otherwise, newly-created directories have mode 0755.</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--file <arg choice="plain">FD</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Copy from the file descriptor <arg choice="plain">FD</arg> to
+          <arg choice="plain">DEST</arg>.
+          If the previous option was <option>--perms</option>, it sets the
+          mode of the new file. Otherwise, the file has mode 0666
+          (note that this is not the same as <option>--bind-data</option>).</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--bind-data <arg choice="plain">FD</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Copy from the file descriptor <arg choice="plain">FD</arg> to
+          a file which is bind-mounted on <arg choice="plain">DEST</arg>.
+          If the previous option was <option>--perms</option>, it sets the
+          mode of the new file. Otherwise, the file has mode 0600
+          (note that this is not the same as <option>--file</option>).</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--ro-bind-data <arg choice="plain">FD</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Copy from the file descriptor <arg choice="plain">FD</arg> to
+          a file which is bind-mounted read-only on
+          <arg choice="plain">DEST</arg>.
+          If the previous option was <option>--perms</option>, it sets the
+          mode of the new file. Otherwise, the file has mode 0600
+          (note that this is not the same as <option>--file</option>).</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--symlink <arg choice="plain">SRC</arg> <arg choice="plain">DEST</arg></option></term>
+      <listitem>
+        <para>Create a symlink at <arg choice="plain">DEST</arg> with target
+          <arg choice="plain">SRC</arg>.</para>
+        <para>Since version 0.9.0, it is not considered to be an error if
+          <arg choice="plain">DEST</arg> already exists as a symbolic link and its
+          target is exactly <arg choice="plain">SRC</arg>.</para>
+        <para>Before version 0.9.0, if <arg choice="plain">DEST</arg> already
+          existed, this would be treated as an error (even if its target
+          was identical to <arg choice="plain">SRC</arg>).</para>
+      </listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--chmod <arg choice="plain">OCTAL</arg> <arg choice="plain">PATH</arg></option></term>
+      <listitem>
+        <para>
+          Set the permissions of <arg choice="plain">PATH</arg>, which
+          must already exist, to <arg choice="plain">OCTAL</arg>.
+        </para>
+      </listitem>
+    </varlistentry>
+  </variablelist>
+  <para>Lockdown options:</para>
+  <variablelist>
+    <varlistentry>
+      <term><option>--seccomp <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+        Load and use seccomp rules from <arg choice="plain">FD</arg>.
+        The rules need to be in the form of a compiled cBPF program,
+        as generated by seccomp_export_bpf.
+        If this option is given more than once, only the last one is used.
+        Use <option>--add-seccomp-fd</option> if multiple seccomp programs
+        are needed.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--add-seccomp-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+        Load and use seccomp rules from <arg choice="plain">FD</arg>.
+        The rules need to be in the form of a compiled cBPF program,
+        as generated by seccomp_export_bpf.
+        This option can be repeated, in which case all the seccomp
+        programs will be loaded in the order given (note that the kernel
+        will evaluate them in reverse order, so the last program on the
+        bwrap command-line is evaluated first). All of them, except
+        possibly the last, must allow use of the PR_SET_SECCOMP prctl.
+        This option cannot be combined with <option>--seccomp</option>.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--exec-label <arg choice="plain">LABEL</arg></option></term>
+      <listitem><para>
+	Exec Label from the sandbox. On an SELinux system you can specify the SELinux
+	context for the sandbox process(s).
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--file-label <arg choice="plain">LABEL</arg></option></term>
+      <listitem><para>
+	File label for temporary sandbox content. On an SELinux system you can specify
+	the SELinux context for the sandbox content.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--block-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+	Block the sandbox on reading from FD until some data is available.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--userns-block-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+	Do not initialize the user namespace but wait on FD until it is ready.  This allow
+        external processes (like newuidmap/newgidmap) to setup the user namespace before it
+        is used by the sandbox process.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--info-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+	Write information in JSON format about the sandbox to FD.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--json-status-fd <arg choice="plain">FD</arg></option></term>
+      <listitem><para>
+        Multiple JSON documents are written to <arg choice="plain">FD</arg>,
+        one per line (<ulink url="https://jsonlines.org/">"JSON lines" format</ulink>).
+        Each line is a single JSON object.
+        After <command>bwrap</command> has started the child process inside the sandbox,
+        it writes an object with a <literal>child-pid</literal> member to the
+        <option>--json-status-fd</option> (this duplicates the older <option>--info-fd</option>).
+        The corresponding value is the process ID of the child process in the pid namespace from
+        which <command>bwrap</command> was run.
+        If available, the namespace IDs are also included in the object with the <literal>child-pid</literal>;
+        again, this duplicates the older <option>--info-fd</option>.
+        When the child process inside the sandbox exits, <command>bwrap</command> writes an object
+        with an exit-code member, and then closes the <option>--json-status-fd</option>. The value
+        corresponding to <literal>exit-code</literal> is the exit status of the child, in the usual
+        shell encoding (n if it exited normally with status n, or 128+n if it was killed by signal n).
+        Other members may be added to those objects in future versions of <command>bwrap</command>,
+        and other JSON objects may be added before or after the current objects, so readers must
+        ignore members and objects that they do not understand.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--new-session</option></term>
+      <listitem><para>
+	Create a new terminal session for the sandbox (calls setsid()). This
+        disconnects the sandbox from the controlling terminal which means
+        the sandbox can't for instance inject input into the terminal.
+        </para><para>
+        Note: In a general sandbox, if you don't use --new-session, it is
+        recommended to use seccomp to disallow the TIOCSTI ioctl, otherwise
+        the application can feed keyboard input to the terminal
+        which can e.g. lead to out-of-sandbox command execution
+        (see CVE-2017-5226).
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--die-with-parent</option></term>
+      <listitem><para>
+    Ensures child process (COMMAND) dies when bwrap's parent dies. Kills (SIGKILL)
+        all bwrap sandbox processes in sequence from parent to child
+        including COMMAND process when bwrap or bwrap's parent dies.
+        See prctl, PR_SET_PDEATHSIG.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--as-pid-1</option></term>
+      <listitem><para>
+	Do not create a process with PID=1 in the sandbox to reap child processes.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--cap-add <arg choice="plain">CAP</arg></option></term>
+      <listitem><para>
+        Add the specified capability <arg choice="plain">CAP</arg>, e.g.
+        CAP_DAC_READ_SEARCH, when running as privileged user.  It accepts
+        the special value ALL to add all the permitted caps.
+      </para></listitem>
+    </varlistentry>
+    <varlistentry>
+      <term><option>--cap-drop <arg choice="plain">CAP</arg></option></term>
+      <listitem><para>
+        Drop the specified capability when running as privileged user.  It accepts
+        the special value ALL to drop all the caps.
+
+        By default no caps are left in the sandboxed process.  The
+        <option>--cap-add</option> and <option>--cap-drop</option>
+        options are processed in the order they are specified on the
+        command line.  Please be careful to the order they are specified.
+      </para></listitem>
+    </varlistentry>
+  </variablelist>
+</refsect1>
+
+<refsect1>
+  <title>Environment</title>
+
+  <variablelist>
+    <varlistentry>
+      <term><envar>HOME</envar></term>
+      <listitem><para>
+        Used as the cwd in the sandbox if <option>--chdir</option> has not been
+        explicitly specified and the current cwd is not present inside the sandbox.
+        The <option>--setenv</option> option can be used to override the value
+        that is used here.
+      </para></listitem>
+    </varlistentry>
+  </variablelist>
+</refsect1>
+
+<refsect1>
+  <title>Exit status</title>
+
+  <para>
+    The <command>bwrap</command> command returns the exit status of the
+    initial application process (pid 2 in the sandbox).
+  </para>
+</refsect1>
+
+</refentry>

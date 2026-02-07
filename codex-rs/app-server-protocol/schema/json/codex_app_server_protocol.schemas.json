@@ -123,34 +123,6 @@
         }
       ]
     },
-    "Annotations": {
-      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
-      "properties": {
-        "audience": {
-          "items": {
-            "$ref": "#/definitions/Role"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "lastModified": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priority": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ApplyPatchApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -258,36 +230,6 @@
         }
       ]
     },
-    "AudioContent": {
-      "description": "Audio provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
-      ],
-      "type": "object"
-    },
     "AuthMode": {
       "description": "Authentication mode for OpenAI-backed providers.",
       "oneOf": [
@@ -332,27 +274,6 @@
       "title": "AuthStatusChangeNotification",
       "type": "object"
     },
-    "BlobResourceContents": {
-      "properties": {
-        "blob": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "blob",
-        "uri"
-      ],
-      "type": "object"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -377,10 +298,9 @@
     "CallToolResult": {
       "description": "The server's response to a tool call.",
       "properties": {
+        "_meta": true,
         "content": {
-          "items": {
-            "$ref": "#/definitions/ContentBlock"
-          },
+          "items": true,
           "type": "array"
         },
         "isError": {
@@ -685,6 +605,30 @@
             },
             "method": {
               "enum": [
+                "thread/compact/start"
+              ],
+              "title": "Thread/compact/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadCompactStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/compact/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -805,6 +749,54 @@
             },
             "method": {
               "enum": [
+                "skills/remote/read"
+              ],
+              "title": "Skills/remote/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsRemoteReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/remote/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skills/remote/write"
+              ],
+              "title": "Skills/remote/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsRemoteWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/remote/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "app/list"
               ],
               "title": "App/listRequestMethod",
@@ -877,6 +869,30 @@
             },
             "method": {
               "enum": [
+                "turn/steer"
+              ],
+              "title": "Turn/steerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnSteerParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Turn/steerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/interrupt"
               ],
               "title": "Turn/interruptRequestMethod",
@@ -940,6 +956,30 @@
             "params"
           ],
           "title": "Model/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "experimentalFeature/list"
+              ],
+              "title": "ExperimentalFeature/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ExperimentalFeatureListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExperimentalFeature/listRequest",
           "type": "object"
         },
         {
@@ -2105,25 +2145,6 @@
       "title": "CommandExecutionRequestApprovalResponse",
       "type": "object"
     },
-    "ContentBlock": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextContent"
-        },
-        {
-          "$ref": "#/definitions/ImageContent"
-        },
-        {
-          "$ref": "#/definitions/AudioContent"
-        },
-        {
-          "$ref": "#/definitions/ResourceLink"
-        },
-        {
-          "$ref": "#/definitions/EmbeddedResource"
-        }
-      ]
-    },
     "ContentItem": {
       "oneOf": [
         {
@@ -2339,6 +2360,50 @@
       ],
       "type": "object"
     },
+    "DynamicToolCallOutputContentItem": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputText"
+              ],
+              "title": "InputTextDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "type"
+          ],
+          "title": "InputTextDynamicToolCallOutputContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "imageUrl": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inputImage"
+              ],
+              "title": "InputImageDynamicToolCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "imageUrl",
+            "type"
+          ],
+          "title": "InputImageDynamicToolCallOutputContentItem",
+          "type": "object"
+        }
+      ]
+    },
     "DynamicToolCallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2369,55 +2434,22 @@
     "DynamicToolCallResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "output": {
-          "type": "string"
+        "contentItems": {
+          "items": {
+            "$ref": "#/definitions/DynamicToolCallOutputContentItem"
+          },
+          "type": "array"
         },
         "success": {
           "type": "boolean"
         }
       },
       "required": [
-        "output",
+        "contentItems",
         "success"
       ],
       "title": "DynamicToolCallResponse",
       "type": "object"
-    },
-    "EmbeddedResource": {
-      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resource": {
-          "$ref": "#/definitions/EmbeddedResourceResource"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "resource",
-        "type"
-      ],
-      "type": "object"
-    },
-    "EmbeddedResourceResource": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextResourceContents"
-        },
-        {
-          "$ref": "#/definitions/BlobResourceContents"
-        }
-      ]
     },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2526,7 +2558,7 @@
                   "$ref": "#/definitions/v2/ModeKind"
                 }
               ],
-              "default": "code"
+              "default": "default"
             },
             "model_context_window": {
               "format": "int64",
@@ -3988,6 +4020,59 @@
           "type": "object"
         },
         {
+          "description": "List of remote skills available to the agent.",
+          "properties": {
+            "skills": {
+              "items": {
+                "$ref": "#/definitions/v2/RemoteSkillSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "list_remote_skills_response"
+              ],
+              "title": "ListRemoteSkillsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "skills",
+            "type"
+          ],
+          "title": "ListRemoteSkillsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Remote skill downloaded to local cache.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remote_skill_downloaded"
+              ],
+              "title": "RemoteSkillDownloadedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "RemoteSkillDownloadedEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Notification that skill data may have been updated and clients may want to reload.",
           "properties": {
             "type": {
@@ -5054,6 +5139,19 @@
       "title": "ForkConversationResponse",
       "type": "object"
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -5100,19 +5198,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -5122,7 +5211,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -5429,36 +5518,6 @@
         "conversation_id",
         "text",
         "ts"
-      ],
-      "type": "object"
-    },
-    "ImageContent": {
-      "description": "An image provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
       ],
       "type": "object"
     },
@@ -6028,14 +6087,18 @@
         }
       ]
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "default"
       ],
       "type": "string"
     },
@@ -6536,6 +6599,25 @@
         }
       ]
     },
+    "RemoteSkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "RemoveConversationListenerParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -6563,7 +6645,8 @@
           "format": "int64",
           "type": "integer"
         }
-      ]
+      ],
+      "description": "ID of a request, which can be either a string or an integer."
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -6619,19 +6702,18 @@
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -6663,61 +6745,6 @@
       },
       "required": [
         "name",
-        "uri"
-      ],
-      "type": "object"
-    },
-    "ResourceLink": {
-      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "size": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
         "uri"
       ],
       "type": "object"
@@ -6725,16 +6752,7 @@
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "annotations": true,
         "description": {
           "type": [
             "string",
@@ -6788,6 +6806,16 @@
                 "null"
               ],
               "writeOnly": true
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "role": {
               "type": "string"
@@ -6865,7 +6893,7 @@
               ]
             },
             "id": {
-              "description": "Set when using the chat completions API.",
+              "description": "Legacy id field retained for compatibility with older payloads.",
               "type": [
                 "string",
                 "null"
@@ -7454,14 +7482,6 @@
           "type": "object"
         }
       ]
-    },
-    "Role": {
-      "description": "The sender or recipient of messages and data in a conversation.",
-      "enum": [
-        "assistant",
-        "user"
-      ],
-      "type": "string"
     },
     "SandboxMode": {
       "enum": [
@@ -8885,32 +8905,6 @@
         }
       ]
     },
-    "TextContent": {
-      "description": "Text provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "type"
-      ],
-      "type": "object"
-    },
     "TextElement": {
       "properties": {
         "byte_range": {
@@ -8931,27 +8925,6 @@
       },
       "required": [
         "byte_range"
-      ],
-      "type": "object"
-    },
-    "TextResourceContents": {
-      "properties": {
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "uri"
       ],
       "type": "object"
     },
@@ -9015,38 +8988,26 @@
     "Tool": {
       "description": "Definition for a tool the client can call.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolAnnotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "inputSchema": {
-          "$ref": "#/definitions/ToolInputSchema"
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
         },
+        "inputSchema": true,
         "name": {
           "type": "string"
         },
-        "outputSchema": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolOutputSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "outputSchema": true,
         "title": {
           "type": [
             "string",
@@ -9058,82 +9019,6 @@
         "inputSchema",
         "name"
       ],
-      "type": "object"
-    },
-    "ToolAnnotations": {
-      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-      "properties": {
-        "destructiveHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "idempotentHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "openWorldHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "readOnlyHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ToolInputSchema": {
-      "description": "A JSON Schema object defining the expected parameters for the tool.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "ToolOutputSchema": {
-      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
       "type": "object"
     },
     "ToolRequestUserInputAnswer": {
@@ -9984,33 +9869,31 @@
         },
         "type": "object"
       },
-      "Annotations": {
-        "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "AppConfig": {
         "properties": {
-          "audience": {
-            "items": {
-              "$ref": "#/definitions/v2/Role"
-            },
-            "type": [
-              "array",
-              "null"
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppDisabledReason"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "lastModified": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "priority": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+          "enabled": {
+            "default": true,
+            "type": "boolean"
           }
         },
         "type": "object"
+      },
+      "AppDisabledReason": {
+        "enum": [
+          "unknown",
+          "user"
+        ],
+        "type": "string"
       },
       "AppInfo": {
         "properties": {
@@ -10059,6 +9942,9 @@
           "id",
           "name"
         ],
+        "type": "object"
+      },
+      "AppsConfig": {
         "type": "object"
       },
       "AppsListParams": {
@@ -10116,36 +10002,6 @@
         ],
         "type": "string"
       },
-      "AudioContent": {
-        "description": "Audio provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "data": {
-            "type": "string"
-          },
-          "mimeType": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "data",
-          "mimeType",
-          "type"
-        ],
-        "type": "object"
-      },
       "AuthMode": {
         "description": "Authentication mode for OpenAI-backed providers.",
         "oneOf": [
@@ -10171,27 +10027,6 @@
             "type": "string"
           }
         ]
-      },
-      "BlobResourceContents": {
-        "properties": {
-          "blob": {
-            "type": "string"
-          },
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "blob",
-          "uri"
-        ],
-        "type": "object"
       },
       "ByteRange": {
         "properties": {
@@ -11324,25 +11159,6 @@
         "title": "ConfigWriteResponse",
         "type": "object"
       },
-      "ContentBlock": {
-        "anyOf": [
-          {
-            "$ref": "#/definitions/v2/TextContent"
-          },
-          {
-            "$ref": "#/definitions/v2/ImageContent"
-          },
-          {
-            "$ref": "#/definitions/v2/AudioContent"
-          },
-          {
-            "$ref": "#/definitions/v2/ResourceLink"
-          },
-          {
-            "$ref": "#/definitions/v2/EmbeddedResource"
-          }
-        ]
-      },
       "ContentItem": {
         "oneOf": [
           {
@@ -11484,42 +11300,6 @@
         ],
         "type": "object"
       },
-      "EmbeddedResource": {
-        "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "resource": {
-            "$ref": "#/definitions/v2/EmbeddedResourceResource"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "resource",
-          "type"
-        ],
-        "type": "object"
-      },
-      "EmbeddedResourceResource": {
-        "anyOf": [
-          {
-            "$ref": "#/definitions/v2/TextResourceContents"
-          },
-          {
-            "$ref": "#/definitions/v2/BlobResourceContents"
-          }
-        ]
-      },
       "ErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -11544,6 +11324,143 @@
         ],
         "title": "ErrorNotification",
         "type": "object"
+      },
+      "ExperimentalFeature": {
+        "properties": {
+          "announcement": {
+            "description": "Announcement copy shown to users when the feature is introduced. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "defaultEnabled": {
+            "description": "Whether this feature is enabled by default.",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "Short summary describing what the feature does. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "description": "User-facing display name shown in the experimental features UI. Null when this feature is not in beta.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Whether this feature is currently enabled in the loaded config.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Stable key used in config.toml and CLI flag toggles.",
+            "type": "string"
+          },
+          "stage": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ExperimentalFeatureStage"
+              }
+            ],
+            "description": "Lifecycle stage of this feature flag."
+          }
+        },
+        "required": [
+          "defaultEnabled",
+          "enabled",
+          "name",
+          "stage"
+        ],
+        "type": "object"
+      },
+      "ExperimentalFeatureListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cursor": {
+            "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Optional page size; defaults to a reasonable server-side value.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ExperimentalFeatureListParams",
+        "type": "object"
+      },
+      "ExperimentalFeatureListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/ExperimentalFeature"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ExperimentalFeatureListResponse",
+        "type": "object"
+      },
+      "ExperimentalFeatureStage": {
+        "oneOf": [
+          {
+            "description": "Feature is available for user testing and feedback.",
+            "enum": [
+              "beta"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is still being built and not ready for broad use.",
+            "enum": [
+              "underDevelopment"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is production-ready.",
+            "enum": [
+              "stable"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature is deprecated and should be avoided.",
+            "enum": [
+              "deprecated"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Feature flag is retained only for backwards compatibility.",
+            "enum": [
+              "removed"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "FeedbackUploadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -11638,6 +11555,19 @@
         ],
         "type": "string"
       },
+      "FunctionCallOutputBody": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/v2/FunctionCallOutputContentItem"
+            },
+            "type": "array"
+          }
+        ]
+      },
       "FunctionCallOutputContentItem": {
         "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
         "oneOf": [
@@ -11684,19 +11614,10 @@
         ]
       },
       "FunctionCallOutputPayload": {
-        "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+        "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
         "properties": {
-          "content": {
-            "type": "string"
-          },
-          "content_items": {
-            "items": {
-              "$ref": "#/definitions/v2/FunctionCallOutputContentItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
+          "body": {
+            "$ref": "#/definitions/v2/FunctionCallOutputBody"
           },
           "success": {
             "type": [
@@ -11706,7 +11627,7 @@
           }
         },
         "required": [
-          "content"
+          "body"
         ],
         "type": "object"
       },
@@ -11813,35 +11734,24 @@
         },
         "type": "object"
       },
-      "ImageContent": {
-        "description": "An image provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "data": {
+      "InputModality": {
+        "description": "Canonical user-input modality tags advertised by a model.",
+        "oneOf": [
+          {
+            "description": "Plain text turns and tool payloads.",
+            "enum": [
+              "text"
+            ],
             "type": "string"
           },
-          "mimeType": {
-            "type": "string"
-          },
-          "type": {
+          {
+            "description": "Image attachments included in user turns.",
+            "enum": [
+              "image"
+            ],
             "type": "string"
           }
-        },
-        "required": [
-          "data",
-          "mimeType",
-          "type"
-        ],
-        "type": "object"
+        ]
       },
       "ItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -12286,9 +12196,7 @@
       "McpToolCallResult": {
         "properties": {
           "content": {
-            "items": {
-              "$ref": "#/definitions/v2/ContentBlock"
-            },
+            "items": true,
             "type": "array"
           },
           "structuredContent": true
@@ -12313,14 +12221,18 @@
         ],
         "type": "string"
       },
+      "MessagePhase": {
+        "enum": [
+          "commentary",
+          "final_answer"
+        ],
+        "type": "string"
+      },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
           "plan",
-          "code",
-          "pair_programming",
-          "execute",
-          "custom"
+          "default"
         ],
         "type": "string"
       },
@@ -12338,6 +12250,16 @@
           "id": {
             "type": "string"
           },
+          "inputModalities": {
+            "default": [
+              "text",
+              "image"
+            ],
+            "items": {
+              "$ref": "#/definitions/v2/InputModality"
+            },
+            "type": "array"
+          },
           "isDefault": {
             "type": "boolean"
           },
@@ -12353,6 +12275,12 @@
           "supportsPersonality": {
             "default": false,
             "type": "boolean"
+          },
+          "upgrade": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12505,6 +12433,7 @@
       },
       "Personality": {
         "enum": [
+          "none",
           "friendly",
           "pragmatic"
         ],
@@ -12917,6 +12846,25 @@
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
       },
+      "RemoteSkillSummary": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "ResidencyRequirement": {
         "enum": [
           "us"
@@ -12926,19 +12874,18 @@
       "Resource": {
         "description": "A known resource that the server is capable of reading.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "_meta": true,
+          "annotations": true,
           "description": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -12970,61 +12917,6 @@
         },
         "required": [
           "name",
-          "uri"
-        ],
-        "type": "object"
-      },
-      "ResourceLink": {
-        "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "type": "string"
-          },
-          "size": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "type": {
-            "type": "string"
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type",
           "uri"
         ],
         "type": "object"
@@ -13032,16 +12924,7 @@
       "ResourceTemplate": {
         "description": "A template description for resources available on the server.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "annotations": true,
           "description": {
             "type": [
               "string",
@@ -13095,6 +12978,16 @@
                   "null"
                 ],
                 "writeOnly": true
+              },
+              "phase": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/MessagePhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "role": {
                 "type": "string"
@@ -13172,7 +13065,7 @@
                 ]
               },
               "id": {
-                "description": "Set when using the chat completions API.",
+                "description": "Legacy id field retained for compatibility with older payloads.",
                 "type": [
                   "string",
                   "null"
@@ -13563,14 +13456,6 @@
             "type": "object"
           }
         ]
-      },
-      "Role": {
-        "description": "The sender or recipient of messages and data in a conversation.",
-        "enum": [
-          "assistant",
-          "user"
-        ],
-        "type": "string"
       },
       "SandboxMode": {
         "enum": [
@@ -14015,6 +13900,65 @@
         "title": "SkillsListResponse",
         "type": "object"
       },
+      "SkillsRemoteReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsRemoteReadParams",
+        "type": "object"
+      },
+      "SkillsRemoteReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/RemoteSkillSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillsRemoteReadResponse",
+        "type": "object"
+      },
+      "SkillsRemoteWriteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "hazelnutId": {
+            "type": "string"
+          },
+          "isPreload": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hazelnutId",
+          "isPreload"
+        ],
+        "title": "SkillsRemoteWriteParams",
+        "type": "object"
+      },
+      "SkillsRemoteWriteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "path"
+        ],
+        "title": "SkillsRemoteWriteResponse",
+        "type": "object"
+      },
       "SubAgentSource": {
         "oneOf": [
           {
@@ -14094,32 +14038,6 @@
         "title": "TerminalInteractionNotification",
         "type": "object"
       },
-      "TextContent": {
-        "description": "Text provided to or from an LLM.",
-        "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Annotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "text": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "text",
-          "type"
-        ],
-        "type": "object"
-      },
       "TextElement": {
         "properties": {
           "byteRange": {
@@ -14176,27 +14094,6 @@
         "required": [
           "end",
           "start"
-        ],
-        "type": "object"
-      },
-      "TextResourceContents": {
-        "properties": {
-          "mimeType": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "text": {
-            "type": "string"
-          },
-          "uri": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "text",
-          "uri"
         ],
         "type": "object"
       },
@@ -14296,6 +14193,24 @@
         "title": "ThreadArchiveResponse",
         "type": "object"
       },
+      "ThreadCompactStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadCompactStartParams",
+        "type": "object"
+      },
+      "ThreadCompactStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadCompactStartResponse",
+        "type": "object"
+      },
       "ThreadForkParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -14343,13 +14258,6 @@
             ]
           },
           "modelProvider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
             "type": [
               "string",
               "null"
@@ -15113,16 +15021,6 @@
               "null"
             ]
           },
-          "history": {
-            "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-            "items": {
-              "$ref": "#/definitions/v2/ResponseItem"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "model": {
             "description": "Configuration overrides for the resumed thread, if any.",
             "type": [
@@ -15131,13 +15029,6 @@
             ]
           },
           "modelProvider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
             "type": [
               "string",
               "null"
@@ -15342,11 +15233,6 @@
               "null"
             ]
           },
-          "experimentalRawEvents": {
-            "default": false,
-            "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-            "type": "boolean"
-          },
           "model": {
             "type": [
               "string",
@@ -15543,38 +15429,26 @@
       "Tool": {
         "description": "Definition for a tool the client can call.",
         "properties": {
-          "annotations": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolAnnotations"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "_meta": true,
+          "annotations": true,
           "description": {
             "type": [
               "string",
               "null"
             ]
           },
-          "inputSchema": {
-            "$ref": "#/definitions/v2/ToolInputSchema"
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
           },
+          "inputSchema": true,
           "name": {
             "type": "string"
           },
-          "outputSchema": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolOutputSchema"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
+          "outputSchema": true,
           "title": {
             "type": [
               "string",
@@ -15586,82 +15460,6 @@
           "inputSchema",
           "name"
         ],
-        "type": "object"
-      },
-      "ToolAnnotations": {
-        "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-        "properties": {
-          "destructiveHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "idempotentHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "openWorldHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "readOnlyHint": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ToolInputSchema": {
-        "description": "A JSON Schema object defining the expected parameters for the tool.",
-        "properties": {
-          "properties": true,
-          "required": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "type": {
-            "default": "object",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "ToolOutputSchema": {
-        "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-        "properties": {
-          "properties": true,
-          "required": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "type": {
-            "default": "object",
-            "type": "string"
-          }
-        },
         "type": "object"
       },
       "ToolsV2": {
@@ -15871,17 +15669,6 @@
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
           },
-          "collaborationMode": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/CollaborationMode"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -15998,6 +15785,44 @@
           "inProgress"
         ],
         "type": "string"
+      },
+      "TurnSteerParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedTurnId": {
+            "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+            "type": "string"
+          },
+          "input": {
+            "items": {
+              "$ref": "#/definitions/v2/UserInput"
+            },
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedTurnId",
+          "input",
+          "threadId"
+        ],
+        "title": "TurnSteerParams",
+        "type": "object"
+      },
+      "TurnSteerResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
+        "title": "TurnSteerResponse",
+        "type": "object"
       },
       "UserInput": {
         "oneOf": [

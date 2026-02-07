@@ -11,10 +11,12 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use rmcp::model::Tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
@@ -34,7 +36,7 @@ pub struct ToolRouter {
 impl ToolRouter {
     pub fn from_config(
         config: &ToolsConfig,
-        mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+        mcp_tools: Option<HashMap<String, Tool>>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> Self {
         let builder = build_specs(config, mcp_tools, dynamic_tools);
@@ -180,9 +182,8 @@ impl ToolRouter {
             ResponseInputItem::FunctionCallOutput {
                 call_id,
                 output: codex_protocol::models::FunctionCallOutputPayload {
-                    content: message,
+                    body: FunctionCallOutputBody::Text(message),
                     success: Some(false),
-                    ..Default::default()
                 },
             }
         }

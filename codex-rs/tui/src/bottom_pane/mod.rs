@@ -13,7 +13,6 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event::ConnectorsSnapshot;
@@ -36,11 +35,14 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::time::Duration;
 
 mod app_link_view;
 mod approval_overlay;
+mod multi_select_picker;
 mod request_user_input;
+mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
@@ -51,6 +53,14 @@ mod bottom_pane_view;
 pub(crate) struct LocalImageAttachment {
     pub(crate) placeholder: String,
     pub(crate) path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MentionBinding {
+    /// Mention token text without the leading `$`.
+    pub(crate) mention: String,
+    /// Canonical mention target (for example `app://...` or absolute SKILL.md path).
+    pub(crate) path: String,
 }
 mod chat_composer;
 mod chat_composer_history;
@@ -65,6 +75,7 @@ mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::FeedbackAudience;
@@ -73,6 +84,8 @@ pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
+pub(crate) use status_line_setup::StatusLineItem;
+pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 pub mod popup_consts;
 mod queued_user_messages;
@@ -209,19 +222,32 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update image-paste behavior for the active composer and repaint immediately.
+    ///
+    /// Callers use this to keep composer affordances aligned with model capabilities.
+    pub fn set_image_paste_enabled(&mut self, enabled: bool) {
+        self.composer.set_image_paste_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
         self.composer.set_connector_mentions(snapshot);
         self.request_redraw();
     }
 
-    pub fn take_mention_paths(&mut self) -> HashMap<String, String> {
-        self.composer.take_mention_paths()
+    pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        self.composer.take_mention_bindings()
     }
 
-    /// Clear pending attachments and mention paths e.g. when a slash command doesn't submit text.
+    pub fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        self.composer.take_recent_submission_mention_bindings()
+    }
+
+    /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
-        let _ = self.take_mention_paths();
+        let _ = self.take_recent_submission_mention_bindings();
+        let _ = self.take_mention_bindings();
     }
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -402,6 +428,10 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
+    ///
+    /// This is intended for fresh input where mention linkage does not need to
+    /// survive; it routes to `ChatComposer::set_text_content`, which resets
+    /// mention bindings.
     pub(crate) fn set_composer_text(
         &mut self,
         text: String,
@@ -411,6 +441,27 @@ impl BottomPane {
         self.composer
             .set_text_content(text, text_elements, local_image_paths);
         self.composer.move_cursor_to_end();
+        self.request_redraw();
+    }
+
+    /// Replace the composer text while preserving mention link targets.
+    ///
+    /// Use this when rehydrating a draft after a local validation/gating
+    /// failure (for example unsupported image submit) so previously selected
+    /// mention targets remain stable across retry.
+    pub(crate) fn set_composer_text_with_mention_bindings(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        mention_bindings: Vec<MentionBinding>,
+    ) {
+        self.composer.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+        );
         self.request_redraw();
     }
 
@@ -440,6 +491,10 @@ impl BottomPane {
 
     pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
         self.composer.local_images()
+    }
+
+    pub(crate) fn composer_mention_bindings(&self) -> Vec<MentionBinding> {
+        self.composer.mention_bindings()
     }
 
     #[cfg(test)]
@@ -827,6 +882,16 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+        self.composer.set_status_line(status_line);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.composer.set_status_line_enabled(enabled);
+        self.request_redraw();
     }
 }
 

@@ -1,20 +1,18 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
-use mcp_types::ListResourceTemplatesRequestParams;
-use mcp_types::ListResourceTemplatesResult;
-use mcp_types::ListResourcesRequestParams;
-use mcp_types::ListResourcesResult;
-use mcp_types::ReadResourceRequestParams;
-use mcp_types::ReadResourceResult;
-use mcp_types::Resource;
-use mcp_types::ResourceTemplate;
-use mcp_types::TextContent;
+use codex_protocol::mcp::CallToolResult;
+use rmcp::model::ListResourceTemplatesResult;
+use rmcp::model::ListResourcesResult;
+use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceResult;
+use rmcp::model::Resource;
+use rmcp::model::ResourceTemplate;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -264,7 +262,7 @@ async fn handle_list_resources(
 
     let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| ListResourcesRequestParams {
+            let params = cursor.clone().map(|value| PaginatedRequestParam {
                 cursor: Some(value),
             });
             let result = session
@@ -299,12 +297,10 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -312,7 +308,7 @@ async fn handle_list_resources(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -371,11 +367,9 @@ async fn handle_list_resource_templates(
 
     let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor
-                .clone()
-                .map(|value| ListResourceTemplatesRequestParams {
-                    cursor: Some(value),
-                });
+            let params = cursor.clone().map(|value| PaginatedRequestParam {
+                cursor: Some(value),
+            });
             let result = session
                 .list_resource_templates(&server_name, params)
                 .await
@@ -410,12 +404,10 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -423,7 +415,7 @@ async fn handle_list_resource_templates(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -482,7 +474,7 @@ async fn handle_read_resource(
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
         let result = session
-            .read_resource(&server, ReadResourceRequestParams { uri: uri.clone() })
+            .read_resource(&server, ReadResourceRequestParam { uri: uri.clone() })
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
@@ -499,12 +491,10 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -512,7 +502,7 @@ async fn handle_read_resource(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -551,13 +541,10 @@ async fn handle_read_resource(
 
 fn call_tool_result_from_content(content: &str, success: Option<bool>) -> CallToolResult {
     CallToolResult {
-        content: vec![ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: content.to_string(),
-            r#type: "text".to_string(),
-        })],
-        is_error: success.map(|value| !value),
+        content: vec![serde_json::json!({"type": "text", "text": content})],
         structured_content: None,
+        is_error: success.map(|value| !value),
+        meta: None,
     }
 }
 
@@ -630,8 +617,7 @@ where
     })?;
 
     Ok(ToolOutput::Function {
-        content,
-        content_items: None,
+        body: FunctionCallOutputBody::Text(content),
         success: Some(true),
     })
 }
@@ -678,32 +664,33 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mcp_types::ListResourcesResult;
-    use mcp_types::ResourceTemplate;
     use pretty_assertions::assert_eq;
+    use rmcp::model::AnnotateAble;
     use serde_json::json;
 
     fn resource(uri: &str, name: &str) -> Resource {
-        Resource {
-            annotations: None,
+        rmcp::model::RawResource {
+            uri: uri.to_string(),
+            name: name.to_string(),
+            title: None,
             description: None,
             mime_type: None,
-            name: name.to_string(),
             size: None,
-            title: None,
-            uri: uri.to_string(),
+            icons: None,
+            meta: None,
         }
+        .no_annotation()
     }
 
     fn template(uri_template: &str, name: &str) -> ResourceTemplate {
-        ResourceTemplate {
-            annotations: None,
-            description: None,
-            mime_type: None,
+        rmcp::model::RawResourceTemplate {
+            uri_template: uri_template.to_string(),
             name: name.to_string(),
             title: None,
-            uri_template: uri_template.to_string(),
+            description: None,
+            mime_type: None,
         }
+        .no_annotation()
     }
 
     #[test]
@@ -719,6 +706,7 @@ mod tests {
     #[test]
     fn list_resources_payload_from_single_server_copies_next_cursor() {
         let result = ListResourcesResult {
+            meta: None,
             next_cursor: Some("cursor-1".to_string()),
             resources: vec![resource("memo://id", "memo")],
         };

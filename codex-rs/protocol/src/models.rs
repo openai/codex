@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::load_and_resize_to_fit;
-use mcp_types::CallToolResult;
-use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -23,6 +21,8 @@ use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+
+use crate::mcp::CallToolResult;
 
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
@@ -72,6 +72,13 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum MessagePhase {
+    Commentary,
+    FinalAnswer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -85,6 +92,11 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         end_turn: Option<bool>,
+        // Optional output-message phase (for example: "commentary", "final_answer").
+        // Do not use directly; availability can vary by provider and model.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        phase: Option<MessagePhase>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -97,7 +109,7 @@ pub enum ResponseItem {
         encrypted_content: Option<String>,
     },
     LocalShellCall {
-        /// Set when using the chat completions API.
+        /// Legacy id field retained for compatibility with older payloads.
         #[serde(default, skip_serializing)]
         #[ts(skip)]
         id: Option<String>,
@@ -113,16 +125,15 @@ pub enum ResponseItem {
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
-        // Session::handle_function_call parse it into a Value. This exactly matches the
-        // Chat Completions + Responses API behavior.
+        // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
     },
-    // NOTE: The input schema for `function_call_output` objects that clients send to the
-    // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the
-    // SSE stream. When *sending* we must wrap the string output inside an object that includes a
-    // required `success` boolean. To ensure we serialize exactly the expected shape we introduce
-    // a dedicated payload struct and flatten it here.
+    // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
+    // custom serialization. On the wire it is either:
+    //   - a plain string (`content`)
+    //   - an array of structured content items (`content_items`)
+    // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
@@ -238,7 +249,7 @@ impl DeveloperInstructions {
                     match command_prefixes {
                         Some(prefixes) => {
                             format!(
-                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\nApproved command prefixes:\n{prefixes}"
+                                "{APPROVAL_POLICY_ON_REQUEST_RULE}\n## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
                             )
                         }
                         None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
@@ -261,6 +272,12 @@ impl DeveloperInstructions {
         }
         text.push_str(&other.into().text);
         Self { text }
+    }
+
+    pub fn model_switch_message(model_instructions: String) -> Self {
+        DeveloperInstructions::new(format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{model_instructions}\n</model_switch>"
+        ))
     }
 
     pub fn personality_spec_message(spec: String) -> Self {
@@ -439,6 +456,7 @@ impl From<DeveloperInstructions> for ResponseItem {
                 text: di.into_text(),
             }],
             end_turn: None,
+            phase: None,
         }
     }
 }
@@ -596,6 +614,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 content,
                 id: None,
                 end_turn: None,
+                phase: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
@@ -604,9 +623,8 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = match result {
                     Ok(result) => FunctionCallOutputPayload::from(&result),
                     Err(tool_call_err) => FunctionCallOutputPayload {
-                        content: format!("err: {tool_call_err:?}"),
+                        body: FunctionCallOutputBody::Text(format!("err: {tool_call_err:?}")),
                         success: Some(false),
-                        ..Default::default()
                     },
                 };
                 Self::FunctionCallOutput { call_id, output }
@@ -767,40 +785,146 @@ pub enum FunctionCallOutputContentItem {
     InputImage { image_url: String },
 }
 
+/// Converts structured function-call output content into plain text for
+/// human-readable surfaces.
+///
+/// This conversion is intentionally lossy:
+/// - only `input_text` items are included
+/// - image items are ignored
+///
+/// We use this helper where callers still need a string representation (for
+/// example telemetry previews or legacy string-only output paths) while keeping
+/// the original multimodal `content_items` as the authoritative payload sent to
+/// the model.
+pub fn function_call_output_content_items_to_text(
+    content_items: &[FunctionCallOutputContentItem],
+) -> Option<String> {
+    let text_segments = content_items
+        .iter()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } if !text.trim().is_empty() => {
+                Some(text.as_str())
+            }
+            FunctionCallOutputContentItem::InputText { .. }
+            | FunctionCallOutputContentItem::InputImage { .. } => None,
+        })
+        .collect::<Vec<_>>();
+
+    if text_segments.is_empty() {
+        None
+    } else {
+        Some(text_segments.join("\n"))
+    }
+}
+
+impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
+    for FunctionCallOutputContentItem
+{
+    fn from(item: crate::dynamic_tools::DynamicToolCallOutputContentItem) -> Self {
+        match item {
+            crate::dynamic_tools::DynamicToolCallOutputContentItem::InputText { text } => {
+                Self::InputText { text }
+            }
+            crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                Self::InputImage { image_url }
+            }
+        }
+    }
+}
+
 /// The payload we send back to OpenAI when reporting a tool call result.
 ///
-/// `content` preserves the historical plain-string payload so downstream
-/// integrations (tests, logging, etc.) can keep treating tool output as
-/// `String`. When an MCP server returns richer data we additionally populate
-/// `content_items` with the structured form that the Responses/Chat
-/// Completions APIs understand.
+/// `body` serializes directly as the wire value for `function_call_output.output`.
+/// `success` remains internal metadata for downstream handling.
 #[derive(Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 pub struct FunctionCallOutputPayload {
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
+    pub body: FunctionCallOutputBody,
     pub success: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(untagged)]
-enum FunctionCallOutputPayloadSerde {
+pub enum FunctionCallOutputBody {
     Text(String),
-    Items(Vec<FunctionCallOutputContentItem>),
+    ContentItems(Vec<FunctionCallOutputContentItem>),
 }
 
-// The Responses API expects two *different* shapes depending on success vs failure:
-//   • success → output is a plain string (no nested object)
-//   • failure → output is an object { content, success:false }
+impl FunctionCallOutputBody {
+    /// Best-effort conversion of a function-call output body to plain text for
+    /// human-readable surfaces.
+    ///
+    /// This conversion is intentionally lossy when the body contains content
+    /// items: image entries are dropped and text entries are joined with
+    /// newlines.
+    pub fn to_text(&self) -> Option<String> {
+        match self {
+            Self::Text(content) => Some(content.clone()),
+            Self::ContentItems(items) => function_call_output_content_items_to_text(items),
+        }
+    }
+}
+
+impl Default for FunctionCallOutputBody {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl FunctionCallOutputPayload {
+    pub fn from_text(content: String) -> Self {
+        Self {
+            body: FunctionCallOutputBody::Text(content),
+            success: None,
+        }
+    }
+
+    pub fn from_content_items(content_items: Vec<FunctionCallOutputContentItem>) -> Self {
+        Self {
+            body: FunctionCallOutputBody::ContentItems(content_items),
+            success: None,
+        }
+    }
+
+    pub fn text_content(&self) -> Option<&str> {
+        match &self.body {
+            FunctionCallOutputBody::Text(content) => Some(content),
+            FunctionCallOutputBody::ContentItems(_) => None,
+        }
+    }
+
+    pub fn text_content_mut(&mut self) -> Option<&mut String> {
+        match &mut self.body {
+            FunctionCallOutputBody::Text(content) => Some(content),
+            FunctionCallOutputBody::ContentItems(_) => None,
+        }
+    }
+
+    pub fn content_items(&self) -> Option<&[FunctionCallOutputContentItem]> {
+        match &self.body {
+            FunctionCallOutputBody::Text(_) => None,
+            FunctionCallOutputBody::ContentItems(items) => Some(items),
+        }
+    }
+
+    pub fn content_items_mut(&mut self) -> Option<&mut Vec<FunctionCallOutputContentItem>> {
+        match &mut self.body {
+            FunctionCallOutputBody::Text(_) => None,
+            FunctionCallOutputBody::ContentItems(items) => Some(items),
+        }
+    }
+}
+
+// `function_call_output.output` is encoded as either:
+//   - an array of structured content items
+//   - a plain string
 impl Serialize for FunctionCallOutputPayload {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        if let Some(items) = &self.content_items {
-            items.serialize(serializer)
-        } else {
-            serializer.serialize_str(&self.content)
+        match &self.body {
+            FunctionCallOutputBody::Text(content) => serializer.serialize_str(content),
+            FunctionCallOutputBody::ContentItems(items) => items.serialize(serializer),
         }
     }
 }
@@ -810,20 +934,11 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     where
         D: Deserializer<'de>,
     {
-        match FunctionCallOutputPayloadSerde::deserialize(deserializer)? {
-            FunctionCallOutputPayloadSerde::Text(content) => Ok(FunctionCallOutputPayload {
-                content,
-                ..Default::default()
-            }),
-            FunctionCallOutputPayloadSerde::Items(items) => {
-                let content = serde_json::to_string(&items).map_err(serde::de::Error::custom)?;
-                Ok(FunctionCallOutputPayload {
-                    content,
-                    content_items: Some(items),
-                    success: None,
-                })
-            }
-        }
+        let body = FunctionCallOutputBody::deserialize(deserializer)?;
+        Ok(FunctionCallOutputPayload {
+            body,
+            success: None,
+        })
     }
 }
 
@@ -833,6 +948,7 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             content,
             structured_content,
             is_error,
+            meta: _,
         } = call_tool_result;
 
         let is_success = is_error != &Some(true);
@@ -843,16 +959,14 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             match serde_json::to_string(structured_content) {
                 Ok(serialized_structured_content) => {
                     return FunctionCallOutputPayload {
-                        content: serialized_structured_content,
+                        body: FunctionCallOutputBody::Text(serialized_structured_content),
                         success: Some(is_success),
-                        ..Default::default()
                     };
                 }
                 Err(err) => {
                     return FunctionCallOutputPayload {
-                        content: err.to_string(),
+                        body: FunctionCallOutputBody::Text(err.to_string()),
                         success: Some(false),
-                        ..Default::default()
                     };
                 }
             }
@@ -862,68 +976,83 @@ impl From<&CallToolResult> for FunctionCallOutputPayload {
             Ok(serialized_content) => serialized_content,
             Err(err) => {
                 return FunctionCallOutputPayload {
-                    content: err.to_string(),
+                    body: FunctionCallOutputBody::Text(err.to_string()),
                     success: Some(false),
-                    ..Default::default()
                 };
             }
         };
 
-        let content_items = convert_content_blocks_to_items(content);
+        let content_items = convert_mcp_content_to_items(content);
+
+        let body = match content_items {
+            Some(content_items) => FunctionCallOutputBody::ContentItems(content_items),
+            None => FunctionCallOutputBody::Text(serialized_content),
+        };
 
         FunctionCallOutputPayload {
-            content: serialized_content,
-            content_items,
+            body,
             success: Some(is_success),
         }
     }
 }
 
-fn convert_content_blocks_to_items(
-    blocks: &[ContentBlock],
+fn convert_mcp_content_to_items(
+    contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum McpContent {
+        #[serde(rename = "text")]
+        Text { text: String },
+        #[serde(rename = "image")]
+        Image {
+            data: String,
+            #[serde(rename = "mimeType", alias = "mime_type")]
+            mime_type: Option<String>,
+        },
+        #[serde(other)]
+        Unknown,
+    }
+
     let mut saw_image = false;
-    let mut items = Vec::with_capacity(blocks.len());
-    tracing::warn!("Blocks: {:?}", blocks);
-    for block in blocks {
-        match block {
-            ContentBlock::TextContent(text) => {
-                items.push(FunctionCallOutputContentItem::InputText {
-                    text: text.text.clone(),
-                });
-            }
-            ContentBlock::ImageContent(image) => {
+    let mut items = Vec::with_capacity(contents.len());
+
+    for content in contents {
+        let item = match serde_json::from_value::<McpContent>(content.clone()) {
+            Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
+            Ok(McpContent::Image { data, mime_type }) => {
                 saw_image = true;
-                // Just in case the content doesn't include a data URL, add it.
-                let image_url = if image.data.starts_with("data:") {
-                    image.data.clone()
+                let image_url = if data.starts_with("data:") {
+                    data
                 } else {
-                    format!("data:{};base64,{}", image.mime_type, image.data)
+                    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
+                    format!("data:{mime_type};base64,{data}")
                 };
-                items.push(FunctionCallOutputContentItem::InputImage { image_url });
+                FunctionCallOutputContentItem::InputImage { image_url }
             }
-            // TODO: render audio, resource, and embedded resource content to the model.
-            _ => return None,
-        }
+            Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
+                text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
+            },
+        };
+        items.push(item);
     }
 
     if saw_image { Some(items) } else { None }
 }
 
 // Implement Display so callers can treat the payload like a plain string when logging or doing
-// trivial substring checks in tests (existing tests call `.contains()` on the output). Display
-// returns the raw `content` field.
+// trivial substring checks in tests (existing tests call `.contains()` on the output). For
+// `ContentItems`, Display emits a JSON representation.
 
 impl std::fmt::Display for FunctionCallOutputPayload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.content)
-    }
-}
-
-impl std::ops::Deref for FunctionCallOutputPayload {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.content
+        match &self.body {
+            FunctionCallOutputBody::Text(content) => f.write_str(content),
+            FunctionCallOutputBody::ContentItems(items) => {
+                let content = serde_json::to_string(items).unwrap_or_default();
+                f.write_str(content.as_str())
+            }
+        }
     }
 }
 
@@ -936,11 +1065,108 @@ mod tests {
     use crate::protocol::AskForApproval;
     use anyhow::Result;
     use codex_execpolicy::Policy;
-    use mcp_types::ImageContent;
-    use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn convert_mcp_content_to_items_preserves_data_urls() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "data:image/png;base64,Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_builds_data_urls_when_missing_prefix() {
+        let contents = vec![serde_json::json!({
+            "type": "image",
+            "data": "Zm9v",
+            "mimeType": "image/png",
+        })];
+
+        let items = convert_mcp_content_to_items(&contents).expect("expected image items");
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,Zm9v".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn convert_mcp_content_to_items_returns_none_without_images() {
+        let contents = vec![serde_json::json!({
+            "type": "text",
+            "text": "hello",
+        })];
+
+        assert_eq!(convert_mcp_content_to_items(&contents), None);
+    }
+
+    #[test]
+    fn function_call_output_content_items_to_text_joins_text_segments() {
+        let content_items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line 1".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "line 2".to_string(),
+            },
+        ];
+
+        let text = function_call_output_content_items_to_text(&content_items);
+        assert_eq!(text, Some("line 1\nline 2".to_string()));
+    }
+
+    #[test]
+    fn function_call_output_content_items_to_text_ignores_blank_text_and_images() {
+        let content_items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "   ".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+        ];
+
+        let text = function_call_output_content_items_to_text(&content_items);
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn function_call_output_body_to_text_returns_plain_text_content() {
+        let body = FunctionCallOutputBody::Text("ok".to_string());
+        let text = body.to_text();
+        assert_eq!(text, Some("ok".to_string()));
+    }
+
+    #[test]
+    fn function_call_output_body_to_text_uses_content_item_fallback() {
+        let body = FunctionCallOutputBody::ContentItems(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "line 1".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+        ]);
+
+        let text = body.to_text();
+        assert_eq!(text, Some("line 1".to_string()));
+    }
 
     #[test]
     fn converts_sandbox_mode_into_developer_instructions() {
@@ -1088,10 +1314,7 @@ mod tests {
     fn serializes_success_as_plain_string() -> Result<()> {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
-            output: FunctionCallOutputPayload {
-                content: "ok".into(),
-                ..Default::default()
-            },
+            output: FunctionCallOutputPayload::from_text("ok".into()),
         };
 
         let json = serde_json::to_string(&item)?;
@@ -1107,9 +1330,8 @@ mod tests {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
-                content: "bad".into(),
+                body: FunctionCallOutputBody::Text("bad".into()),
                 success: Some(false),
-                ..Default::default()
             },
         };
 
@@ -1124,25 +1346,20 @@ mod tests {
     fn serializes_image_outputs_as_array() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![
-                ContentBlock::TextContent(TextContent {
-                    annotations: None,
-                    text: "caption".into(),
-                    r#type: "text".into(),
-                }),
-                ContentBlock::ImageContent(ImageContent {
-                    annotations: None,
-                    data: "BASE64".into(),
-                    mime_type: "image/png".into(),
-                    r#type: "image".into(),
-                }),
+                serde_json::json!({"type":"text","text":"caption"}),
+                serde_json::json!({"type":"image","data":"BASE64","mimeType":"image/png"}),
             ],
-            is_error: None,
             structured_content: None,
+            is_error: Some(false),
+            meta: None,
         };
 
         let payload = FunctionCallOutputPayload::from(&call_tool_result);
         assert_eq!(payload.success, Some(true));
-        let items = payload.content_items.clone().expect("content items");
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        let items = items.to_vec();
         assert_eq!(
             items,
             vec![
@@ -1170,6 +1387,34 @@ mod tests {
     }
 
     #[test]
+    fn preserves_existing_image_data_urls() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "data:image/png;base64,BASE64",
+                "mimeType": "image/png"
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = FunctionCallOutputPayload::from(&call_tool_result);
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        let items = items.to_vec();
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,BASE64".into(),
+            }]
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn deserializes_array_payload_into_items() -> Result<()> {
         let json = r#"[
             {"type": "input_text", "text": "note"},
@@ -1187,10 +1432,14 @@ mod tests {
                 image_url: "data:image/png;base64,XYZ".into(),
             },
         ];
-        assert_eq!(payload.content_items, Some(expected_items.clone()));
-
-        let expected_content = serde_json::to_string(&expected_items)?;
-        assert_eq!(payload.content, expected_content);
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(expected_items.clone())
+        );
+        assert_eq!(
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&expected_items)?
+        );
 
         Ok(())
     }

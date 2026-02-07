@@ -82,7 +82,7 @@ async fn start_review_conversation(
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
-    let config = ctx.client.config();
+    let config = ctx.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
@@ -94,7 +94,7 @@ async fn start_review_conversation(
     let model = config
         .review_model
         .clone()
-        .unwrap_or_else(|| ctx.client.get_model());
+        .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
     (run_codex_thread_one_shot(
         sub_agent_config,
@@ -222,6 +222,7 @@ pub(crate) async fn exit_review_mode(
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 end_turn: None,
+                phase: None,
             }],
         )
         .await;
@@ -241,6 +242,7 @@ pub(crate) async fn exit_review_mode(
                     text: assistant_message,
                 }],
                 end_turn: None,
+                phase: None,
             },
         )
         .await;

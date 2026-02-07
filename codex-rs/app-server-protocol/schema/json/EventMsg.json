@@ -93,34 +93,6 @@
         }
       ]
     },
-    "Annotations": {
-      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
-      "properties": {
-        "audience": {
-          "items": {
-            "$ref": "#/definitions/Role"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "lastModified": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "priority": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -154,57 +126,6 @@
         }
       ]
     },
-    "AudioContent": {
-      "description": "Audio provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
-      ],
-      "type": "object"
-    },
-    "BlobResourceContents": {
-      "properties": {
-        "blob": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "blob",
-        "uri"
-      ],
-      "type": "object"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -229,10 +150,9 @@
     "CallToolResult": {
       "description": "The server's response to a tool call.",
       "properties": {
+        "_meta": true,
         "content": {
-          "items": {
-            "$ref": "#/definitions/ContentBlock"
-          },
+          "items": true,
           "type": "array"
         },
         "isError": {
@@ -390,25 +310,6 @@
         }
       ]
     },
-    "ContentBlock": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextContent"
-        },
-        {
-          "$ref": "#/definitions/ImageContent"
-        },
-        {
-          "$ref": "#/definitions/AudioContent"
-        },
-        {
-          "$ref": "#/definitions/ResourceLink"
-        },
-        {
-          "$ref": "#/definitions/EmbeddedResource"
-        }
-      ]
-    },
     "ContentItem": {
       "oneOf": [
         {
@@ -544,42 +445,6 @@
       ],
       "type": "object"
     },
-    "EmbeddedResource": {
-      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resource": {
-          "$ref": "#/definitions/EmbeddedResourceResource"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "resource",
-        "type"
-      ],
-      "type": "object"
-    },
-    "EmbeddedResourceResource": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/TextResourceContents"
-        },
-        {
-          "$ref": "#/definitions/BlobResourceContents"
-        }
-      ]
-    },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
       "oneOf": [
@@ -686,7 +551,7 @@
                   "$ref": "#/definitions/ModeKind"
                 }
               ],
-              "default": "code"
+              "default": "default"
             },
             "model_context_window": {
               "format": "int64",
@@ -2148,6 +2013,59 @@
           "type": "object"
         },
         {
+          "description": "List of remote skills available to the agent.",
+          "properties": {
+            "skills": {
+              "items": {
+                "$ref": "#/definitions/RemoteSkillSummary"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "list_remote_skills_response"
+              ],
+              "title": "ListRemoteSkillsResponseEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "skills",
+            "type"
+          ],
+          "title": "ListRemoteSkillsResponseEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Remote skill downloaded to local cache.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remote_skill_downloaded"
+              ],
+              "title": "RemoteSkillDownloadedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "RemoteSkillDownloadedEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Notification that skill data may have been updated and clients may want to reload.",
           "properties": {
             "type": {
@@ -2946,6 +2864,19 @@
         }
       ]
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -2992,19 +2923,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses/Chat Completions APIs understand.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -3014,7 +2936,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -3068,36 +2990,6 @@
         "conversation_id",
         "text",
         "ts"
-      ],
-      "type": "object"
-    },
-    "ImageContent": {
-      "description": "An image provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType",
-        "type"
       ],
       "type": "object"
     },
@@ -3276,14 +3168,18 @@
         }
       ]
     },
+    "MessagePhase": {
+      "enum": [
+        "commentary",
+        "final_answer"
+      ],
+      "type": "string"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "code",
-        "pair_programming",
-        "execute",
-        "custom"
+        "default"
       ],
       "type": "string"
     },
@@ -3590,6 +3486,25 @@
         }
       ]
     },
+    "RemoteSkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -3599,7 +3514,8 @@
           "format": "int64",
           "type": "integer"
         }
-      ]
+      ],
+      "description": "ID of a request, which can be either a string or an integer."
     },
     "RequestUserInputQuestion": {
       "properties": {
@@ -3655,19 +3571,18 @@
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -3699,61 +3614,6 @@
       },
       "required": [
         "name",
-        "uri"
-      ],
-      "type": "object"
-    },
-    "ResourceLink": {
-      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "size": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
         "uri"
       ],
       "type": "object"
@@ -3761,16 +3621,7 @@
     "ResourceTemplate": {
       "description": "A template description for resources available on the server.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "annotations": true,
         "description": {
           "type": [
             "string",
@@ -3824,6 +3675,16 @@
                 "null"
               ],
               "writeOnly": true
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "role": {
               "type": "string"
@@ -3901,7 +3762,7 @@
               ]
             },
             "id": {
-              "description": "Set when using the chat completions API.",
+              "description": "Legacy id field retained for compatibility with older payloads.",
               "type": [
                 "string",
                 "null"
@@ -4361,14 +4222,6 @@
         }
       ]
     },
-    "Role": {
-      "description": "The sender or recipient of messages and data in a conversation.",
-      "enum": [
-        "assistant",
-        "user"
-      ],
-      "type": "string"
-    },
     "SandboxPolicy": {
       "description": "Determines execution restrictions for model shell commands.",
       "oneOf": [
@@ -4678,32 +4531,6 @@
       ],
       "type": "string"
     },
-    "TextContent": {
-      "description": "Text provided to or from an LLM.",
-      "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "type"
-      ],
-      "type": "object"
-    },
     "TextElement": {
       "properties": {
         "byte_range": {
@@ -4724,27 +4551,6 @@
       },
       "required": [
         "byte_range"
-      ],
-      "type": "object"
-    },
-    "TextResourceContents": {
-      "properties": {
-        "mimeType": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "uri": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "text",
-        "uri"
       ],
       "type": "object"
     },
@@ -4808,38 +4614,26 @@
     "Tool": {
       "description": "Definition for a tool the client can call.",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolAnnotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "_meta": true,
+        "annotations": true,
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "inputSchema": {
-          "$ref": "#/definitions/ToolInputSchema"
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
         },
+        "inputSchema": true,
         "name": {
           "type": "string"
         },
-        "outputSchema": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolOutputSchema"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
+        "outputSchema": true,
         "title": {
           "type": [
             "string",
@@ -4851,82 +4645,6 @@
         "inputSchema",
         "name"
       ],
-      "type": "object"
-    },
-    "ToolAnnotations": {
-      "description": "Additional properties describing a Tool to clients.\n\nNOTE: all properties in ToolAnnotations are **hints**. They are not guaranteed to provide a faithful description of tool behavior (including descriptive properties like `title`).\n\nClients should never make tool use decisions based on ToolAnnotations received from untrusted servers.",
-      "properties": {
-        "destructiveHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "idempotentHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "openWorldHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "readOnlyHint": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ToolInputSchema": {
-      "description": "A JSON Schema object defining the expected parameters for the tool.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "ToolOutputSchema": {
-      "description": "An optional JSON Schema object defining the structure of the tool's output returned in the structuredContent field of a CallToolResult.",
-      "properties": {
-        "properties": true,
-        "required": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "type": {
-          "default": "object",
-          "type": "string"
-        }
-      },
       "type": "object"
     },
     "TurnAbortReason": {
@@ -5433,7 +5151,7 @@
               "$ref": "#/definitions/ModeKind"
             }
           ],
-          "default": "code"
+          "default": "default"
         },
         "model_context_window": {
           "format": "int64",
@@ -6892,6 +6610,59 @@
         "type"
       ],
       "title": "ListSkillsResponseEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "List of remote skills available to the agent.",
+      "properties": {
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/RemoteSkillSummary"
+          },
+          "type": "array"
+        },
+        "type": {
+          "enum": [
+            "list_remote_skills_response"
+          ],
+          "title": "ListRemoteSkillsResponseEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "skills",
+        "type"
+      ],
+      "title": "ListRemoteSkillsResponseEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Remote skill downloaded to local cache.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "remote_skill_downloaded"
+          ],
+          "title": "RemoteSkillDownloadedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "path",
+        "type"
+      ],
+      "title": "RemoteSkillDownloadedEventMsg",
       "type": "object"
     },
     {

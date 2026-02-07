@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_string::sanitize_metric_tag_value;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs;
@@ -22,6 +23,8 @@ pub enum SetupErrorCode {
     OrchestratorPayloadSerializeFailed,
     /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
     OrchestratorHelperLaunchFailed,
+    /// User canceled the UAC prompt while launching the helper.
+    OrchestratorHelperLaunchCanceled,
     /// Helper exited non-zero and no structured report was available.
     OrchestratorHelperExitNonzero,
     /// Helper exited non-zero and reading `setup_error.json` failed.
@@ -72,6 +75,7 @@ impl SetupErrorCode {
             Self::OrchestratorElevationCheckFailed => "orchestrator_elevation_check_failed",
             Self::OrchestratorPayloadSerializeFailed => "orchestrator_payload_serialize_failed",
             Self::OrchestratorHelperLaunchFailed => "orchestrator_helper_launch_failed",
+            Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
@@ -123,7 +127,7 @@ impl SetupFailure {
     }
 
     pub fn metric_message(&self) -> String {
-        sanitize_tag_value(&self.message)
+        sanitize_setup_metric_tag_value(&self.message)
     }
 }
 
@@ -178,30 +182,9 @@ pub fn read_setup_error_report(codex_home: &Path) -> Result<Option<SetupErrorRep
     Ok(Some(report))
 }
 
-/// Sanitize a tag value to comply with metric tag validation rules:
-/// only ASCII alphanumeric, '.', '_', '-', and '/' are allowed.
-pub fn sanitize_tag_value(value: &str) -> String {
-    const MAX_LEN: usize = 256;
-    let redacted = redact_home_paths(value);
-    let sanitized: String = redacted
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let trimmed = sanitized.trim_matches('_');
-    if trimmed.is_empty() {
-        return "unspecified".to_string();
-    }
-    if trimmed.len() <= MAX_LEN {
-        trimmed.to_string()
-    } else {
-        trimmed[..MAX_LEN].to_string()
-    }
+/// Sanitize a setup error message for use as a metric tag.
+pub fn sanitize_setup_metric_tag_value(value: &str) -> String {
+    sanitize_metric_tag_value(redact_home_paths(value).as_str())
 }
 
 fn redact_home_paths(value: &str) -> String {
@@ -264,7 +247,7 @@ fn redact_username_segments(value: &str, usernames: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::redact_username_segments;
     use pretty_assertions::assert_eq;
 
     #[test]

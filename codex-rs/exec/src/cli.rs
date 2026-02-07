@@ -30,7 +30,7 @@ pub struct Cli {
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
-    /// Specify which local provider to use (lmstudio, ollama, or ollama-chat).
+    /// Specify which local provider to use (lmstudio or ollama).
     /// If not specified with --oss, will use config default or show selection.
     #[arg(long = "local-provider")]
     pub oss_provider: Option<String>,
@@ -70,6 +70,10 @@ pub struct Cli {
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
+
+    /// Run without persisting session files to disk.
+    #[arg(long = "ephemeral", global = true, default_value_t = false)]
+    pub ephemeral: bool,
 
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
@@ -262,9 +266,11 @@ mod tests {
             "gpt-5.2-codex",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
+            "--ephemeral",
             PROMPT,
         ]);
 
+        assert!(cli.ephemeral);
         let Some(Command::Resume(args)) = cli.command else {
             panic!("expected resume command");
         };
