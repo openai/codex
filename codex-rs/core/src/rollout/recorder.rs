@@ -40,7 +40,6 @@ use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -75,7 +74,6 @@ pub enum RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
-        defer_until_first_user_message: bool,
     },
     Resume {
         path: PathBuf,
@@ -84,6 +82,9 @@ pub enum RolloutRecorderParams {
 
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
+    Persist {
+        ack: oneshot::Sender<()>,
+    },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
         ack: oneshot::Sender<()>,
@@ -100,7 +101,6 @@ impl RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
-        defer_until_first_user_message: bool,
     ) -> Self {
         Self::Create {
             conversation_id,
@@ -108,7 +108,6 @@ impl RolloutRecorderParams {
             source,
             base_instructions,
             dynamic_tools,
-            defer_until_first_user_message,
         }
     }
 
@@ -286,9 +285,10 @@ impl RolloutRecorder {
 
     /// Attempt to create a new [`RolloutRecorder`].
     ///
-    /// For immediate-create sessions, this creates/open the rollout file up
-    /// front. For deferred fresh sessions, this only precomputes path/metadata
-    /// and defers file creation/open until the first user message.
+    /// For newly created sessions, this precomputes path/metadata and defers
+    /// file creation/open until an explicit `persist()` call.
+    ///
+    /// For resumed sessions, this immediately opens the existing rollout file.
     pub async fn new(
         config: &Config,
         params: RolloutRecorderParams,
@@ -302,7 +302,6 @@ impl RolloutRecorder {
                 source,
                 base_instructions,
                 dynamic_tools,
-                defer_until_first_user_message,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -334,22 +333,7 @@ impl RolloutRecorder {
                     },
                 };
 
-                let file = if defer_until_first_user_message {
-                    None
-                } else {
-                    Some(tokio::fs::File::from_std(open_log_file(path.as_path())?))
-                };
-
-                (
-                    file,
-                    if defer_until_first_user_message {
-                        Some(log_file_info)
-                    } else {
-                        None
-                    },
-                    path,
-                    Some(session_meta),
-                )
+                (None, Some(log_file_info), path, Some(session_meta))
             }
             RolloutRecorderParams::Resume { path } => (
                 Some(
@@ -419,6 +403,19 @@ impl RolloutRecorder {
             .send(RolloutCmd::AddItems(filtered))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+    }
+
+    /// Materialize the rollout file and persist all buffered items.
+    ///
+    /// This is idempotent; after first materialization, repeated calls are no-ops.
+    pub async fn persist(&self) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::Persist { ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -605,7 +602,8 @@ async fn rollout_writer(
         builder.rollout_path = rollout_path.clone();
     }
 
-    // For non-deferred new sessions and resume sessions, write session metadata immediately.
+    // Resumed sessions already have a file handle open, so session metadata can
+    // be written immediately if present.
     if writer.is_some()
         && let Some(session_meta) = meta.take()
     {
@@ -637,47 +635,6 @@ async fn rollout_writer(
 
                 if writer.is_none() {
                     buffered_items.extend(persisted_items);
-                    let saw_first_user_message =
-                        buffered_items.iter().any(is_user_message_rollout_item);
-                    if !saw_first_user_message {
-                        continue;
-                    }
-
-                    let Some(log_file_info) = deferred_log_file_info.take() else {
-                        return Err(IoError::other(
-                            "deferred rollout recorder missing log file metadata",
-                        ));
-                    };
-                    let file = open_log_file(log_file_info.path.as_path())?;
-                    writer = Some(JsonlWriter {
-                        file: tokio::fs::File::from_std(file),
-                    });
-
-                    if let Some(session_meta) = meta.take() {
-                        write_session_meta(
-                            writer.as_mut(),
-                            session_meta,
-                            &cwd,
-                            &rollout_path,
-                            state_db_ctx.as_deref(),
-                            &mut state_builder,
-                            default_provider.as_str(),
-                        )
-                        .await?;
-                    }
-
-                    if !buffered_items.is_empty() {
-                        write_and_reconcile_items(
-                            writer.as_mut(),
-                            buffered_items.as_slice(),
-                            &rollout_path,
-                            state_db_ctx.as_deref(),
-                            &mut state_builder,
-                            default_provider.as_str(),
-                        )
-                        .await?;
-                        buffered_items.clear();
-                    }
                     continue;
                 }
 
@@ -690,6 +647,56 @@ async fn rollout_writer(
                     default_provider.as_str(),
                 )
                 .await?;
+            }
+            RolloutCmd::Persist { ack } => {
+                if writer.is_none() {
+                    let result = async {
+                        let Some(log_file_info) = deferred_log_file_info.take() else {
+                            return Err(IoError::other(
+                                "deferred rollout recorder missing log file metadata",
+                            ));
+                        };
+                        let file = open_log_file(log_file_info.path.as_path())?;
+                        writer = Some(JsonlWriter {
+                            file: tokio::fs::File::from_std(file),
+                        });
+
+                        if let Some(session_meta) = meta.take() {
+                            write_session_meta(
+                                writer.as_mut(),
+                                session_meta,
+                                &cwd,
+                                &rollout_path,
+                                state_db_ctx.as_deref(),
+                                &mut state_builder,
+                                default_provider.as_str(),
+                            )
+                            .await?;
+                        }
+
+                        if !buffered_items.is_empty() {
+                            write_and_reconcile_items(
+                                writer.as_mut(),
+                                buffered_items.as_slice(),
+                                &rollout_path,
+                                state_db_ctx.as_deref(),
+                                &mut state_builder,
+                                default_provider.as_str(),
+                            )
+                            .await?;
+                            buffered_items.clear();
+                        }
+
+                        Ok(())
+                    }
+                    .await;
+
+                    if let Err(err) = result {
+                        let _ = ack.send(());
+                        return Err(err);
+                    }
+                }
+                let _ = ack.send(());
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.
@@ -708,10 +715,6 @@ async fn rollout_writer(
     }
 
     Ok(())
-}
-
-fn is_user_message_rollout_item(item: &RolloutItem) -> bool {
-    matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_)))
 }
 
 async fn write_session_meta(
@@ -896,7 +899,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn deferred_recorder_materializes_rollout_on_first_user_message() -> std::io::Result<()> {
+    async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
         let home = TempDir::new().expect("temp dir");
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
@@ -911,7 +914,6 @@ mod tests {
                 SessionSource::Exec,
                 BaseInstructions::default(),
                 Vec::new(),
-                true,
             ),
             None,
             None,
@@ -949,9 +951,14 @@ mod tests {
             .await?;
         recorder.flush().await?;
         assert!(
-            rollout_path.exists(),
-            "rollout file should be created after first user message"
+            !rollout_path.exists(),
+            "user-message-like items should not materialize without explicit persist"
         );
+
+        recorder.persist().await?;
+        // Second call verifies `persist()` is idempotent after materialization.
+        recorder.persist().await?;
+        assert!(rollout_path.exists(), "rollout file should be materialized");
 
         let text = std::fs::read_to_string(&rollout_path)?;
         assert!(
@@ -968,6 +975,8 @@ mod tests {
             buffered_idx < user_idx,
             "buffered items should preserve ordering"
         );
+        let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
+        assert_eq!(text_after_second_persist, text);
 
         recorder.shutdown().await?;
         Ok(())
