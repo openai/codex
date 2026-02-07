@@ -173,16 +173,12 @@ pub async fn main_execve_wrapper() -> anyhow::Result<()> {
 ///
 /// `file` is the absolute, canonical path to the executable to run, i.e. the first arg to exec.
 /// `argv` is the argv, including the program name (`argv[0]`).
-/// `workdir` is the shell working directory used to detect workdir-local binaries.
 pub(crate) fn evaluate_exec_policy(
     policy: &Policy,
     file: &Path,
     argv: &[String],
-    workdir: &Path,
     preserve_program_paths: bool,
 ) -> Result<ExecPolicyOutcome, McpError> {
-    let preserve_program_paths =
-        should_preserve_program_paths(file, argv, workdir, preserve_program_paths);
     let program_name = format_program_name(file, preserve_program_paths).ok_or_else(|| {
         McpError::internal_error(
             format!("failed to format program name for `{}`", file.display()),
@@ -194,10 +190,7 @@ pub(crate) fn evaluate_exec_policy(
         .chain(argv.iter().skip(1).cloned())
         .collect();
     let evaluation = policy.check(&command, &|cmd| {
-        // Keep dangerous-command heuristics stable even when policy evaluation
-        // needs a full program path.
-        let normalized_for_heuristics = normalize_program_name_for_heuristics(cmd);
-        if command_might_be_dangerous(&normalized_for_heuristics) {
+        if command_might_be_dangerous(cmd) {
             Decision::Prompt
         } else {
             Decision::Allow
@@ -225,61 +218,6 @@ pub(crate) fn evaluate_exec_policy(
             sandbox_permissions,
         },
     })
-}
-
-/// Decide whether execpolicy matching should use full program paths.
-///
-/// Security rules:
-/// - Always preserve paths for path-qualified invocations (for example `./git`).
-/// - Preserve paths for binaries resolved under `workdir` to avoid basename
-///   authorization confusion for repo-local executables.
-/// - Otherwise keep basename matching for compatibility with existing rules.
-fn should_preserve_program_paths(
-    file: &Path,
-    argv: &[String],
-    workdir: &Path,
-    preserve_program_paths: bool,
-) -> bool {
-    if preserve_program_paths {
-        return true;
-    }
-
-    // Path-qualified invocations (for example `./git` or `/tmp/git`) must not
-    // be reduced to basenames when evaluating escalation policy.
-    if let Some(argv0) = argv.first()
-        && Path::new(argv0).components().count() > 1
-    {
-        return true;
-    }
-
-    // Protect against PATH-based hijacks that resolve to workdir-local binaries
-    // while preserving basename matching for normal system binaries.
-    //
-    // Skip this for root (`/`) workdirs because every absolute path would
-    // otherwise match.
-    workdir.parent().is_some() && file.starts_with(workdir)
-}
-
-/// Normalize command argv for dangerous-command heuristics.
-///
-/// Policy matching may intentionally preserve full paths, but dangerous-command
-/// detection is keyed off command basenames (for example `rm` and `git`).
-/// This helper keeps heuristics behavior stable by converting `argv[0]` to a
-/// basename while leaving the remaining args unchanged.
-fn normalize_program_name_for_heuristics(command: &[String]) -> Vec<String> {
-    let Some((cmd0, args)) = command.split_first() else {
-        return Vec::new();
-    };
-
-    let normalized_cmd0 = Path::new(cmd0)
-        .file_name()
-        .and_then(|osstr| osstr.to_str())
-        .unwrap_or(cmd0)
-        .to_string();
-
-    std::iter::once(normalized_cmd0)
-        .chain(args.iter().cloned())
-        .collect()
 }
 
 fn format_program_name(path: &Path, preserve_program_paths: bool) -> Option<String> {
@@ -325,11 +263,9 @@ mod tests {
     fn evaluate_exec_policy_uses_heuristics_for_dangerous_commands() {
         let policy = Policy::empty();
         let file = Path::new("/bin/rm");
-        let workdir = Path::new("/tmp");
         let argv = vec!["rm".to_string(), "-rf".to_string(), "/".to_string()];
 
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, false).expect("policy evaluation");
+        let outcome = evaluate_exec_policy(&policy, file, &argv, false).expect("policy evaluation");
 
         assert_eq!(
             outcome,
@@ -352,95 +288,18 @@ mod tests {
             )
             .expect("policy rule should be added");
         let file = Path::new("/usr/local/bin/custom-cmd");
-        let workdir = Path::new("/tmp");
         let argv = vec![
             "/usr/local/bin/custom-cmd".to_string(),
             "--flag".to_string(),
             "value".to_string(),
         ];
 
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, true).expect("policy evaluation");
+        let outcome = evaluate_exec_policy(&policy, file, &argv, true).expect("policy evaluation");
 
         assert_eq!(
             outcome,
             ExecPolicyOutcome::Allow {
                 sandbox_permissions: SandboxPermissions::RequireEscalated
-            }
-        );
-    }
-
-    #[test]
-    fn evaluate_exec_policy_does_not_escalate_basename_rule_when_paths_preserved() {
-        let mut policy = Policy::empty();
-        policy
-            .add_prefix_rule(&["git".to_string(), "status".to_string()], Decision::Allow)
-            .expect("policy rule should be added");
-        let file = Path::new("/tmp/repo/git");
-        let workdir = Path::new("/tmp/repo");
-        let argv = vec!["git".to_string(), "status".to_string()];
-
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, false).expect("policy evaluation");
-
-        assert_eq!(
-            outcome,
-            ExecPolicyOutcome::Allow {
-                sandbox_permissions: SandboxPermissions::UseDefault
-            }
-        );
-    }
-
-    #[test]
-    fn evaluate_exec_policy_path_preservation_still_prompts_for_dangerous_commands() {
-        let policy = Policy::empty();
-        let file = Path::new("/tmp/repo/rm");
-        let workdir = Path::new("/tmp/repo");
-        let argv = vec!["./rm".to_string(), "-rf".to_string(), "/".to_string()];
-
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, false).expect("policy evaluation");
-
-        assert_eq!(
-            outcome,
-            ExecPolicyOutcome::Prompt {
-                sandbox_permissions: SandboxPermissions::UseDefault
-            }
-        );
-    }
-
-    #[test]
-    fn evaluate_exec_policy_default_git_runs_in_sandbox() {
-        let policy = Policy::empty();
-        let file = Path::new("/usr/bin/git");
-        let workdir = Path::new("/tmp/repo");
-        let argv = vec!["git".to_string(), "status".to_string()];
-
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, false).expect("policy evaluation");
-
-        assert_eq!(
-            outcome,
-            ExecPolicyOutcome::Allow {
-                sandbox_permissions: SandboxPermissions::UseDefault
-            }
-        );
-    }
-
-    #[test]
-    fn evaluate_exec_policy_default_dot_git_runs_in_sandbox() {
-        let policy = Policy::empty();
-        let file = Path::new("/tmp/repo/git");
-        let workdir = Path::new("/tmp/repo");
-        let argv = vec!["./git".to_string(), "status".to_string()];
-
-        let outcome =
-            evaluate_exec_policy(&policy, file, &argv, workdir, false).expect("policy evaluation");
-
-        assert_eq!(
-            outcome,
-            ExecPolicyOutcome::Allow {
-                sandbox_permissions: SandboxPermissions::UseDefault
             }
         );
     }

@@ -105,13 +105,8 @@ impl EscalationPolicy for McpEscalationPolicy {
         workdir: &Path,
     ) -> Result<EscalateAction, rmcp::ErrorData> {
         let policy = self.policy.read().await;
-        let outcome = crate::posix::evaluate_exec_policy(
-            &policy,
-            file,
-            argv,
-            workdir,
-            self.preserve_program_paths,
-        )?;
+        let outcome =
+            crate::posix::evaluate_exec_policy(&policy, file, argv, self.preserve_program_paths)?;
         let action = match outcome {
             ExecPolicyOutcome::Allow {
                 sandbox_permissions,
