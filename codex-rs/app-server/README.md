@@ -88,6 +88,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
+- `thread/close` — unload a thread from memory; if a turn is active, the server interrupts it and shuts the thread down before emitting `thread/closed`.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
@@ -216,6 +217,16 @@ When `nextCursor` is `null`, you’ve reached the final page.
 { "id": 21, "result": {
     "data": ["thr_123", "thr_456"]
 } }
+```
+
+### Example: Close a loaded thread
+
+`thread/close` unloads a thread from memory without archiving its rollout. If a turn is running, the server interrupts it, completes shutdown, and then emits `thread/closed`.
+
+```json
+{ "method": "thread/close", "id": 22, "params": { "threadId": "thr_123" } }
+{ "id": 22, "result": {} }
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Read a thread
@@ -473,7 +484,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/closed`, `turn/*`, and `item/*` notifications.
 
 ### Turn events
 

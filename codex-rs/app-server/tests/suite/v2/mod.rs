@@ -16,6 +16,7 @@ mod rate_limits;
 mod request_user_input;
 mod review;
 mod thread_archive;
+mod thread_close;
 mod thread_fork;
 mod thread_list;
 mod thread_loaded_list;

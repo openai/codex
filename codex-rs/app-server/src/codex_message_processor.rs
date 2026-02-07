@@ -109,6 +109,9 @@ use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -503,6 +506,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadClose { request_id, params } => {
+                self.thread_close(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadSetName { request_id, params } => {
@@ -4095,6 +4102,75 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_close(&mut self, request_id: ConnectionRequestId, params: ThreadCloseParams) {
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        if let Some(thread) = self.thread_manager.remove_thread(&thread_id).await {
+            info!("thread {thread_id} was active; shutting down");
+            match thread.submit(Op::Shutdown).await {
+                Ok(_) => {
+                    let wait_for_shutdown = async {
+                        loop {
+                            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    };
+                    if tokio::time::timeout(Duration::from_secs(10), wait_for_shutdown)
+                        .await
+                        .is_err()
+                    {
+                        warn!("thread {thread_id} shutdown timed out; proceeding with close");
+                    }
+                }
+                Err(err) => {
+                    warn!("failed to submit Shutdown to thread {thread_id}: {err}");
+                }
+            }
+
+            let notification = ThreadClosedNotification {
+                thread_id: thread_id.to_string(),
+            };
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadClosed(notification))
+                .await;
+        }
+
+        self.cleanup_thread_runtime_state(thread_id).await;
+        self.outgoing
+            .send_response(request_id, ThreadCloseResponse {})
+            .await;
+    }
+
+    async fn cleanup_thread_runtime_state(&mut self, thread_id: ThreadId) {
+        let subscription_ids: Vec<Uuid> = self
+            .listener_thread_ids_by_subscription
+            .iter()
+            .filter_map(|(subscription_id, listener_thread_id)| {
+                (*listener_thread_id == thread_id).then_some(*subscription_id)
+            })
+            .collect();
+        for subscription_id in subscription_ids {
+            if let Some(cancel_tx) = self.conversation_listeners.remove(&subscription_id) {
+                let _ = cancel_tx.send(());
+            }
+            self.listener_thread_ids_by_subscription
+                .remove(&subscription_id);
+        }
+
+        self.pending_interrupts.lock().await.remove(&thread_id);
+        self.pending_rollbacks.lock().await.remove(&thread_id);
+        self.turn_summary_store.lock().await.remove(&thread_id);
+    }
+
     async fn archive_thread_common(
         &mut self,
         thread_id: ThreadId,
@@ -4189,6 +4265,8 @@ impl CodexMessageProcessor {
                 }
             }
         }
+
+        self.cleanup_thread_runtime_state(thread_id).await;
 
         if state_db_ctx.is_none() {
             state_db_ctx = open_if_present(
