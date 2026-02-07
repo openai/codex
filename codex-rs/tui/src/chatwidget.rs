@@ -4024,6 +4024,8 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
