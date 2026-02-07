@@ -37,7 +37,7 @@ pub use config_requirements::ConfigRequirementsToml;
 pub use config_requirements::ConstrainedWithSource;
 pub use config_requirements::McpServerIdentity;
 pub use config_requirements::McpServerRequirement;
-pub use config_requirements::NetworkRequirements;
+pub use config_requirements::NetworkConstraints;
 pub use config_requirements::NetworkRequirementsToml;
 pub use config_requirements::RequirementSource;
 pub use config_requirements::ResidencyRequirement;

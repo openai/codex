@@ -82,7 +82,7 @@ pub struct ConfigRequirements {
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
-    pub network: Option<Sourced<NetworkRequirements>>,
+    pub network: Option<Sourced<NetworkConstraints>>,
 }
 
 impl Default for ConfigRequirements {
@@ -142,7 +142,7 @@ pub struct NetworkRequirementsToml {
 
 /// Normalized network constraints derived from requirements TOML.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NetworkRequirements {
+pub struct NetworkConstraints {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
@@ -155,7 +155,7 @@ pub struct NetworkRequirements {
     pub allow_local_binding: Option<bool>,
 }
 
-impl From<NetworkRequirementsToml> for NetworkRequirements {
+impl From<NetworkRequirementsToml> for NetworkConstraints {
     fn from(value: NetworkRequirementsToml) -> Self {
         let NetworkRequirementsToml {
             enabled,
@@ -541,7 +541,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         };
         let network = network.map(|sourced_network| {
             let Sourced { value, source } = sourced_network;
-            Sourced::new(NetworkRequirements::from(value), source)
+            Sourced::new(NetworkConstraints::from(value), source)
         });
         Ok(ConfigRequirements {
             approval_policy,
