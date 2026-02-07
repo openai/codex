@@ -1209,21 +1209,29 @@ impl ChatWidget {
         } else {
             text
         };
+        // Plan commit ticks can hide the status row; remember whether we streamed plan output so
+        // completion can restore it once stream queues are idle.
+        let should_restore_after_stream = self.plan_stream_controller.is_some();
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
+        let finalized_streamed_cell =
+            if let Some(mut controller) = self.plan_stream_controller.take() {
+                controller.finalize()
+            } else {
+                None
+            };
+        if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
-            return;
+        } else if !plan_text.is_empty() {
+            self.add_to_history(history_cell::new_proposed_plan(plan_text));
         }
-        if plan_text.is_empty() {
-            return;
+        if should_restore_after_stream {
+            self.pending_status_indicator_restore = true;
+            self.maybe_restore_status_indicator_after_stream_idle();
         }
-        self.add_to_history(history_cell::new_proposed_plan(plan_text));
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {

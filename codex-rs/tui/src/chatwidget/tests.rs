@@ -2119,6 +2119,31 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
 }
 
 #[tokio::test]
+async fn plan_completion_restores_status_indicator_after_streaming_plan_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.on_plan_item_completed("- Step 1\n".to_string());
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+}
+
+#[tokio::test]
 async fn preamble_keeps_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
