@@ -1,5 +1,7 @@
+use crate::config::NetworkConfigTable;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::deserialize_network_proxy_config;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
@@ -47,9 +49,7 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
     // This avoids a second parser/merger implementation (and the drift that comes with it).
     let merged_toml = config_layer_stack.effective_config();
-    let config: NetworkProxyConfig = merged_toml
-        .try_into()
-        .context("failed to deserialize network proxy config")?;
+    let config = deserialize_network_proxy_config(merged_toml)?;
 
     // Security boundary: user-controlled layers must not be able to widen restrictions set by
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
@@ -94,30 +94,7 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
 #[derive(Debug, Default, Deserialize)]
 struct PartialConfig {
     #[serde(default)]
-    network_proxy: PartialNetworkProxyConfig,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PartialNetworkProxyConfig {
-    enabled: Option<bool>,
-    mode: Option<NetworkMode>,
-    allow_upstream_proxy: Option<bool>,
-    dangerously_allow_non_loopback_proxy: Option<bool>,
-    dangerously_allow_non_loopback_admin: Option<bool>,
-    #[serde(default)]
-    policy: PartialNetworkPolicy,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct PartialNetworkPolicy {
-    #[serde(default)]
-    allowed_domains: Option<Vec<String>>,
-    #[serde(default)]
-    denied_domains: Option<Vec<String>>,
-    #[serde(default)]
-    allow_unix_sockets: Option<Vec<String>>,
-    #[serde(default)]
-    allow_local_binding: Option<bool>,
+    network: Option<NetworkConfigTable>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -163,42 +140,49 @@ fn network_proxy_constraints_from_trusted_layers(
             .try_into()
             .context("failed to deserialize trusted config layer")?;
 
-        if let Some(enabled) = partial.network_proxy.enabled {
-            constraints.enabled = Some(enabled);
-        }
-        if let Some(mode) = partial.network_proxy.mode {
-            constraints.mode = Some(mode);
-        }
-        if let Some(allow_upstream_proxy) = partial.network_proxy.allow_upstream_proxy {
-            constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
-        }
-        if let Some(dangerously_allow_non_loopback_proxy) =
-            partial.network_proxy.dangerously_allow_non_loopback_proxy
-        {
-            constraints.dangerously_allow_non_loopback_proxy =
-                Some(dangerously_allow_non_loopback_proxy);
-        }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            partial.network_proxy.dangerously_allow_non_loopback_admin
-        {
-            constraints.dangerously_allow_non_loopback_admin =
-                Some(dangerously_allow_non_loopback_admin);
-        }
-
-        if let Some(allowed_domains) = partial.network_proxy.policy.allowed_domains {
-            constraints.allowed_domains = Some(allowed_domains);
-        }
-        if let Some(denied_domains) = partial.network_proxy.policy.denied_domains {
-            constraints.denied_domains = Some(denied_domains);
-        }
-        if let Some(allow_unix_sockets) = partial.network_proxy.policy.allow_unix_sockets {
-            constraints.allow_unix_sockets = Some(allow_unix_sockets);
-        }
-        if let Some(allow_local_binding) = partial.network_proxy.policy.allow_local_binding {
-            constraints.allow_local_binding = Some(allow_local_binding);
+        if let Some(network) = partial.network.as_ref() {
+            apply_network_constraints(&mut constraints, network);
         }
     }
     Ok(constraints)
+}
+
+fn apply_network_constraints(
+    constraints: &mut NetworkProxyConstraints,
+    entry: &NetworkConfigTable,
+) {
+    if let Some(enabled) = entry.enabled {
+        constraints.enabled = Some(enabled);
+    }
+    if let Some(mode) = entry.mode {
+        constraints.mode = Some(mode);
+    }
+    if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
+        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
+    }
+    if let Some(dangerously_allow_non_loopback_proxy) = entry.dangerously_allow_non_loopback_proxy {
+        constraints.dangerously_allow_non_loopback_proxy =
+            Some(dangerously_allow_non_loopback_proxy);
+    }
+    if let Some(dangerously_allow_non_loopback_admin) = entry.dangerously_allow_non_loopback_admin {
+        constraints.dangerously_allow_non_loopback_admin =
+            Some(dangerously_allow_non_loopback_admin);
+    }
+
+    if let Some(policy) = entry.policy.as_ref() {
+        if let Some(allowed_domains) = policy.allowed_domains.clone() {
+            constraints.allowed_domains = Some(allowed_domains);
+        }
+        if let Some(denied_domains) = policy.denied_domains.clone() {
+            constraints.denied_domains = Some(denied_domains);
+        }
+        if let Some(allow_unix_sockets) = policy.allow_unix_sockets.clone() {
+            constraints.allow_unix_sockets = Some(allow_unix_sockets);
+        }
+        if let Some(allow_local_binding) = policy.allow_local_binding {
+            constraints.allow_local_binding = Some(allow_local_binding);
+        }
+    }
 }
 
 fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
@@ -232,7 +216,7 @@ pub(crate) fn validate_policy_against_constraints(
         let _ = Constrained::new(enabled, move |candidate| {
             if *candidate && !max_enabled {
                 Err(invalid_value(
-                    "network_proxy.enabled",
+                    "network.enabled",
                     "true",
                     "false (disabled by managed config)",
                 ))
@@ -246,7 +230,7 @@ pub(crate) fn validate_policy_against_constraints(
         let _ = Constrained::new(config.network_proxy.mode, move |candidate| {
             if network_mode_rank(*candidate) > network_mode_rank(max_mode) {
                 Err(invalid_value(
-                    "network_proxy.mode",
+                    "network.mode",
                     format!("{candidate:?}"),
                     format!("{max_mode:?} or more restrictive"),
                 ))
@@ -264,7 +248,7 @@ pub(crate) fn validate_policy_against_constraints(
             Some(false) => {
                 if *candidate {
                     Err(invalid_value(
-                        "network_proxy.allow_upstream_proxy",
+                        "network.allow_upstream_proxy",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -283,7 +267,7 @@ pub(crate) fn validate_policy_against_constraints(
             Some(false) => {
                 if *candidate {
                     Err(invalid_value(
-                        "network_proxy.dangerously_allow_non_loopback_admin",
+                        "network.dangerously_allow_non_loopback_admin",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -302,7 +286,7 @@ pub(crate) fn validate_policy_against_constraints(
             Some(false) => {
                 if *candidate {
                     Err(invalid_value(
-                        "network_proxy.dangerously_allow_non_loopback_proxy",
+                        "network.dangerously_allow_non_loopback_proxy",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -319,7 +303,7 @@ pub(crate) fn validate_policy_against_constraints(
             move |candidate| {
                 if *candidate && !allow_local_binding {
                     Err(invalid_value(
-                        "network_proxy.policy.allow_local_binding",
+                        "network.policy.allow_local_binding",
                         "true",
                         "false (disabled by managed config)",
                     ))
@@ -352,7 +336,7 @@ pub(crate) fn validate_policy_against_constraints(
                     Ok(())
                 } else {
                     Err(invalid_value(
-                        "network_proxy.policy.allowed_domains",
+                        "network.policy.allowed_domains",
                         format!("{invalid:?}"),
                         "subset of managed allowed_domains",
                     ))
@@ -380,7 +364,7 @@ pub(crate) fn validate_policy_against_constraints(
                     Ok(())
                 } else {
                     Err(invalid_value(
-                        "network_proxy.policy.denied_domains",
+                        "network.policy.denied_domains",
                         "missing managed denied_domains entries",
                         format!("{missing:?}"),
                     ))
@@ -407,7 +391,7 @@ pub(crate) fn validate_policy_against_constraints(
                     Ok(())
                 } else {
                     Err(invalid_value(
-                        "network_proxy.policy.allow_unix_sockets",
+                        "network.policy.allow_unix_sockets",
                         format!("{invalid:?}"),
                         "subset of managed allow_unix_sockets",
                     ))

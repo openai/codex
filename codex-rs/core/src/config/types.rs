@@ -608,6 +608,79 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+/// Network proxy configuration from the `[network]` table in `config.toml`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkConfigToml {
+    /// Enable proxy configuration for sandboxed tool execution.
+    pub enabled: Option<bool>,
+
+    /// Network proxy mode.
+    pub mode: Option<NetworkMode>,
+
+    /// Allow upstream proxy env vars to be honored by the network proxy.
+    pub allow_upstream_proxy: Option<bool>,
+
+    /// Allow non-loopback binding for proxy listeners (dangerous).
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+
+    /// Allow non-loopback binding for admin listener (dangerous).
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+
+    /// HTTP proxy listener port (loopback).
+    pub http_port: Option<u16>,
+
+    /// SOCKS5 proxy listener port (loopback).
+    pub socks_port: Option<u16>,
+
+    /// Policy configuration.
+    #[serde(default)]
+    pub policy: Option<NetworkPolicyToml>,
+}
+
+/// Resolved network proxy configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkConfig {
+    pub enabled: bool,
+    pub mode: NetworkMode,
+    pub allow_upstream_proxy: bool,
+    pub dangerously_allow_non_loopback_proxy: bool,
+    pub dangerously_allow_non_loopback_admin: bool,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub policy: NetworkPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkMode {
+    Limited,
+    #[default]
+    Full,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkPolicyToml {
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkPolicy {
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub denied_domains: Vec<String>,
+    #[serde(default)]
+    pub allow_unix_sockets: Vec<String>,
+    pub allow_local_binding: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {

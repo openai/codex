@@ -7,6 +7,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::NetworkConfig;
+use crate::config::types::NetworkConfigToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -161,6 +163,9 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+
+    /// Resolved network proxy configuration from the `[network]` table.
+    pub network: NetworkConfig,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -859,6 +864,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Network proxy configuration.
+    #[serde(default)]
+    pub network: Option<NetworkConfigToml>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
@@ -1344,6 +1353,50 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     }
 }
 
+fn resolve_network_config(entry: Option<&NetworkConfigToml>) -> NetworkConfig {
+    let mut resolved = NetworkConfig::default();
+
+    if let Some(entry) = entry {
+        if let Some(enabled) = entry.enabled {
+            resolved.enabled = enabled;
+        }
+        if let Some(mode) = entry.mode.as_ref() {
+            resolved.mode = mode.clone();
+        }
+        if let Some(allow_upstream_proxy) = entry.allow_upstream_proxy {
+            resolved.allow_upstream_proxy = allow_upstream_proxy;
+        }
+        if let Some(value) = entry.dangerously_allow_non_loopback_proxy {
+            resolved.dangerously_allow_non_loopback_proxy = value;
+        }
+        if let Some(value) = entry.dangerously_allow_non_loopback_admin {
+            resolved.dangerously_allow_non_loopback_admin = value;
+        }
+        if let Some(http_port) = entry.http_port {
+            resolved.http_port = Some(http_port);
+        }
+        if let Some(socks_port) = entry.socks_port {
+            resolved.socks_port = Some(socks_port);
+        }
+        if let Some(policy) = entry.policy.as_ref() {
+            if let Some(allowed_domains) = policy.allowed_domains.as_ref() {
+                resolved.policy.allowed_domains = allowed_domains.clone();
+            }
+            if let Some(denied_domains) = policy.denied_domains.as_ref() {
+                resolved.policy.denied_domains = denied_domains.clone();
+            }
+            if let Some(allow_unix_sockets) = policy.allow_unix_sockets.as_ref() {
+                resolved.policy.allow_unix_sockets = allow_unix_sockets.clone();
+            }
+            if let Some(allow_local_binding) = policy.allow_local_binding {
+                resolved.policy.allow_local_binding = allow_local_binding;
+            }
+        }
+    }
+
+    resolved
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -1511,6 +1564,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let network = resolve_network_config(cfg.network.as_ref());
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1662,6 +1716,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            network,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1980,6 +2035,56 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn network_config_parses_network_table() {
+        let cfg = r#"
+[network]
+enabled = true
+mode = "limited"
+allow_upstream_proxy = true
+http_port = 8080
+socks_port = 1080
+[network.policy]
+allowed_domains = ["example.com"]
+denied_domains = ["internal.local"]
+allow_unix_sockets = ["/var/run/docker.sock"]
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
+        let resolved = resolve_network_config(parsed.network.as_ref());
+
+        assert_eq!(
+            resolved,
+            NetworkConfig {
+                enabled: true,
+                mode: crate::config::types::NetworkMode::Limited,
+                allow_upstream_proxy: true,
+                dangerously_allow_non_loopback_proxy: false,
+                dangerously_allow_non_loopback_admin: false,
+                http_port: Some(8080),
+                socks_port: Some(1080),
+                policy: crate::config::types::NetworkPolicy {
+                    allowed_domains: vec!["example.com".to_string()],
+                    denied_domains: vec!["internal.local".to_string()],
+                    allow_unix_sockets: vec!["/var/run/docker.sock".to_string()],
+                    allow_local_binding: false,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn network_config_defaults_mode_to_full() {
+        let cfg = r#"
+[network]
+enabled = true
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
+        let resolved = resolve_network_config(parsed.network.as_ref());
+        assert_eq!(resolved.mode, crate::config::types::NetworkMode::Full);
     }
 
     #[test]
@@ -3951,6 +4056,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                network: NetworkConfig::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -4039,6 +4145,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4142,6 +4249,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4231,6 +4339,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

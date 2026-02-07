@@ -17,14 +17,12 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 Example config:
 
 ```toml
-[network_proxy]
+[network]
 enabled = true
-proxy_url = "http://127.0.0.1:3128"
-admin_url = "http://127.0.0.1:8080"
-# Optional SOCKS5 listener (disabled by default).
-enable_socks5 = false
-socks_url = "http://127.0.0.1:8081"
-enable_socks5_udp = false
+# Optional override for HTTP proxy port (default 3128).
+http_port = 3128
+# Optional SOCKS5 port. When set, SOCKS5 listener is enabled.
+socks_port = 8081
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
@@ -35,7 +33,7 @@ dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
-[network_proxy.policy]
+[network.policy]
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com"]

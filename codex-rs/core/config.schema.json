@@ -507,6 +507,92 @@
       ],
       "type": "object"
     },
+    "NetworkConfigToml": {
+      "additionalProperties": false,
+      "description": "Network proxy configuration from the `[network]` table in `config.toml`.",
+      "properties": {
+        "allow_upstream_proxy": {
+          "description": "Allow upstream proxy env vars to be honored by the network proxy.",
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_admin": {
+          "description": "Allow non-loopback binding for admin listener (dangerous).",
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "description": "Allow non-loopback binding for proxy listeners (dangerous).",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Enable proxy configuration for sandboxed tool execution.",
+          "type": "boolean"
+        },
+        "http_port": {
+          "description": "HTTP proxy listener port (loopback).",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkMode"
+            }
+          ],
+          "description": "Network proxy mode."
+        },
+        "policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NetworkPolicyToml"
+            }
+          ],
+          "default": null,
+          "description": "Policy configuration."
+        },
+        "socks_port": {
+          "description": "SOCKS5 proxy listener port (loopback).",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkMode": {
+      "enum": [
+        "limited",
+        "full"
+      ],
+      "type": "string"
+    },
+    "NetworkPolicyToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_unix_sockets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "denied_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
@@ -1465,6 +1551,15 @@
         }
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+    },
+    "network": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Network proxy configuration."
     },
     "notice": {
       "allOf": [
