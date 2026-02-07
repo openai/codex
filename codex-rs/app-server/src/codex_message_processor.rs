@@ -2456,7 +2456,8 @@ impl CodexMessageProcessor {
                 return;
             };
             let config_snapshot = thread.config_snapshot().await;
-            if include_turns {
+            let loaded_rollout_path = thread.rollout_path();
+            if include_turns && loaded_rollout_path.is_none() {
                 self.send_invalid_request_error(
                     request_id,
                     "ephemeral threads do not support includeTurns".to_string(),
@@ -2464,7 +2465,10 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
-            build_ephemeral_thread(thread_uuid, &config_snapshot)
+            if include_turns {
+                rollout_path = loaded_rollout_path.clone();
+            }
+            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
         };
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
@@ -5745,10 +5749,6 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
             updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)
         });
     updated_at.or_else(|| created_at.map(str::to_string))
-}
-
-fn build_ephemeral_thread(thread_id: ThreadId, config_snapshot: &ThreadConfigSnapshot) -> Thread {
-    build_thread_from_snapshot(thread_id, config_snapshot, None)
 }
 
 fn build_thread_from_snapshot(

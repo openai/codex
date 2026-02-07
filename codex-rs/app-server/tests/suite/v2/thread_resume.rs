@@ -434,12 +434,17 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let body = responses::sse(vec![
+    let first_body = responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ]);
-    let response_mock = responses::mount_sse_once(&server, body).await;
+    let second_body = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-2", "Done"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let response_mock = responses::mount_sse_sequence(&server, vec![first_body, second_body]).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -447,20 +452,43 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let history = vec![ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "seed history".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    }];
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let materialize_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(materialize_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: "unused-thread-id".to_string(),
-            history: Some(history),
+            thread_id: thread.id,
             model: Some("gpt-5.2-codex".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
@@ -495,7 +523,10 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     )
     .await??;
 
-    let request = response_mock.single_request();
+    let requests = response_mock.requests();
+    let request = requests
+        .last()
+        .expect("expected request for resumed thread turn");
     let developer_texts = request.message_input_texts("developer");
     assert!(
         developer_texts
