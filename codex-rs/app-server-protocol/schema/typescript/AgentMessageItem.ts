@@ -4,4 +4,18 @@
 import type { AgentMessageContent } from "./AgentMessageContent";
 import type { MessagePhase } from "./MessagePhase";
 
-export type AgentMessageItem = { id: string, content: Array<AgentMessageContent>, phase?: MessagePhase, };
+/**
+ * Assistant-authored message payload used in turn-item streams.
+ *
+ * `phase` is optional because not all providers/models emit it. Consumers
+ * should use it when present, but retain legacy completion semantics when it
+ * is `None`.
+ */
+export type AgentMessageItem = { id: string, content: Array<AgentMessageContent>, 
+/**
+ * Optional phase metadata carried through from `ResponseItem::Message`.
+ *
+ * This is currently used by TUI rendering to distinguish mid-turn
+ * commentary from a final answer and avoid status-indicator jitter.
+ */
+phase?: MessagePhase, };
