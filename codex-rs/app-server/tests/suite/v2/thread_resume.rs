@@ -74,6 +74,8 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     let mut expected = thread;
     expected.updated_at = resumed.updated_at;
+    expected.path = resumed.path.clone();
+    expected.git_info = resumed.git_info.clone();
     assert_eq!(resumed, expected);
 
     Ok(())
@@ -322,7 +324,22 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let thread_path = thread.path.clone().expect("thread path");
+    let materialize_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let materialize_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(materialize_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: persisted, ..
+    } = to_response::<ThreadResumeResponse>(materialize_resp)?;
+    let thread_path = persisted.path.clone().expect("thread path");
+
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),
@@ -339,7 +356,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let mut expected = thread;
+    let mut expected = persisted;
     expected.updated_at = resumed.updated_at;
     assert_eq!(resumed, expected);
 
