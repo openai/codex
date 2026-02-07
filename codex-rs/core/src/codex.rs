@@ -558,9 +558,8 @@ impl TurnContext {
     }
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
-        let cwd = self.cwd.clone();
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(cwd).await })
+            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
             .await
             .clone()
     }
@@ -1100,11 +1099,7 @@ impl Session {
         // when submit_turn() runs.
         sess.services.model_client.pre_establish_connection(
             sess.services.otel_manager.clone(),
-            resolve_turn_metadata_header_with_timeout(
-                build_turn_metadata_header(session_configuration.cwd.clone()),
-                None,
-            )
-            .boxed(),
+            session_configuration.cwd.clone(),
         );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -4154,8 +4149,7 @@ async fn run_sampling_request(
 
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
-        if retries > 0
-            && retries >= max_retries
+        if retries >= max_retries
             && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
         {
             sess.send_event(
