@@ -1660,6 +1660,19 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
+
+    /// Optional per-cwd extra roots to scan as user-scoped skills.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListExtraRootsForCwd {
+    pub cwd: PathBuf,
+    pub extra_user_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3304,20 +3317,36 @@ mod tests {
             serde_json::to_value(SkillsListParams {
                 cwds: Vec::new(),
                 force_reload: false,
+                per_cwd_extra_user_roots: None,
             })
             .unwrap(),
-            json!({}),
+            json!({
+                "perCwdExtraUserRoots": null,
+            }),
         );
 
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
                 force_reload: true,
+                per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
+                    cwd: PathBuf::from("/repo"),
+                    extra_user_roots: vec![
+                        PathBuf::from("/shared/skills"),
+                        PathBuf::from("/tmp/x")
+                    ],
+                }]),
             })
             .unwrap(),
             json!({
                 "cwds": ["/repo"],
                 "forceReload": true,
+                "perCwdExtraUserRoots": [
+                    {
+                        "cwd": "/repo",
+                        "extraUserRoots": ["/shared/skills", "/tmp/x"],
+                    }
+                ],
             }),
         );
     }
