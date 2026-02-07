@@ -42,11 +42,11 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
 +        }
 +
 +        for flag_prefix in ["-B", "-L"] {
-+            if let Some(path) = arg_str.strip_prefix(flag_prefix)
-+                && path.starts_with("bazel-out/")
-+            {
-+                *arg = format!("{flag_prefix}{}", execroot.join(path).display()).into();
-+                return;
++            if let Some(path) = arg_str.strip_prefix(flag_prefix) {
++                if path.starts_with("bazel-out/") {
++                    *arg = format!("{flag_prefix}{}", execroot.join(path).display()).into();
++                    return;
++                }
 +            }
 +        }
 +    }
