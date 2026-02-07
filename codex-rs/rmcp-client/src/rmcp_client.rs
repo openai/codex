@@ -107,31 +107,38 @@ impl ProcessGroupGuard {
             Self
         }
     }
+
+    #[cfg(unix)]
+    fn maybe_terminate_process_group(&self) {
+        let process_group_id = self.process_group_id;
+        let should_escalate =
+            match codex_utils_pty::process_group::terminate_process_group(process_group_id) {
+                Ok(exists) => exists,
+                Err(error) => {
+                    warn!("Failed to terminate MCP process group {process_group_id}: {error}");
+                    false
+                }
+            };
+        if should_escalate {
+            std::thread::spawn(move || {
+                std::thread::sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
+                if let Err(error) =
+                    codex_utils_pty::process_group::kill_process_group(process_group_id)
+                {
+                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
+                }
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn maybe_terminate_process_group(&self) {}
 }
 
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            let process_group_id = self.process_group_id;
-            let should_escalate =
-                match codex_utils_pty::process_group::terminate_process_group(process_group_id) {
-                    Ok(exists) => exists,
-                    Err(error) => {
-                        warn!("Failed to terminate MCP process group {process_group_id}: {error}");
-                        false
-                    }
-                };
-            if should_escalate {
-                std::thread::spawn(move || {
-                    std::thread::sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
-                    if let Err(error) =
-                        codex_utils_pty::process_group::kill_process_group(process_group_id)
-                    {
-                        warn!("Failed to kill MCP process group {process_group_id}: {error}");
-                    }
-                });
-            }
+        if cfg!(unix) {
+            self.maybe_terminate_process_group();
         }
     }
 }
