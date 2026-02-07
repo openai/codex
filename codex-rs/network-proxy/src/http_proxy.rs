@@ -688,7 +688,7 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkMode;
-    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
@@ -697,7 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkPolicy {
+        let policy = NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             ..Default::default()
         };

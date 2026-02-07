@@ -6064,11 +6064,23 @@
       ]
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -9146,6 +9158,7 @@
           "type": "object"
         },
         {
+          "description": "Assistant-authored message payload used in turn-item streams.\n\n`phase` is optional because not all providers/models emit it. Consumers should use it when present, but retain legacy completion semantics when it is `None`.",
           "properties": {
             "content": {
               "items": {
@@ -9155,6 +9168,17 @@
             },
             "id": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter."
             },
             "type": {
               "enum": [
@@ -12178,11 +12202,23 @@
         "type": "string"
       },
       "MessagePhase": {
-        "enum": [
-          "commentary",
-          "final_answer"
-        ],
-        "type": "string"
+        "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+        "oneOf": [
+          {
+            "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+            "enum": [
+              "commentary"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The assistant's terminal answer text for the current turn.",
+            "enum": [
+              "final_answer"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",

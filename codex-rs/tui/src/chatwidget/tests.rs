@@ -41,6 +41,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -71,6 +72,10 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
@@ -1074,6 +1079,7 @@ async fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         retry_status_header: None,
+        pending_status_indicator_restore: false,
         thread_id: None,
         thread_name: None,
         forked_from: None,
@@ -1958,6 +1964,28 @@ fn terminal_interaction(chat: &mut ChatWidget, call_id: &str, process_id: &str, 
     });
 }
 
+fn complete_assistant_message(
+    chat: &mut ChatWidget,
+    item_id: &str,
+    text: &str,
+    phase: Option<MessagePhase>,
+) {
+    chat.handle_codex_event(Event {
+        id: format!("raw-{item_id}"),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: item_id.to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: text.to_string(),
+                }],
+                phase,
+            }),
+        }),
+    });
+}
+
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) -> ExecCommandBeginEvent {
     begin_exec_with_source(chat, call_id, raw_cmd, ExecCommandSource::Agent)
 }
@@ -2103,15 +2131,16 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 
 #[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
     chat.on_commit_tick();
+    drain_insert_history(&mut rx);
 
     assert!(chat.bottom_pane.is_task_running());
-    assert!(chat.bottom_pane.status_widget().is_some());
+    assert!(!chat.bottom_pane.status_indicator_visible());
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
@@ -2133,7 +2162,26 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
-async fn preamble_keeps_status_indicator_visible_until_exec_begin() {
+async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    // A second idle tick should not toggle the row back on and cause jitter.
+    chat.on_commit_tick();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+}
+
+#[tokio::test]
+async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_task_started();
@@ -2143,12 +2191,45 @@ async fn preamble_keeps_status_indicator_visible_until_exec_begin() {
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-commentary",
+        "Preamble line\n",
+        Some(MessagePhase::Commentary),
+    );
+
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
     begin_exec(&mut chat, "call-1", "echo hi");
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+}
+
+#[tokio::test]
+async fn plan_completion_restores_status_indicator_after_streaming_plan_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.on_plan_item_completed("- Step 1\n".to_string());
 
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
 }
 
 #[tokio::test]
@@ -2157,11 +2238,17 @@ async fn preamble_keeps_working_status_snapshot() {
     chat.thread_id = Some(ThreadId::new());
 
     // Regression sequence: a preamble line is committed to history before any exec/tool event.
-    // The status row must remain visible so the spinner/shimmer still communicates "working".
+    // After commentary completes, the status row should be restored before subsequent work.
     chat.on_task_started();
     chat.on_agent_message_delta("Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
+    complete_assistant_message(
+        &mut chat,
+        "msg-commentary-snapshot",
+        "Preamble line\n",
+        Some(MessagePhase::Commentary),
+    );
 
     let height = chat.desired_height(80);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
@@ -5168,6 +5255,34 @@ async fn stream_error_updates_status_indicator() {
         cells.is_empty(),
         "expected no history cell for StreamError event"
     );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), msg);
+    assert_eq!(status.details(), Some(details));
+}
+
+#[tokio::test]
+async fn stream_error_restores_hidden_status_indicator() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+
+    let msg = "Reconnecting... 2/5";
+    let details = "Idle timeout waiting for SSE";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+            additional_details: Some(details.to_string()),
+        }),
+    });
+
     let status = chat
         .bottom_pane
         .status_widget()

@@ -2007,6 +2007,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
+ "codex-utils-pty",
  "futures",
  "keyring",
  "oauth2",
