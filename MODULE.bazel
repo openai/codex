@@ -79,7 +79,7 @@ crate.annotation(
     version = "0.3.1",
 )
 crate.annotation(
-    build_script_data_select = {
+    build_script_tools_select = {
         "aarch64-unknown-linux-musl": [
             "@toolchains_llvm_bootstrapped//runtimes:crt_objects_directory_linux",
             "@toolchains_llvm_bootstrapped//runtimes:resource_directory",
