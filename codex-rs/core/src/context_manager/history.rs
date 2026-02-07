@@ -26,6 +26,8 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    /// Number of history items present when `last_token_usage` was last updated.
+    last_usage_items_len: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -41,6 +43,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            last_usage_items_len: 0,
         }
     }
 
@@ -49,7 +52,9 @@ impl ContextManager {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        let has_info = info.is_some();
         self.token_info = info;
+        self.last_usage_items_len = if has_info { self.items.len() } else { 0 };
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -59,6 +64,7 @@ impl ContextManager {
                 self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
             }
         }
+        self.last_usage_items_len = self.items.len();
     }
 
     /// `items` is ordered from oldest to newest.
@@ -216,6 +222,7 @@ impl ContextManager {
             &Some(usage.clone()),
             model_context_window,
         );
+        self.last_usage_items_len = self.items.len();
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
@@ -245,30 +252,29 @@ impl ContextManager {
             })
     }
 
-    fn get_trailing_codex_generated_items_tokens(&self) -> i64 {
-        let mut total = 0i64;
-        for item in self.items.iter().rev() {
-            if !is_codex_generated_item(item) {
-                break;
-            }
-            total = total.saturating_add(estimate_item_token_count(item));
-        }
-        total
+    fn items_added_since_last_usage(&self) -> &[ResponseItem] {
+        let start = self.last_usage_items_len.min(self.items.len());
+        &self.items[start..]
     }
 
-    fn get_trailing_codex_generated_items_bytes(&self) -> usize {
-        let mut total = 0usize;
-        for item in self.items.iter().rev() {
-            if !is_codex_generated_item(item) {
-                break;
-            }
-            total = total.saturating_add(
-                serde_json::to_vec(item)
-                    .map(|bytes| bytes.len())
-                    .unwrap_or_default(),
-            );
-        }
-        total
+    fn get_items_added_since_last_usage_tokens(&self) -> i64 {
+        self.items_added_since_last_usage()
+            .iter()
+            .fold(0i64, |acc, item| {
+                acc.saturating_add(estimate_item_token_count(item))
+            })
+    }
+
+    fn get_items_added_since_last_usage_bytes(&self) -> usize {
+        self.items_added_since_last_usage()
+            .iter()
+            .fold(0usize, |acc, item| {
+                acc.saturating_add(
+                    serde_json::to_vec(item)
+                        .map(|bytes| bytes.len())
+                        .unwrap_or_default(),
+                )
+            })
     }
 
     /// When true, the server already accounted for past reasoning tokens and
@@ -279,13 +285,13 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
-        let trailing_codex_generated_tokens = self.get_trailing_codex_generated_items_tokens();
+        let items_added_since_last_usage_tokens = self.get_items_added_since_last_usage_tokens();
         if server_reasoning_included {
-            last_tokens.saturating_add(trailing_codex_generated_tokens)
+            last_tokens.saturating_add(items_added_since_last_usage_tokens)
         } else {
             last_tokens
                 .saturating_add(self.get_non_last_reasoning_items_tokens())
-                .saturating_add(trailing_codex_generated_tokens)
+                .saturating_add(items_added_since_last_usage_tokens)
         }
     }
 
@@ -306,9 +312,9 @@ impl ContextManager {
                     .unwrap_or(usize::MAX)
             },
             estimated_tokens_of_items_added_since_last_successful_api_response: self
-                .get_trailing_codex_generated_items_tokens(),
+                .get_items_added_since_last_usage_tokens(),
             estimated_bytes_of_items_added_since_last_successful_api_response: self
-                .get_trailing_codex_generated_items_bytes(),
+                .get_items_added_since_last_usage_bytes(),
         }
     }
 
