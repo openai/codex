@@ -4492,12 +4492,7 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if !self
-            .auth_manager
-            .auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-        {
+        if !self.should_prefetch_rate_limits() {
             return;
         }
 
@@ -4520,6 +4515,17 @@ impl ChatWidget {
         });
 
         self.rate_limit_poller = Some(handle);
+    }
+
+    fn should_prefetch_rate_limits(&self) -> bool {
+        if !self.config.model_provider.requires_openai_auth {
+            return false;
+        }
+
+        self.auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
