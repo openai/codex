@@ -88,7 +88,6 @@ pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
-mod pending_remote_images;
 pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
@@ -1322,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_remote_images_render_above_composer() {
+    fn pending_remote_images_are_prefixed_in_composer_text() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1341,9 +1340,7 @@ mod tests {
             "data:image/png;base64,aGVsbG8=".to_string(),
         ]);
 
-        let rendered = render_snapshot(&pane, Rect::new(0, 0, 96, pane.desired_height(96)));
-        assert!(rendered.contains("[external image 1] https://example.com/one.png"));
-        assert!(rendered.contains("[external image 2] image/png data URL (5 bytes)"));
+        assert_eq!(pane.composer_text(), "[Image #1]\n[Image #2]\n");
     }
 
     #[test]

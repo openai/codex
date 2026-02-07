@@ -49,6 +49,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -237,108 +238,8 @@ fn build_user_message_lines_with_elements(
     raw_lines
 }
 
-fn inline_data_url_summary(url: &str) -> String {
-    let Some(data_url_body) = url.strip_prefix("data:") else {
-        return "image data URL (size unavailable)".to_string();
-    };
-    let Some((meta, payload)) = data_url_body.split_once(',') else {
-        return "image data URL (size unavailable)".to_string();
-    };
-    let media_type = meta
-        .split(';')
-        .next()
-        .filter(|media_type| !media_type.is_empty())
-        .unwrap_or("image");
-    let Some(payload_bytes) = data_url_payload_size_bytes(meta, payload) else {
-        return format!("{media_type} data URL (size unavailable)");
-    };
-    format!("{media_type} data URL ({payload_bytes} bytes)")
-}
-
-fn data_url_payload_size_bytes(meta: &str, payload: &str) -> Option<usize> {
-    if meta
-        .split(';')
-        .any(|part| part.eq_ignore_ascii_case("base64"))
-    {
-        return base64_decoded_len(payload);
-    }
-    percent_decoded_len(payload)
-}
-
-fn base64_decoded_len(payload: &str) -> Option<usize> {
-    let mut data_len = 0usize;
-    let mut padding = 0usize;
-    let mut saw_padding = false;
-    for byte in payload.bytes() {
-        if byte.is_ascii_whitespace() {
-            continue;
-        }
-        if byte == b'=' {
-            saw_padding = true;
-            padding = padding.saturating_add(1);
-            continue;
-        }
-        if saw_padding {
-            return None;
-        }
-        if is_base64_char(byte) {
-            data_len = data_len.saturating_add(1);
-        } else {
-            return None;
-        }
-    }
-    if padding > 2 {
-        return None;
-    }
-    let total_len = data_len.saturating_add(padding);
-    if !total_len.is_multiple_of(4) {
-        return None;
-    }
-    let decoded_len = (total_len / 4).saturating_mul(3).saturating_sub(padding);
-    Some(decoded_len)
-}
-
-fn is_base64_char(byte: u8) -> bool {
-    matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'-' | b'_')
-}
-
-fn percent_decoded_len(payload: &str) -> Option<usize> {
-    let bytes = payload.as_bytes();
-    let mut idx = 0usize;
-    let mut decoded_len = 0usize;
-    while idx < bytes.len() {
-        if bytes[idx] == b'%' {
-            if idx + 2 >= bytes.len() {
-                return None;
-            }
-            if !bytes[idx + 1].is_ascii_hexdigit() || !bytes[idx + 2].is_ascii_hexdigit() {
-                return None;
-            }
-            decoded_len = decoded_len.saturating_add(1);
-            idx = idx.saturating_add(3);
-        } else {
-            decoded_len = decoded_len.saturating_add(1);
-            idx = idx.saturating_add(1);
-        }
-    }
-    Some(decoded_len)
-}
-
-fn remote_image_display_label(index: usize, total: usize) -> String {
-    if total > 1 {
-        format!("[external image {index}] ")
-    } else {
-        "[external image] ".to_string()
-    }
-}
-
-fn remote_image_display_line(url: &str, style: Style, index: usize, total: usize) -> Line<'static> {
-    let label = remote_image_display_label(index, total);
-    if url.starts_with("data:") {
-        Line::from(vec![label.dim(), inline_data_url_summary(url).dim()]).style(style)
-    } else {
-        Line::from(vec![label.dim(), url.to_string().cyan().underlined()]).style(style)
-    }
+fn remote_image_display_line(style: Style, index: usize) -> Line<'static> {
+    Line::from(local_image_label_text(index)).style(style)
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -355,16 +256,13 @@ impl HistoryCell for UserHistoryCell {
         let element_style = style.fg(Color::Cyan);
 
         if !self.remote_image_urls.is_empty() {
-            let total_remote_images = self.remote_image_urls.len();
             let wrapped_remote_images = word_wrap_lines(
-                self.remote_image_urls.iter().enumerate().map(|(idx, url)| {
-                    remote_image_display_line(
-                        url,
-                        style,
-                        idx.saturating_add(1),
-                        total_remote_images,
-                    )
-                }),
+                self.remote_image_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _url)| {
+                        remote_image_display_line(element_style, idx.saturating_add(1))
+                    }),
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
             );
@@ -3514,8 +3412,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
-        assert!(rendered.contains("[external image]"));
-        assert!(rendered.contains("https://example.com/example.png"));
+        assert!(rendered.contains("[Image #1]"));
         assert!(rendered.contains("describe these"));
     }
 
@@ -3530,8 +3427,7 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
-        assert!(rendered.contains("[external image]"));
-        assert!(rendered.contains("image/png data URL (5 bytes)"));
+        assert!(rendered.contains("[Image #1]"));
         assert!(rendered.contains("describe inline image"));
     }
 
@@ -3549,10 +3445,8 @@ mod tests {
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
 
-        assert!(rendered.contains("[external image 1]"));
-        assert!(rendered.contains("[external image 2]"));
-        assert!(rendered.contains("https://example.com/one.png"));
-        assert!(rendered.contains("https://example.com/two.png"));
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("[Image #2]"));
     }
 
     #[test]

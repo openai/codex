@@ -692,14 +692,23 @@ pub(crate) fn create_initial_user_message(
     if text.is_empty() && local_image_paths.is_empty() {
         None
     } else {
-        let local_images = local_image_paths
-            .into_iter()
-            .enumerate()
-            .map(|(idx, path)| LocalImageAttachment {
-                placeholder: local_image_label_text(idx + 1),
-                path,
-            })
-            .collect();
+        let placeholders = image_placeholders_in_element_order(&text, &text_elements);
+        let local_images = if placeholders.is_empty() {
+            local_image_paths
+                .into_iter()
+                .enumerate()
+                .map(|(idx, path)| LocalImageAttachment {
+                    placeholder: local_image_label_text(idx + 1),
+                    path,
+                })
+                .collect()
+        } else {
+            local_image_paths
+                .into_iter()
+                .zip(placeholders)
+                .map(|(path, placeholder)| LocalImageAttachment { placeholder, path })
+                .collect()
+        };
         Some(UserMessage {
             text,
             local_images,
@@ -708,6 +717,105 @@ pub(crate) fn create_initial_user_message(
             mention_bindings: Vec::new(),
         })
     }
+}
+
+fn normalize_user_message_remote_placeholders(message: UserMessage) -> UserMessage {
+    let UserMessage {
+        text,
+        text_elements,
+        local_images,
+        remote_image_urls,
+        mention_bindings,
+    } = message;
+
+    let (trimmed_text, trimmed_elements) =
+        strip_leading_remote_image_placeholder_lines(text, text_elements, remote_image_urls.len());
+
+    UserMessage {
+        text: trimmed_text,
+        text_elements: trimmed_elements,
+        local_images,
+        remote_image_urls,
+        mention_bindings,
+    }
+}
+
+fn strip_leading_remote_image_placeholder_lines(
+    text: String,
+    text_elements: Vec<TextElement>,
+    remote_image_count: usize,
+) -> (String, Vec<TextElement>) {
+    if remote_image_count == 0 || text.is_empty() {
+        return (text, text_elements);
+    }
+
+    let mut consumed = 0usize;
+    let mut rest = text.as_str();
+    for idx in 0..remote_image_count {
+        let expected = local_image_label_text(idx + 1);
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        let line = &rest[..line_end];
+        if line.trim() != expected {
+            break;
+        }
+        consumed += line_end;
+        if line_end < rest.len() {
+            consumed += 1;
+            rest = &rest[line_end + 1..];
+        } else {
+            rest = &rest[line_end..];
+        }
+    }
+
+    if consumed == 0 {
+        return (text, text_elements);
+    }
+
+    let stripped_text = text.get(consumed..).unwrap_or("").to_string();
+    let stripped_elements = text_elements
+        .into_iter()
+        .filter_map(|elem| {
+            let start = elem.byte_range.start;
+            let end = elem.byte_range.end;
+            if end <= consumed || start >= text.len() {
+                return None;
+            }
+            let rebased_start = start.saturating_sub(consumed);
+            let rebased_end = end.saturating_sub(consumed).min(stripped_text.len());
+            if rebased_start >= rebased_end {
+                return None;
+            }
+            let placeholder = stripped_text
+                .get(rebased_start..rebased_end)
+                .map(str::to_string);
+            Some(TextElement::new(
+                (rebased_start..rebased_end).into(),
+                placeholder,
+            ))
+        })
+        .collect();
+
+    (stripped_text, stripped_elements)
+}
+
+fn image_placeholders_in_element_order(text: &str, text_elements: &[TextElement]) -> Vec<String> {
+    let mut ordered = text_elements.to_vec();
+    ordered.sort_by_key(|elem| elem.byte_range.start);
+    let mut seen = HashSet::new();
+    let mut placeholders = Vec::new();
+    for elem in ordered {
+        if let Some(placeholder) = elem.placeholder(text).map(str::to_string)
+            && placeholder
+                .trim()
+                .strip_prefix("[Image #")
+                .and_then(|s| s.strip_suffix(']'))
+                .is_some()
+            && seen.insert(placeholder.clone())
+        {
+            placeholders.push(placeholder);
+        }
+    }
+    placeholders
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
@@ -1724,15 +1832,19 @@ impl ChatWidget {
             return None;
         }
 
-        let existing_message = UserMessage {
+        let existing_message = normalize_user_message_remote_placeholders(UserMessage {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
             remote_image_urls: self.pending_non_editable_image_urls.clone(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
-        };
+        });
 
-        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        let mut to_merge: Vec<UserMessage> = self
+            .queued_user_messages
+            .drain(..)
+            .map(normalize_user_message_remote_placeholders)
+            .collect();
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -3117,7 +3229,7 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
-                    let user_message = UserMessage {
+                    let user_message = normalize_user_message_remote_placeholders(UserMessage {
                         text,
                         local_images: self
                             .bottom_pane
@@ -3127,7 +3239,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
-                    };
+                    });
                     if self.is_session_configured() && !self.is_plan_streaming_in_tui() {
                         // Submitted is only emitted when steer is enabled.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -3143,7 +3255,7 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
-                    let user_message = UserMessage {
+                    let user_message = normalize_user_message_remote_placeholders(UserMessage {
                         text,
                         local_images: self
                             .bottom_pane
@@ -3153,7 +3265,7 @@ impl ChatWidget {
                         mention_bindings: self
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
-                    };
+                    });
                     self.queue_user_message(user_message);
                 }
                 InputResult::Command(cmd) => {

@@ -3404,7 +3404,7 @@ mod tests {
             remote_image_urls: vec![remote_image_url.clone()],
         });
 
-        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "[Image #1]\n");
         assert_eq!(
             app.chat_widget.pending_non_editable_image_urls(),
             vec![remote_image_url]

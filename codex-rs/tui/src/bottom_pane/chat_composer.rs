@@ -107,7 +107,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
@@ -138,7 +137,6 @@ use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
-use super::pending_remote_images::PendingRemoteImages;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
@@ -279,7 +277,8 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
-    /// Invariant: attached images are labeled `[Image #1]..[Image #N]` in vec order.
+    /// Invariant: attached images are labeled in vec order starting after
+    /// pending remote image placeholders.
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
@@ -293,7 +292,7 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
-    pending_remote_images: PendingRemoteImages,
+    pending_non_editable_image_urls: Vec<String>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
@@ -393,7 +392,7 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
-            pending_remote_images: PendingRemoteImages::new(),
+            pending_non_editable_image_urls: Vec::new(),
             footer_flash: None,
             context_window_percent: None,
             context_window_used_tokens: None,
@@ -515,13 +514,7 @@ impl ChatComposer {
         };
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
-        let mut textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
-        let reserved_height = self
-            .pending_remote_images
-            .panel_height(textarea_rect.width)
-            .min(textarea_rect.height.saturating_sub(1));
-        textarea_rect.y = textarea_rect.y.saturating_add(reserved_height);
-        textarea_rect.height = textarea_rect.height.saturating_sub(reserved_height);
+        let textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
         [composer_rect, textarea_rect, popup_rect]
     }
 
@@ -533,9 +526,18 @@ impl ChatComposer {
         }
     }
 
-    /// Returns true if the composer currently contains no user input.
+    /// Returns true if the composer currently contains no user-entered input.
+    /// Leading remote-image placeholder lines are ignored.
     pub(crate) fn is_empty(&self) -> bool {
-        self.textarea.is_empty()
+        if self.pending_non_editable_image_urls.is_empty() {
+            return self.textarea.is_empty() && self.attached_images.is_empty();
+        }
+        let (text_without_remote_prefix, _) = strip_leading_remote_image_placeholder_lines(
+            self.textarea.text().to_string(),
+            self.textarea.text_elements(),
+            self.pending_non_editable_image_urls.len(),
+        );
+        text_without_remote_prefix.trim().is_empty() && self.attached_images.is_empty()
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -659,8 +661,8 @@ impl ChatComposer {
     /// Replace the composer content with text from an external editor.
     /// Clears pending paste placeholders and keeps only attachments whose
     /// placeholder labels still appear in the new text. Image placeholders
-    /// are renumbered to `[Image #1]..[Image #N]`. Cursor is placed at the end
-    /// after rebuilding elements.
+    /// are renumbered to match the current remote-image offset. Cursor is
+    /// placed at the end after rebuilding elements.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.pending_pastes.clear();
 
@@ -722,7 +724,8 @@ impl ChatComposer {
             self.textarea.insert_str(&text[idx..]);
         }
 
-        // Keep image placeholders normalized to [Image #1].. in attachment order.
+        // Keep local image placeholders normalized in attachment order after the
+        // remote-image prefix.
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
@@ -757,7 +760,29 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_pending_non_editable_image_urls(&mut self, urls: Vec<String>) {
-        self.pending_remote_images.urls = urls;
+        let old_remote_image_count = self.pending_non_editable_image_urls.len();
+        let old_cursor = self.textarea.cursor();
+        let (text_without_remote_prefix, text_elements_without_remote_prefix) =
+            strip_leading_remote_image_placeholder_lines(
+                self.textarea.text().to_string(),
+                self.textarea.text_elements(),
+                old_remote_image_count,
+            );
+        let old_prefix_len = self
+            .textarea
+            .text()
+            .len()
+            .saturating_sub(text_without_remote_prefix.len());
+        self.textarea.set_text_with_elements(
+            &text_without_remote_prefix,
+            &text_elements_without_remote_prefix,
+        );
+        self.textarea
+            .set_cursor(old_cursor.saturating_sub(old_prefix_len));
+        self.pending_non_editable_image_urls = urls;
+        self.relabel_attached_images_and_update_placeholders();
+        self.sync_remote_image_placeholder_prefix(0);
+        self.sync_popups();
     }
 
     #[cfg(test)]
@@ -821,20 +846,27 @@ impl ChatComposer {
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
-        let image_placeholders: HashSet<String> = text_elements
-            .iter()
-            .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
-            .collect();
-        for (idx, path) in local_image_paths.into_iter().enumerate() {
-            let placeholder = local_image_label_text(idx + 1);
-            if image_placeholders.contains(&placeholder) {
+        let image_placeholders_in_order =
+            image_placeholders_in_element_order(&text, &text_elements);
+        if image_placeholders_in_order.is_empty() {
+            for (idx, path) in local_image_paths.into_iter().enumerate() {
+                let placeholder = local_image_label_text(idx + 1);
+                self.attached_images
+                    .push(AttachedImage { placeholder, path });
+            }
+        } else {
+            for (path, placeholder) in local_image_paths
+                .into_iter()
+                .zip(image_placeholders_in_order.into_iter())
+            {
                 self.attached_images
                     .push(AttachedImage { placeholder, path });
             }
         }
 
         self.bind_mentions_from_snapshot(mention_bindings);
-
+        self.relabel_attached_images_and_update_placeholders();
+        self.sync_remote_image_placeholder_prefix(0);
         self.textarea.set_cursor(0);
         self.sync_popups();
     }
@@ -854,8 +886,24 @@ impl ChatComposer {
         if self.is_empty() {
             return None;
         }
-        let previous = self.current_text();
-        let text_elements = self.textarea.text_elements();
+        let (previous_without_remote_prefix, previous_text_elements_without_remote_prefix) =
+            strip_leading_remote_image_placeholder_lines(
+                self.current_text(),
+                self.textarea.text_elements(),
+                self.pending_non_editable_image_urls.len(),
+            );
+        let mut mapping: HashMap<String, String> = HashMap::new();
+        for (idx, image) in self.attached_images.iter().enumerate() {
+            let normalized = local_image_label_text(idx + 1);
+            if image.placeholder != normalized {
+                mapping.insert(image.placeholder.clone(), normalized);
+            }
+        }
+        let (previous, text_elements) = remap_text_elements_and_placeholders(
+            previous_without_remote_prefix,
+            previous_text_elements_without_remote_prefix,
+            &mapping,
+        );
         let local_image_paths = self
             .attached_images
             .iter()
@@ -949,7 +997,8 @@ impl ChatComposer {
 
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number = self.attached_images.len() + 1;
+        let image_number =
+            self.pending_non_editable_image_urls.len() + self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
@@ -2030,6 +2079,15 @@ impl ChatComposer {
             text_elements = expanded_elements;
         }
 
+        let (text_without_remote_prefix, rebased_elements) =
+            strip_leading_remote_image_placeholder_lines(
+                text,
+                text_elements,
+                self.pending_non_editable_image_urls.len(),
+            );
+        text = text_without_remote_prefix;
+        text_elements = rebased_elements;
+
         let expanded_input = text.clone();
 
         // If there is neither text nor attachments, suppress submission entirely.
@@ -2105,7 +2163,10 @@ impl ChatComposer {
         // Custom prompt expansion can remove or rewrite image placeholders, so prune any
         // attachments that no longer have a corresponding placeholder in the expanded text.
         self.prune_attached_images_for_submission(&text, &text_elements);
-        if text.is_empty() && self.attached_images.is_empty() {
+        if text.is_empty()
+            && self.attached_images.is_empty()
+            && self.pending_non_editable_image_urls.is_empty()
+        {
             return None;
         }
         self.recent_submission_mention_bindings = original_mention_bindings.clone();
@@ -2583,7 +2644,10 @@ impl ChatComposer {
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
-        let elements_before = if self.pending_pastes.is_empty() && self.attached_images.is_empty() {
+        let elements_before = if self.pending_pastes.is_empty()
+            && self.attached_images.is_empty()
+            && self.pending_non_editable_image_urls.is_empty()
+        {
             None
         } else {
             Some(self.textarea.element_payloads())
@@ -2622,12 +2686,22 @@ impl ChatComposer {
         let elements_after: HashSet<String> =
             self.textarea.element_payloads().into_iter().collect();
 
+        let old_remote_image_count = self.pending_non_editable_image_urls.len();
+        let mut removed_remote_indexes: HashSet<usize> = HashSet::new();
         let mut removed_any_image = false;
         for removed in elements_before
             .into_iter()
             .filter(|payload| !elements_after.contains(payload))
         {
             self.pending_pastes.retain(|(ph, _)| ph != &removed);
+
+            if let Some(remote_index) =
+                parse_image_placeholder_number(&removed).and_then(|n| n.checked_sub(1))
+                && remote_index < old_remote_image_count
+            {
+                removed_remote_indexes.insert(remote_index);
+                continue;
+            }
 
             if let Some(idx) = self
                 .attached_images
@@ -2639,14 +2713,26 @@ impl ChatComposer {
             }
         }
 
-        if removed_any_image {
+        let removed_any_remote = !removed_remote_indexes.is_empty();
+        if removed_any_remote {
+            let old_urls = std::mem::take(&mut self.pending_non_editable_image_urls);
+            self.pending_non_editable_image_urls = old_urls
+                .into_iter()
+                .enumerate()
+                .filter_map(|(idx, url)| (!removed_remote_indexes.contains(&idx)).then_some(url))
+                .collect();
+            self.sync_remote_image_placeholder_prefix(old_remote_image_count);
+        }
+
+        if removed_any_image || removed_any_remote {
             self.relabel_attached_images_and_update_placeholders();
         }
     }
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
         for idx in 0..self.attached_images.len() {
-            let expected = local_image_label_text(idx + 1);
+            let expected =
+                local_image_label_text(self.pending_non_editable_image_urls.len() + idx + 1);
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
                 continue;
@@ -2655,6 +2741,39 @@ impl ChatComposer {
             self.attached_images[idx].placeholder = expected.clone();
             let _renamed = self.textarea.replace_element_payload(&current, &expected);
         }
+    }
+
+    fn sync_remote_image_placeholder_prefix(&mut self, old_remote_image_count: usize) {
+        let old_text = self.textarea.text().to_string();
+        let old_cursor = self.textarea.cursor();
+        let (text_without_remote_prefix, text_elements_without_remote_prefix) =
+            strip_leading_remote_image_placeholder_lines(
+                old_text.clone(),
+                self.textarea.text_elements(),
+                old_remote_image_count,
+            );
+        let prefix = remote_image_placeholder_prefix(self.pending_non_editable_image_urls.len());
+        let prefix_len = prefix.len();
+        let old_prefix_len = old_text
+            .len()
+            .saturating_sub(text_without_remote_prefix.len());
+        let adjusted_cursor = old_cursor.saturating_sub(old_prefix_len);
+        let new_text = format!("{prefix}{text_without_remote_prefix}");
+        let mut new_text_elements =
+            remote_image_text_elements(self.pending_non_editable_image_urls.len());
+        new_text_elements.extend(text_elements_without_remote_prefix.into_iter().map(|elem| {
+            elem.map_range(|range| ByteRange {
+                start: range.start + prefix_len,
+                end: range.end + prefix_len,
+            })
+        }));
+        self.textarea
+            .set_text_with_elements(&new_text, &new_text_elements);
+        self.textarea.set_cursor(
+            prefix_len
+                .saturating_add(adjusted_cursor)
+                .min(new_text.len()),
+        );
     }
 
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
@@ -3291,9 +3410,7 @@ impl Renderable for ChatComposer {
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         let inner_width = width.saturating_sub(COLS_WITH_MARGIN);
-        let pending_remote_images_height = self.pending_remote_images.panel_height(inner_width);
         self.textarea.desired_height(inner_width)
-            + pending_remote_images_height
             + 2
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
@@ -3531,18 +3648,6 @@ impl ChatComposer {
         }
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
-        let pending_remote_image_lines = self.pending_remote_images.lines(textarea_rect.width);
-        if !pending_remote_image_lines.is_empty() {
-            let pending_rect = Rect {
-                x: textarea_rect.x,
-                y: composer_rect.y.saturating_add(1),
-                width: textarea_rect.width,
-                height: pending_remote_image_lines.len() as u16,
-            };
-            Paragraph::new(pending_remote_image_lines)
-                .style(style)
-                .render_ref(pending_rect, buf);
-        }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
                 "›".bold()
@@ -3580,6 +3685,171 @@ impl ChatComposer {
             }
         }
     }
+}
+
+fn remote_image_placeholder_prefix(remote_image_count: usize) -> String {
+    if remote_image_count == 0 {
+        return String::new();
+    }
+    let mut prefix = (1..=remote_image_count)
+        .map(local_image_label_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    prefix.push('\n');
+    prefix
+}
+
+fn remote_image_text_elements(remote_image_count: usize) -> Vec<TextElement> {
+    let mut text_elements = Vec::with_capacity(remote_image_count);
+    let mut offset = 0usize;
+    for idx in 0..remote_image_count {
+        let placeholder = local_image_label_text(idx + 1);
+        let start = offset;
+        let end = start + placeholder.len();
+        text_elements.push(TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder),
+        ));
+        offset = end + 1;
+    }
+    text_elements
+}
+
+fn parse_image_placeholder_number(text: &str) -> Option<usize> {
+    let number = text
+        .trim()
+        .strip_prefix("[Image #")?
+        .strip_suffix(']')?
+        .parse::<usize>()
+        .ok()?;
+    (number > 0).then_some(number)
+}
+
+fn strip_leading_remote_image_placeholder_lines(
+    text: String,
+    text_elements: Vec<TextElement>,
+    remote_image_count: usize,
+) -> (String, Vec<TextElement>) {
+    if remote_image_count == 0 || text.is_empty() {
+        return (text, text_elements);
+    }
+
+    let mut consumed = 0usize;
+    let mut rest = text.as_str();
+    for idx in 0..remote_image_count {
+        let expected = local_image_label_text(idx + 1);
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        let line = &rest[..line_end];
+        if line.trim() != expected {
+            break;
+        }
+        consumed += line_end;
+        if line_end < rest.len() {
+            consumed += 1;
+            rest = &rest[line_end + 1..];
+        } else {
+            rest = &rest[line_end..];
+        }
+    }
+
+    if consumed == 0 {
+        return (text, text_elements);
+    }
+
+    let stripped_text = text.get(consumed..).unwrap_or("").to_string();
+    let stripped_elements = text_elements
+        .into_iter()
+        .filter_map(|elem| {
+            let start = elem.byte_range.start;
+            let end = elem.byte_range.end;
+            if end <= consumed || start >= text.len() {
+                return None;
+            }
+            let rebased_start = start.saturating_sub(consumed);
+            let rebased_end = end.saturating_sub(consumed).min(stripped_text.len());
+            if rebased_start >= rebased_end {
+                return None;
+            }
+            let placeholder = stripped_text
+                .get(rebased_start..rebased_end)
+                .map(str::to_string);
+            Some(TextElement::new(
+                ByteRange {
+                    start: rebased_start,
+                    end: rebased_end,
+                },
+                placeholder,
+            ))
+        })
+        .collect();
+
+    (stripped_text, stripped_elements)
+}
+
+fn remap_text_elements_and_placeholders(
+    text: String,
+    mut text_elements: Vec<TextElement>,
+    mapping: &HashMap<String, String>,
+) -> (String, Vec<TextElement>) {
+    if mapping.is_empty() || text_elements.is_empty() {
+        return (text, text_elements);
+    }
+
+    text_elements.sort_by_key(|elem| elem.byte_range.start);
+    let mut rebuilt = String::with_capacity(text.len());
+    let mut rebuilt_elements = Vec::with_capacity(text_elements.len());
+    let mut cursor = 0usize;
+
+    for mut elem in text_elements {
+        let start = elem.byte_range.start.min(text.len());
+        let end = elem.byte_range.end.min(text.len());
+        if start > end {
+            continue;
+        }
+
+        if let Some(segment) = text.get(cursor..start) {
+            rebuilt.push_str(segment);
+        }
+
+        let original = text.get(start..end).unwrap_or("");
+        let placeholder = elem.placeholder(&text);
+        let replacement = placeholder
+            .and_then(|ph| mapping.get(ph))
+            .map(String::as_str)
+            .unwrap_or(original);
+        let rebuilt_start = rebuilt.len();
+        rebuilt.push_str(replacement);
+        let rebuilt_end = rebuilt.len();
+
+        if let Some(remapped) = placeholder.and_then(|ph| mapping.get(ph)) {
+            elem.set_placeholder(Some(remapped.clone()));
+        }
+        elem.byte_range = (rebuilt_start..rebuilt_end).into();
+        rebuilt_elements.push(elem);
+        cursor = end;
+    }
+
+    if let Some(segment) = text.get(cursor..) {
+        rebuilt.push_str(segment);
+    }
+
+    (rebuilt, rebuilt_elements)
+}
+
+fn image_placeholders_in_element_order(text: &str, text_elements: &[TextElement]) -> Vec<String> {
+    let mut ordered = text_elements.to_vec();
+    ordered.sort_by_key(|elem| elem.byte_range.start);
+    let mut seen = HashSet::new();
+    let mut placeholders = Vec::new();
+    for elem in ordered {
+        if let Some(placeholder) = elem.placeholder(text).map(str::to_string)
+            && parse_image_placeholder_number(&placeholder).is_some()
+            && seen.insert(placeholder.clone())
+        {
+            placeholders.push(placeholder);
+        }
+    }
+    placeholders
 }
 
 fn prompt_selection_action(
@@ -4256,6 +4526,45 @@ mod tests {
         assert_eq!(composer.textarea.text(), placeholder);
         assert_eq!(composer.local_image_paths(), vec![path]);
         assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_normalizes_remote_prefixed_image_draft() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer
+            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        let text = "[Image #1] draft".to_string();
+        let text_elements = vec![TextElement::new(
+            (0.."[Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        )];
+        let local_image_path = PathBuf::from("/tmp/local-draft.png");
+        composer.set_text_content(text, text_elements, vec![local_image_path.clone()]);
+
+        assert_eq!(
+            composer.clear_for_ctrl_c(),
+            Some("[Image #1] draft".to_string())
+        );
+
+        assert_eq!(
+            composer.history.navigate_up(&composer.app_event_tx),
+            Some(HistoryEntry {
+                text: "[Image #1] draft".to_string(),
+                text_elements: vec![TextElement::new(
+                    (0.."[Image #1]".len()).into(),
+                    Some("[Image #1]".to_string())
+                )],
+                local_image_paths: vec![local_image_path],
+            })
+        );
     }
 
     /// Behavior: `?` toggles the shortcut overlay only when the composer is otherwise empty. After
@@ -7929,6 +8238,125 @@ mod tests {
             format!("{placeholder} extra {placeholder}")
         );
         assert_eq!(composer.attached_images.len(), 1);
+    }
+
+    #[test]
+    fn pending_remote_images_are_prefixed_in_textarea() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_pending_non_editable_image_urls(vec![
+            "https://example.com/one.png".to_string(),
+            "https://example.com/two.png".to_string(),
+        ]);
+
+        let text = composer.current_text();
+        assert_eq!(text, "[Image #1]\n[Image #2]\n");
+        let elements = composer.text_elements();
+        assert_eq!(
+            elements,
+            vec![
+                TextElement::new(
+                    (0.."[Image #1]".len()).into(),
+                    Some("[Image #1]".to_string())
+                ),
+                TextElement::new(
+                    ("[Image #1]\n".len().."[Image #1]\n[Image #2]".len()).into(),
+                    Some("[Image #2]".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn attach_image_after_remote_prefix_uses_offset_label() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_pending_non_editable_image_urls(vec![
+            "https://example.com/one.png".to_string(),
+            "https://example.com/two.png".to_string(),
+        ]);
+        composer.attach_image(PathBuf::from("/tmp/local.png"));
+
+        assert_eq!(composer.attached_images[0].placeholder, "[Image #3]");
+        assert_eq!(
+            composer.current_text(),
+            "[Image #1]\n[Image #2]\n[Image #3]"
+        );
+    }
+
+    #[test]
+    fn prepare_submission_trims_remote_prefix_and_keeps_local_placeholder_numbering() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer
+            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        let base_text = "[Image #2] hello".to_string();
+        let base_elements = vec![TextElement::new(
+            (0.."[Image #2]".len()).into(),
+            Some("[Image #2]".to_string()),
+        )];
+        composer.set_text_content(
+            base_text,
+            base_elements,
+            vec![PathBuf::from("/tmp/local.png")],
+        );
+
+        let (submitted_text, submitted_elements) = composer
+            .prepare_submission_text(true)
+            .expect("remote+local submission should be generated");
+        assert_eq!(submitted_text, "[Image #2] hello");
+        assert_eq!(
+            submitted_elements,
+            vec![TextElement::new(
+                (0.."[Image #2]".len()).into(),
+                Some("[Image #2]".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn prepare_submission_with_only_remote_images_returns_empty_text() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer
+            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        let (submitted_text, submitted_elements) = composer
+            .prepare_submission_text(true)
+            .expect("remote-only submission should be generated");
+        assert_eq!(submitted_text, "");
+        assert!(submitted_elements.is_empty());
     }
 
     #[test]
