@@ -568,6 +568,7 @@ allowed_approval_policies = ["on-request"]
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         }),
     )
@@ -615,6 +616,7 @@ allowed_approval_policies = ["on-request"]
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -651,6 +653,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
+        network: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });
