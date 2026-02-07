@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -16,7 +16,6 @@ use crate::git_info::get_git_remote_urls_assume_git_repo;
 use crate::git_info::get_git_repo_root;
 use crate::git_info::get_head_commit_hash;
 
-/// Timeout used when resolving the optional turn-metadata header.
 pub(crate) const TURN_METADATA_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Resolves turn metadata with a shared timeout policy.
@@ -57,7 +56,8 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-pub async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
+pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
+    let cwd = cwd.as_path();
     let repo_root = get_git_repo_root(cwd)?;
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
