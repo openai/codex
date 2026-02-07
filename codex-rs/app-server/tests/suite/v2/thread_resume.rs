@@ -73,6 +73,7 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     let mut expected = thread;
+    expected.created_at = resumed.created_at;
     expected.updated_at = resumed.updated_at;
     expected.path = resumed.path.clone();
     expected.git_info = resumed.git_info.clone();
