@@ -75,9 +75,11 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -109,6 +111,7 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::sandbox_tags::sandbox_tag;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::turn_metadata::build_turn_metadata_header;
 use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
@@ -117,6 +120,7 @@ pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+pub const X_CODEX_SANDBOX_HEADER: &str = "x-codex-sandbox";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -368,6 +372,7 @@ impl ModelClient {
                 client_setup.api_auth,
                 Some(Arc::clone(&turn_state)),
                 turn_metadata_header,
+                "none",
             )
             .await
         {
@@ -532,8 +537,10 @@ impl ModelClient {
         api_auth: CoreAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
+        sandbox_header: &str,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
+        let headers =
+            self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header, sandbox_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
             .connect(headers, turn_state, Some(websocket_telemetry))
@@ -548,12 +555,14 @@ impl ModelClient {
         &self,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
+        sandbox_header: &str,
     ) -> ApiHeaderMap {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let mut headers = build_responses_headers(
             self.state.beta_features_header.as_deref(),
             turn_state,
             turn_metadata_header.as_ref(),
+            sandbox_header,
         );
         headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
@@ -734,6 +743,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
         compression: Compression,
+        sandbox_header: &str,
     ) -> ApiResponsesOptions {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
 
@@ -787,6 +797,7 @@ impl ModelClientSession {
                 self.client.state.beta_features_header.as_deref(),
                 Some(&self.turn_state),
                 turn_metadata_header.as_ref(),
+                sandbox_header,
             ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
@@ -946,6 +957,11 @@ impl ModelClientSession {
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
+            let sandbox_header = options
+                .extra_headers
+                .get(X_CODEX_SANDBOX_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("none");
             let new_conn = self
                 .client
                 .connect_websocket(
@@ -954,6 +970,7 @@ impl ModelClientSession {
                     api_auth,
                     Some(turn_state),
                     turn_metadata_header,
+                    sandbox_header,
                 )
                 .await?;
             self.connection = Some(new_conn);
@@ -1015,6 +1032,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        sandbox_header: &str,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
@@ -1052,6 +1070,7 @@ impl ModelClientSession {
                 summary,
                 turn_metadata_header,
                 compression,
+                sandbox_header,
             );
 
             let stream_result = client
@@ -1083,6 +1102,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        sandbox_header: &str,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
@@ -1101,6 +1121,7 @@ impl ModelClientSession {
                 summary,
                 turn_metadata_header,
                 compression,
+                sandbox_header,
             );
 
             match self
@@ -1185,7 +1206,10 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        sandbox_policy: &SandboxPolicy,
+        windows_sandbox_level: WindowsSandboxLevel,
     ) -> Result<ResponseStream> {
+        let sandbox_header = sandbox_tag(sandbox_policy, windows_sandbox_level);
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -1200,6 +1224,7 @@ impl ModelClientSession {
                         effort,
                         summary,
                         turn_metadata_header,
+                        sandbox_header,
                     )
                     .await
                 } else {
@@ -1210,6 +1235,7 @@ impl ModelClientSession {
                         effort,
                         summary,
                         turn_metadata_header,
+                        sandbox_header,
                     )
                     .await
                 }
@@ -1273,10 +1299,12 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
+/// - `x-codex-sandbox`: sandbox mode tag used by tool-call telemetry.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
+    sandbox_header: &str,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
     if let Some(value) = beta_features_header
@@ -1293,6 +1321,9 @@ fn build_responses_headers(
     }
     if let Some(header_value) = turn_metadata_header {
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
+    }
+    if let Ok(header_value) = HeaderValue::from_str(sandbox_header) {
+        headers.insert(X_CODEX_SANDBOX_HEADER, header_value);
     }
     headers
 }

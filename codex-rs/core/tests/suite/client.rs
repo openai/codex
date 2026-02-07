@@ -20,6 +20,7 @@ use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -28,6 +29,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
@@ -1342,7 +1344,16 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            config.sandbox_policy.get(),
+            WindowsSandboxLevel::from_config(config.as_ref()),
+        )
         .await
         .expect("responses stream to start");
 

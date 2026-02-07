@@ -11,10 +11,12 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -112,7 +114,16 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            config.sandbox_policy.get(),
+            WindowsSandboxLevel::from_config(config.as_ref()),
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -125,6 +136,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
+    );
+    assert!(
+        request.header("x-codex-sandbox").is_some(),
+        "missing x-codex-sandbox header"
     );
 }
 
@@ -216,7 +231,16 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            config.sandbox_policy.get(),
+            WindowsSandboxLevel::from_config(config.as_ref()),
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -319,7 +343,16 @@ async fn responses_respects_model_info_overrides_from_config() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            config.sandbox_policy.get(),
+            WindowsSandboxLevel::from_config(config.as_ref()),
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {

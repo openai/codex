@@ -54,6 +54,7 @@ pub mod path_utils;
 pub mod personality_migration;
 pub mod powershell;
 mod proposed_plan_parser;
+mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
 mod stream_events_utils;
@@ -131,6 +132,7 @@ mod user_shell_command;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
+pub use client::X_CODEX_SANDBOX_HEADER;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use command_safety::is_dangerous_command;
 pub use command_safety::is_safe_command;
