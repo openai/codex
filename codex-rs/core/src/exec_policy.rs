@@ -133,8 +133,8 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let parsed_commands = commands_for_exec_policy(command);
-        let auto_amendment_allowed = !parsed_commands.used_heredoc_fallback;
+        let (commands, used_heredoc_fallback) = commands_for_exec_policy(command);
+        let auto_amendment_allowed = !used_heredoc_fallback;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
@@ -143,8 +143,7 @@ impl ExecPolicyManager {
                 sandbox_permissions,
             )
         };
-        let evaluation =
-            exec_policy.check_multiple(parsed_commands.commands.iter(), &exec_policy_fallback);
+        let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
 
         let requested_amendment = derive_requested_execpolicy_amendment(
             features,
@@ -368,31 +367,16 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
 }
 
-#[derive(Default)]
-struct ExecPolicyCommands {
-    commands: Vec<Vec<String>>,
-    used_heredoc_fallback: bool,
-}
-
-fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
+fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
     if let Some(commands) = parse_shell_lc_plain_commands(command) {
-        return ExecPolicyCommands {
-            commands,
-            used_heredoc_fallback: false,
-        };
+        return (commands, false);
     }
 
     if let Some(single_command) = parse_shell_lc_single_command_prefix(command) {
-        return ExecPolicyCommands {
-            commands: vec![single_command],
-            used_heredoc_fallback: true,
-        };
+        return (vec![single_command], true);
     }
 
-    ExecPolicyCommands {
-        commands: vec![command.to_vec()],
-        used_heredoc_fallback: false,
-    }
+    (vec![command.to_vec()], false)
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
