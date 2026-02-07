@@ -250,6 +250,31 @@ fn usage_breakdown_counts_no_items_after_last_model_generated_item() {
 }
 
 #[test]
+fn usage_breakdown_is_zero_without_model_generated_items() {
+    let mut history = create_history_with_items(vec![user_msg("no model output yet")]);
+    history.update_token_info(
+        &TokenUsage {
+            total_tokens: 100,
+            ..Default::default()
+        },
+        None,
+    );
+
+    assert_eq!(
+        history
+            .get_total_token_usage_breakdown()
+            .estimated_tokens_of_items_added_since_last_successful_api_response,
+        0
+    );
+    assert_eq!(
+        history
+            .get_total_token_usage_breakdown()
+            .estimated_bytes_of_items_added_since_last_successful_api_response,
+        0
+    );
+}
+
+#[test]
 fn total_token_usage_includes_all_items_after_last_model_generated_item() {
     let mut history = create_history_with_items(vec![assistant_msg("already counted by API")]);
     history.update_token_info(
