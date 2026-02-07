@@ -10,21 +10,24 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
  
  #[non_exhaustive]
  #[derive(PartialEq, Eq)]
-@@ -659,6 +659,13 @@
-             // The logic below assumes a Clang or GCC compiler is in use
-             return;
+@@ -661,6 +661,16 @@
          }
-+
-+        if target_vendor() == "apple" {
-+            // In hermetic Bazel toolchains, this probe can require dsymutil,
-+            // which is not always present in the build-script sandbox.
-+            return;
-+        }
-+
          let mut memcmp_compile_args = Vec::from(memcmp_compiler.args());
  
++        // Keep the probe self-contained and avoid invoking external debug tools
++        // (for example `dsymutil`) that may be missing in hermetic sandboxes.
++        memcmp_compile_args.retain(|arg| {
++            let Some(arg_str) = arg.to_str() else {
++                return true;
++            };
++            !arg_str.starts_with("-g")
++        });
++        memcmp_compile_args.push("-g0".into());
++
          // This check invokes the compiled executable and hence needs to link
-@@ -672,6 +679,15 @@
+         // it. CMake handles this via LDFLAGS but `cc` doesn't. In setups with
+         // custom linker setups this could lead to a mismatch between the
+@@ -672,6 +682,15 @@
              }
          }
  
@@ -40,7 +43,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
          memcmp_compile_args.push(
              self.manifest_dir
                  .join("aws-lc")
-@@ -725,6 +741,40 @@
+@@ -725,6 +744,40 @@
          }
          let _ = fs::remove_file(exec_path);
      }
