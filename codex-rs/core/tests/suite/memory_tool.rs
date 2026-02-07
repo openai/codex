@@ -31,7 +31,7 @@ async fn get_memory_tool_returns_persisted_thread_memory() -> Result<()> {
     let thread_id = test.session_configured.session_id;
     let thread_id_string = thread_id.to_string();
 
-    let _materialize_mock = mount_sse_once(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-init"),

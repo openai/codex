@@ -1445,6 +1445,8 @@ impl App {
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(path) = self.chat_widget.rollout_path() {
+                    // Fresh threads expose a precomputed path, but the file is
+                    // materialized lazily on first user message.
                     if path.exists() {
                         match self
                             .server

@@ -6845,6 +6845,12 @@ impl ChatWidget {
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
+
+    /// Returns the current thread's precomputed rollout path.
+    ///
+    /// For fresh non-ephemeral threads this path may exist before the file is
+    /// materialized; rollout persistence is deferred until the first user
+    /// message is recorded.
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }
