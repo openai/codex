@@ -10,7 +10,21 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
  
  #[non_exhaustive]
  #[derive(PartialEq, Eq)]
-@@ -672,6 +672,15 @@
+@@ -659,6 +659,13 @@
+             // The logic below assumes a Clang or GCC compiler is in use
+             return;
+         }
++
++        if target_vendor() == "apple" {
++            // In hermetic Bazel toolchains, this probe can require dsymutil,
++            // which is not always present in the build-script sandbox.
++            return;
++        }
++
+         let mut memcmp_compile_args = Vec::from(memcmp_compiler.args());
+ 
+         // This check invokes the compiled executable and hence needs to link
+@@ -672,6 +679,15 @@
              }
          }
  
@@ -26,7 +40,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
          memcmp_compile_args.push(
              self.manifest_dir
                  .join("aws-lc")
-@@ -725,6 +734,40 @@
+@@ -725,6 +741,40 @@
          }
          let _ = fs::remove_file(exec_path);
      }
