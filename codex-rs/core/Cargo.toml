@@ -23,6 +23,7 @@ arc-swap = "1.8.0"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+bm25 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }

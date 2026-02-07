@@ -105,6 +105,7 @@ mod resume_warning;
 mod review;
 mod rmcp_client;
 mod rollout_list_find;
+mod search_tool;
 mod seatbelt;
 mod shell_command;
 mod shell_serialization;

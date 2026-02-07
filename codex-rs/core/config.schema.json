@@ -245,6 +245,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "search_tool": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -1286,6 +1289,9 @@
           "type": "boolean"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "search_tool": {
           "type": "boolean"
         },
         "shell_snapshot": {
