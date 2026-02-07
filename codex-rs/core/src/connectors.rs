@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+use std::time::Instant;
 
 use async_channel::unbounded;
 pub use codex_app_server_protocol::AppInfo;
@@ -17,11 +21,25 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
 
+pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+
+#[derive(Clone)]
+struct CachedAccessibleConnectors {
+    expires_at: Instant,
+    connectors: Vec<AppInfo>,
+}
+
+static ACCESSIBLE_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAccessibleConnectors>>> =
+    LazyLock::new(|| StdMutex::new(None));
+
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
+    }
+    if let Some(cached_connectors) = read_cached_accessible_connectors() {
+        return Ok(cached_connectors);
     }
 
     let auth_manager = auth_manager_from_config(config);
@@ -67,7 +85,35 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     let tools = mcp_connection_manager.list_all_tools().await;
     cancel_token.cancel();
 
-    Ok(accessible_connectors_from_mcp_tools(&tools))
+    let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);
+    write_cached_accessible_connectors(&accessible_connectors);
+    Ok(accessible_connectors)
+}
+
+fn read_cached_accessible_connectors() -> Option<Vec<AppInfo>> {
+    let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = Instant::now();
+
+    if let Some(cached) = cache_guard.as_ref()
+        && now < cached.expires_at
+    {
+        return Some(cached.connectors.clone());
+    }
+
+    *cache_guard = None;
+    None
+}
+
+fn write_cached_accessible_connectors(connectors: &[AppInfo]) {
+    let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *cache_guard = Some(CachedAccessibleConnectors {
+        expires_at: Instant::now() + CONNECTORS_CACHE_TTL,
+        connectors: connectors.to_vec(),
+    });
 }
 
 fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
