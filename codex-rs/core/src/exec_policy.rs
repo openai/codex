@@ -123,6 +123,9 @@ impl ExecPolicyManager {
         } = req;
         let exec_policy = self.current();
         let (commands, used_heredoc_fallback) = commands_for_exec_policy(command);
+        // Keep heredoc prefix parsing for rule evaluation so existing
+        // allow/prompt/forbidden rules still apply, but avoid auto-derived
+        // amendments when only the heredoc fallback parser matched.
         let auto_amendment_allowed = !used_heredoc_fallback;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
