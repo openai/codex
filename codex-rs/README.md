@@ -53,6 +53,16 @@ You can enable notifications by configuring a script that is run whenever the ag
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
+If you want to migrate context from Claude Code, you can import a Claude session transcript directly:
+
+```shell
+# Import by Claude session id from ~/.claude/projects/*/<id>.jsonl
+codex exec --from-claude-session 8cbd6fe5-400a-4518-949a-dcd5feb14dd2
+
+# Import by explicit JSONL file path and add a follow-up instruction
+codex exec --from-claude-session /path/to/session.jsonl "Continue this workstream"
+```
+
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:

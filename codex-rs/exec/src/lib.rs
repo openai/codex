@@ -4,6 +4,7 @@
 // For both modes, any other output must be written to stderr.
 #![deny(clippy::print_stdout)]
 
+mod claude_import;
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
@@ -49,6 +50,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use supports_color::Stream;
@@ -103,6 +105,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd,
         skip_git_repo_check,
         add_dir,
+        from_claude_session,
+        claude_home,
+        claude_max_chars,
         ephemeral,
         color,
         last_message_file,
@@ -360,6 +365,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
         .await;
 
+    if matches!(command.as_ref(), Some(ExecCommand::Review(_))) && from_claude_session.is_some() {
+        anyhow::bail!("--from-claude-session is only supported for regular and resume exec turns");
+    }
+
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewThread {
         thread_id: primary_thread_id,
@@ -396,7 +405,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     }
                 })
                 .or(root_prompt);
-            let prompt_text = resolve_prompt(prompt_arg);
+            let prompt_text = resolve_prompt_with_optional_claude_import(
+                prompt_arg,
+                from_claude_session.as_deref(),
+                claude_home.as_deref(),
+                claude_max_chars,
+            );
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .chain(args.images.into_iter())
@@ -417,7 +431,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             )
         }
         (None, root_prompt, imgs) => {
-            let prompt_text = resolve_prompt(root_prompt);
+            let prompt_text = resolve_prompt_with_optional_claude_import(
+                root_prompt,
+                from_claude_session.as_deref(),
+                claude_home.as_deref(),
+                claude_max_chars,
+            );
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
@@ -801,6 +820,33 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
     }
 }
 
+fn resolve_prompt_with_optional_claude_import(
+    prompt_arg: Option<String>,
+    from_claude_session: Option<&str>,
+    claude_home: Option<&Path>,
+    claude_max_chars: Option<usize>,
+) -> String {
+    let Some(source) = from_claude_session else {
+        return resolve_prompt(prompt_arg);
+    };
+
+    let imported_prompt =
+        match claude_import::build_claude_resume_prompt(source, claude_home, claude_max_chars) {
+            Ok(prompt) => prompt,
+            Err(err) => {
+                eprintln!("Failed to import Claude session '{source}': {err}");
+                std::process::exit(1);
+            }
+        };
+
+    let Some(user_prompt_arg) = prompt_arg else {
+        return imported_prompt;
+    };
+    let user_prompt = resolve_prompt(Some(user_prompt_arg));
+
+    format!("{imported_prompt}\n\nCURRENT_USER_REQUEST\n{user_prompt}",)
+}
+
 fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
     let target = if args.uncommitted {
         ReviewTarget::UncommittedChanges
@@ -835,6 +881,7 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
 
     #[test]
     fn builds_uncommitted_review_request() {
@@ -971,5 +1018,49 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    #[test]
+    fn resolve_prompt_with_claude_import_uses_imported_transcript_without_user_prompt() {
+        let dir = tempdir().expect("tempdir");
+        let session_file = dir.path().join("session.jsonl");
+        std::fs::write(
+            &session_file,
+            r#"{"type":"user","message":{"content":"claude prompt body"}}"#,
+        )
+        .expect("write session");
+
+        let out = resolve_prompt_with_optional_claude_import(
+            None,
+            Some(session_file.to_str().expect("session path utf-8")),
+            None,
+            None,
+        );
+
+        assert!(out.contains("BEGIN_IMPORTED_TRANSCRIPT"));
+        assert!(out.contains("claude prompt body"));
+        assert!(out.contains("END_IMPORTED_TRANSCRIPT"));
+    }
+
+    #[test]
+    fn resolve_prompt_with_claude_import_appends_follow_up_prompt() {
+        let dir = tempdir().expect("tempdir");
+        let session_file = dir.path().join("session.jsonl");
+        std::fs::write(
+            &session_file,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"prior answer"}]}}"#,
+        )
+        .expect("write session");
+
+        let out = resolve_prompt_with_optional_claude_import(
+            Some("continue with a patch".to_string()),
+            Some(session_file.to_str().expect("session path utf-8")),
+            None,
+            None,
+        );
+
+        assert!(out.contains("prior answer"));
+        assert!(out.contains("CURRENT_USER_REQUEST"));
+        assert!(out.contains("continue with a patch"));
     }
 }

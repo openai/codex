@@ -71,6 +71,34 @@ pub struct Cli {
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
 
+    /// Import a Claude Code session and convert it into a resume-context prompt.
+    /// Accepts a Claude session id (UUID) or a direct path to a Claude JSONL transcript file.
+    #[arg(
+        long = "from-claude-session",
+        value_name = "SESSION_ID_OR_JSONL",
+        global = true
+    )]
+    pub from_claude_session: Option<String>,
+
+    /// Override Claude home used with --from-claude-session (defaults to ~/.claude).
+    #[arg(
+        long = "claude-home",
+        value_name = "DIR",
+        value_hint = clap::ValueHint::DirPath,
+        global = true,
+        requires = "from_claude_session"
+    )]
+    pub claude_home: Option<PathBuf>,
+
+    /// Optional character limit for imported Claude transcript body (keeps the tail when truncated).
+    #[arg(
+        long = "claude-max-chars",
+        value_name = "N",
+        global = true,
+        requires = "from_claude_session"
+    )]
+    pub claude_max_chars: Option<usize>,
+
     /// Run without persisting session files to disk.
     #[arg(long = "ephemeral", global = true, default_value_t = false)]
     pub ephemeral: bool,
