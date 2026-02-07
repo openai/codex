@@ -41,10 +41,16 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     } = to_response::<NewConversationResponse>(new_response)?;
 
     assert!(
-        rollout_path.exists(),
-        "expected rollout path {} to exist",
+        !rollout_path.exists(),
+        "expected rollout path {} to be deferred until first user message",
         rollout_path.display()
     );
+    std::fs::create_dir_all(
+        rollout_path
+            .parent()
+            .expect("rollout path should have parent directory"),
+    )?;
+    std::fs::write(&rollout_path, "{}\n")?;
 
     let archive_request_id = mcp
         .send_archive_conversation_request(ArchiveConversationParams {

@@ -314,7 +314,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -872,7 +872,7 @@ impl Session {
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
+            InitialHistory::New => {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
@@ -884,6 +884,23 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
+                        true,
+                    ),
+                )
+            }
+            InitialHistory::Forked(_) => {
+                let conversation_id = ThreadId::default();
+                (
+                    conversation_id,
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        forked_from_id,
+                        session_source,
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
+                        session_configuration.dynamic_tools.clone(),
+                        false,
                     ),
                 )
             }

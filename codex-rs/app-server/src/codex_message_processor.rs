@@ -1856,31 +1856,11 @@ impl CodexMessageProcessor {
                     ..
                 } = new_conv;
                 let config_snapshot = thread.config_snapshot().await;
-                let fallback_provider = self.config.model_provider_id.as_str();
-
-                // A bit hacky, but the summary contains a lot of useful information for the thread
-                // that unfortunately does not get returned from thread_manager.start_thread().
-                let thread = match session_configured.rollout_path.as_ref() {
-                    Some(rollout_path) => {
-                        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider)
-                            .await
-                        {
-                            Ok(summary) => summary_to_thread(summary),
-                            Err(err) => {
-                                self.send_internal_error(
-                                    request_id,
-                                    format!(
-                                        "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                        rollout_path.display()
-                                    ),
-                                )
-                                .await;
-                                return;
-                            }
-                        }
-                    }
-                    None => build_ephemeral_thread(thread_id, &config_snapshot),
-                };
+                let thread = build_thread_from_snapshot(
+                    thread_id,
+                    &config_snapshot,
+                    session_configured.rollout_path.clone(),
+                );
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -5768,6 +5748,14 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
 }
 
 fn build_ephemeral_thread(thread_id: ThreadId, config_snapshot: &ThreadConfigSnapshot) -> Thread {
+    build_thread_from_snapshot(thread_id, config_snapshot, None)
+}
+
+fn build_thread_from_snapshot(
+    thread_id: ThreadId,
+    config_snapshot: &ThreadConfigSnapshot,
+    path: Option<PathBuf>,
+) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
@@ -5775,7 +5763,7 @@ fn build_ephemeral_thread(thread_id: ThreadId, config_snapshot: &ThreadConfigSna
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
-        path: None,
+        path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         source: config_snapshot.session_source.clone().into(),

@@ -35,7 +35,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 #[tokio::test]
-async fn thread_resume_returns_original_thread() -> Result<()> {
+async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -57,24 +57,26 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    // Resume it via v2 API.
+    // Resume should fail before the first user message materializes rollout storage.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
             ..Default::default()
         })
         .await?;
-    let resume_resp: JSONRPCResponse = timeout(
+    let resume_err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse {
-        thread: resumed, ..
-    } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let mut expected = thread;
-    expected.updated_at = resumed.updated_at;
-    assert_eq!(resumed, expected);
+    assert!(
+        resume_err
+            .error
+            .message
+            .contains("no rollout found for thread id"),
+        "unexpected resume error: {}",
+        resume_err.error.message
+    );
 
     Ok(())
 }
@@ -322,6 +324,27 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
     let thread_path = thread.path.clone().expect("thread path");
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
@@ -339,9 +362,8 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let mut expected = thread;
-    expected.updated_at = resumed.updated_at;
-    assert_eq!(resumed, expected);
+    assert_eq!(resumed.id, thread.id);
+    assert_eq!(resumed.path, thread.path);
 
     Ok(())
 }
@@ -425,22 +447,20 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    let start_id = mcp
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    let history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "seed history".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id.clone(),
+            thread_id: "unused-thread-id".to_string(),
+            history: Some(history),
             model: Some("gpt-5.2-codex".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
@@ -451,11 +471,11 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let _resume: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
+    let resume: ThreadResumeResponse = to_response::<ThreadResumeResponse>(resume_resp)?;
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id,
+            thread_id: resume.thread.id,
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
