@@ -4,6 +4,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::agent_jobs::AgentJobsHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
@@ -479,6 +480,112 @@ fn create_spawn_agent_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["message".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_spawn_agents_on_csv_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "csv_path".to_string(),
+        JsonSchema::String {
+            description: Some("Path to the CSV file containing input rows.".to_string()),
+        },
+    );
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Instruction template to apply to each CSV row. Use {column_name} placeholders to inject values from the row."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "id_column".to_string(),
+        JsonSchema::String {
+            description: Some("Optional column name to use as stable item id.".to_string()),
+        },
+    );
+    properties.insert(
+        "job_name".to_string(),
+        JsonSchema::String {
+            description: Some("Optional friendly name for the job.".to_string()),
+        },
+    );
+    properties.insert(
+        "output_csv_path".to_string(),
+        JsonSchema::String {
+            description: Some("Optional output CSV path for exported results.".to_string()),
+        },
+    );
+    properties.insert(
+        "max_concurrency".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum concurrent workers for this job. Defaults to 64 and is capped by config."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_schema".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: None,
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agents_on_csv".to_string(),
+        description:
+            "Run a batch job that spawns subagents to process each CSV row, blocking until completion and auto-exporting results on success."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_report_agent_job_result_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "job_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the job.".to_string()),
+        },
+    );
+    properties.insert(
+        "item_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the job item.".to_string()),
+        },
+    );
+    properties.insert(
+        "result".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: None,
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "report_agent_job_result".to_string(),
+        description:
+            "Worker-only tool to report a result for an agent job item. Main agents should not call this."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "job_id".to_string(),
+                "item_id".to_string(),
+                "result".to_string(),
+            ]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1418,6 +1525,14 @@ pub(crate) fn build_specs(
         builder.register_handler("close_agent", collab_handler);
     }
 
+    if config.collab_tools {
+        let agent_jobs_handler = Arc::new(AgentJobsHandler);
+        builder.push_spec(create_spawn_agents_on_csv_tool());
+        builder.push_spec(create_report_agent_job_result_tool());
+        builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
+        builder.register_handler("report_agent_job_result", agent_jobs_handler);
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1670,7 +1785,14 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
             &tools,
-            &["spawn_agent", "send_input", "wait", "close_agent"],
+            &[
+                "spawn_agent",
+                "send_input",
+                "wait",
+                "close_agent",
+                "spawn_agents_on_csv",
+                "report_agent_job_result",
+            ],
         );
     }
 

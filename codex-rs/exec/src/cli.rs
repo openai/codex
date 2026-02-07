@@ -86,6 +86,10 @@ pub struct Cli {
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
 
+    /// Force cursor-based progress updates in exec mode.
+    #[arg(long = "progress-cursor", default_value_t = false)]
+    pub progress_cursor: bool,
+
     /// Print events to stdout as JSONL.
     #[arg(
         long = "json",
