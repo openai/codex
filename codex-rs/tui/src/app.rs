@@ -1485,12 +1485,15 @@ impl App {
                         }
                     } else {
                         self.chat_widget.add_error_message(
-                            "Current session is not ready to fork yet.".to_string(),
+                            "A thread must contain at least one turn before it can be forked."
+                                .to_string(),
                         );
                     }
                 } else {
-                    self.chat_widget
-                        .add_error_message("Current session is not ready to fork yet.".to_string());
+                    self.chat_widget.add_error_message(
+                        "A thread must contain at least one turn before it can be forked."
+                            .to_string(),
+                    );
                 }
 
                 tui.frame_requester().schedule_frame();
