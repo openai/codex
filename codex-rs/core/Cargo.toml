@@ -109,6 +109,7 @@ uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 zip = { workspace = true }
+monty = "0.0.0"
 
 [features]
 deterministic_process_ids = []
