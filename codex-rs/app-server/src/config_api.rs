@@ -115,6 +115,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_web_search_modes: requirements
+            .allowed_web_search_modes
+            .map(|modes| modes.into_iter().map(Into::into).collect()),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
@@ -177,6 +180,9 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            allowed_web_search_modes: Some(vec![
+                codex_core::config_loader::WebSearchModeRequirement::Cached,
+            ]),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
@@ -194,6 +200,10 @@ mod tests {
         assert_eq!(
             mapped.allowed_sandbox_modes,
             Some(vec![SandboxMode::ReadOnly]),
+        );
+        assert_eq!(
+            mapped.allowed_web_search_modes,
+            Some(vec![codex_protocol::config_types::WebSearchMode::Cached]),
         );
         assert_eq!(
             mapped.enforce_residency,
