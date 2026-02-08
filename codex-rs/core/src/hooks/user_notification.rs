@@ -32,7 +32,7 @@ pub(super) fn legacy_notify_json(
     hook_event: &HookEvent,
     cwd: &Path,
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&match hook_event {
+    let notification = match hook_event {
         HookEvent::AfterAgent { event } => UserNotification::AgentTurnComplete {
             thread_id: event.thread_id.to_string(),
             turn_id: event.turn_id.clone(),
@@ -40,7 +40,11 @@ pub(super) fn legacy_notify_json(
             input_messages: event.input_messages.clone(),
             last_assistant_message: event.last_assistant_message.clone(),
         },
-    })
+        // Legacy notification format only supports AfterAgent events.
+        // Other events use the new stdin/stdout JSON protocol.
+        _ => return serde_json::to_string(hook_event),
+    };
+    serde_json::to_string(&notification)
 }
 
 pub(super) fn notify_hook(argv: Vec<String>) -> Hook {
@@ -51,7 +55,7 @@ pub(super) fn notify_hook(argv: Vec<String>) -> Hook {
             Box::pin(async move {
                 let mut command = match command_from_argv(&argv) {
                     Some(command) => command,
-                    None => return HookOutcome::Continue,
+                    None => return HookOutcome::Proceed,
                 };
                 if let Ok(notify_payload) = legacy_notify_json(&payload.hook_event, &payload.cwd) {
                     command.arg(notify_payload);
@@ -64,7 +68,7 @@ pub(super) fn notify_hook(argv: Vec<String>) -> Hook {
                     .stderr(Stdio::null());
 
                 let _ = command.spawn();
-                HookOutcome::Continue
+                HookOutcome::Proceed
             })
         }),
     }
@@ -127,6 +131,77 @@ mod tests {
         let actual: Value = serde_json::from_str(&serialized)?;
         assert_eq!(actual, expected_notification_json());
 
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_notify_json_for_pre_tool_use_returns_event_serialized_directly() -> Result<()> {
+        use super::super::types::HookEventPreToolUse;
+
+        let hook_event = HookEvent::PreToolUse {
+            event: HookEventPreToolUse {
+                tool_name: "bash".to_string(),
+                tool_input: r#"{"command": "ls"}"#.to_string(),
+            },
+        };
+
+        let serialized = legacy_notify_json(&hook_event, Path::new("/tmp"))?;
+        let actual: Value = serde_json::from_str(&serialized)?;
+
+        // PreToolUse events use new protocol, not legacy format
+        let expected = json!({
+            "event_type": "pre_tool_use",
+            "tool_name": "bash",
+            "tool_input": r#"{"command": "ls"}"#,
+        });
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_notify_json_for_post_tool_use_returns_event_serialized_directly() -> Result<()> {
+        use super::super::types::HookEventPostToolUse;
+
+        let hook_event = HookEvent::PostToolUse {
+            event: HookEventPostToolUse {
+                tool_name: "bash".to_string(),
+                tool_output: "file1.txt\nfile2.txt".to_string(),
+            },
+        };
+
+        let serialized = legacy_notify_json(&hook_event, Path::new("/tmp"))?;
+        let actual: Value = serde_json::from_str(&serialized)?;
+
+        let expected = json!({
+            "event_type": "post_tool_use",
+            "tool_name": "bash",
+            "tool_output": "file1.txt\nfile2.txt",
+        });
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_notify_json_for_stop_returns_event_serialized_directly() -> Result<()> {
+        use super::super::types::HookEventStop;
+
+        let hook_event = HookEvent::Stop {
+            event: HookEventStop {
+                reason: "max_tokens".to_string(),
+            },
+        };
+
+        let serialized = legacy_notify_json(&hook_event, Path::new("/tmp"))?;
+        let actual: Value = serde_json::from_str(&serialized)?;
+
+        let expected = json!({
+            "event_type": "stop",
+            "reason": "max_tokens",
+        });
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 }
