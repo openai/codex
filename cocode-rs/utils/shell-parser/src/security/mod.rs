@@ -30,6 +30,7 @@ pub use analyzers::CodeExecutionAnalyzer;
 pub use analyzers::DangerousSubstitutionAnalyzer;
 pub use analyzers::DangerousVariablesAnalyzer;
 pub use analyzers::FileSystemTamperingAnalyzer;
+pub use analyzers::HeredocSubstitutionAnalyzer;
 pub use analyzers::IfsInjectionAnalyzer;
 pub use analyzers::JqDangerAnalyzer;
 pub use analyzers::MalformedTokensAnalyzer;

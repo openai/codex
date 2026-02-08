@@ -3,6 +3,7 @@
 //! These commands represent user actions that need to be communicated
 //! to the core agent loop for processing.
 
+use cocode_protocol::ApprovalDecision;
 use cocode_protocol::SubmissionId;
 use cocode_protocol::ThinkingLevel;
 use hyper_sdk::ContentBlock;
@@ -48,10 +49,8 @@ pub enum UserCommand {
     ApprovalResponse {
         /// The request ID being responded to.
         request_id: String,
-        /// Whether the user approved the request.
-        approved: bool,
-        /// Whether to remember this decision for similar operations.
-        remember: bool,
+        /// The user's three-way decision.
+        decision: ApprovalDecision,
     },
 
     /// Execute a skill command.
@@ -135,13 +134,9 @@ impl std::fmt::Display for UserCommand {
             UserCommand::SetModel { model } => write!(f, "SetModel({model})"),
             UserCommand::ApprovalResponse {
                 request_id,
-                approved,
-                remember,
+                decision,
             } => {
-                write!(
-                    f,
-                    "ApprovalResponse({request_id}, approved={approved}, remember={remember})"
-                )
+                write!(f, "ApprovalResponse({request_id}, {decision:?})")
             }
             UserCommand::ExecuteSkill { name, args } => {
                 if args.is_empty() {
@@ -195,10 +190,9 @@ mod tests {
 
         let cmd = UserCommand::ApprovalResponse {
             request_id: "req-1".to_string(),
-            approved: true,
-            remember: false,
+            decision: ApprovalDecision::Approved,
         };
-        assert!(cmd.to_string().contains("approved=true"));
+        assert!(cmd.to_string().contains("Approved"));
 
         let cmd = UserCommand::Shutdown;
         assert_eq!(cmd.to_string(), "Shutdown");

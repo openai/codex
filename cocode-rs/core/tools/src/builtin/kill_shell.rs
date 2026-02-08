@@ -68,13 +68,14 @@ impl Tool for KillShellTool {
 
         // Get final output before stopping
         let final_output = ctx
+            .shell_executor
             .background_registry
             .get_output(task_id)
             .await
             .unwrap_or_default();
 
         // Stop the task
-        let was_running = ctx.background_registry.stop(task_id).await;
+        let was_running = ctx.shell_executor.background_registry.stop(task_id).await;
 
         if was_running {
             Ok(ToolOutput::text(format!(
@@ -124,12 +125,18 @@ mod tests {
             output,
             completed: Arc::new(Notify::new()),
         };
-        ctx.background_registry
+        ctx.shell_executor
+            .background_registry
             .register("task-123".to_string(), process)
             .await;
 
         // Verify task is running
-        assert!(ctx.background_registry.is_running("task-123").await);
+        assert!(
+            ctx.shell_executor
+                .background_registry
+                .is_running("task-123")
+                .await
+        );
 
         let input = serde_json::json!({
             "task_id": "task-123"
@@ -146,7 +153,12 @@ mod tests {
         }
 
         // Verify task is no longer running
-        assert!(!ctx.background_registry.is_running("task-123").await);
+        assert!(
+            !ctx.shell_executor
+                .background_registry
+                .is_running("task-123")
+                .await
+        );
     }
 
     #[test]

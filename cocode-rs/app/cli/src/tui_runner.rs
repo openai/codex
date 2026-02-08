@@ -378,14 +378,13 @@ async fn run_agent_driver(
             }
             UserCommand::ApprovalResponse {
                 request_id,
-                approved,
-                remember,
+                decision,
             } => {
-                info!(request_id, approved, remember, "Approval response received");
+                info!(request_id, decision = ?decision, "Approval response received");
                 let _ = event_tx
                     .send(LoopEvent::ApprovalResponse {
                         request_id,
-                        approved,
+                        decision,
                     })
                     .await;
             }

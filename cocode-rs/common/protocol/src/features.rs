@@ -53,31 +53,18 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
-    /// Enable the default shell tool.
-    ShellTool,
 
     // Experimental
-    /// Use the single unified PTY-backed exec tool.
-    UnifiedExec,
-    /// Include the freeform apply_patch tool.
-    ApplyPatchFreeform,
-
-    /// Gate the execpolicy enforcement for shell/unified exec.
-    ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Experimental shell snapshotting.
-    ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
     HierarchicalAgents,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Enable collab tools.
     Collab,
-    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
-    Steer,
     WebFetch,
     /// Enable custom web_search tool (DuckDuckGo/Tavily providers).
     WebSearch,
@@ -85,6 +72,8 @@ pub enum Feature {
     Retrieval,
     /// Enable LSP tool for code intelligence (requires pre-installed LSP servers).
     Lsp,
+    /// Enable the LS directory listing tool.
+    Ls,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
     McpResourceTools,
     /// Enable subagent tools (Task, TaskOutput) for spawning specialized subagents.
@@ -202,50 +191,12 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: false,
     },
-    FeatureSpec {
-        id: Feature::ShellTool,
-        key: "shell_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
     // Beta program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Beta {
-            name: "Background terminal",
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Beta {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
     FeatureSpec {
         id: Feature::HierarchicalAgents,
         key: "hierarchical_agents",
         stage: Stage::Experimental,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ApplyPatchFreeform,
-        key: "apply_patch_freeform",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ExecPolicy,
-        key: "exec_policy",
-        stage: Stage::Experimental,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
@@ -272,16 +223,6 @@ const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Steer,
-        key: "steer",
-        stage: Stage::Beta {
-            name: "Steer conversation",
-            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
-            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::WebFetch,
         key: "web_fetch",
         stage: Stage::Experimental,
@@ -304,6 +245,12 @@ const FEATURES: &[FeatureSpec] = &[
         key: "lsp",
         stage: Stage::Experimental,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Ls,
+        key: "ls",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::McpResourceTools,
@@ -333,12 +280,10 @@ mod tests {
     fn test_with_defaults_includes_default_enabled_features() {
         let features = Features::with_defaults();
 
-        // Shell tool is default enabled
-        assert!(features.enabled(Feature::ShellTool));
-        // ExecPolicy is default enabled
-        assert!(features.enabled(Feature::ExecPolicy));
         // McpResourceTools is default enabled
         assert!(features.enabled(Feature::McpResourceTools));
+        // Ls is default enabled
+        assert!(features.enabled(Feature::Ls));
     }
 
     #[test]
@@ -384,11 +329,11 @@ mod tests {
         let mut features = Features::with_defaults();
         let mut map = BTreeMap::new();
         // Disable a default-enabled feature
-        map.insert("shell_tool".to_string(), false);
+        map.insert("ls".to_string(), false);
 
         features.apply_map(&map);
 
-        assert!(!features.enabled(Feature::ShellTool));
+        assert!(!features.enabled(Feature::Ls));
     }
 
     #[test]
@@ -407,7 +352,6 @@ mod tests {
     #[test]
     fn test_feature_for_key_known_keys() {
         assert_eq!(feature_for_key("subagent"), Some(Feature::Subagent));
-        assert_eq!(feature_for_key("shell_tool"), Some(Feature::ShellTool));
         assert_eq!(feature_for_key("web_fetch"), Some(Feature::WebFetch));
         assert_eq!(feature_for_key("undo"), Some(Feature::GhostCommit));
     }
@@ -422,7 +366,6 @@ mod tests {
     #[test]
     fn test_is_known_feature_key() {
         assert!(is_known_feature_key("subagent"));
-        assert!(is_known_feature_key("shell_tool"));
         assert!(!is_known_feature_key("unknown"));
         assert!(!is_known_feature_key(""));
     }
@@ -430,20 +373,18 @@ mod tests {
     #[test]
     fn test_feature_key_method() {
         assert_eq!(Feature::Subagent.key(), "subagent");
-        assert_eq!(Feature::ShellTool.key(), "shell_tool");
         assert_eq!(Feature::GhostCommit.key(), "undo");
     }
 
     #[test]
     fn test_feature_stage_method() {
-        assert_eq!(Feature::ShellTool.stage(), Stage::Stable);
+        assert_eq!(Feature::McpResourceTools.stage(), Stage::Stable);
         assert_eq!(Feature::Subagent.stage(), Stage::Experimental);
-        assert!(matches!(Feature::UnifiedExec.stage(), Stage::Beta { .. }));
     }
 
     #[test]
     fn test_feature_default_enabled_method() {
-        assert!(Feature::ShellTool.default_enabled());
+        assert!(Feature::Ls.default_enabled());
         assert!(!Feature::Subagent.default_enabled());
     }
 
@@ -463,11 +404,11 @@ mod tests {
     fn test_all_features_contains_all_variants() {
         let specs: Vec<_> = all_features().collect();
         // Ensure we have a reasonable number of features
-        assert!(specs.len() >= 15);
+        assert!(specs.len() >= 13);
 
         // Check that some expected features are present
         assert!(specs.iter().any(|s| s.id == Feature::Subagent));
-        assert!(specs.iter().any(|s| s.id == Feature::ShellTool));
+        assert!(specs.iter().any(|s| s.id == Feature::Ls));
     }
 
     #[test]

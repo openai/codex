@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use cocode_config::PermissionsConfig;
 use cocode_protocol::PermissionDecision;
 use cocode_protocol::RuleSource;
 
@@ -36,7 +37,7 @@ pub struct PermissionRule {
 
 /// Evaluates permission rules against tool calls.
 ///
-/// Rules are evaluated in priority order: source priority first (Policy > Project > ...),
+/// Rules are evaluated in priority order: source priority first (Session > Command > ... > User),
 /// then action severity (Deny > Ask > Allow). The first matching rule wins.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionRuleEvaluator {
@@ -57,6 +58,39 @@ impl PermissionRuleEvaluator {
     /// Add a single rule.
     pub fn add_rule(&mut self, rule: PermissionRule) {
         self.rules.push(rule);
+    }
+
+    /// Build permission rules from a `PermissionsConfig` with a given source.
+    pub fn rules_from_config(
+        config: &PermissionsConfig,
+        source: RuleSource,
+    ) -> Vec<PermissionRule> {
+        let mut rules = Vec::new();
+        for pattern in &config.allow {
+            rules.push(PermissionRule {
+                source,
+                tool_pattern: pattern.clone(),
+                file_pattern: None,
+                action: RuleAction::Allow,
+            });
+        }
+        for pattern in &config.deny {
+            rules.push(PermissionRule {
+                source,
+                tool_pattern: pattern.clone(),
+                file_pattern: None,
+                action: RuleAction::Deny,
+            });
+        }
+        for pattern in &config.ask {
+            rules.push(PermissionRule {
+                source,
+                tool_pattern: pattern.clone(),
+                file_pattern: None,
+                action: RuleAction::Ask,
+            });
+        }
+        rules
     }
 
     /// Evaluate rules for a tool call.
@@ -411,9 +445,10 @@ mod tests {
             },
         ]);
 
+        // Session has highest priority — its Allow overrides Policy's Deny
         let decision = evaluator.evaluate("Edit", None).expect("should match");
-        assert!(decision.result.is_denied());
-        assert_eq!(decision.source, Some(RuleSource::Policy));
+        assert!(decision.result.is_allowed());
+        assert_eq!(decision.source, Some(RuleSource::Session));
     }
 
     #[test]
@@ -582,10 +617,11 @@ mod tests {
             },
         ]);
 
+        // Session has highest priority
         let decision = evaluator
             .evaluate_behavior("Edit", None, RuleAction::Deny, None)
             .expect("should match");
-        assert_eq!(decision.source, Some(RuleSource::Policy));
+        assert_eq!(decision.source, Some(RuleSource::Session));
     }
 
     // ── Command pattern matching ────────────────────────────────────
@@ -633,6 +669,57 @@ mod tests {
             "Bash",
             Some("npm test")
         ));
+    }
+
+    // ── from_permissions_config ──────────────────────────────────────
+
+    #[test]
+    fn test_rules_from_config() {
+        let config = cocode_config::PermissionsConfig {
+            allow: vec!["Read".to_string(), "Bash(git *)".to_string()],
+            deny: vec!["Bash(rm -rf *)".to_string()],
+            ask: vec!["Bash(sudo *)".to_string()],
+        };
+        let rules = PermissionRuleEvaluator::rules_from_config(&config, RuleSource::User);
+        assert_eq!(rules.len(), 4);
+
+        // Check allow rules
+        assert_eq!(rules[0].tool_pattern, "Read");
+        assert_eq!(rules[0].action, RuleAction::Allow);
+        assert_eq!(rules[0].source, RuleSource::User);
+        assert_eq!(rules[1].tool_pattern, "Bash(git *)");
+        assert_eq!(rules[1].action, RuleAction::Allow);
+
+        // Check deny rule
+        assert_eq!(rules[2].tool_pattern, "Bash(rm -rf *)");
+        assert_eq!(rules[2].action, RuleAction::Deny);
+
+        // Check ask rule
+        assert_eq!(rules[3].tool_pattern, "Bash(sudo *)");
+        assert_eq!(rules[3].action, RuleAction::Ask);
+    }
+
+    #[test]
+    fn test_rules_from_config_integrated() {
+        let config = cocode_config::PermissionsConfig {
+            allow: vec!["Bash(git *)".to_string()],
+            deny: vec!["Bash(rm *)".to_string()],
+            ask: vec![],
+        };
+        let rules = PermissionRuleEvaluator::rules_from_config(&config, RuleSource::Project);
+        let evaluator = PermissionRuleEvaluator::with_rules(rules);
+
+        // "git status" should be allowed
+        let decision =
+            evaluator.evaluate_behavior("Bash", None, RuleAction::Allow, Some("git status"));
+        assert!(decision.is_some());
+        assert!(decision.unwrap().result.is_allowed());
+
+        // "rm -rf /" should be denied
+        let decision =
+            evaluator.evaluate_behavior("Bash", None, RuleAction::Deny, Some("rm -rf /"));
+        assert!(decision.is_some());
+        assert!(decision.unwrap().result.is_denied());
     }
 
     #[test]

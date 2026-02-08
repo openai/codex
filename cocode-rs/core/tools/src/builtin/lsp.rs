@@ -110,8 +110,8 @@ impl Tool for LspTool {
         true
     }
 
-    fn is_enabled(&self, ctx: &ToolContext) -> bool {
-        ctx.lsp_manager.is_some()
+    fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+        Some(cocode_protocol::Feature::Lsp)
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -596,10 +596,9 @@ mod tests {
     }
 
     #[test]
-    fn test_is_enabled_without_manager() {
+    fn test_feature_gate() {
         let tool = LspTool::new();
-        let ctx = make_context();
-        assert!(!tool.is_enabled(&ctx));
+        assert_eq!(tool.feature_gate(), Some(cocode_protocol::Feature::Lsp));
     }
 
     #[tokio::test]

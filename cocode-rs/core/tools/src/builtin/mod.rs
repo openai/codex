@@ -1,12 +1,13 @@
 //! Built-in tools for the agent.
 //!
-//! This module provides the standard set of 19 built-in tools:
+//! This module provides the standard set of 20 built-in tools:
 //! - [`ReadTool`] - Read file contents
 //! - [`GlobTool`] - Pattern-based file search
 //! - [`GrepTool`] - Content search with regex
 //! - [`EditTool`] - Exact string replacement in files
 //! - [`WriteTool`] - Write/create files
 //! - [`BashTool`] - Execute shell commands
+//! - [`ShellTool`] - Execute commands via array format (direct exec)
 //! - [`TaskTool`] - Launch sub-agents
 //! - [`TaskOutputTool`] - Get background task output
 //! - [`KillShellTool`] - Stop background tasks
@@ -19,6 +20,7 @@
 //! - [`SkillTool`] - Execute named skills (slash commands)
 //! - [`LspTool`] - Language Server Protocol operations (feature-gated)
 //! - [`McpSearchTool`] - Search MCP tools by keyword (dynamic, for auto-search mode)
+//! - [`LsTool`] - List directory contents with tree-style output
 //! - [`ApplyPatchTool`] - Apply multi-file patches (optional, for GPT-5)
 //!
 //! ## Utilities
@@ -36,11 +38,13 @@ mod exit_plan_mode;
 mod glob;
 mod grep;
 mod kill_shell;
+mod ls;
 mod lsp;
 pub mod mcp_search;
 mod notebook_edit;
 pub mod path_extraction;
 mod read;
+mod shell;
 mod skill;
 mod task;
 mod task_output;
@@ -58,10 +62,12 @@ pub use exit_plan_mode::ExitPlanModeTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
+pub use ls::LsTool;
 pub use lsp::LspTool;
 pub use mcp_search::McpSearchTool;
 pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
+pub use shell::ShellTool;
 pub use skill::SkillTool;
 pub use task::TaskTool;
 pub use task_output::TaskOutputTool;
@@ -94,9 +100,11 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(WebFetchTool::new());
     registry.register(WebSearchTool::new());
     registry.register(SkillTool::new());
+    registry.register(LsTool::new());
     registry.register(LspTool::new());
     registry.register(NotebookEditTool::new());
     registry.register(ApplyPatchTool::new());
+    registry.register(ShellTool::new());
 }
 
 /// Get a list of built-in tool names.
@@ -118,8 +126,10 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
         "WebFetch",
         "WebSearch",
         "Skill",
+        "LS",
         "Lsp",
         "NotebookEdit",
         "apply_patch",
+        "shell",
     ]
 }

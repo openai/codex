@@ -127,6 +127,7 @@ impl Tool for ReadTool {
                         ),
                     }],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }
@@ -143,6 +144,7 @@ impl Tool for ReadTool {
                     ),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }

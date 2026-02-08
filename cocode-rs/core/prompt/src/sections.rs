@@ -97,6 +97,38 @@ pub fn render_memory_files(ctx: &ConversationContext) -> String {
     parts.join("\n\n")
 }
 
+/// Generate tool-specific policy lines based on available tool names.
+///
+/// Only includes policy lines for tools that are actually registered,
+/// avoiding wasted tokens for disabled tools.
+pub fn generate_tool_policy_lines(tool_names: &[String]) -> String {
+    let tools: std::collections::HashSet<&str> = tool_names.iter().map(|s| s.as_str()).collect();
+    let mut lines = Vec::new();
+    if tools.contains("Read") {
+        lines.push("- Use Read for reading files (not cat/head/tail)");
+    }
+    if tools.contains("Edit") {
+        lines.push("- Use Edit for modifying files (not sed/awk)");
+    }
+    if tools.contains("Write") {
+        lines.push("- Use Write for creating files (not echo/heredoc)");
+    }
+    if tools.contains("Grep") {
+        lines.push("- Use Grep for searching file contents (not grep/rg)");
+    }
+    if tools.contains("Glob") {
+        lines.push("- Use Glob for finding files by pattern (not find/ls)");
+    }
+    if tools.contains("LS") {
+        lines.push("- Use LS for directory listing (not Bash ls)");
+    }
+    if lines.is_empty() {
+        String::new()
+    } else {
+        lines.join("\n")
+    }
+}
+
 /// Render injections for a specific position.
 pub fn render_injections(ctx: &ConversationContext, position: InjectionPosition) -> String {
     let matching: Vec<&_> = ctx
@@ -302,5 +334,51 @@ mod tests {
         assert!(rendered.contains("# Language Preference"));
         assert!(rendered.contains("中文"));
         assert!(rendered.contains("MUST respond in"));
+    }
+
+    #[test]
+    fn test_generate_tool_policy_lines_with_ls() {
+        let tool_names = vec!["Read".to_string(), "Edit".to_string(), "LS".to_string()];
+        let result = generate_tool_policy_lines(&tool_names);
+        assert!(result.contains("Use Read for reading files"));
+        assert!(result.contains("Use Edit for modifying files"));
+        assert!(result.contains("Use LS for directory listing"));
+        assert!(!result.contains("Use Grep"));
+    }
+
+    #[test]
+    fn test_generate_tool_policy_lines_without_ls() {
+        let tool_names = vec!["Read".to_string(), "Edit".to_string(), "Grep".to_string()];
+        let result = generate_tool_policy_lines(&tool_names);
+        assert!(result.contains("Use Read for reading files"));
+        assert!(result.contains("Use Edit for modifying files"));
+        assert!(result.contains("Use Grep for searching file contents"));
+        assert!(!result.contains("Use LS"));
+    }
+
+    #[test]
+    fn test_generate_tool_policy_lines_empty() {
+        let tool_names: Vec<String> = vec![];
+        let result = generate_tool_policy_lines(&tool_names);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_generate_tool_policy_lines_all_tools() {
+        let tool_names = vec![
+            "Read".to_string(),
+            "Edit".to_string(),
+            "Write".to_string(),
+            "Grep".to_string(),
+            "Glob".to_string(),
+            "LS".to_string(),
+        ];
+        let result = generate_tool_policy_lines(&tool_names);
+        assert!(result.contains("Use Read"));
+        assert!(result.contains("Use Edit"));
+        assert!(result.contains("Use Write"));
+        assert!(result.contains("Use Grep"));
+        assert!(result.contains("Use Glob"));
+        assert!(result.contains("Use LS"));
     }
 }

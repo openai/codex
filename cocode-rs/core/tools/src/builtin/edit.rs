@@ -129,6 +129,7 @@ impl Tool for EditTool {
                             ),
                         }],
                         allow_remember: true,
+                        proposed_prefix_pattern: None,
                     },
                 };
             }
@@ -152,6 +153,7 @@ impl Tool for EditTool {
                             ),
                         }],
                         allow_remember: true,
+                        proposed_prefix_pattern: None,
                     },
                 };
             }
@@ -177,6 +179,7 @@ impl Tool for EditTool {
                 ),
                 risks: vec![],
                 allow_remember: true,
+                proposed_prefix_pattern: None,
             },
         }
     }

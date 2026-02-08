@@ -130,6 +130,7 @@ pub use tool::ToolOutputExt;
 
 // Re-export commonly used types from dependencies
 pub use cocode_protocol::AbortReason;
+pub use cocode_protocol::ApprovalDecision;
 pub use cocode_protocol::ConcurrencySafety;
 pub use cocode_protocol::ContextModifier;
 pub use cocode_protocol::PermissionMode;

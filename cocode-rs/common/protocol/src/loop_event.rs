@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::ApprovalDecision;
 use crate::ApprovalRequest;
 use crate::PermissionDecision;
 
@@ -154,8 +155,8 @@ pub enum LoopEvent {
     ApprovalResponse {
         /// Request identifier.
         request_id: String,
-        /// Whether the user approved.
-        approved: bool,
+        /// The user's decision (approve, approve-with-prefix, or deny).
+        decision: ApprovalDecision,
     },
     /// A permission check was evaluated.
     PermissionChecked {

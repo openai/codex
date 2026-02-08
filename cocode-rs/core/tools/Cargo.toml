@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cocode-protocol.workspace = true
+cocode-config.workspace = true
 cocode-message.workspace = true
 cocode-error.workspace = true
 cocode-hooks.workspace = true
@@ -28,9 +29,10 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "fs", "process"] }
 tokio-util = { workspace = true, features = ["codec"] }
 tracing.workspace = true
-regex.workspace = true
 globset.workspace = true
-walkdir.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+ignore.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 anyhow.workspace = true

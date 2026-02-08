@@ -82,6 +82,21 @@ Usage notes:\n\
 - When issuing multiple commands: use && to chain sequential commands, make parallel calls for independent commands\n\
 - Always quote file paths that contain spaces with double quotes";
 
+/// Description for the Shell tool (array format commands).
+pub const SHELL_DESCRIPTION: &str = "\
+Executes a command directly without a shell interpreter.\n\
+\n\
+Unlike Bash, this tool takes a command as an array of strings [program, arg1, arg2, ...] \
+and executes it directly via exec (no shell involved). This avoids shell parsing issues \
+and is safer for commands with special characters in arguments.\n\
+\n\
+Usage notes:\n\
+- The command parameter is a required array of strings\n\
+- The first element is the program, remaining elements are arguments\n\
+- Optional timeout in seconds (max 600). Default: 120 seconds\n\
+- Background execution is not supported — use Bash for that\n\
+- Output exceeding 30000 characters will be truncated";
+
 /// Description for the Task tool.
 pub const TASK_DESCRIPTION: &str = "\
 Launch a new agent to handle complex, multi-step tasks autonomously.\n\
@@ -293,6 +308,21 @@ Edit modes:\n\
 - replace (default): Replace the content of an existing cell\n\
 - insert: Insert a new cell (cell_type required)\n\
 - delete: Delete the specified cell";
+
+/// Description for the LS tool.
+pub const LS_DESCRIPTION: &str = "\
+Lists files and directories in a given path with a tree-like view.\n\
+Use this tool instead of Bash ls for directory listing — it provides structured output \
+with .gitignore awareness.\n\
+\n\
+- Default depth is 1 (immediate children only). Use depth=2+ for tree views.\n\
+- Returns entries sorted with directories first, then files, alphabetically within each group\n\
+- Results respect .gitignore and .ignore rules (ignored files are hidden)\n\
+- Directories show with trailing /, symlinks with @\n\
+- Supports pagination via offset (1-indexed) and limit for large directories\n\
+- Hidden files (dotfiles) are included unless excluded by ignore rules\n\
+\n\
+Use Glob for pattern-based file matching or Grep for content search instead.";
 
 /// Description for the LSP tool.
 pub const LSP_DESCRIPTION: &str = "\

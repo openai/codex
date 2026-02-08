@@ -577,6 +577,90 @@ impl Analyzer for CodeExecutionAnalyzer {
     }
 }
 
+/// Detects unsafe heredoc usage in command substitutions.
+///
+/// A heredoc with an unquoted delimiter (`<<EOF`) expands variables, which is
+/// dangerous inside command substitutions (`$(... <<EOF ...)`). Quoted delimiters
+/// (`<<'EOF'` or `<<\EOF`) suppress expansion and are safe.
+pub struct HeredocSubstitutionAnalyzer;
+
+impl HeredocSubstitutionAnalyzer {
+    /// Check if a `<<` heredoc operator at `pos` has an unquoted delimiter.
+    ///
+    /// Skips the optional `-` after `<<` then checks if the delimiter starts
+    /// with a quote character.
+    fn is_unquoted_heredoc(source: &str, heredoc_pos: usize) -> bool {
+        let after = &source[heredoc_pos..];
+
+        // Skip "<<"
+        let rest = after.strip_prefix("<<").unwrap_or(after);
+        // Skip optional "-" (for <<-)
+        let rest = rest.strip_prefix('-').unwrap_or(rest);
+        // Skip whitespace
+        let rest = rest.trim_start_matches([' ', '\t']);
+
+        // A quoted delimiter starts with ', ", or \
+        !(rest.starts_with('\'') || rest.starts_with('"') || rest.starts_with('\\'))
+    }
+}
+
+impl Analyzer for HeredocSubstitutionAnalyzer {
+    fn analyze(&self, cmd: &ParsedCommand, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        let bytes = source.as_bytes();
+
+        // Track $( nesting depth to know if we're inside a command substitution
+        let mut i = 0;
+        let mut cmd_subst_depth = 0i32;
+
+        while i < bytes.len() {
+            // Detect $( — enter command substitution
+            if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+                cmd_subst_depth += 1;
+                i += 2;
+                continue;
+            }
+            // Detect ) — leave command substitution
+            if bytes[i] == b')' && cmd_subst_depth > 0 {
+                cmd_subst_depth -= 1;
+                i += 1;
+                continue;
+            }
+            // Detect << (but not <<<)
+            if bytes[i] == b'<'
+                && i + 1 < bytes.len()
+                && bytes[i + 1] == b'<'
+                && (i + 2 >= bytes.len() || bytes[i + 2] != b'<')
+            {
+                if cmd_subst_depth > 0 && Self::is_unquoted_heredoc(source, i) {
+                    analysis.add_risk(
+                        SecurityRisk::new(
+                            RiskKind::UnsafeHeredocSubstitution,
+                            "unquoted heredoc delimiter inside command substitution allows variable expansion",
+                        ),
+                    );
+                }
+                // Skip past the << so we don't double-count
+                i += 2;
+                continue;
+            }
+            // Skip single-quoted strings entirely (no expansion inside)
+            if bytes[i] == b'\'' {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'\'' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+                continue;
+            }
+
+            i += 1;
+        }
+    }
+}
+
 /// Get all default analyzers.
 pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
     vec![
@@ -589,6 +673,7 @@ pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
         Box::new(IfsInjectionAnalyzer),
         Box::new(ProcEnvironAnalyzer),
         // Ask phase
+        Box::new(HeredocSubstitutionAnalyzer),
         Box::new(DangerousSubstitutionAnalyzer),
         Box::new(MalformedTokensAnalyzer),
         Box::new(SensitiveRedirectAnalyzer),
@@ -672,6 +757,42 @@ mod tests {
                 .risks
                 .iter()
                 .any(|r| r.kind == RiskKind::CodeExecution)
+        );
+    }
+
+    #[test]
+    fn test_heredoc_unsafe_in_command_substitution() {
+        // Unquoted heredoc inside $() — should flag
+        let analysis = analyze_command("echo $(cat <<EOF\nhello $USER\nEOF\n)");
+        assert!(
+            analysis
+                .risks
+                .iter()
+                .any(|r| r.kind == RiskKind::UnsafeHeredocSubstitution)
+        );
+    }
+
+    #[test]
+    fn test_heredoc_safe_quoted_delimiter() {
+        // Quoted heredoc — should NOT flag UnsafeHeredocSubstitution
+        let analysis = analyze_command("cat <<'EOF'\nhello $USER\nEOF");
+        assert!(
+            !analysis
+                .risks
+                .iter()
+                .any(|r| r.kind == RiskKind::UnsafeHeredocSubstitution)
+        );
+    }
+
+    #[test]
+    fn test_heredoc_safe_outside_substitution() {
+        // Unquoted heredoc NOT inside $() — should NOT flag
+        let analysis = analyze_command("cat <<EOF\nhello $USER\nEOF");
+        assert!(
+            !analysis
+                .risks
+                .iter()
+                .any(|r| r.kind == RiskKind::UnsafeHeredocSubstitution)
         );
     }
 

@@ -106,6 +106,23 @@ impl ToolOutput {
         self.modifiers.extend(modifiers);
         self
     }
+
+    /// Truncate text content to at most `max_chars`, preserving start and end.
+    pub fn truncate_to(&mut self, max_chars: usize) {
+        if let ToolResultContent::Text(ref text) = self.content {
+            if text.len() > max_chars {
+                let half = max_chars / 2;
+                let start_end = text.floor_char_boundary(half);
+                let suffix_start = text.ceil_char_boundary(text.len() - half);
+                let start = &text[..start_end];
+                let end = &text[suffix_start..];
+                let omitted = text.len() - start_end - (text.len() - suffix_start);
+                self.content = ToolResultContent::Text(format!(
+                    "{start}\n\n... (output truncated, {omitted} characters omitted) ...\n\n{end}"
+                ));
+            }
+        }
+    }
 }
 
 /// A modifier that changes the conversation context after tool execution.
@@ -285,5 +302,61 @@ mod tests {
         let parsed: ToolOutput = serde_json::from_str(&json).unwrap();
         assert!(!parsed.is_error);
         assert_eq!(parsed.modifiers.len(), 1);
+    }
+
+    #[test]
+    fn test_truncate_to_no_op_when_within_limit() {
+        let mut output = ToolOutput::text("short text");
+        output.truncate_to(100);
+        assert!(matches!(&output.content, ToolResultContent::Text(s) if s == "short text"));
+    }
+
+    #[test]
+    fn test_truncate_to_truncates_long_text() {
+        let long = "a".repeat(1000);
+        let mut output = ToolOutput::text(long);
+        output.truncate_to(100);
+        if let ToolResultContent::Text(ref s) = output.content {
+            assert!(s.len() < 1000);
+            assert!(s.contains("output truncated"));
+            assert!(s.contains("characters omitted"));
+        } else {
+            panic!("Expected Text content");
+        }
+    }
+
+    #[test]
+    fn test_truncate_to_preserves_start_and_end() {
+        let text = format!("START{}END", "x".repeat(1000));
+        let mut output = ToolOutput::text(text);
+        output.truncate_to(100);
+        if let ToolResultContent::Text(ref s) = output.content {
+            assert!(s.starts_with("START"));
+            assert!(s.ends_with("END"));
+        } else {
+            panic!("Expected Text content");
+        }
+    }
+
+    #[test]
+    fn test_truncate_to_ignores_structured() {
+        let mut output = ToolOutput::structured(serde_json::json!({"key": "value"}));
+        output.truncate_to(1); // Should not panic or change
+        assert!(matches!(&output.content, ToolResultContent::Structured(_)));
+    }
+
+    #[test]
+    fn test_truncate_to_utf8_safe() {
+        // Use multibyte characters to verify UTF-8 safety
+        let text = "你好世界".repeat(100); // 4 chars × 3 bytes each × 100 = 1200 bytes
+        let mut output = ToolOutput::text(text);
+        output.truncate_to(100);
+        if let ToolResultContent::Text(ref s) = output.content {
+            // Should not panic and result should be valid UTF-8
+            assert!(s.is_char_boundary(0));
+            assert!(s.contains("output truncated"));
+        } else {
+            panic!("Expected Text content");
+        }
     }
 }

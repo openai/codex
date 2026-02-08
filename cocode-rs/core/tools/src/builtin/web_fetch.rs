@@ -114,6 +114,7 @@ impl Tool for WebFetchTool {
                 description: format!("Fetch URL: {url}"),
                 risks: vec![],
                 allow_remember: true,
+                proposed_prefix_pattern: None,
             },
         }
     }

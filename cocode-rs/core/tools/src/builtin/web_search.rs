@@ -85,6 +85,7 @@ impl Tool for WebSearchTool {
                 description: format!("Web search: {query}"),
                 risks: vec![],
                 allow_remember: true,
+                proposed_prefix_pattern: None,
             },
         }
     }

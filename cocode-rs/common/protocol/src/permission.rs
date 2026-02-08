@@ -195,17 +195,22 @@ impl PermissionDecision {
     }
 }
 
-/// Source of a permission rule, ordered by priority (highest first).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// Source of a permission rule.
+///
+/// Ordering: smaller value = higher priority.
+/// Session has the highest priority (user's real-time decisions override
+/// all other sources), followed by Command, Cli, Flag, Local, Project,
+/// Policy, and User (lowest).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuleSource {
-    /// Policy-level rules (highest priority).
+    /// Policy-level rules.
     Policy,
-    /// Project-level settings (.claude/settings.json in project).
+    /// Project-level settings (.cocode/settings.json in project).
     Project,
-    /// Local settings (.claude/settings.local.json).
+    /// Local settings (.cocode/settings.local.json).
     Local,
-    /// User-level settings (~/.claude/settings.json).
+    /// User-level settings (~/.cocode/settings.json).
     User,
     /// CLI flag overrides.
     Flag,
@@ -213,8 +218,36 @@ pub enum RuleSource {
     Cli,
     /// Per-command overrides.
     Command,
-    /// Session-level approvals (lowest priority).
+    /// Session-level approvals (highest priority).
     Session,
+}
+
+impl RuleSource {
+    /// Returns a numeric priority value. Lower = higher priority.
+    fn priority(self) -> i32 {
+        match self {
+            RuleSource::Session => 0,
+            RuleSource::Command => 1,
+            RuleSource::Cli => 2,
+            RuleSource::Flag => 3,
+            RuleSource::Local => 4,
+            RuleSource::Project => 5,
+            RuleSource::Policy => 6,
+            RuleSource::User => 7,
+        }
+    }
+}
+
+impl PartialOrd for RuleSource {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RuleSource {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.priority().cmp(&other.priority())
+    }
 }
 
 impl RuleSource {
@@ -239,6 +272,24 @@ impl std::fmt::Display for RuleSource {
     }
 }
 
+/// Result of a user approval interaction.
+///
+/// Returned from `PermissionRequester::request_permission()` to convey
+/// the user's three-way choice: approve once, approve similar, or deny.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum ApprovalDecision {
+    /// Approve this one execution only.
+    Approved,
+    /// Approve and remember a prefix pattern for similar future commands.
+    ApprovedWithPrefix {
+        /// The prefix pattern to remember, e.g. "git *".
+        prefix_pattern: String,
+    },
+    /// Deny the operation.
+    Denied,
+}
+
 /// Request for user approval of an operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalRequest {
@@ -254,6 +305,10 @@ pub struct ApprovalRequest {
     /// Whether this can be auto-approved for similar future operations.
     #[serde(default)]
     pub allow_remember: bool,
+    /// Proposed command prefix pattern for "allow similar" option.
+    /// E.g. "git *" for command "git push origin main".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_prefix_pattern: Option<String>,
 }
 
 /// Result of a permission check with additional context.
@@ -420,6 +475,7 @@ mod tests {
                 description: "test".to_string(),
                 risks: vec![],
                 allow_remember: false,
+                proposed_prefix_pattern: None,
             },
         };
         assert!(!needs_approval.is_allowed());
@@ -465,10 +521,14 @@ mod tests {
 
     #[test]
     fn test_rule_source_ordering() {
-        assert!(RuleSource::Policy < RuleSource::Project);
-        assert!(RuleSource::Project < RuleSource::Local);
-        assert!(RuleSource::Local < RuleSource::User);
-        assert!(RuleSource::Command < RuleSource::Session);
+        // Session has highest priority (smallest value)
+        assert!(RuleSource::Session < RuleSource::Command);
+        assert!(RuleSource::Command < RuleSource::Cli);
+        assert!(RuleSource::Cli < RuleSource::Flag);
+        assert!(RuleSource::Flag < RuleSource::Local);
+        assert!(RuleSource::Local < RuleSource::Project);
+        assert!(RuleSource::Project < RuleSource::Policy);
+        assert!(RuleSource::Policy < RuleSource::User);
     }
 
     #[test]
@@ -500,5 +560,59 @@ mod tests {
         let json = serde_json::to_string(&risk).unwrap();
         let parsed: SecurityRisk = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, risk);
+    }
+
+    #[test]
+    fn test_approval_decision_serde_roundtrip() {
+        // Approved
+        let decision = ApprovalDecision::Approved;
+        let json = serde_json::to_string(&decision).unwrap();
+        let parsed: ApprovalDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ApprovalDecision::Approved);
+
+        // ApprovedWithPrefix
+        let decision = ApprovalDecision::ApprovedWithPrefix {
+            prefix_pattern: "git *".to_string(),
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("approved-with-prefix"));
+        assert!(json.contains("git *"));
+        let parsed: ApprovalDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, decision);
+
+        // Denied
+        let decision = ApprovalDecision::Denied;
+        let json = serde_json::to_string(&decision).unwrap();
+        let parsed: ApprovalDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ApprovalDecision::Denied);
+    }
+
+    #[test]
+    fn test_approval_request_proposed_prefix_pattern() {
+        // Without prefix pattern (backward compat)
+        let request = ApprovalRequest {
+            request_id: "1".to_string(),
+            tool_name: "Bash".to_string(),
+            description: "git push".to_string(),
+            risks: vec![],
+            allow_remember: true,
+            proposed_prefix_pattern: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("proposed_prefix_pattern"));
+
+        // With prefix pattern
+        let request = ApprovalRequest {
+            request_id: "2".to_string(),
+            tool_name: "Bash".to_string(),
+            description: "git push origin main".to_string(),
+            risks: vec![],
+            allow_remember: true,
+            proposed_prefix_pattern: Some("git *".to_string()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("proposed_prefix_pattern"));
+        let parsed: ApprovalRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.proposed_prefix_pattern, Some("git *".to_string()));
     }
 }

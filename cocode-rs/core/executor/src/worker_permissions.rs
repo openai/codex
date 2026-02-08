@@ -27,8 +27,8 @@
 //! // Main thread processes requests
 //! while let Some(request) = queue.next_pending().await {
 //!     // Show UI and get user response
-//!     let approved = show_approval_dialog(&request);
-//!     queue.respond(&request.request_id, approved).await;
+//!     let decision = show_approval_dialog(&request);
+//!     queue.respond(&request.request_id, decision).await;
 //! }
 //! ```
 
@@ -38,6 +38,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::LoopEvent;
 use cocode_tools::PermissionRequester;
@@ -131,7 +132,7 @@ pub struct QueuedPermissionRequest {
     /// Worker ID that submitted the request.
     pub worker_id: String,
     /// Response channel.
-    response_tx: Option<oneshot::Sender<bool>>,
+    response_tx: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
 impl QueuedPermissionRequest {
@@ -222,8 +223,12 @@ impl WorkerPermissionQueue {
     /// Request permission from the main thread.
     ///
     /// This method queues the request and waits for a response.
-    /// Returns `true` if approved, `false` if denied or timed out.
-    pub async fn request_permission(&self, mut request: ApprovalRequest, worker_id: &str) -> bool {
+    /// Returns the user's three-way decision, or `Denied` on timeout/cancel.
+    pub async fn request_permission(
+        &self,
+        mut request: ApprovalRequest,
+        worker_id: &str,
+    ) -> ApprovalDecision {
         // Generate request ID if not set
         if request.request_id.is_empty() {
             request.request_id = self.next_request_id().await;
@@ -242,7 +247,7 @@ impl WorkerPermissionQueue {
                     request_id = %request_id,
                     "Permission queue full, denying request"
                 );
-                return false;
+                return ApprovalDecision::Denied;
             }
 
             let queued = QueuedPermissionRequest {
@@ -272,21 +277,21 @@ impl WorkerPermissionQueue {
 
         // Wait for response with timeout
         match tokio::time::timeout(self.default_timeout, response_rx).await {
-            Ok(Ok(approved)) => {
-                debug!(request_id = %request_id, approved, "Permission response received");
-                approved
+            Ok(Ok(decision)) => {
+                debug!(request_id = %request_id, ?decision, "Permission response received");
+                decision
             }
             Ok(Err(_)) => {
                 // Channel closed - request was cancelled
                 warn!(request_id = %request_id, "Permission request cancelled");
                 self.cleanup_request(&request_id).await;
-                false
+                ApprovalDecision::Denied
             }
             Err(_) => {
                 // Timeout
                 warn!(request_id = %request_id, "Permission request timed out");
                 self.cleanup_request(&request_id).await;
-                false
+                ApprovalDecision::Denied
             }
         }
     }
@@ -297,7 +302,7 @@ impl WorkerPermissionQueue {
         mut request: ApprovalRequest,
         worker_id: &str,
         timeout: Duration,
-    ) -> bool {
+    ) -> ApprovalDecision {
         // Generate request ID if not set
         if request.request_id.is_empty() {
             request.request_id = self.next_request_id().await;
@@ -315,7 +320,7 @@ impl WorkerPermissionQueue {
                     request_id = %request_id,
                     "Permission queue full, denying request"
                 );
-                return false;
+                return ApprovalDecision::Denied;
             }
 
             let queued = QueuedPermissionRequest {
@@ -346,19 +351,19 @@ impl WorkerPermissionQueue {
 
         // Wait for response with custom timeout
         match tokio::time::timeout(timeout, response_rx).await {
-            Ok(Ok(approved)) => {
-                debug!(request_id = %request_id, approved, "Permission response received");
-                approved
+            Ok(Ok(decision)) => {
+                debug!(request_id = %request_id, decision = ?decision, "Permission response received");
+                decision
             }
             Ok(Err(_)) => {
                 warn!(request_id = %request_id, "Permission request cancelled");
                 self.cleanup_request(&request_id).await;
-                false
+                ApprovalDecision::Denied
             }
             Err(_) => {
                 warn!(request_id = %request_id, "Permission request timed out");
                 self.cleanup_request(&request_id).await;
-                false
+                ApprovalDecision::Denied
             }
         }
     }
@@ -366,7 +371,7 @@ impl WorkerPermissionQueue {
     /// Respond to a pending permission request.
     ///
     /// Returns `true` if the request was found and responded to.
-    pub async fn respond(&self, request_id: &str, approved: bool) -> bool {
+    pub async fn respond(&self, request_id: &str, decision: ApprovalDecision) -> bool {
         let response_tx = {
             let mut requests = self.requests.lock().await;
             if let Some(mut queued) = requests.remove(request_id) {
@@ -377,18 +382,18 @@ impl WorkerPermissionQueue {
         };
 
         if let Some(tx) = response_tx {
-            let _ = tx.send(approved);
+            let _ = tx.send(decision.clone());
 
             info!(
                 request_id = %request_id,
-                approved,
+                decision = ?decision,
                 "Permission response sent"
             );
 
             // Emit event
             self.emit_event(LoopEvent::ApprovalResponse {
                 request_id: request_id.to_string(),
-                approved,
+                decision,
             })
             .await;
 
@@ -477,7 +482,7 @@ impl WorkerPermissionQueue {
         for request_id in to_cancel {
             if let Some(mut queued) = requests.remove(&request_id) {
                 if let Some(tx) = queued.response_tx.take() {
-                    let _ = tx.send(false); // Deny cancelled requests
+                    let _ = tx.send(ApprovalDecision::Denied); // Deny cancelled requests
                 }
                 cancelled += 1;
             }
@@ -501,7 +506,7 @@ impl WorkerPermissionQueue {
 
         for (_, mut queued) in requests.drain() {
             if let Some(tx) = queued.response_tx.take() {
-                let _ = tx.send(false);
+                let _ = tx.send(ApprovalDecision::Denied);
             }
             cancelled += 1;
         }
@@ -527,7 +532,7 @@ impl WorkerPermissionQueue {
         for request_id in timed_out {
             if let Some(mut queued) = requests.remove(&request_id) {
                 if let Some(tx) = queued.response_tx.take() {
-                    let _ = tx.send(false);
+                    let _ = tx.send(ApprovalDecision::Denied);
                 }
                 cleaned += 1;
             }
@@ -581,7 +586,11 @@ impl Default for WorkerPermissionQueue {
 
 #[async_trait]
 impl PermissionRequester for WorkerPermissionQueue {
-    async fn request_permission(&self, request: ApprovalRequest, worker_id: &str) -> bool {
+    async fn request_permission(
+        &self,
+        request: ApprovalRequest,
+        worker_id: &str,
+    ) -> ApprovalDecision {
         self.request_permission(request, worker_id).await
     }
 }
@@ -623,6 +632,7 @@ mod tests {
             description: format!("Test request for {tool}"),
             risks: vec![],
             allow_remember: false,
+            proposed_prefix_pattern: None,
         }
     }
 
@@ -653,12 +663,14 @@ mod tests {
         // Spawn response task
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            queue_for_response.respond("req-1", true).await;
+            queue_for_response
+                .respond("req-1", ApprovalDecision::Approved)
+                .await;
         });
 
         // Request permission (should wait for response)
         let result = queue2.request_permission(request, "worker-1").await;
-        assert!(result);
+        assert_eq!(result, ApprovalDecision::Approved);
     }
 
     #[tokio::test]
@@ -669,7 +681,7 @@ mod tests {
 
         // Request without responding - should timeout
         let result = queue.request_permission(request, "worker-1").await;
-        assert!(!result); // Should be denied due to timeout
+        assert_eq!(result, ApprovalDecision::Denied);
     }
 
     #[tokio::test]

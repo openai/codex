@@ -76,11 +76,20 @@ impl Tool for TaskOutputTool {
             .await;
 
         // Check if task exists
-        let is_running = ctx.background_registry.is_running(task_id).await;
+        let is_running = ctx
+            .shell_executor
+            .background_registry
+            .is_running(task_id)
+            .await;
 
         if !is_running {
             // Check if we can still get output (task may have completed)
-            if let Some(output) = ctx.background_registry.get_output(task_id).await {
+            if let Some(output) = ctx
+                .shell_executor
+                .background_registry
+                .get_output(task_id)
+                .await
+            {
                 return Ok(ToolOutput::text(format!(
                     "Task {task_id} (completed):\n{output}"
                 )));
@@ -98,7 +107,12 @@ impl Tool for TaskOutputTool {
 
             loop {
                 // Check if task completed
-                if !ctx.background_registry.is_running(task_id).await {
+                if !ctx
+                    .shell_executor
+                    .background_registry
+                    .is_running(task_id)
+                    .await
+                {
                     break;
                 }
 
@@ -106,6 +120,7 @@ impl Tool for TaskOutputTool {
                 if start.elapsed() >= timeout_duration {
                     // Return current output with timeout note
                     let output = ctx
+                        .shell_executor
                         .background_registry
                         .get_output(task_id)
                         .await
@@ -122,11 +137,17 @@ impl Tool for TaskOutputTool {
 
         // Return current output
         let output = ctx
+            .shell_executor
             .background_registry
             .get_output(task_id)
             .await
             .unwrap_or_default();
-        let status = if ctx.background_registry.is_running(task_id).await {
+        let status = if ctx
+            .shell_executor
+            .background_registry
+            .is_running(task_id)
+            .await
+        {
             "running"
         } else {
             "completed"
@@ -175,7 +196,8 @@ mod tests {
             output,
             completed: Arc::new(Notify::new()),
         };
-        ctx.background_registry
+        ctx.shell_executor
+            .background_registry
             .register("task-123".to_string(), process)
             .await;
 

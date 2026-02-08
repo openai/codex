@@ -4,7 +4,7 @@
 //! - Model capabilities and reasoning levels
 //! - Model configuration types
 //! - Provider type definitions
-//! - Shell and truncation policies
+//! - Shell policies
 //! - MCP protocol types
 //! - Permission and approval types
 //! - Core loop configuration and events
@@ -45,8 +45,6 @@ pub use model::ModelSpecParseError;
 pub use model::ReasoningEffort;
 pub use model::RoleSelection;
 pub use model::RoleSelections;
-pub use model::TruncationMode;
-pub use model::TruncationPolicyConfig;
 pub use model::nearest_effort;
 pub use model::resolve_provider_type;
 
@@ -74,6 +72,7 @@ pub use features::is_known_feature_key;
 pub use sandbox::SandboxMode;
 
 // Permission types
+pub use permission::ApprovalDecision;
 pub use permission::ApprovalRequest;
 pub use permission::PermissionBehavior;
 pub use permission::PermissionCheckResult;

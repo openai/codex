@@ -26,6 +26,7 @@ use cocode_protocol::RoleSelections;
 use cocode_protocol::ThinkingLevel;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
+use cocode_shell::ShellExecutor;
 use cocode_skill::SkillInterface;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tools::ToolRegistry;
@@ -157,6 +158,9 @@ pub struct SessionState {
     /// Provider type for the current session.
     provider_type: ProviderType,
 
+    /// Shell executor for command execution and background tasks.
+    shell_executor: ShellExecutor,
+
     /// Queued commands for real-time steering (Enter during streaming).
     /// These commands are:
     /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
@@ -165,6 +169,12 @@ pub struct SessionState {
 
     /// Optional suffix appended to the end of the system prompt.
     system_prompt_suffix: Option<String>,
+
+    /// Feature flags for tool enablement.
+    features: cocode_protocol::Features,
+
+    /// Pre-configured permission rules loaded from config.
+    permission_rules: Vec<cocode_tools::PermissionRule>,
 }
 
 impl SessionState {
@@ -237,6 +247,27 @@ impl SessionState {
             ..LoopConfig::default()
         };
 
+        // Resolve features from config
+        let features = config.features();
+
+        // Load permission rules from config
+        let permission_rules = {
+            let app_config = config.app_config();
+            match app_config.permissions {
+                Some(ref perms) => cocode_tools::PermissionRuleEvaluator::rules_from_config(
+                    perms,
+                    cocode_protocol::RuleSource::User,
+                ),
+                None => Vec::new(),
+            }
+        };
+
+        // Create shell executor with default shell and start snapshotting
+        let mut shell_executor = ShellExecutor::with_default_shell(session.working_dir.clone());
+        if let Some(cocode_home) = dirs::home_dir().map(|h| h.join(".cocode")) {
+            shell_executor.start_snapshotting(cocode_home, &session.id.to_string());
+        }
+
         Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -252,8 +283,11 @@ impl SessionState {
             total_output_tokens: 0,
             context_window,
             provider_type,
+            shell_executor,
             queued_commands: Vec::new(),
             system_prompt_suffix: None,
+            features,
+            permission_rules,
         })
     }
 
@@ -320,6 +354,9 @@ impl SessionState {
             .hooks(self.hook_registry.clone())
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
+            .features(self.features.clone())
+            .permission_rules(self.permission_rules.clone())
+            .shell_executor(self.shell_executor.clone())
             .build();
 
         let result = loop_instance.run(user_input).await?;
@@ -745,6 +782,8 @@ impl SessionState {
             .event_tx(event_tx)
             .cancel_token(self.cancel_token.clone())
             .queued_commands(std::mem::take(&mut self.queued_commands))
+            .features(self.features.clone())
+            .permission_rules(self.permission_rules.clone())
             .build();
 
         // Use run_and_process_queue to:

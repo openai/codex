@@ -145,6 +145,8 @@ dotenvy = "0.15.7"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.16"
 http = "1.3.1"
 humantime-serde = "1"
 ignore = "0.4.23"

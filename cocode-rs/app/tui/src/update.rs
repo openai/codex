@@ -283,8 +283,7 @@ pub async fn handle_command(
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id,
-                        approved: true,
-                        remember: false,
+                        decision: cocode_protocol::ApprovalDecision::Approved,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -323,8 +322,7 @@ pub async fn handle_command(
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id,
-                        approved: false,
-                        remember: false,
+                        decision: cocode_protocol::ApprovalDecision::Denied,
                     })
                     .await;
                 state.ui.clear_overlay();
@@ -333,11 +331,18 @@ pub async fn handle_command(
         TuiCommand::ApproveAll => {
             if let Some(Overlay::Permission(ref perm)) = state.ui.overlay {
                 let request_id = perm.request.request_id.clone();
+                // Use proposed prefix pattern if available, otherwise approve once
+                let decision = if let Some(ref prefix) = perm.request.proposed_prefix_pattern {
+                    cocode_protocol::ApprovalDecision::ApprovedWithPrefix {
+                        prefix_pattern: prefix.clone(),
+                    }
+                } else {
+                    cocode_protocol::ApprovalDecision::Approved
+                };
                 let _ = command_tx
                     .send(UserCommand::ApprovalResponse {
                         request_id,
-                        approved: true,
-                        remember: true,
+                        decision,
                     })
                     .await;
                 state.ui.clear_overlay();

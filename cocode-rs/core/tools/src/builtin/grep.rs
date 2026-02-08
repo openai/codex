@@ -1,43 +1,135 @@
-//! Grep tool for content search with regex.
+//! Grep tool for content search using the ripgrep library ecosystem.
 
 use super::prompts;
 use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_file_ignore::IgnoreConfig;
+use cocode_file_ignore::IgnoreService;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
-use globset::Glob;
-use regex::Regex;
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::BinaryDetection;
+use grep_searcher::Searcher;
+use grep_searcher::SearcherBuilder;
+use grep_searcher::Sink;
+use grep_searcher::SinkContext;
+use grep_searcher::SinkMatch;
 use serde_json::Value;
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
-use walkdir::WalkDir;
+use std::time::Duration;
+use tokio::time::timeout;
+
+/// Search timeout to prevent long-running searches.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Output mode for grep results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputMode {
     /// Show matching lines with content.
     Content,
     /// Show only file paths.
+    #[default]
     FilesWithMatches,
     /// Show match counts per file.
     Count,
 }
 
-impl Default for OutputMode {
-    fn default() -> Self {
-        OutputMode::FilesWithMatches
+/// A single entry from grep search: a match line, context line, or group break.
+#[derive(Debug, Clone)]
+struct GrepMatchLine {
+    file_path: String,
+    line_number: u64,
+    line_content: String,
+    is_context: bool,
+    /// Sentinel: true means this is a `--` separator between non-contiguous
+    /// context groups within the same file.
+    is_break: bool,
+}
+
+/// Custom Sink that distinguishes between match lines and context lines.
+struct ContextAwareSink<'a> {
+    matches: &'a mut Vec<GrepMatchLine>,
+    file_path: String,
+    limit: usize,
+}
+
+impl Sink for ContextAwareSink<'_> {
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        mat: &SinkMatch<'_>,
+    ) -> std::result::Result<bool, io::Error> {
+        if self.matches.len() >= self.limit {
+            return Ok(false);
+        }
+        self.matches.push(GrepMatchLine {
+            file_path: self.file_path.clone(),
+            line_number: mat.line_number().unwrap_or(0),
+            line_content: String::from_utf8_lossy(mat.bytes()).trim_end().to_string(),
+            is_context: false,
+            is_break: false,
+        });
+        Ok(true)
+    }
+
+    fn context(
+        &mut self,
+        _searcher: &Searcher,
+        ctx: &SinkContext<'_>,
+    ) -> std::result::Result<bool, io::Error> {
+        if self.matches.len() >= self.limit {
+            return Ok(false);
+        }
+        self.matches.push(GrepMatchLine {
+            file_path: self.file_path.clone(),
+            line_number: ctx.line_number().unwrap_or(0),
+            line_content: String::from_utf8_lossy(ctx.bytes()).trim_end().to_string(),
+            is_context: true,
+            is_break: false,
+        });
+        Ok(true)
+    }
+
+    fn context_break(&mut self, _searcher: &Searcher) -> std::result::Result<bool, io::Error> {
+        if self.matches.len() >= self.limit {
+            return Ok(false);
+        }
+        self.matches.push(GrepMatchLine {
+            file_path: self.file_path.clone(),
+            line_number: 0,
+            line_content: String::new(),
+            is_context: false,
+            is_break: true,
+        });
+        Ok(true)
     }
 }
 
-/// Tool for searching file contents using regex.
+/// Parameters for the synchronous grep search (all owned, Send-safe).
+struct GrepSearchParams {
+    pattern: String,
+    case_insensitive: bool,
+    multiline: bool,
+    before_context: usize,
+    after_context: usize,
+    search_path: PathBuf,
+    effective_glob: Option<String>,
+    max_depth: usize,
+    max_results: usize,
+}
+
+/// Tool for searching file contents using the grep crate (ripgrep's core library).
 ///
 /// This is a safe tool that can run concurrently with other tools.
 pub struct GrepTool {
-    /// Maximum files to search.
-    max_files: i32,
     /// Maximum results to return.
     max_results: i32,
     /// Maximum depth to traverse.
@@ -48,16 +140,9 @@ impl GrepTool {
     /// Create a new Grep tool with default settings.
     pub fn new() -> Self {
         Self {
-            max_files: 5000,
             max_results: 500,
             max_depth: 20,
         }
-    }
-
-    /// Set the maximum files to search.
-    pub fn with_max_files(mut self, max: i32) -> Self {
-        self.max_files = max;
-        self
     }
 
     /// Set the maximum results.
@@ -172,6 +257,7 @@ impl Tool for GrepTool {
                     ),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }
@@ -188,6 +274,7 @@ impl Tool for GrepTool {
                     ),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }
@@ -208,9 +295,9 @@ impl Tool for GrepTool {
         let show_line_numbers = input["-n"].as_bool().unwrap_or(true);
         let multiline = input["multiline"].as_bool().unwrap_or(false);
 
-        let context_after = input["-A"].as_i64().unwrap_or(0) as i32;
-        let context_before = input["-B"].as_i64().unwrap_or(0) as i32;
-        let context_both = input["-C"].as_i64().unwrap_or(0) as i32;
+        let context_after = input["-A"].as_i64().unwrap_or(0) as usize;
+        let context_before = input["-B"].as_i64().unwrap_or(0) as usize;
+        let context_both = input["-C"].as_i64().unwrap_or(0) as usize;
 
         let after_lines = context_after.max(context_both);
         let before_lines = context_before.max(context_both);
@@ -219,7 +306,7 @@ impl Tool for GrepTool {
             .as_i64()
             .map(|n| n as i32)
             .unwrap_or(self.max_results);
-        let offset = input["offset"].as_i64().unwrap_or(0) as i32;
+        let offset = input["offset"].as_i64().unwrap_or(0) as usize;
 
         let output_mode = match input["output_mode"].as_str() {
             Some("content") => OutputMode::Content,
@@ -235,191 +322,242 @@ impl Tool for GrepTool {
         let file_glob = input["glob"].as_str();
         let file_type = input["type"].as_str();
 
-        // Build regex
-        let mut regex_pattern = String::new();
-        if multiline {
-            regex_pattern.push_str("(?s)");
-        }
-        if case_insensitive {
-            regex_pattern.push_str("(?i)");
-        }
-        regex_pattern.push_str(pattern_str);
-
-        let regex = Regex::new(&regex_pattern).map_err(|e| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: format!("Invalid regex pattern: {e}"),
-            }
-            .build()
-        })?;
-
-        // Build file glob: use explicit glob, or derive from type parameter
+        // Build effective glob from explicit glob or type parameter
         let effective_glob = if file_glob.is_some() {
             file_glob.map(String::from)
         } else {
             file_type.map(|t| format!("*.{}", type_to_extension(t)))
         };
 
-        let file_matcher = effective_glob
-            .as_deref()
-            .map(|g| {
-                Glob::new(g)
-                    .map_err(|e| {
-                        crate::error::tool_error::InvalidInputSnafu {
-                            message: format!("Invalid glob pattern: {e}"),
-                        }
-                        .build()
-                    })
-                    .map(|glob| glob.compile_matcher())
-            })
-            .transpose()?;
-
-        // Collect files to search
-        let files: Vec<PathBuf> = if search_path.is_file() {
-            vec![search_path.clone()]
-        } else {
-            WalkDir::new(&search_path)
-                .max_depth(self.max_depth as usize)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| {
-                    // Apply glob filter if provided
-                    if let Some(ref matcher) = file_matcher {
-                        let relative = e.path().strip_prefix(&search_path).unwrap_or(e.path());
-                        matcher.is_match(relative) || matcher.is_match(e.path())
-                    } else {
-                        true
-                    }
-                })
-                .take(self.max_files as usize)
-                .map(|e| e.path().to_path_buf())
-                .collect()
+        let params = GrepSearchParams {
+            pattern: pattern_str.to_string(),
+            case_insensitive,
+            multiline,
+            before_context: before_lines,
+            after_context: after_lines,
+            search_path: search_path.clone(),
+            effective_glob,
+            max_depth: self.max_depth as usize,
+            max_results: self.max_results as usize,
         };
 
-        // Search files
-        let mut results = Vec::new();
-        let mut total_matches = 0;
-        let mut skipped = 0_i32;
+        // Run search in spawn_blocking with timeout
+        let search_future = tokio::task::spawn_blocking(move || run_grep_search(&params));
 
-        for file_path in &files {
-            if ctx.is_cancelled() {
+        let matches = timeout(COMMAND_TIMEOUT, search_future)
+            .await
+            .map_err(|_| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: "grep search timed out after 30 seconds",
+                }
+                .build()
+            })?
+            .map_err(|e| {
+                crate::error::tool_error::ExecutionFailedSnafu {
+                    message: format!("grep search task failed: {e}"),
+                }
+                .build()
+            })??;
+
+        // Format output
+        format_grep_output(
+            &matches,
+            pattern_str,
+            &search_path,
+            output_mode,
+            show_line_numbers,
+            offset,
+            head_limit as usize,
+        )
+    }
+}
+
+/// Execute the grep search synchronously (called from spawn_blocking).
+fn run_grep_search(params: &GrepSearchParams) -> Result<Vec<GrepMatchLine>> {
+    // Build regex matcher
+    let mut builder = RegexMatcherBuilder::new();
+    builder.case_insensitive(params.case_insensitive);
+    if params.multiline {
+        builder.multi_line(true).dot_matches_new_line(true);
+    }
+    let matcher = builder.build(&params.pattern).map_err(|e| {
+        crate::error::tool_error::InvalidInputSnafu {
+            message: format!("Invalid regex pattern: {e}"),
+        }
+        .build()
+    })?;
+
+    // Build searcher with context support and binary detection
+    let mut searcher_builder = SearcherBuilder::new();
+    searcher_builder
+        .line_number(true)
+        .binary_detection(BinaryDetection::quit(0));
+    if params.before_context > 0 {
+        searcher_builder.before_context(params.before_context);
+    }
+    if params.after_context > 0 {
+        searcher_builder.after_context(params.after_context);
+    }
+    if params.multiline {
+        searcher_builder.multi_line(true);
+    }
+
+    let mut matches: Vec<GrepMatchLine> = Vec::new();
+
+    if params.search_path.is_file() {
+        // Search a single file directly
+        let file_path_str = params.search_path.display().to_string();
+        let mut searcher = searcher_builder.build();
+        let mut sink = ContextAwareSink {
+            matches: &mut matches,
+            file_path: file_path_str,
+            limit: params.max_results,
+        };
+        if let Err(e) = searcher.search_path(&matcher, &params.search_path, &mut sink) {
+            tracing::debug!("Search error in {}: {e}", params.search_path.display());
+        }
+    } else {
+        // Build walker via IgnoreService (respects .gitignore, .ignore)
+        let ignore_config = IgnoreConfig::default().with_hidden(true);
+        let ignore_service = IgnoreService::new(ignore_config);
+        let mut walker_builder = ignore_service.create_walk_builder(&params.search_path);
+        walker_builder.max_depth(Some(params.max_depth));
+
+        // Apply glob/type filter via ignore::types::TypesBuilder
+        if let Some(ref glob_pattern) = params.effective_glob {
+            let mut types_builder = ignore::types::TypesBuilder::new();
+            if let Err(e) = types_builder.add("custom", glob_pattern) {
+                tracing::warn!("Invalid glob filter pattern '{glob_pattern}': {e}");
+            }
+            types_builder.select("custom");
+            if let Ok(types) = types_builder.build() {
+                walker_builder.types(types);
+            }
+        }
+
+        for entry in walker_builder.build().flatten() {
+            if matches.len() >= params.max_results {
                 break;
             }
 
-            // Read file (skip binary files)
-            let content = match tokio::fs::read_to_string(file_path).await {
-                Ok(c) => c,
-                Err(_) => continue, // Skip files that can't be read as text
-            };
-
-            let lines: Vec<&str> = content.lines().collect();
-            let mut file_matches = Vec::new();
-
-            for (line_idx, line) in lines.iter().enumerate() {
-                if regex.is_match(line) {
-                    file_matches.push((line_idx, *line));
-                    total_matches += 1;
-
-                    if total_matches >= head_limit {
-                        break;
-                    }
-                }
+            let file_type = entry.file_type();
+            if file_type.map(|t| !t.is_file()).unwrap_or(true) {
+                continue;
             }
 
-            if !file_matches.is_empty() {
-                // Apply offset: skip first N entries
-                if offset > 0 && skipped < offset {
-                    skipped += 1;
+            let file_path = entry.path().to_path_buf();
+            let file_path_str = file_path.display().to_string();
+
+            let mut searcher = searcher_builder.build();
+            let mut sink = ContextAwareSink {
+                matches: &mut matches,
+                file_path: file_path_str,
+                limit: params.max_results,
+            };
+
+            if let Err(e) = searcher.search_path(&matcher, &file_path, &mut sink) {
+                tracing::debug!("Search error in {}: {e}", file_path.display());
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+/// Format grep output based on output mode with offset/limit support.
+fn format_grep_output(
+    matches: &[GrepMatchLine],
+    pattern: &str,
+    search_path: &Path,
+    output_mode: OutputMode,
+    show_line_numbers: bool,
+    offset: usize,
+    head_limit: usize,
+) -> Result<ToolOutput> {
+    if matches.is_empty() {
+        return Ok(ToolOutput::text(format!(
+            "No matches found for pattern '{pattern}' in {}",
+            search_path.display()
+        )));
+    }
+
+    let mut results: Vec<String> = Vec::new();
+
+    match output_mode {
+        OutputMode::FilesWithMatches => {
+            // Collect unique file paths from actual match lines
+            let mut seen = std::collections::HashSet::new();
+            for m in matches.iter().filter(|m| !m.is_context && !m.is_break) {
+                if seen.insert(m.file_path.clone()) {
+                    results.push(m.file_path.clone());
+                }
+            }
+        }
+        OutputMode::Count => {
+            // Count actual matches grouped by file path
+            let mut counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            // Preserve insertion order with a separate vec
+            let mut order: Vec<&str> = Vec::new();
+            for m in matches.iter().filter(|m| !m.is_context && !m.is_break) {
+                let count = counts.entry(&m.file_path).or_insert(0);
+                if *count == 0 {
+                    order.push(&m.file_path);
+                }
+                *count += 1;
+            }
+            for file in &order {
+                if let Some(&count) = counts.get(file) {
+                    results.push(format!("{file}:{count}"));
+                }
+            }
+        }
+        OutputMode::Content => {
+            let mut prev_file: Option<&str> = None;
+            for m in matches {
+                // Separator between different files
+                if prev_file.is_some() && prev_file != Some(&m.file_path) {
+                    results.push("--".to_string());
+                }
+                prev_file = Some(&m.file_path);
+
+                // Context break between non-contiguous groups within a file
+                if m.is_break {
+                    results.push("--".to_string());
                     continue;
                 }
 
-                match output_mode {
-                    OutputMode::FilesWithMatches => {
-                        results.push(file_path.display().to_string());
-                    }
-                    OutputMode::Count => {
-                        results.push(format!("{}:{}", file_path.display(), file_matches.len()));
-                    }
-                    OutputMode::Content => {
-                        for (line_idx, line) in file_matches {
-                            let line_num = line_idx + 1;
-
-                            // Get context lines
-                            let start = line_idx.saturating_sub(before_lines as usize);
-                            let end = (line_idx + 1 + after_lines as usize).min(lines.len());
-
-                            if before_lines > 0 || after_lines > 0 {
-                                // Show context
-                                for (ctx_idx, ctx_line) in lines[start..end].iter().enumerate() {
-                                    let actual_line_num = start + ctx_idx + 1;
-                                    let prefix = if actual_line_num == line_num {
-                                        ":"
-                                    } else {
-                                        "-"
-                                    };
-
-                                    if show_line_numbers {
-                                        results.push(format!(
-                                            "{}{}{}{}",
-                                            file_path.display(),
-                                            prefix,
-                                            actual_line_num,
-                                            prefix
-                                        ));
-                                        results.push(ctx_line.to_string());
-                                    } else {
-                                        results.push(format!(
-                                            "{}{}{}",
-                                            file_path.display(),
-                                            prefix,
-                                            ctx_line
-                                        ));
-                                    }
-                                }
-                                results.push("--".to_string());
-                            } else {
-                                if show_line_numbers {
-                                    results.push(format!(
-                                        "{}:{}:{}",
-                                        file_path.display(),
-                                        line_num,
-                                        line
-                                    ));
-                                } else {
-                                    results.push(format!("{}:{}", file_path.display(), line));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if results.len() >= head_limit as usize {
-                    break;
+                let separator = if m.is_context { "-" } else { ":" };
+                if show_line_numbers {
+                    results.push(format!(
+                        "{}{separator}{}{separator}{}",
+                        m.file_path, m.line_number, m.line_content
+                    ));
+                } else {
+                    results.push(format!("{}{separator}{}", m.file_path, m.line_content));
                 }
             }
         }
+    }
 
-        // Format output
-        if results.is_empty() {
-            Ok(ToolOutput::text(format!(
-                "No matches found for pattern '{}' in {}",
-                pattern_str,
-                search_path.display()
-            )))
-        } else {
-            let truncated = results.len() >= head_limit as usize;
-            let output = results.join("\n");
+    // Apply offset and head_limit
+    let total = results.len();
+    let results: Vec<String> = results.into_iter().skip(offset).collect();
+    let truncated = head_limit > 0 && results.len() > head_limit;
+    let results: Vec<String> = if head_limit > 0 {
+        results.into_iter().take(head_limit).collect()
+    } else {
+        results
+    };
 
-            if truncated {
-                Ok(ToolOutput::text(format!(
-                    "{}\n\n... (truncated at {} results)",
-                    output, head_limit
-                )))
-            } else {
-                Ok(ToolOutput::text(output))
-            }
-        }
+    let output = results.join("\n");
+
+    if truncated {
+        Ok(ToolOutput::text(format!(
+            "{output}\n\n... (truncated at {head_limit} results, {total} total)"
+        )))
+    } else {
+        Ok(ToolOutput::text(output))
     }
 }
 
@@ -596,5 +734,192 @@ mod tests {
         let tool = GrepTool::new();
         assert_eq!(tool.name(), "Grep");
         assert!(tool.is_concurrent_safe());
+    }
+
+    #[tokio::test]
+    async fn test_grep_respects_gitignore() {
+        let dir = TempDir::new().unwrap();
+
+        // Create .gitignore that excludes *.log
+        std::fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+
+        // Create files
+        let mut rs_file = File::create(dir.path().join("main.rs")).unwrap();
+        writeln!(rs_file, "fn hello() {{}}").unwrap();
+
+        let mut log_file = File::create(dir.path().join("debug.log")).unwrap();
+        writeln!(log_file, "fn should_be_ignored() {{}}").unwrap();
+
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "fn "
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(content.contains("main.rs"));
+        assert!(!content.contains("debug.log"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_skips_binary_files() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a text file with a match
+        let mut text_file = File::create(dir.path().join("text.rs")).unwrap();
+        writeln!(text_file, "fn search_me() {{}}").unwrap();
+
+        // Create a binary file with null bytes
+        let mut binary_file = File::create(dir.path().join("binary.bin")).unwrap();
+        binary_file
+            .write_all(b"fn search_me() {}\x00\x00\x00binary data")
+            .unwrap();
+
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "search_me"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(content.contains("text.rs"));
+        // Binary file should be skipped by grep-searcher
+        assert!(!content.contains("binary.bin"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_context_lines_with_sink() {
+        let dir = TempDir::new().unwrap();
+
+        let mut file = File::create(dir.path().join("ctx.txt")).unwrap();
+        writeln!(file, "line 1").unwrap();
+        writeln!(file, "line 2 match").unwrap();
+        writeln!(file, "line 3").unwrap();
+        writeln!(file, "line 4").unwrap();
+        writeln!(file, "line 5 match").unwrap();
+        writeln!(file, "line 6").unwrap();
+
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "match",
+            "output_mode": "content",
+            "-B": 1,
+            "-A": 1
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        // Should contain match lines (with :)
+        assert!(content.contains("line 2 match"));
+        assert!(content.contains("line 5 match"));
+        // Should contain context lines (with -)
+        assert!(content.contains("line 1"));
+        assert!(content.contains("line 3"));
+        assert!(content.contains("line 4"));
+        assert!(content.contains("line 6"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_count_mode() {
+        let dir = setup_test_dir();
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "fn ",
+            "output_mode": "count"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        // Each .rs file has one "fn " match
+        assert!(content.contains(":1"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_multiline_cross_line() {
+        let dir = TempDir::new().unwrap();
+
+        let mut file = File::create(dir.path().join("multi.txt")).unwrap();
+        writeln!(file, "fn hello() {{").unwrap();
+        writeln!(file, "    world").unwrap();
+        writeln!(file, "}}").unwrap();
+
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "hello.*world",
+            "multiline": true,
+            "output_mode": "content"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        // Should match across lines when multiline is enabled
+        assert!(content.contains("hello"));
+        assert!(content.contains("world"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_context_break_separators() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a file with two matches far apart so context groups are disjoint
+        let mut file = File::create(dir.path().join("breaks.txt")).unwrap();
+        writeln!(file, "line 1 match").unwrap();
+        writeln!(file, "line 2").unwrap();
+        writeln!(file, "line 3").unwrap();
+        writeln!(file, "line 4").unwrap();
+        writeln!(file, "line 5").unwrap();
+        writeln!(file, "line 6").unwrap();
+        writeln!(file, "line 7").unwrap();
+        writeln!(file, "line 8 match").unwrap();
+
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "match",
+            "output_mode": "content",
+            "-A": 1
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        // Should have a -- separator between disjoint context groups
+        assert!(content.contains("line 1 match"));
+        assert!(content.contains("line 8 match"));
+        assert!(content.contains("--"));
     }
 }

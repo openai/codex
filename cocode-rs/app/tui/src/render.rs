@@ -732,6 +732,7 @@ mod tests {
                     description: "Run command: ls -la".to_string(),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             )));
 

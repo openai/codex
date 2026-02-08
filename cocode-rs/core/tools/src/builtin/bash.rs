@@ -1,4 +1,7 @@
 //! Bash tool for executing shell commands.
+//!
+//! Delegates to [`ShellExecutor`] for command execution, CWD tracking,
+//! and background task management.
 
 use super::prompts;
 use crate::context::ToolContext;
@@ -12,17 +15,9 @@ use cocode_protocol::RiskSeverity;
 use cocode_protocol::RiskType;
 use cocode_protocol::SecurityRisk;
 use cocode_protocol::ToolOutput;
-use cocode_shell::BackgroundProcess;
+use cocode_shell::CommandResult;
 use serde_json::Value;
-use std::process::Stdio;
-use std::sync::Arc;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
-use tokio::sync::Mutex;
-use tokio::sync::Notify;
 
-/// Maximum output size (bytes) before truncation.
-const MAX_OUTPUT_SIZE: usize = 30_000;
 /// Default timeout in seconds.
 const DEFAULT_TIMEOUT_SECS: i64 = 120;
 /// Maximum timeout in seconds.
@@ -226,6 +221,7 @@ impl Tool for BashTool {
                         description,
                         risks,
                         allow_remember: true,
+                        proposed_prefix_pattern: None,
                     },
                 };
             }
@@ -249,6 +245,7 @@ impl Tool for BashTool {
                 },
                 risks: vec![],
                 allow_remember: true,
+                proposed_prefix_pattern: None,
             },
         }
     }
@@ -271,92 +268,18 @@ impl Tool for BashTool {
         let desc = input["description"].as_str().unwrap_or("Executing command");
         ctx.emit_progress(desc).await;
 
-        // Background execution
+        // Background execution — delegate to ShellExecutor
         if run_in_background {
-            let task_id = format!("bg-{}", uuid_simple());
-            let output = Arc::new(Mutex::new(String::new()));
-            let completed = Arc::new(Notify::new());
-
-            let process = BackgroundProcess {
-                id: task_id.clone(),
-                command: command.to_string(),
-                output: Arc::clone(&output),
-                completed: Arc::clone(&completed),
-            };
-
-            // Register the background task
-            ctx.background_registry
-                .register(task_id.clone(), process)
-                .await;
-
-            // Spawn the background process
-            let cwd = ctx.cwd.clone();
-            let cmd = command.to_string();
-
-            tokio::spawn(async move {
-                let child = Command::new("bash")
-                    .arg("-c")
-                    .arg(&cmd)
-                    .current_dir(&cwd)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .kill_on_drop(true)
-                    .spawn();
-
-                match child {
-                    Ok(mut child) => {
-                        // Read stdout asynchronously
-                        if let Some(mut stdout) = child.stdout.take() {
-                            let output_clone = Arc::clone(&output);
-                            tokio::spawn(async move {
-                                let mut buf = vec![0u8; 4096];
-                                loop {
-                                    match stdout.read(&mut buf).await {
-                                        Ok(0) => break,
-                                        Ok(n) => {
-                                            if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
-                                                let mut out = output_clone.lock().await;
-                                                out.push_str(&text);
-                                            }
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            });
-                        }
-
-                        // Read stderr asynchronously
-                        if let Some(mut stderr) = child.stderr.take() {
-                            let output_clone = Arc::clone(&output);
-                            tokio::spawn(async move {
-                                let mut buf = vec![0u8; 4096];
-                                loop {
-                                    match stderr.read(&mut buf).await {
-                                        Ok(0) => break,
-                                        Ok(n) => {
-                                            if let Ok(text) = String::from_utf8(buf[..n].to_vec()) {
-                                                let mut out = output_clone.lock().await;
-                                                out.push_str(&text);
-                                            }
-                                        }
-                                        Err(_) => break,
-                                    }
-                                }
-                            });
-                        }
-
-                        // Wait for process to complete
-                        let _ = child.wait().await;
+            let task_id = ctx
+                .shell_executor
+                .spawn_background(command)
+                .await
+                .map_err(|e| {
+                    crate::error::tool_error::ExecutionFailedSnafu {
+                        message: e.to_string(),
                     }
-                    Err(e) => {
-                        let mut out = output.lock().await;
-                        out.push_str(&format!("Failed to spawn command: {e}"));
-                    }
-                }
-
-                completed.notify_waiters();
-                // Note: Task remains in registry until explicitly stopped or output retrieved
-            });
+                    .build()
+                })?;
 
             return Ok(ToolOutput::text(format!(
                 "Background task started with ID: {task_id}\n\
@@ -364,94 +287,49 @@ impl Tool for BashTool {
             )));
         }
 
-        // Execute command
-        let timeout_duration = std::time::Duration::from_secs(timeout_secs as u64);
+        // Foreground execution — delegate to ShellExecutor with CWD tracking
+        let result = ctx
+            .shell_executor
+            .execute_with_cwd_tracking(command, timeout_secs)
+            .await;
 
-        let result = tokio::time::timeout(timeout_duration, async {
-            Command::new("bash")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&ctx.cwd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await
-        })
-        .await;
-
-        let output = match result {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => {
-                return Err(crate::error::tool_error::ExecutionFailedSnafu {
-                    message: format!("Failed to execute command: {e}"),
-                }
-                .build());
-            }
-            Err(_) => {
-                return Err(crate::error::tool_error::TimeoutSnafu { timeout_secs }.build());
-            }
-        };
-
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        // Build output
-        let mut result_text = String::new();
-        if !stdout.is_empty() {
-            let truncated = truncate_output(&stdout, MAX_OUTPUT_SIZE);
-            result_text.push_str(&truncated);
-        }
-        if !stderr.is_empty() {
-            if !result_text.is_empty() {
-                result_text.push('\n');
-            }
-            result_text.push_str("STDERR:\n");
-            let truncated = truncate_output(&stderr, MAX_OUTPUT_SIZE);
-            result_text.push_str(&truncated);
+        // Sync CWD back to ctx
+        if let Some(ref new_cwd) = result.new_cwd {
+            ctx.cwd = new_cwd.clone();
         }
 
-        if exit_code != 0 {
-            if result_text.is_empty() {
-                result_text = format!("Command failed with exit code {exit_code}");
-            } else {
-                result_text.push_str(&format!("\n\nExit code: {exit_code}"));
-            }
-            return Ok(ToolOutput::error(result_text));
-        }
-
-        if result_text.is_empty() {
-            result_text = "(no output)".to_string();
-        }
-
-        Ok(ToolOutput::text(result_text))
+        // Convert CommandResult → ToolOutput
+        format_command_result(&result)
     }
 }
 
-/// Truncate output if it exceeds the maximum size.
-fn truncate_output(output: &str, max_size: usize) -> String {
-    if output.len() <= max_size {
-        output.to_string()
-    } else {
-        let half = max_size / 2;
-        let start = &output[..half];
-        let end = &output[output.len() - half..];
-        format!(
-            "{start}\n\n... (output truncated, {} characters omitted) ...\n\n{end}",
-            output.len() - max_size
-        )
+/// Convert a [`CommandResult`] to a [`ToolOutput`].
+fn format_command_result(result: &CommandResult) -> Result<ToolOutput> {
+    let mut text = String::new();
+    if !result.stdout.is_empty() {
+        text.push_str(&result.stdout);
     }
-}
+    if !result.stderr.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("STDERR:\n");
+        text.push_str(&result.stderr);
+    }
 
-/// Generates a simple unique identifier (timestamp-based).
-fn uuid_simple() -> String {
-    use std::time::SystemTime;
-    use std::time::UNIX_EPOCH;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
+    if result.exit_code != 0 {
+        if text.is_empty() {
+            text = format!("Command failed with exit code {}", result.exit_code);
+        } else {
+            text.push_str(&format!("\n\nExit code: {}", result.exit_code));
+        }
+        return Ok(ToolOutput::error(text));
+    }
+
+    if text.is_empty() {
+        text = "(no output)".to_string();
+    }
+    Ok(ToolOutput::text(text))
 }
 
 #[cfg(test)]
@@ -502,16 +380,6 @@ mod tests {
         assert!(!is_read_only_command("rm -rf /"));
         assert!(!is_read_only_command("ls && rm foo"));
         assert!(!is_read_only_command("echo foo > bar"));
-    }
-
-    #[test]
-    fn test_truncate_output() {
-        let short = "hello";
-        assert_eq!(truncate_output(short, 100), "hello");
-
-        let long = "a".repeat(200);
-        let result = truncate_output(&long, 100);
-        assert!(result.contains("truncated"));
     }
 
     #[test]

@@ -63,7 +63,9 @@ pub enum RiskKind {
     /// Access to /proc/*/environ.
     ProcEnvironAccess,
 
-    // Ask phase risks (7)
+    // Ask phase risks (8)
+    /// Unsafe heredoc in command substitution (unquoted delimiter allows expansion).
+    UnsafeHeredocSubstitution,
     /// Dangerous substitutions ($(), ${}, <(), etc.).
     DangerousSubstitution,
     /// Malformed tokens (unbalanced brackets, quotes).
@@ -94,6 +96,7 @@ impl RiskKind {
             RiskKind::ProcEnvironAccess => RiskLevel::High,
 
             // Ask phase - generally higher severity
+            RiskKind::UnsafeHeredocSubstitution => RiskLevel::Medium,
             RiskKind::DangerousSubstitution => RiskLevel::Medium,
             RiskKind::MalformedTokens => RiskLevel::Low,
             RiskKind::SensitiveRedirect => RiskLevel::High,
@@ -115,7 +118,8 @@ impl RiskKind {
             | RiskKind::IfsInjection
             | RiskKind::ProcEnvironAccess => RiskPhase::Allow,
 
-            RiskKind::DangerousSubstitution
+            RiskKind::UnsafeHeredocSubstitution
+            | RiskKind::DangerousSubstitution
             | RiskKind::MalformedTokens
             | RiskKind::SensitiveRedirect
             | RiskKind::NetworkExfiltration
@@ -135,6 +139,7 @@ impl RiskKind {
             RiskKind::NewlineInjection => "newline injection",
             RiskKind::IfsInjection => "IFS injection",
             RiskKind::ProcEnvironAccess => "/proc environ access",
+            RiskKind::UnsafeHeredocSubstitution => "unsafe heredoc substitution",
             RiskKind::DangerousSubstitution => "dangerous substitution",
             RiskKind::MalformedTokens => "malformed tokens",
             RiskKind::SensitiveRedirect => "sensitive redirect",
@@ -294,6 +299,14 @@ mod tests {
 
         analysis.add_risk(SecurityRisk::new(RiskKind::CodeExecution, "test2"));
         assert_eq!(analysis.max_level, Some(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_unsafe_heredoc_substitution() {
+        let risk = SecurityRisk::new(RiskKind::UnsafeHeredocSubstitution, "test heredoc risk");
+        assert_eq!(risk.level, RiskLevel::Medium);
+        assert_eq!(risk.phase, RiskPhase::Ask);
+        assert_eq!(risk.kind.name(), "unsafe heredoc substitution");
     }
 
     #[test]

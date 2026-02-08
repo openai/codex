@@ -8,11 +8,13 @@ use crate::permission_rules::PermissionRuleEvaluator;
 use async_trait::async_trait;
 use cocode_hooks::HookRegistry;
 use cocode_lsp::LspServerManager;
+use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
+use cocode_protocol::Features;
 use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::RoleSelections;
-use cocode_shell::BackgroundTaskRegistry;
+use cocode_shell::ShellExecutor;
 use cocode_skill::SkillManager;
 use serde::Deserialize;
 use serde::Serialize;
@@ -89,8 +91,13 @@ pub type SpawnAgentFn = Arc<
 pub trait PermissionRequester: Send + Sync {
     /// Request permission for an operation.
     ///
-    /// Returns `true` if approved, `false` if denied or timed out.
-    async fn request_permission(&self, request: ApprovalRequest, worker_id: &str) -> bool;
+    /// Returns the user's three-way decision: approve once, approve similar
+    /// commands (with prefix pattern), or deny.
+    async fn request_permission(
+        &self,
+        request: ApprovalRequest,
+        worker_id: &str,
+    ) -> ApprovalDecision;
 }
 
 /// Information about an invoked skill.
@@ -120,9 +127,41 @@ impl ApprovalStore {
     }
 
     /// Check if a tool action is approved.
+    ///
+    /// Supports wildcard matching: a stored pattern "git *" matches
+    /// any value starting with "git " (or equal to "git").
     pub fn is_approved(&self, tool_name: &str, pattern: &str) -> bool {
         let key = format!("{tool_name}:{pattern}");
-        self.approved_patterns.contains(&key) || self.session_approvals.contains(tool_name)
+        if self.approved_patterns.contains(&key) || self.session_approvals.contains(tool_name) {
+            return true;
+        }
+        // Check wildcard patterns: stored "Bash:git *" matches query "Bash:git push origin main"
+        let prefix = format!("{tool_name}:");
+        self.approved_patterns.iter().any(|stored| {
+            stored
+                .strip_prefix(&prefix)
+                .is_some_and(|pat| Self::matches_wildcard(pat, pattern))
+        })
+    }
+
+    /// Check if a wildcard pattern matches a value.
+    ///
+    /// Supported patterns:
+    /// - `"*"` matches everything
+    /// - `"git *"` matches `"git"` and `"git push origin main"`
+    /// - `"git*"` matches any string starting with `"git"`
+    /// - exact string equality otherwise
+    fn matches_wildcard(pattern: &str, value: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+        if let Some(pfx) = pattern.strip_suffix(" *") {
+            value == pfx || value.starts_with(&format!("{pfx} "))
+        } else if let Some(pfx) = pattern.strip_suffix('*') {
+            value.starts_with(pfx)
+        } else {
+            pattern == value
+        }
     }
 
     /// Add an approval for a specific pattern.
@@ -320,8 +359,8 @@ pub struct ToolContext {
     pub is_plan_mode: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
-    /// Background task registry for managing background shell commands.
-    pub background_registry: BackgroundTaskRegistry,
+    /// Shell executor for command execution and background task management.
+    pub shell_executor: ShellExecutor,
     /// Optional LSP server manager for language intelligence tools.
     pub lsp_manager: Option<Arc<LspServerManager>>,
     /// Optional skill manager for executing named skills.
@@ -350,11 +389,14 @@ pub struct ToolContext {
     /// When set, rules are evaluated before the tool's own `check_permission()`
     /// to allow, deny, or delegate based on project/user/policy configuration.
     pub permission_evaluator: Option<PermissionRuleEvaluator>,
+    /// Feature flags for tool enablement checks.
+    pub features: Features,
 }
 
 impl ToolContext {
     /// Create a new tool context.
     pub fn new(call_id: impl Into<String>, session_id: impl Into<String>, cwd: PathBuf) -> Self {
+        let shell_executor = ShellExecutor::new(cwd.clone());
         Self {
             call_id: call_id.into(),
             session_id: session_id.into(),
@@ -370,7 +412,7 @@ impl ToolContext {
             spawn_agent_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
-            background_registry: BackgroundTaskRegistry::new(),
+            shell_executor,
             lsp_manager: None,
             skill_manager: None,
             hook_registry: None,
@@ -379,6 +421,7 @@ impl ToolContext {
             parent_selections: None,
             permission_requester: None,
             permission_evaluator: None,
+            features: Features::with_defaults(),
         }
     }
 
@@ -443,9 +486,9 @@ impl ToolContext {
         self
     }
 
-    /// Set the background task registry.
-    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
-        self.background_registry = registry;
+    /// Set the shell executor.
+    pub fn with_shell_executor(mut self, executor: ShellExecutor) -> Self {
+        self.shell_executor = executor;
         self
     }
 
@@ -604,6 +647,60 @@ impl ToolContext {
         self.approval_store.lock().await.approve_session(tool_name);
     }
 
+    /// Persist a permission rule to `~/.cocode/settings.local.json`.
+    ///
+    /// Called when the user selects "Allow always" — writes the pattern
+    /// into `permissions.allow` so it's remembered across sessions.
+    pub async fn persist_permission_rule(&self, tool_name: &str, pattern: &str) {
+        use cocode_config::default_config_dir;
+
+        let config_dir = default_config_dir();
+        let settings_path = config_dir.join("settings.local.json");
+
+        // Read existing config or start fresh
+        let mut config: serde_json::Value = if settings_path.exists() {
+            match tokio::fs::read_to_string(&settings_path).await {
+                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                Err(_) => serde_json::Value::Object(serde_json::Map::new()),
+            }
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        };
+
+        // Build the rule string: "Bash(git *)" or just "Read"
+        let rule = if pattern.is_empty() {
+            tool_name.to_string()
+        } else {
+            format!("{tool_name}({pattern})")
+        };
+
+        // Ensure permissions.allow array exists and append
+        let permissions = config
+            .as_object_mut()
+            .expect("root must be object")
+            .entry("permissions")
+            .or_insert_with(|| serde_json::json!({}));
+        let allow = permissions
+            .as_object_mut()
+            .expect("permissions must be object")
+            .entry("allow")
+            .or_insert_with(|| serde_json::json!([]));
+        if let Some(arr) = allow.as_array_mut() {
+            let rule_val = serde_json::Value::String(rule.clone());
+            if !arr.contains(&rule_val) {
+                arr.push(rule_val);
+            }
+        }
+
+        // Write back
+        if let Some(parent) = settings_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(content) = serde_json::to_string_pretty(&config) {
+            let _ = tokio::fs::write(&settings_path, content).await;
+        }
+    }
+
     /// Resolve a path relative to the working directory.
     pub fn resolve_path(&self, path: &str) -> PathBuf {
         let path = PathBuf::from(path);
@@ -652,7 +749,7 @@ pub struct ToolContextBuilder {
     spawn_agent_fn: Option<SpawnAgentFn>,
     is_plan_mode: bool,
     plan_file_path: Option<PathBuf>,
-    background_registry: BackgroundTaskRegistry,
+    shell_executor: Option<ShellExecutor>,
     lsp_manager: Option<Arc<LspServerManager>>,
     skill_manager: Option<Arc<SkillManager>>,
     hook_registry: Option<Arc<HookRegistry>>,
@@ -661,6 +758,7 @@ pub struct ToolContextBuilder {
     parent_selections: Option<RoleSelections>,
     permission_requester: Option<Arc<dyn PermissionRequester>>,
     permission_evaluator: Option<PermissionRuleEvaluator>,
+    features: Features,
 }
 
 impl ToolContextBuilder {
@@ -681,7 +779,7 @@ impl ToolContextBuilder {
             spawn_agent_fn: None,
             is_plan_mode: false,
             plan_file_path: None,
-            background_registry: BackgroundTaskRegistry::new(),
+            shell_executor: None,
             lsp_manager: None,
             skill_manager: None,
             hook_registry: None,
@@ -690,6 +788,7 @@ impl ToolContextBuilder {
             parent_selections: None,
             permission_requester: None,
             permission_evaluator: None,
+            features: Features::with_defaults(),
         }
     }
 
@@ -760,9 +859,9 @@ impl ToolContextBuilder {
         self
     }
 
-    /// Set the background task registry.
-    pub fn background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
-        self.background_registry = registry;
+    /// Set the shell executor.
+    pub fn shell_executor(mut self, executor: ShellExecutor) -> Self {
+        self.shell_executor = Some(executor);
         self
     }
 
@@ -812,8 +911,17 @@ impl ToolContextBuilder {
         self
     }
 
+    /// Set the feature flags.
+    pub fn features(mut self, features: Features) -> Self {
+        self.features = features;
+        self
+    }
+
     /// Build the context.
     pub fn build(self) -> ToolContext {
+        let shell_executor = self
+            .shell_executor
+            .unwrap_or_else(|| ShellExecutor::new(self.cwd.clone()));
         ToolContext {
             call_id: self.call_id,
             session_id: self.session_id,
@@ -829,7 +937,7 @@ impl ToolContextBuilder {
             spawn_agent_fn: self.spawn_agent_fn,
             is_plan_mode: self.is_plan_mode,
             plan_file_path: self.plan_file_path,
-            background_registry: self.background_registry,
+            shell_executor,
             lsp_manager: self.lsp_manager,
             skill_manager: self.skill_manager,
             hook_registry: self.hook_registry,
@@ -838,6 +946,7 @@ impl ToolContextBuilder {
             parent_selections: self.parent_selections,
             permission_requester: self.permission_requester,
             permission_evaluator: self.permission_evaluator,
+            features: self.features,
         }
     }
 }
@@ -856,6 +965,52 @@ mod tests {
 
         store.approve_session("Read");
         assert!(store.is_approved("Read", "any_pattern"));
+    }
+
+    #[test]
+    fn test_approval_store_wildcard() {
+        let mut store = ApprovalStore::new();
+
+        // Prefix wildcard: "git *" matches "git push origin main"
+        store.approve_pattern("Bash", "git *");
+        assert!(store.is_approved("Bash", "git push origin main"));
+        assert!(store.is_approved("Bash", "git status"));
+        assert!(store.is_approved("Bash", "git"));
+        assert!(!store.is_approved("Bash", "gitx"));
+        assert!(!store.is_approved("Bash", "npm install"));
+
+        // Different tool name should not match
+        assert!(!store.is_approved("Edit", "git push"));
+
+        // Glob wildcard: "npm*" matches "npm" and "npx"
+        store.approve_pattern("Bash", "npm*");
+        assert!(store.is_approved("Bash", "npm install"));
+        assert!(store.is_approved("Bash", "npmrc"));
+        assert!(!store.is_approved("Bash", "node index.js"));
+
+        // Universal wildcard
+        store.approve_pattern("Bash", "*");
+        assert!(store.is_approved("Bash", "anything"));
+    }
+
+    #[test]
+    fn test_matches_wildcard() {
+        // Universal
+        assert!(ApprovalStore::matches_wildcard("*", "anything"));
+
+        // Space-star prefix
+        assert!(ApprovalStore::matches_wildcard("git *", "git push"));
+        assert!(ApprovalStore::matches_wildcard("git *", "git"));
+        assert!(!ApprovalStore::matches_wildcard("git *", "gitx"));
+
+        // Trailing star (no space)
+        assert!(ApprovalStore::matches_wildcard("git*", "git"));
+        assert!(ApprovalStore::matches_wildcard("git*", "gitx"));
+        assert!(ApprovalStore::matches_wildcard("git*", "git push"));
+
+        // Exact match
+        assert!(ApprovalStore::matches_wildcard("git status", "git status"));
+        assert!(!ApprovalStore::matches_wildcard("git status", "git push"));
     }
 
     #[test]

@@ -18,6 +18,9 @@ cocode-context.workspace = true
 cocode-loop.workspace = true
 cocode-executor.workspace = true
 
+# Internal - exec
+cocode-shell.workspace = true
+
 # Internal - features
 cocode-hooks.workspace = true
 cocode-skill.workspace = true

@@ -115,7 +115,8 @@
       "Bash(then echo \"FOUND IN CARGO.TOML\")",
       "Bash(else echo \"not in Cargo.toml\")",
       "Bash(for dir in common core provider-sdks utils mcp exec features app lsp retrieval)",
-      "Bash(do echo \"=== $dir ===\" ls -d /Users/linyuzhi/codespace/myagent/codex/cocode-rs/$dir/*/src)"
+      "Bash(do echo \"=== $dir ===\" ls -d /Users/linyuzhi/codespace/myagent/codex/cocode-rs/$dir/*/src)",
+      "Bash(test:*)"
     ],
     "deny": [],
     "ask": []

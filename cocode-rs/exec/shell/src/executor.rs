@@ -10,9 +10,9 @@
 //! When sandbox mode is enabled in the future, the executor will wrap commands with
 //! platform-specific sandbox enforcement (Landlock on Linux, Seatbelt on macOS).
 
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 
 use tokio::io::AsyncReadExt;
@@ -72,8 +72,8 @@ const CWD_MARKER_END: &str = "__COCODE_CWD_END__";
 pub struct ShellExecutor {
     /// Default timeout for command execution in seconds.
     pub default_timeout_secs: i64,
-    /// Working directory for command execution.
-    pub cwd: PathBuf,
+    /// Working directory for command execution (shared across clones).
+    cwd: Arc<StdMutex<PathBuf>>,
     /// Registry for background tasks.
     pub background_registry: BackgroundTaskRegistry,
     /// Shell configuration with optional snapshot.
@@ -88,7 +88,7 @@ impl std::fmt::Debug for ShellExecutor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ShellExecutor")
             .field("default_timeout_secs", &self.default_timeout_secs)
-            .field("cwd", &self.cwd)
+            .field("cwd", &*self.cwd.lock().unwrap())
             .field("background_registry", &self.background_registry)
             .field("shell", &self.shell)
             .field("snapshot_initialized", &self.snapshot_initialized)
@@ -105,7 +105,7 @@ impl ShellExecutor {
     pub fn new(cwd: PathBuf) -> Self {
         Self {
             default_timeout_secs: DEFAULT_TIMEOUT_SECS,
-            cwd,
+            cwd: Arc::new(StdMutex::new(cwd)),
             background_registry: BackgroundTaskRegistry::new(),
             shell: None,
             snapshot_initialized: false,
@@ -119,7 +119,7 @@ impl ShellExecutor {
     pub fn with_shell(cwd: PathBuf, shell: Shell) -> Self {
         Self {
             default_timeout_secs: DEFAULT_TIMEOUT_SECS,
-            cwd,
+            cwd: Arc::new(StdMutex::new(cwd)),
             background_registry: BackgroundTaskRegistry::new(),
             shell: Some(shell),
             snapshot_initialized: false,
@@ -209,13 +209,13 @@ impl ShellExecutor {
     }
 
     /// Returns the current working directory.
-    pub fn cwd(&self) -> &Path {
-        &self.cwd
+    pub fn cwd(&self) -> PathBuf {
+        self.cwd.lock().unwrap().clone()
     }
 
     /// Updates the working directory.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
-        self.cwd = cwd;
+        *self.cwd.lock().unwrap() = cwd;
     }
 
     /// Creates a shell executor for subagent use.
@@ -245,7 +245,7 @@ impl ShellExecutor {
     pub fn fork_for_subagent(&self, initial_cwd: PathBuf) -> Self {
         Self {
             default_timeout_secs: self.default_timeout_secs,
-            cwd: initial_cwd, // Use provided initial directory, not current tracked cwd
+            cwd: Arc::new(StdMutex::new(initial_cwd)), // Independent CWD for subagent
             background_registry: BackgroundTaskRegistry::new(), // Independent registry
             shell: self.shell.clone(), // Share shell config (Arc snapshot is shared)
             snapshot_initialized: self.snapshot_initialized,
@@ -325,13 +325,14 @@ impl ShellExecutor {
         // Update internal CWD if command succeeded and CWD changed
         if result.exit_code == 0 {
             if let Some(ref new_cwd) = result.new_cwd {
-                if new_cwd.exists() && new_cwd != &self.cwd {
+                let current_cwd = self.cwd.lock().unwrap().clone();
+                if new_cwd.exists() && *new_cwd != current_cwd {
                     tracing::debug!(
                         "CWD changed: {} -> {}",
-                        self.cwd.display(),
+                        current_cwd.display(),
                         new_cwd.display()
                     );
-                    self.cwd = new_cwd.clone();
+                    *self.cwd.lock().unwrap() = new_cwd.clone();
                 }
             }
         }
@@ -363,18 +364,18 @@ impl ShellExecutor {
         if result.exit_code == 0 && self.has_path_extractor() {
             if let Some(ref extractor) = self.path_extractor {
                 let extraction_start = Instant::now();
+                let cwd = self.cwd.lock().unwrap().clone();
 
                 // Truncate output for extraction efficiency
                 let output_for_extraction = truncate_for_extraction(&result.stdout);
 
                 match extractor
-                    .extract_paths(command, output_for_extraction, &self.cwd)
+                    .extract_paths(command, output_for_extraction, &cwd)
                     .await
                 {
                     Ok(extraction_result) => {
                         // Filter to only existing files
-                        let existing_paths =
-                            filter_existing_files(extraction_result.paths, &self.cwd);
+                        let existing_paths = filter_existing_files(extraction_result.paths, &cwd);
 
                         let extraction_ms = extraction_start.elapsed().as_millis() as i64;
 
@@ -415,13 +416,14 @@ impl ShellExecutor {
         // Update internal CWD if command succeeded and CWD changed
         if result.exit_code == 0 {
             if let Some(ref new_cwd) = result.new_cwd {
-                if new_cwd.exists() && new_cwd != &self.cwd {
+                let current_cwd = self.cwd.lock().unwrap().clone();
+                if new_cwd.exists() && *new_cwd != current_cwd {
                     tracing::debug!(
                         "CWD changed: {} -> {}",
-                        self.cwd.display(),
+                        current_cwd.display(),
                         new_cwd.display()
                     );
-                    self.cwd = new_cwd.clone();
+                    *self.cwd.lock().unwrap() = new_cwd.clone();
                 }
             }
         }
@@ -482,7 +484,7 @@ impl ShellExecutor {
             .register(task_id.clone(), process)
             .await;
 
-        let cwd = self.cwd.clone();
+        let cwd = self.cwd.lock().unwrap().clone();
         let registry = self.background_registry.clone();
         let bg_task_id = task_id.clone();
         let shell_args = self.get_shell_args(command);
@@ -556,6 +558,7 @@ impl ShellExecutor {
     async fn run_command(&self, command: &str) -> CommandResult {
         let args = self.get_shell_args(command);
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
+        let cwd = self.cwd.lock().unwrap().clone();
 
         // Wrap the script to capture CWD after execution
         let wrapped_script = format!(
@@ -566,7 +569,7 @@ impl ShellExecutor {
 
         let child = tokio::process::Command::new(&args[0])
             .args(&args[1..])
-            .current_dir(&self.cwd)
+            .current_dir(&cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
@@ -689,6 +692,7 @@ fn uuid_simple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[tokio::test]
     async fn test_execute_simple_command() {
@@ -1194,7 +1198,8 @@ mod tests {
 
         // CWD should remain unchanged (no tracking)
         let tmp_str = tmp.path().to_str().expect("path to str");
-        let cwd_str = subagent_executor.cwd().to_str().expect("cwd to str");
+        let cwd_path = subagent_executor.cwd();
+        let cwd_str = cwd_path.to_str().expect("cwd to str");
         assert!(
             cwd_str.contains(tmp_str) || tmp_str.contains(cwd_str),
             "execute_for_subagent should not track CWD changes"

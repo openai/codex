@@ -3,7 +3,6 @@
 use super::Capability;
 use super::ConfigShellToolType;
 use super::ReasoningSummary;
-use super::TruncationPolicyConfig;
 use crate::thinking::ThinkingLevel;
 use crate::tool_config::ApplyPatchToolType;
 use serde::Deserialize;
@@ -87,9 +86,10 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_type: Option<ConfigShellToolType>,
 
-    /// Truncation policy for tool output.
+    /// Model-level cap on tool output size (characters).
+    /// When set, overrides per-tool max_result_size_chars() if this value is smaller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub truncation_policy: Option<TruncationPolicyConfig>,
+    pub max_tool_output_chars: Option<i32>,
 
     /// Experimental supported tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,7 +159,7 @@ impl ModelInfo {
         merge_field!(effective_context_window_percent);
         // Tool related
         merge_field!(shell_type);
-        merge_field!(truncation_policy);
+        merge_field!(max_tool_output_chars);
         merge_field!(experimental_supported_tools);
         merge_field!(apply_patch_tool_type);
         // Instructions
@@ -561,5 +561,48 @@ mod tests {
             .with_request_options(opts.clone());
 
         assert_eq!(config.options, Some(opts));
+    }
+
+    #[test]
+    fn test_merge_max_tool_output_chars() {
+        let mut base = ModelInfo {
+            max_tool_output_chars: Some(50_000),
+            ..Default::default()
+        };
+
+        let other = ModelInfo {
+            max_tool_output_chars: Some(20_000),
+            ..Default::default()
+        };
+
+        base.merge_from(&other);
+        assert_eq!(base.max_tool_output_chars, Some(20_000));
+    }
+
+    #[test]
+    fn test_merge_max_tool_output_chars_none_preserves() {
+        let mut base = ModelInfo {
+            max_tool_output_chars: Some(50_000),
+            ..Default::default()
+        };
+
+        let other = ModelInfo::default(); // max_tool_output_chars is None
+
+        base.merge_from(&other);
+        assert_eq!(base.max_tool_output_chars, Some(50_000)); // Preserved
+    }
+
+    #[test]
+    fn test_max_tool_output_chars_serde() {
+        let config = ModelInfo {
+            slug: "test-model".to_string(),
+            max_tool_output_chars: Some(30_000),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(json.contains("max_tool_output_chars"));
+        let parsed: ModelInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.max_tool_output_chars, Some(30_000));
     }
 }

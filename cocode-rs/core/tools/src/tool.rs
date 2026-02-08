@@ -107,12 +107,15 @@ pub trait Tool: Send + Sync {
         30_000
     }
 
-    /// Whether this tool is enabled in the current context.
+    /// Optional feature flag that gates this tool's visibility.
     ///
-    /// Default: always enabled. Override for feature-gated tools
-    /// (e.g., LSP requires LSP server, WebSearch requires API key).
-    fn is_enabled(&self, _ctx: &ToolContext) -> bool {
-        true
+    /// When `Some(feature)`, the tool is only included in API requests
+    /// if `Features::enabled(feature)` is true. This makes disabled tools
+    /// invisible to the model (never sent as tool definitions).
+    ///
+    /// Default: `None` (always visible).
+    fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+        None
     }
 
     /// Validate the input before execution.
@@ -276,8 +279,7 @@ mod tests {
         assert!(tool.is_concurrency_safe_for(&serde_json::json!({})));
         assert!(tool.is_read_only());
         assert_eq!(tool.max_result_size_chars(), 30_000);
-        let ctx = ToolContext::new("call-1", "session-1", std::path::PathBuf::from("/tmp"));
-        assert!(tool.is_enabled(&ctx));
+        assert!(tool.feature_gate().is_none());
     }
 
     #[tokio::test]

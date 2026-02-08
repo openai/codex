@@ -34,10 +34,13 @@ impl SystemPromptBuilder {
 
         // 2. Tool policy (if tools present)
         if ctx.has_tools() {
-            ordered_sections.push((
-                PromptSection::ToolPolicy,
-                templates::TOOL_POLICY.to_string(),
-            ));
+            let mut policy = templates::TOOL_POLICY.to_string();
+            let tool_lines = sections::generate_tool_policy_lines(&ctx.tool_names);
+            if !tool_lines.is_empty() {
+                policy.push('\n');
+                policy.push_str(&tool_lines);
+            }
+            ordered_sections.push((PromptSection::ToolPolicy, policy));
         }
 
         // 3. Security
@@ -299,6 +302,39 @@ mod tests {
         let (system, user) = SystemPromptBuilder::build_brief_summarization("brief content");
         assert!(!system.is_empty());
         assert!(user.contains("brief content"));
+    }
+
+    #[test]
+    fn test_build_with_tools_includes_dynamic_policy() {
+        let ctx = ConversationContext::builder()
+            .environment(test_env())
+            .tool_names(vec![
+                "Read".to_string(),
+                "Edit".to_string(),
+                "LS".to_string(),
+            ])
+            .build()
+            .unwrap();
+
+        let prompt = SystemPromptBuilder::build(&ctx);
+        assert!(prompt.contains("Use Read for reading files"));
+        assert!(prompt.contains("Use Edit for modifying files"));
+        assert!(prompt.contains("Use LS for directory listing"));
+        assert!(!prompt.contains("Use Grep"));
+    }
+
+    #[test]
+    fn test_build_with_tools_excludes_ls_when_not_registered() {
+        let ctx = ConversationContext::builder()
+            .environment(test_env())
+            .tool_names(vec!["Read".to_string(), "Edit".to_string()])
+            .build()
+            .unwrap();
+
+        let prompt = SystemPromptBuilder::build(&ctx);
+        assert!(prompt.contains("Use Read for reading files"));
+        assert!(prompt.contains("Use Edit for modifying files"));
+        assert!(!prompt.contains("Use LS for directory listing"));
     }
 
     #[test]

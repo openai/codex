@@ -185,6 +185,41 @@ impl ToolRegistry {
         self.mcp_tools.contains_key(name)
     }
 
+    /// Get tool definitions filtered by feature flags.
+    ///
+    /// Tools whose `feature_gate()` returns a disabled Feature are excluded.
+    /// MCP tools (no feature gate) are always included.
+    pub fn definitions_filtered(
+        &self,
+        features: &cocode_protocol::Features,
+    ) -> Vec<ToolDefinition> {
+        let mut definitions = Vec::new();
+
+        // Built-in tools — skip those gated on a disabled feature
+        for tool in self.tools.values() {
+            if let Some(feature) = tool.feature_gate() {
+                if !features.enabled(feature) {
+                    continue;
+                }
+            }
+            definitions.push(tool.to_definition());
+        }
+
+        // MCP tools — always included (no feature gate)
+        for mcp_tool in self.mcp_tools.values() {
+            definitions.push(ToolDefinition::full(
+                mcp_tool.qualified_name(),
+                mcp_tool
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("MCP tool from {}", mcp_tool.server)),
+                mcp_tool.input_schema.clone(),
+            ));
+        }
+
+        definitions
+    }
+
     /// Get all tool definitions for API requests.
     pub fn all_definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = Vec::new();
@@ -366,6 +401,45 @@ mod tests {
                 "type": "object",
                 "properties": {}
             })
+        }
+
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &mut ToolContext,
+        ) -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                content: cocode_protocol::ToolResultContent::Text("ok".to_string()),
+                is_error: false,
+                modifiers: Vec::new(),
+            })
+        }
+    }
+
+    struct GatedTool {
+        name: String,
+        gate: cocode_protocol::Feature,
+    }
+
+    #[async_trait]
+    impl Tool for GatedTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn description(&self) -> &str {
+            "Gated tool"
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })
+        }
+
+        fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+            Some(self.gate)
         }
 
         async fn execute(
@@ -575,5 +649,42 @@ mod tests {
 
         // Builtin tool should not be affected
         assert!(registry.get("builtin").is_some());
+    }
+
+    #[test]
+    fn test_definitions_filtered_excludes_disabled_gate() {
+        let mut registry = ToolRegistry::new();
+        registry.register(TestTool {
+            name: "always_on".to_string(),
+        });
+        registry.register(GatedTool {
+            name: "ls_tool".to_string(),
+            gate: cocode_protocol::Feature::Ls,
+        });
+
+        // Ls disabled → gated tool excluded
+        let mut features = cocode_protocol::Features::with_defaults();
+        features.disable(cocode_protocol::Feature::Ls);
+        let defs = registry.definitions_filtered(&features);
+        assert!(defs.iter().any(|d| d.name == "always_on"));
+        assert!(defs.iter().all(|d| d.name != "ls_tool"));
+    }
+
+    #[test]
+    fn test_definitions_filtered_includes_enabled_gate() {
+        let mut registry = ToolRegistry::new();
+        registry.register(TestTool {
+            name: "always_on".to_string(),
+        });
+        registry.register(GatedTool {
+            name: "ls_tool".to_string(),
+            gate: cocode_protocol::Feature::Ls,
+        });
+
+        // Ls enabled → gated tool included
+        let features = cocode_protocol::Features::with_defaults(); // Ls is default enabled
+        let defs = registry.definitions_filtered(&features);
+        assert!(defs.iter().any(|d| d.name == "always_on"));
+        assert!(defs.iter().any(|d| d.name == "ls_tool"));
     }
 }

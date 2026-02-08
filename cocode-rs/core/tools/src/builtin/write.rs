@@ -121,6 +121,7 @@ impl Tool for WriteTool {
                             ),
                         }],
                         allow_remember: true,
+                        proposed_prefix_pattern: None,
                     },
                 };
             }
@@ -141,6 +142,7 @@ impl Tool for WriteTool {
                             ),
                         }],
                         allow_remember: true,
+                        proposed_prefix_pattern: None,
                     },
                 };
             }
@@ -166,6 +168,7 @@ impl Tool for WriteTool {
                 ),
                 risks: vec![],
                 allow_remember: true,
+                proposed_prefix_pattern: None,
             },
         }
     }

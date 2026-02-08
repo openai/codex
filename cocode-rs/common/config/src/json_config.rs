@@ -60,6 +60,36 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+/// Permission rules configuration section.
+///
+/// Defines allow/deny/ask rules for tool execution.
+/// Rules follow the pattern: tool name optionally followed by a command
+/// pattern in parentheses, e.g. `"Bash(git *)"`, `"Read"`, `"Edit"`.
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "permissions": {
+///     "allow": ["Read", "Glob", "Bash(git *)", "Bash(npm *)"],
+///     "deny": ["Bash(rm -rf *)"],
+///     "ask": ["Bash(sudo *)"]
+///   }
+/// }
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PermissionsConfig {
+    /// Tool patterns that are always allowed without prompting.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Tool patterns that are always denied.
+    #[serde(default)]
+    pub deny: Vec<String>,
+    /// Tool patterns that require user approval each time.
+    #[serde(default)]
+    pub ask: Vec<String>,
+}
+
 /// Profile configuration that can override top-level settings.
 ///
 /// All fields are optional - only set fields will override top-level config.
@@ -154,6 +184,10 @@ pub struct AppConfig {
     /// When set, the agent will respond in this language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_preference: Option<String>,
+
+    /// Permission rules for tool execution.
+    #[serde(default)]
+    pub permissions: Option<PermissionsConfig>,
 }
 
 /// Resolved configuration with profile applied.
@@ -349,8 +383,7 @@ impl LoggingConfig {
 /// {
 ///   "features": {
 ///     "subagent": true,
-///     "web_fetch": true,
-///     "shell_tool": false
+///     "web_fetch": true
 ///   }
 /// }
 /// ```
@@ -437,8 +470,7 @@ mod tests {
             },
             "features": {
                 "subagent": true,
-                "web_fetch": true,
-                "shell_tool": false
+                "web_fetch": true
             }
         }"#;
         let config: AppConfig = serde_json::from_str(json_str).unwrap();
@@ -455,7 +487,6 @@ mod tests {
         let features = config.features.unwrap();
         assert_eq!(features.get("subagent"), Some(true));
         assert_eq!(features.get("web_fetch"), Some(true));
-        assert_eq!(features.get("shell_tool"), Some(false));
     }
 
     #[test]
@@ -657,15 +688,15 @@ mod tests {
     fn test_features_config_into_features() {
         let mut entries = BTreeMap::new();
         entries.insert("subagent".to_string(), true);
-        entries.insert("shell_tool".to_string(), false);
+        entries.insert("ls".to_string(), false);
 
         let features_config = FeaturesConfig { entries };
         let features = features_config.into_features();
 
         // subagent should be enabled (it was set to true)
         assert!(features.enabled(Feature::Subagent));
-        // shell_tool should be disabled (it was set to false, overriding default true)
-        assert!(!features.enabled(Feature::ShellTool));
+        // ls should be disabled (it was set to false, overriding default true)
+        assert!(!features.enabled(Feature::Ls));
     }
 
     #[test]
@@ -696,7 +727,7 @@ mod tests {
         let features = config.resolve_features();
 
         // Should return defaults
-        assert!(features.enabled(Feature::ShellTool));
+        assert!(features.enabled(Feature::Ls));
         assert!(!features.enabled(Feature::Subagent));
     }
 
@@ -704,7 +735,7 @@ mod tests {
     fn test_features_config_unknown_keys_empty() {
         let mut entries = BTreeMap::new();
         entries.insert("subagent".to_string(), true);
-        entries.insert("shell_tool".to_string(), false);
+        entries.insert("ls".to_string(), false);
 
         let features = FeaturesConfig { entries };
         assert!(features.unknown_keys().is_empty());

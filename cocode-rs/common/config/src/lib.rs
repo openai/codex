@@ -58,8 +58,6 @@ pub use cocode_protocol::Capability;
 pub use cocode_protocol::ConfigShellToolType;
 pub use cocode_protocol::ModelInfo;
 pub use cocode_protocol::ReasoningEffort;
-pub use cocode_protocol::TruncationMode;
-pub use cocode_protocol::TruncationPolicyConfig;
 
 // Re-export protocol types (features)
 pub use cocode_protocol::Feature;
@@ -93,6 +91,7 @@ pub use json_config::AppConfig;
 pub use json_config::ConfigProfile;
 pub use json_config::FeaturesConfig;
 pub use json_config::LoggingConfig;
+pub use json_config::PermissionsConfig;
 pub use json_config::ResolvedAppConfig;
 
 // Re-export constants

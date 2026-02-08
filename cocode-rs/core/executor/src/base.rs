@@ -36,6 +36,8 @@ pub struct ExecutorConfig {
     pub enable_micro_compaction: bool,
     /// Enable streaming tools.
     pub enable_streaming_tools: bool,
+    /// Feature flags propagated to subagent tool executors.
+    pub features: cocode_protocol::Features,
 }
 
 impl Default for ExecutorConfig {
@@ -48,6 +50,7 @@ impl Default for ExecutorConfig {
             auto_compact_threshold: 0.8,
             enable_micro_compaction: true,
             enable_streaming_tools: true,
+            features: cocode_protocol::Features::with_defaults(),
         }
     }
 }
@@ -80,6 +83,9 @@ pub struct AgentExecutor {
 
     /// Optional callback for spawning subagents (used by Task tool).
     spawn_agent_fn: Option<SpawnAgentFn>,
+
+    /// Pre-configured permission rules loaded from settings files.
+    permission_rules: Vec<cocode_tools::PermissionRule>,
 }
 
 impl AgentExecutor {
@@ -99,6 +105,7 @@ impl AgentExecutor {
             config,
             cancel_token: CancellationToken::new(),
             spawn_agent_fn: None,
+            permission_rules: Vec::new(),
         }
     }
 
@@ -214,7 +221,9 @@ impl AgentExecutor {
             .compaction_config(CompactionConfig::default())
             .hooks(self.hooks.clone())
             .event_tx(event_tx)
-            .cancel_token(self.cancel_token.clone());
+            .cancel_token(self.cancel_token.clone())
+            .features(self.config.features.clone())
+            .permission_rules(self.permission_rules.clone());
 
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
@@ -257,6 +266,8 @@ pub struct ExecutorBuilder {
     config: ExecutorConfig,
     cancel_token: CancellationToken,
     spawn_agent_fn: Option<SpawnAgentFn>,
+    features: cocode_protocol::Features,
+    permission_rules: Vec<cocode_tools::PermissionRule>,
 }
 
 impl ExecutorBuilder {
@@ -270,6 +281,8 @@ impl ExecutorBuilder {
             config: ExecutorConfig::default(),
             cancel_token: CancellationToken::new(),
             spawn_agent_fn: None,
+            features: cocode_protocol::Features::with_defaults(),
+            permission_rules: Vec::new(),
         }
     }
 
@@ -351,16 +364,31 @@ impl ExecutorBuilder {
         self
     }
 
+    /// Set the feature flags for subagent tool executors.
+    pub fn features(mut self, features: cocode_protocol::Features) -> Self {
+        self.features = features;
+        self
+    }
+
+    /// Set pre-configured permission rules.
+    pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
+        self.permission_rules = rules;
+        self
+    }
+
     /// Build the executor.
     ///
     /// # Panics
     /// Panics if `api_client`, `model_hub`, or `tool_registry` have not been set.
     pub fn build(self) -> AgentExecutor {
+        let mut config = self.config;
+        config.features = self.features;
+
         let mut executor = AgentExecutor::new(
             self.api_client.expect("api_client is required"),
             self.model_hub.expect("model_hub is required"),
             self.tool_registry.expect("tool_registry is required"),
-            self.config,
+            config,
         );
 
         if let Some(hooks) = self.hooks {
@@ -369,6 +397,7 @@ impl ExecutorBuilder {
 
         executor.cancel_token = self.cancel_token;
         executor.spawn_agent_fn = self.spawn_agent_fn;
+        executor.permission_rules = self.permission_rules;
         executor
     }
 }
@@ -392,6 +421,7 @@ mod tests {
         assert!((config.auto_compact_threshold - 0.8).abs() < f32::EPSILON);
         assert!(config.enable_micro_compaction);
         assert!(config.enable_streaming_tools);
+        assert_eq!(config.features, cocode_protocol::Features::with_defaults());
     }
 
     #[test]

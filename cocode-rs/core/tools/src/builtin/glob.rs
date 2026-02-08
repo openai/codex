@@ -5,6 +5,8 @@ use crate::context::ToolContext;
 use crate::error::Result;
 use crate::tool::Tool;
 use async_trait::async_trait;
+use cocode_file_ignore::IgnoreConfig;
+use cocode_file_ignore::IgnoreService;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
@@ -12,7 +14,6 @@ use cocode_protocol::ToolOutput;
 use globset::Glob;
 use globset::GlobSetBuilder;
 use serde_json::Value;
-use walkdir::WalkDir;
 
 /// Tool for finding files using glob patterns.
 ///
@@ -102,6 +103,7 @@ impl Tool for GlobTool {
                     ),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }
@@ -118,6 +120,7 @@ impl Tool for GlobTool {
                     ),
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: None,
                 },
             };
         }
@@ -164,13 +167,16 @@ impl Tool for GlobTool {
             .build()
         })?;
 
+        // Build walker via IgnoreService (respects .gitignore, .ignore)
+        let ignore_config = IgnoreConfig::default().with_hidden(true);
+        let ignore_service = IgnoreService::new(ignore_config);
+        let mut walker_builder = ignore_service.create_walk_builder(&search_path);
+        walker_builder.max_depth(Some(self.max_depth as usize));
+
         // Walk directory and collect matches
         let mut matches = Vec::new();
-        let walker = WalkDir::new(&search_path)
-            .max_depth(self.max_depth as usize)
-            .follow_links(false);
 
-        for entry in walker.into_iter().filter_map(|e| e.ok()) {
+        for entry in walker_builder.build().filter_map(std::result::Result::ok) {
             if ctx.is_cancelled() {
                 break;
             }
@@ -199,8 +205,7 @@ impl Tool for GlobTool {
         // Format output
         if matches.is_empty() {
             Ok(ToolOutput::text(format!(
-                "No files found matching pattern '{}' in {}",
-                pattern,
+                "No files found matching pattern '{pattern}' in {}",
                 search_path.display()
             )))
         } else {
@@ -219,7 +224,7 @@ impl Tool for GlobTool {
                     count, self.max_results
                 )
             } else {
-                format!("Found {} files:\n", count)
+                format!("Found {count} files:\n")
             };
 
             Ok(ToolOutput::text(format!("{header}{output}")))
@@ -336,5 +341,88 @@ mod tests {
         let tool = GlobTool::new();
         assert_eq!(tool.name(), "Glob");
         assert!(tool.is_concurrent_safe());
+    }
+
+    #[tokio::test]
+    async fn test_glob_respects_gitignore() {
+        let dir = TempDir::new().unwrap();
+
+        // Create .gitignore that excludes *.log
+        fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+
+        // Create files
+        File::create(dir.path().join("main.rs")).unwrap();
+        File::create(dir.path().join("debug.log")).unwrap();
+
+        let tool = GlobTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "*"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(content.contains("main.rs"));
+        assert!(!content.contains("debug.log"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_respects_ignore_file() {
+        let dir = TempDir::new().unwrap();
+
+        // Create .ignore that excludes *.tmp
+        fs::write(dir.path().join(".ignore"), "*.tmp\n").unwrap();
+
+        // Create files
+        File::create(dir.path().join("keep.rs")).unwrap();
+        File::create(dir.path().join("temp.tmp")).unwrap();
+
+        let tool = GlobTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "*"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(content.contains("keep.rs"));
+        assert!(!content.contains("temp.tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_finds_hidden_files() {
+        let dir = TempDir::new().unwrap();
+
+        // Create hidden and visible files
+        File::create(dir.path().join("visible.rs")).unwrap();
+        File::create(dir.path().join(".hidden")).unwrap();
+
+        let tool = GlobTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        // Match everything including dotfiles
+        let input = serde_json::json!({
+            "pattern": "*"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(content.contains("visible.rs"));
+        // Since include_hidden is true, dotfiles should be found
+        assert!(content.contains(".hidden"));
     }
 }

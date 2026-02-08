@@ -82,6 +82,7 @@ use crate::fallback::FallbackState;
 use crate::result::LoopResult;
 use crate::session_memory_agent::SessionMemoryExtractionAgent;
 use cocode_plan_mode::PlanModeState;
+use cocode_shell::ShellExecutor;
 
 /// Maximum number of retry attempts for output-token exhaustion recovery.
 const MAX_OUTPUT_TOKEN_RECOVERY: i32 = 3;
@@ -160,6 +161,9 @@ pub struct AgentLoop {
     plan_mode_state: PlanModeState,
 
     // Subagent spawning
+    /// Shell executor for command execution and background tasks.
+    shell_executor: ShellExecutor,
+
     /// Optional callback for spawning subagents (used by Task tool).
     spawn_agent_fn: Option<SpawnAgentFn>,
 
@@ -171,6 +175,14 @@ pub struct AgentLoop {
     /// Queued commands from user (Enter during streaming).
     /// These are injected as steering reminders and executed after idle.
     queued_commands: Vec<QueuedCommandInfo>,
+
+    // Feature flags
+    /// Feature flags for tool enablement and feature gating.
+    features: cocode_protocol::Features,
+
+    // Permission rules
+    /// Pre-configured permission rules loaded from settings files.
+    permission_rules: Vec<cocode_tools::PermissionRule>,
 
     // Status broadcast
     /// Watch channel sender for broadcasting agent status.
@@ -197,10 +209,13 @@ pub struct AgentLoopBuilder {
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     is_subagent: bool,
     plan_mode_state: Option<PlanModeState>,
+    shell_executor: Option<ShellExecutor>,
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
     queued_commands: Vec<QueuedCommandInfo>,
     status_tx: Option<watch::Sender<AgentStatus>>,
+    features: cocode_protocol::Features,
+    permission_rules: Vec<cocode_tools::PermissionRule>,
 }
 
 impl AgentLoopBuilder {
@@ -224,10 +239,13 @@ impl AgentLoopBuilder {
             extraction_agent: None,
             is_subagent: false,
             plan_mode_state: None,
+            shell_executor: None,
             spawn_agent_fn: None,
             skill_manager: None,
             queued_commands: Vec::new(),
             status_tx: None,
+            features: cocode_protocol::Features::with_defaults(),
+            permission_rules: Vec::new(),
         }
     }
 
@@ -335,6 +353,12 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the shell executor for command execution and background tasks.
+    pub fn shell_executor(mut self, executor: ShellExecutor) -> Self {
+        self.shell_executor = Some(executor);
+        self
+    }
+
     /// Set the spawn agent callback for the Task tool.
     pub fn spawn_agent_fn(mut self, f: SpawnAgentFn) -> Self {
         self.spawn_agent_fn = Some(f);
@@ -380,6 +404,18 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the feature flags.
+    pub fn features(mut self, features: cocode_protocol::Features) -> Self {
+        self.features = features;
+        self
+    }
+
+    /// Set pre-configured permission rules.
+    pub fn permission_rules(mut self, rules: Vec<cocode_tools::PermissionRule>) -> Self {
+        self.permission_rules = rules;
+        self
+    }
+
     /// Build the [`AgentLoop`].
     ///
     /// # Panics
@@ -405,13 +441,19 @@ impl AgentLoopBuilder {
             .status_tx
             .unwrap_or_else(|| watch::channel(AgentStatus::default()).0);
 
+        let context = self.context.expect("context is required");
+        let cwd: std::path::PathBuf = context.environment.cwd.clone().into();
+        let shell_executor = self
+            .shell_executor
+            .unwrap_or_else(|| ShellExecutor::new(cwd));
+
         AgentLoop {
             api_client: self.api_client.expect("api_client is required"),
             model_hub: self.model_hub.expect("model_hub is required"),
             selections: self.selections.expect("selections is required"),
             tool_registry: self.tool_registry.expect("tool_registry is required"),
             message_history: self.message_history.unwrap_or_default(),
-            context: self.context.expect("context is required"),
+            context,
             config: self.config,
             fallback_config: self.fallback_config,
             compaction_config: self.compaction_config,
@@ -433,9 +475,12 @@ impl AgentLoopBuilder {
             // Initially true - the first turn always has user input
             current_turn_has_user_input: true,
             plan_mode_state: self.plan_mode_state.unwrap_or_default(),
+            shell_executor,
             spawn_agent_fn: self.spawn_agent_fn,
             skill_manager: self.skill_manager,
             queued_commands: self.queued_commands,
+            features: self.features,
+            permission_rules: self.permission_rules,
             status_tx,
         }
     }
@@ -846,12 +891,26 @@ impl AgentLoop {
 
         // Create executor for this turn BEFORE streaming starts.
         // This enables tool execution to begin DURING streaming.
+
+        // Resolve model-level tool output cap from current main model
+        let max_tool_output_chars = self
+            .selections
+            .get_or_main(cocode_protocol::ModelRole::Main)
+            .and_then(|sel| {
+                self.model_hub
+                    .get_model_with_info(&sel.model)
+                    .ok()
+                    .and_then(|(_, info, _)| info.max_tool_output_chars)
+            });
+
         let executor_config = ExecutorConfig {
             session_id: query_tracking.chain_id.clone(),
             permission_mode: self.config.permission_mode,
             cwd: self.context.environment.cwd.clone().into(),
             is_plan_mode: self.plan_mode_state.is_active,
             plan_file_path: self.plan_mode_state.plan_file_path.clone(),
+            features: self.features.clone(),
+            max_tool_output_chars,
             ..ExecutorConfig::default()
         };
         let mut executor = StreamingToolExecutor::new(
@@ -866,7 +925,16 @@ impl AgentLoop {
         // Share the approval store across turns for permission persistence
         .with_approval_store(self.shared_approval_store.clone())
         // Share async hook tracker for background hook completion tracking
-        .with_async_hook_tracker(self.async_hook_tracker.clone());
+        .with_async_hook_tracker(self.async_hook_tracker.clone())
+        // Share the shell executor for command execution and background tasks
+        .with_shell_executor(self.shell_executor.clone());
+
+        // Wire permission rules into executor
+        if !self.permission_rules.is_empty() {
+            let evaluator =
+                cocode_tools::PermissionRuleEvaluator::with_rules(self.permission_rules.clone());
+            executor = executor.with_permission_evaluator(evaluator);
+        }
 
         // Add spawn_agent_fn if available for Task tool
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
@@ -1212,6 +1280,12 @@ impl AgentLoop {
         // Build messages and tools using existing logic (model-aware filtering)
         let (messages, tools) = self.build_messages_and_tools(injected_messages, &ctx.model_info);
 
+        // Tell the executor which tool names the model was actually given.
+        // Any tool call outside this set is rejected as NotFound, preventing
+        // hallucinated calls to apply_patch (when type=None/Shell) or tools
+        // outside experimental_supported_tools.
+        executor.set_allowed_tool_names(tools.iter().map(|d| d.name.clone()).collect());
+
         // Use RequestBuilder to assemble the final request with context parameters
         let mut builder = RequestBuilder::new(ctx).messages(messages);
         if !tools.is_empty() {
@@ -1445,7 +1519,10 @@ impl AgentLoop {
         &self,
         model_info: &cocode_protocol::ModelInfo,
     ) -> Vec<ToolDefinition> {
-        select_tools_for_model(self.tool_registry.all_definitions(), model_info)
+        select_tools_for_model(
+            self.tool_registry.definitions_filtered(&self.features),
+            model_info,
+        )
     }
 
     /// Convert an injected message to an API Message.
@@ -2300,16 +2377,40 @@ impl AgentLoop {
 /// Filter tool definitions based on model capabilities.
 ///
 /// This ensures each model only sees tools it supports:
+/// - `shell_type`: `Disabled` removes shell-related tools (`Bash`, `shell`, `TaskOutput`, `TaskStop`)
 /// - `apply_patch`: controlled by `ModelInfo.apply_patch_tool_type`
 /// - experimental tools: controlled by `ModelInfo.experimental_supported_tools`
+///
+/// Feature-gated tools are already filtered by `ToolRegistry::definitions_filtered()`.
 fn select_tools_for_model(
     mut defs: Vec<ToolDefinition>,
     model_info: &cocode_protocol::ModelInfo,
 ) -> Vec<ToolDefinition> {
     use cocode_protocol::ApplyPatchToolType;
+    use cocode_protocol::ConfigShellToolType;
     use cocode_tools::builtin::ApplyPatchTool;
 
-    // 1. Handle apply_patch: remove registry default, add model-specific variant
+    // 1. Handle shell_type
+    match model_info.shell_type {
+        Some(ConfigShellToolType::Disabled) => {
+            defs.retain(|d| {
+                !matches!(
+                    d.name.as_str(),
+                    "Bash" | "shell" | "TaskOutput" | "TaskStop"
+                )
+            });
+        }
+        Some(ConfigShellToolType::Shell) => {
+            // Shell mode: remove Bash, keep shell tool
+            defs.retain(|d| d.name != "Bash");
+        }
+        Some(ConfigShellToolType::ShellCommand) | None => {
+            // ShellCommand (default): remove shell tool, keep Bash
+            defs.retain(|d| d.name != "shell");
+        }
+    }
+
+    // 2. Handle apply_patch: remove registry default, add model-specific variant
     defs.retain(|d| d.name != "apply_patch");
     match model_info.apply_patch_tool_type {
         Some(ApplyPatchToolType::Function) => {
@@ -2323,7 +2424,7 @@ fn select_tools_for_model(
         }
     }
 
-    // 2. Handle experimental_supported_tools (whitelist filter)
+    // 3. Handle experimental_supported_tools (whitelist filter)
     if let Some(ref supported) = model_info.experimental_supported_tools {
         if !supported.is_empty() {
             defs.retain(|d| supported.contains(&d.name));

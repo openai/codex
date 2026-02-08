@@ -29,10 +29,11 @@ use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::ToolOutput;
 use cocode_protocol::ValidationResult;
-use cocode_shell::BackgroundTaskRegistry;
+use cocode_shell::ShellExecutor;
 use hyper_sdk::ToolCall;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -74,6 +75,11 @@ pub struct ExecutorConfig {
     pub session_dir: Option<PathBuf>,
     /// Tool configuration for result persistence thresholds.
     pub tool_config: cocode_protocol::ToolConfig,
+    /// Feature flags for tool enablement.
+    pub features: cocode_protocol::Features,
+    /// Model-level cap on tool output size (characters).
+    /// When set, applied after per-tool truncation but before persistence.
+    pub max_tool_output_chars: Option<i32>,
 }
 
 impl Default for ExecutorConfig {
@@ -95,6 +101,8 @@ impl Default for ExecutorConfig {
             plan_file_path: None,
             session_dir: None,
             tool_config: cocode_protocol::ToolConfig::default(),
+            features: cocode_protocol::Features::with_defaults(),
+            max_tool_output_chars: None,
         }
     }
 }
@@ -163,8 +171,8 @@ pub struct StreamingToolExecutor {
     pending_unsafe: Arc<Mutex<Vec<PendingToolCall>>>,
     /// Completed results waiting to be collected.
     completed_results: Arc<Mutex<Vec<ToolExecutionResult>>>,
-    /// Background task registry for Bash background execution.
-    background_registry: BackgroundTaskRegistry,
+    /// Shell executor for command execution and background tasks.
+    shell_executor: ShellExecutor,
     /// Optional callback for spawning subagents.
     spawn_agent_fn: Option<SpawnAgentFn>,
     /// Optional skill manager for the Skill tool.
@@ -178,6 +186,12 @@ pub struct StreamingToolExecutor {
     permission_requester: Option<Arc<dyn crate::context::PermissionRequester>>,
     /// Optional permission rule evaluator.
     permission_evaluator: Option<crate::permission_rules::PermissionRuleEvaluator>,
+    /// Allowlist of tool names the model was actually given.
+    ///
+    /// Set after `select_tools_for_model()` via [`set_allowed_tool_names`].
+    /// When `Some`, only these tools can be executed; all others get `NotFound`.
+    /// When `None` (default), all registered tools are executable.
+    allowed_tool_names: Arc<std::sync::RwLock<Option<HashSet<String>>>>,
 }
 
 impl StreamingToolExecutor {
@@ -187,6 +201,7 @@ impl StreamingToolExecutor {
         config: ExecutorConfig,
         event_tx: Option<mpsc::Sender<LoopEvent>>,
     ) -> Self {
+        let shell_executor = ShellExecutor::new(config.cwd.clone());
         Self {
             registry,
             config,
@@ -199,12 +214,13 @@ impl StreamingToolExecutor {
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
             pending_unsafe: Arc::new(Mutex::new(Vec::new())),
             completed_results: Arc::new(Mutex::new(Vec::new())),
-            background_registry: BackgroundTaskRegistry::new(),
+            shell_executor,
             spawn_agent_fn: None,
             skill_manager: None,
             parent_selections: None,
             permission_requester: None,
             permission_evaluator: None,
+            allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -232,9 +248,9 @@ impl StreamingToolExecutor {
         self
     }
 
-    /// Set the background task registry for Bash background execution.
-    pub fn with_background_registry(mut self, registry: BackgroundTaskRegistry) -> Self {
-        self.background_registry = registry;
+    /// Set the shell executor for command execution and background tasks.
+    pub fn with_shell_executor(mut self, executor: ShellExecutor) -> Self {
+        self.shell_executor = executor;
         self
     }
 
@@ -286,6 +302,29 @@ impl StreamingToolExecutor {
         self
     }
 
+    /// Set the allowlist of tool names that the model was given.
+    ///
+    /// Called from the driver after `select_tools_for_model()` resolves the
+    /// final set of definitions. Any tool call whose name is not in this set
+    /// is rejected with `NotFound`, preventing hallucinated or injected calls
+    /// to tools the model was never offered (e.g. `apply_patch` when
+    /// `apply_patch_tool_type` is `None`, or tools outside
+    /// `experimental_supported_tools`).
+    pub fn set_allowed_tool_names(&self, names: HashSet<String>) {
+        *self.allowed_tool_names.write().unwrap() = Some(names);
+    }
+
+    /// Check if a tool name is allowed by the current allowlist.
+    ///
+    /// Returns `true` if no allowlist is set (all tools allowed) or the name
+    /// is in the allowlist.
+    fn is_tool_allowed(&self, name: &str) -> bool {
+        match self.allowed_tool_names.read().unwrap().as_ref() {
+            None => true,
+            Some(set) => set.contains(name),
+        }
+    }
+
     /// Get the async hook tracker for collecting completed async hooks.
     ///
     /// Call `tracker.take_completed()` to retrieve and clear completed hooks
@@ -335,6 +374,26 @@ impl StreamingToolExecutor {
         let name = &tool_call.name;
 
         debug!(call_id = %call_id, name = %name, "Tool use complete");
+
+        // Reject tools not in the model's allowlist (if set).
+        // This prevents hallucinated calls to tools the model was never offered
+        // (e.g., apply_patch when apply_patch_tool_type is None, or tools outside
+        // experimental_supported_tools).
+        if !self.is_tool_allowed(name) {
+            debug!(call_id = %call_id, name = %name, "Tool not in allowed set, rejecting");
+            let result =
+                Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
+            self.emit_completed(call_id, &result).await;
+            self.completed_results
+                .lock()
+                .await
+                .push(ToolExecutionResult {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    result,
+                });
+            return;
+        }
 
         // Emit queued event
         self.emit_event(LoopEvent::ToolUseQueued {
@@ -436,10 +495,18 @@ impl StreamingToolExecutor {
         let session_dir = self.config.session_dir.clone();
         let tool_config = self.config.tool_config.clone();
         let call_id_for_persistence = call_id.clone();
+        let max_tool_output_chars = self.config.max_tool_output_chars;
 
         // Spawn the execution task
         let handle = tokio::spawn(async move {
-            let mut result = execute_tool(&registry, modified_tool_call, ctx, timeout_secs).await;
+            let mut result = execute_tool(
+                &registry,
+                modified_tool_call,
+                ctx,
+                timeout_secs,
+                max_tool_output_chars,
+            )
+            .await;
 
             // Apply large result persistence if configured
             if let (Ok(output), Some(dir)) = (&result, &session_dir) {
@@ -505,6 +572,23 @@ impl StreamingToolExecutor {
             let name = tool_call.name.clone();
             let original_input = tool_call.arguments.clone();
 
+            // Reject tools not in the model's allowlist (if set)
+            if !self.is_tool_allowed(&name) {
+                debug!(call_id = %call_id, name = %name, "Tool not in allowed set, rejecting");
+                let result =
+                    Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
+                self.emit_completed(&call_id, &result).await;
+                self.completed_results
+                    .lock()
+                    .await
+                    .push(ToolExecutionResult {
+                        call_id,
+                        name,
+                        result,
+                    });
+                continue;
+            }
+
             // Execute pre-hooks before starting the tool
             let modified_input = match self.execute_pre_hooks(&name, original_input.clone()).await {
                 Ok(input) => input,
@@ -540,6 +624,7 @@ impl StreamingToolExecutor {
                 modified_tool_call,
                 ctx,
                 self.config.default_timeout_secs,
+                self.config.max_tool_output_chars,
             )
             .await;
 
@@ -662,13 +747,14 @@ impl StreamingToolExecutor {
     /// Create a tool context for execution.
     fn create_context(&self, call_id: &str) -> ToolContext {
         let mut builder = ToolContextBuilder::new(call_id, &self.config.session_id)
-            .cwd(&self.config.cwd)
+            .cwd(self.shell_executor.cwd())
             .permission_mode(self.config.permission_mode)
             .cancel_token(self.cancel_token.clone())
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
-            .background_registry(self.background_registry.clone());
+            .features(self.config.features.clone())
+            .shell_executor(self.shell_executor.clone());
 
         // Add spawn_agent_fn if available
         if let Some(ref spawn_fn) = self.spawn_agent_fn {
@@ -853,12 +939,13 @@ async fn execute_tool(
     tool_call: ToolCall,
     mut ctx: ToolContext,
     timeout_secs: i64,
+    max_tool_output_chars: Option<i32>,
 ) -> Result<ToolOutput> {
     let timeout_duration = std::time::Duration::from_secs(timeout_secs as u64);
 
     match tokio::time::timeout(
         timeout_duration,
-        execute_tool_inner(registry, tool_call, &mut ctx),
+        execute_tool_inner(registry, tool_call, &mut ctx, max_tool_output_chars),
     )
     .await
     {
@@ -895,6 +982,22 @@ fn extract_file_path(input: &Value) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// Extract a command prefix pattern for the "allow similar commands" option.
+///
+/// For Bash commands, extracts the first word as a prefix pattern.
+/// E.g. `"git push origin main"` → `Some("git *")`.
+fn extract_prefix_pattern(tool_name: &str, input: &Value) -> Option<String> {
+    if tool_name != "Bash" {
+        return None;
+    }
+    let command = input.get("command").and_then(|v| v.as_str())?;
+    let first_word = command.split_whitespace().next()?;
+    if first_word.is_empty() {
+        return None;
+    }
+    Some(format!("{first_word} *"))
+}
+
 /// Build a default approval request for a tool that needs user approval.
 fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::ApprovalRequest {
     let description = if let Some(path) = extract_file_path(input) {
@@ -910,6 +1013,8 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
         format!("Execute tool: {name}")
     };
 
+    let proposed_prefix_pattern = extract_prefix_pattern(name, input);
+
     cocode_protocol::ApprovalRequest {
         request_id: format!(
             "default-{name}-{}",
@@ -922,18 +1027,24 @@ fn default_approval_request(name: &str, input: &Value) -> cocode_protocol::Appro
         description,
         risks: vec![],
         allow_remember: true,
+        proposed_prefix_pattern,
     }
 }
 
-/// Extract command string from Bash tool input.
+/// Extract command string from shell tool input.
 fn extract_command_input(name: &str, input: &Value) -> Option<String> {
-    if name == "Bash" {
-        input
+    match name {
+        "Bash" => input
             .get("command")
             .and_then(|v| v.as_str())
-            .map(String::from)
-    } else {
-        None
+            .map(String::from),
+        "shell" => input.get("command").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        }),
+        _ => None,
     }
 }
 
@@ -979,6 +1090,7 @@ async fn check_permission_pipeline(
                     description: decision.reason,
                     risks: vec![],
                     allow_remember: true,
+                    proposed_prefix_pattern: extract_prefix_pattern(name, input),
                 },
             };
         }
@@ -1066,6 +1178,7 @@ async fn execute_tool_inner(
     registry: &ToolRegistry,
     tool_call: ToolCall,
     ctx: &mut ToolContext,
+    max_tool_output_chars: Option<i32>,
 ) -> Result<ToolOutput> {
     let name = &tool_call.name;
     let input = tool_call.arguments;
@@ -1074,6 +1187,15 @@ async fn execute_tool_inner(
     let tool = registry
         .get(name)
         .ok_or_else(|| crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build())?;
+
+    // Defense-in-depth: reject calls to feature-gated tools that are disabled.
+    // Normally the model never sees these (definitions_filtered excludes them),
+    // but a hallucinated or injected tool name could still reach here.
+    if let Some(feature) = tool.feature_gate() {
+        if !ctx.features.enabled(feature) {
+            return Err(crate::error::tool_error::NotFoundSnafu { name: name.clone() }.build());
+        }
+    }
 
     // Validate input
     let validation = tool.validate(&input).await;
@@ -1102,22 +1224,29 @@ async fn execute_tool_inner(
             // Check ApprovalStore first
             let pattern = &request.description;
             if ctx.is_approved(name, pattern).await {
-                // Already approved for this pattern
+                // Already approved for this pattern (exact or wildcard)
             } else if let Some(requester) = &ctx.permission_requester {
                 // Use the permission requester for interactive approval
                 let worker_id = ctx.call_id.clone();
-                let approved = requester
+                let decision = requester
                     .request_permission(request.clone(), &worker_id)
                     .await;
-                if !approved {
-                    return Err(crate::error::tool_error::PermissionDeniedSnafu {
-                        message: format!("User denied permission for tool '{name}'"),
+                match decision {
+                    cocode_protocol::ApprovalDecision::Denied => {
+                        return Err(crate::error::tool_error::PermissionDeniedSnafu {
+                            message: format!("User denied permission for tool '{name}'"),
+                        }
+                        .build());
                     }
-                    .build());
-                }
-                // Store approval for future calls with the same pattern
-                if request.allow_remember {
-                    ctx.approve_pattern(name, pattern).await;
+                    cocode_protocol::ApprovalDecision::Approved => {
+                        // Session-only: remember exact description
+                        ctx.approve_pattern(name, pattern).await;
+                    }
+                    cocode_protocol::ApprovalDecision::ApprovedWithPrefix { prefix_pattern } => {
+                        // Remember prefix pattern in session + persist to disk
+                        ctx.approve_pattern(name, &prefix_pattern).await;
+                        ctx.persist_permission_rule(name, &prefix_pattern).await;
+                    }
                 }
             } else {
                 // No permission requester available - deny
@@ -1136,10 +1265,19 @@ async fn execute_tool_inner(
     let result = tool.execute(input, ctx).await;
 
     // Post-process
-    let output = match result {
+    let mut output = match result {
         Ok(output) => tool.post_process(output, ctx).await,
         Err(e) => return Err(e),
     };
+
+    // Apply truncation: use the smaller of per-tool limit and model-level limit.
+    // Single pass avoids double truncation markers.
+    let per_tool = tool.max_result_size_chars() as usize;
+    let max_chars = match max_tool_output_chars {
+        Some(model_limit) => per_tool.min(model_limit as usize),
+        None => per_tool,
+    };
+    output.truncate_to(max_chars);
 
     // Cleanup
     tool.cleanup(ctx).await;
@@ -1247,6 +1385,57 @@ mod tests {
         assert!(results[0].result.is_ok());
     }
 
+    /// A tool gated on a feature flag.
+    struct FeatureGatedTool;
+
+    #[async_trait]
+    impl Tool for FeatureGatedTool {
+        fn name(&self) -> &str {
+            "gated_tool"
+        }
+        fn description(&self) -> &str {
+            "A feature-gated tool"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
+            Some(cocode_protocol::Feature::Ls)
+        }
+        async fn execute(&self, _input: Value, _ctx: &mut ToolContext) -> Result<ToolOutput> {
+            Ok(ToolOutput::text("gated result"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_feature_gated_tool_rejected_when_disabled() {
+        let mut registry = ToolRegistry::new();
+        registry.register(FeatureGatedTool);
+
+        // Disable the Ls feature
+        let mut features = cocode_protocol::Features::with_defaults();
+        features.disable(cocode_protocol::Feature::Ls);
+
+        let config = ExecutorConfig {
+            features,
+            ..ExecutorConfig::default()
+        };
+        let executor = StreamingToolExecutor::new(Arc::new(registry), config, None);
+
+        let tool_call = ToolCall::new("call-1", "gated_tool", serde_json::json!({}));
+        executor.on_tool_complete(tool_call).await;
+        executor.execute_pending_unsafe().await;
+
+        let results = executor.drain().await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].result.is_err());
+        let err = results[0].result.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("not found") || err.contains("NotFound"),
+            "Expected NotFound error, got: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn test_executor_not_found() {
         let registry = ToolRegistry::new();
@@ -1265,5 +1454,115 @@ mod tests {
         let results = executor.drain().await;
         assert_eq!(results.len(), 1);
         assert!(results[0].result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_allowed_tool_names_rejects_unlisted_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(SafeTool);
+        registry.register(UnsafeTool);
+
+        let executor =
+            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
+
+        // Only allow safe_tool — unsafe_tool is registered but not in the allowlist
+        executor.set_allowed_tool_names(vec!["safe_tool".to_string()].into_iter().collect());
+
+        // safe_tool → should succeed
+        let tool_call = ToolCall::new("call-1", "safe_tool", serde_json::json!({}));
+        executor.on_tool_complete(tool_call).await;
+
+        // unsafe_tool → should be rejected immediately by allowlist
+        let tool_call = ToolCall::new("call-2", "unsafe_tool", serde_json::json!({}));
+        executor.on_tool_complete(tool_call).await;
+
+        executor.execute_pending_unsafe().await;
+        let results = executor.drain().await;
+
+        assert_eq!(results.len(), 2);
+
+        let safe_result = results.iter().find(|r| r.call_id == "call-1").unwrap();
+        assert!(safe_result.result.is_ok(), "safe_tool should succeed");
+
+        let unsafe_result = results.iter().find(|r| r.call_id == "call-2").unwrap();
+        assert!(
+            unsafe_result.result.is_err(),
+            "unsafe_tool should be rejected"
+        );
+        let err = unsafe_result.result.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("not found") || err.contains("NotFound"),
+            "Expected NotFound error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_allowlist_allows_all_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(SafeTool);
+
+        let executor =
+            StreamingToolExecutor::new(Arc::new(registry), ExecutorConfig::default(), None);
+
+        // No allowlist set → all registered tools should work
+        let tool_call = ToolCall::new("call-1", "safe_tool", serde_json::json!({}));
+        executor.on_tool_complete(tool_call).await;
+
+        let results = executor.drain().await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_bash_command() {
+        let input = serde_json::json!({"command": "git push origin main"});
+        assert_eq!(
+            extract_prefix_pattern("Bash", &input),
+            Some("git *".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_bash_single_word() {
+        let input = serde_json::json!({"command": "ls"});
+        assert_eq!(
+            extract_prefix_pattern("Bash", &input),
+            Some("ls *".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_non_bash_tool() {
+        let input = serde_json::json!({"command": "git push"});
+        assert_eq!(extract_prefix_pattern("Read", &input), None);
+        assert_eq!(extract_prefix_pattern("Edit", &input), None);
+        assert_eq!(extract_prefix_pattern("Write", &input), None);
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_missing_command() {
+        let input = serde_json::json!({"file_path": "/tmp/test"});
+        assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_empty_command() {
+        let input = serde_json::json!({"command": ""});
+        assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_whitespace_only() {
+        let input = serde_json::json!({"command": "   "});
+        assert_eq!(extract_prefix_pattern("Bash", &input), None);
+    }
+
+    #[test]
+    fn test_extract_prefix_pattern_complex_command() {
+        let input = serde_json::json!({"command": "cargo test --no-fail-fast -- -q"});
+        assert_eq!(
+            extract_prefix_pattern("Bash", &input),
+            Some("cargo *".to_string())
+        );
     }
 }
