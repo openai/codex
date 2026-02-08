@@ -182,6 +182,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
     assert!(next_cursor.is_none());
 
     server_handle.abort();
+    let _ = server_handle.await;
     Ok(())
 }
 
