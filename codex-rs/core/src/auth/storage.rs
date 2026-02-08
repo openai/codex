@@ -356,6 +356,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         };
 
         storage
@@ -376,6 +377,7 @@ mod tests {
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         };
 
         let file = get_auth_file(codex_home.path());
@@ -398,6 +400,7 @@ mod tests {
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
+            cloud_token: None,
         };
         let storage = create_auth_storage(dir.path().to_path_buf(), AuthCredentialsStoreMode::File);
         storage.save(&auth_dot_json)?;
@@ -421,6 +424,7 @@ mod tests {
             openai_api_key: Some("sk-ephemeral".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         };
 
         storage.save(&auth_dot_json)?;
@@ -519,6 +523,7 @@ mod tests {
                 account_id: Some(format!("{prefix}-account-id")),
             }),
             last_refresh: None,
+            cloud_token: None,
         }
     }
 
@@ -535,6 +540,7 @@ mod tests {
             openai_api_key: Some("sk-test".to_string()),
             tokens: None,
             last_refresh: None,
+            cloud_token: None,
         };
         seed_keyring_with_auth(
             &mock_keyring,
@@ -577,6 +583,7 @@ mod tests {
                 account_id: Some("account".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         };
 
         storage.save(&auth)?;

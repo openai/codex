@@ -108,20 +108,20 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
         codex_core::auth::AuthCredentialsStoreMode::Auto
     )?.and_then(|a| a.cloud_token);
 
-    let refresh_token = args.token.or(stored_token);
-    
-    if refresh_token.is_none() {
-        anyhow::bail!("No cloud token found. Please run 'bracket pair <CODE>' first.");
-    }
-    let refresh_token = refresh_token.unwrap();
+    let refresh_token = match args.token.or(stored_token) {
+        Some(token) => token,
+        None => anyhow::bail!("No cloud token found. Please run 'bracket pair <CODE>' first."),
+    };
 
     // 1. Exchange refresh token for a session token
     let http_client = reqwest::Client::new();
-    let session_url = format!("{}/api/clients/session", args.server_url.replace("ws://", "http://").replace("wss://", "https://").trim_end_matches('/'));
+    let server_url_base = args.server_url.replace("ws://", "http://").replace("wss://", "https://");
+    let server_url_base = server_url_base.trim_end_matches('/');
+    let session_url = format!("{server_url_base}/api/clients/session");
     
     println!("Authenticating with Span...");
     let res = http_client.post(&session_url)
-        .header("Authorization", format!("Bearer {}", refresh_token))
+        .header("Authorization", format!("Bearer {refresh_token}"))
         .send()
         .await?;
 
@@ -139,8 +139,8 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
     }
     url.query_pairs_mut().append_pair("token", session_token);
 
-    println!("Connecting to {}...", url);
-    println!("Session ID: {}", session_id);
+    println!("Connecting to {url}...");
+    println!("Session ID: {session_id}");
 
     let (ws_stream, _) = connect_async(url.to_string()).await?;
     println!("Connected!");
@@ -181,11 +181,10 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
     let client_id = args.client_id.clone();
     tokio::spawn(async move {
         while let Some(envelope) = rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&envelope) {
-                if let Err(e) = write.send(Message::Text(json.into())).await {
-                    eprintln!("Failed to send message: {}", e);
-                    break;
-                }
+            if let Ok(json) = serde_json::to_string(&envelope)
+                && let Err(e) = write.send(Message::Text(json.into())).await {
+                eprintln!("Failed to send message: {e}");
+                break;
             }
         }
     });
@@ -205,7 +204,7 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
 
             match serde_json::from_str::<ServerMessage>(&text) {
                 Ok(ServerMessage::Welcome { message }) => {
-                    println!("Server: {}", message);
+                    println!("Server: {message}");
                 }
                 Ok(ServerMessage::Ping) => {
                     tx.send(ClientEnvelope::Pong {
@@ -219,10 +218,9 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
                     agent_id,
                     payload,
                 }) => {
-                    if action == "spawn" {
-                        if let (Some(agent_id), Some(payload)) = (agent_id, payload) {
-                            spawn_agent(client_id.clone(), agent_id, payload, tx.clone()).await;
-                        }
+                    if action == "spawn"
+                        && let (Some(agent_id), Some(payload)) = (agent_id, payload) {
+                        spawn_agent(client_id.clone(), agent_id, payload, tx.clone()).await;
                     }
                 }
                 Ok(ServerMessage::Ack { .. }) => {
@@ -230,7 +228,7 @@ pub async fn run_main(args: CloudLinkCli) -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     // Ignore unknown messages or parse errors
-                     eprintln!("Failed to parse message: {} | Error: {}", text, e);
+                     eprintln!("Failed to parse message: {text} | Error: {e}");
                 }
             }
         }
@@ -255,7 +253,7 @@ async fn spawn_agent(
         args.push(prompt);
     }
 
-    println!("Spawning agent {}: {:?} {:?}", agent_id, codex_bin, args);
+    println!("Spawning agent {agent_id}: {codex_bin:?} {args:?}");
 
     // Notify running
     let _ = tx
@@ -278,76 +276,78 @@ async fn spawn_agent(
 
     match child {
         Ok(mut child) => {
-            let stdout = child.stdout.take().expect("Failed to open stdout");
-            let stderr = child.stderr.take().expect("Failed to open stderr");
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
 
-            let tx_stdout = tx.clone();
-            let agent_id_stdout = agent_id.clone();
-            let client_id_stdout = client_id.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    let _ = tx_stdout
-                        .send(ClientEnvelope::Log {
-                            client_id: client_id_stdout.clone(),
-                            session_id: Some(agent_id_stdout.clone()),
+            if let (Some(stdout), Some(stderr)) = (stdout, stderr) {
+                let tx_stdout = tx.clone();
+                let agent_id_stdout = agent_id.clone();
+                let client_id_stdout = client_id.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        let _ = tx_stdout
+                            .send(ClientEnvelope::Log {
+                                client_id: client_id_stdout.clone(),
+                                session_id: Some(agent_id_stdout.clone()),
+                                ts: chrono::Utc::now().to_rfc3339(),
+                                payload: LogPayload {
+                                    stream: "stdout".to_string(),
+                                    message: line,
+                                    agent: Some("bracket".to_string()),
+                                },
+                            })
+                            .await;
+                    }
+                });
+
+                let tx_stderr = tx.clone();
+                let agent_id_stderr = agent_id.clone();
+                let client_id_stderr = client_id.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        let _ = tx_stderr
+                            .send(ClientEnvelope::Log {
+                                client_id: client_id_stderr.clone(),
+                                session_id: Some(agent_id_stderr.clone()),
+                                ts: chrono::Utc::now().to_rfc3339(),
+                                payload: LogPayload {
+                                    stream: "stderr".to_string(),
+                                    message: line,
+                                    agent: Some("bracket".to_string()),
+                                },
+                            })
+                            .await;
+                    }
+                });
+
+                // Wait for finish
+                tokio::spawn(async move {
+                    let status = child.wait().await;
+                    let _ = tx
+                        .send(ClientEnvelope::Status {
+                            client_id,
+                            session_id: Some(agent_id),
                             ts: chrono::Utc::now().to_rfc3339(),
-                            payload: LogPayload {
-                                stream: "stdout".to_string(),
-                                message: line,
+                            payload: StatusPayload {
+                                state: if status.map(|s| s.success()).unwrap_or(false) {
+                                    "exited".to_string()
+                                } else {
+                                    "error".to_string()
+                                },
                                 agent: Some("bracket".to_string()),
                             },
                         })
                         .await;
-                }
-            });
-
-            let tx_stderr = tx.clone();
-            let agent_id_stderr = agent_id.clone();
-            let client_id_stderr = client_id.clone();
-            tokio::spawn(async move {
-                let mut reader = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    let _ = tx_stderr
-                        .send(ClientEnvelope::Log {
-                            client_id: client_id_stderr.clone(),
-                            session_id: Some(agent_id_stderr.clone()),
-                            ts: chrono::Utc::now().to_rfc3339(),
-                            payload: LogPayload {
-                                stream: "stderr".to_string(),
-                                message: line,
-                                agent: Some("bracket".to_string()),
-                            },
-                        })
-                        .await;
-                }
-            });
-
-            // Wait for finish
-            tokio::spawn(async move {
-                let status = child.wait().await;
-                let _ = tx
-                    .send(ClientEnvelope::Status {
-                        client_id: client_id,
-                        session_id: Some(agent_id),
-                        ts: chrono::Utc::now().to_rfc3339(),
-                        payload: StatusPayload {
-                            state: if status.map(|s| s.success()).unwrap_or(false) {
-                                "exited".to_string()
-                            } else {
-                                "error".to_string()
-                            },
-                            agent: Some("bracket".to_string()),
-                        },
-                    })
-                    .await;
-            });
+                });
+            }
         }
         Err(e) => {
-            eprintln!("Failed to spawn: {}", e);
+            eprintln!("Failed to spawn: {e}");
              let _ = tx
                 .send(ClientEnvelope::Status {
-                    client_id: client_id,
+                    client_id,
                     session_id: Some(agent_id),
                     ts: chrono::Utc::now().to_rfc3339(),
                     payload: StatusPayload {
