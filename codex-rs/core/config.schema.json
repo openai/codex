@@ -411,6 +411,82 @@
         }
       ]
     },
+    "HookEntryToml": {
+      "description": "Single hook entry from configuration.",
+      "properties": {
+        "command": {
+          "description": "The command to execute as argv (program + args).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "matcher": {
+          "default": null,
+          "description": "Optional matcher pattern for tool-use hooks.\n\nSupported patterns: - `\"*\"` matches any tool name - `\"prefix*\"` matches tool names starting with `prefix` - `\"exact\"` matches only that exact tool name\n\nNote: suffix patterns like `\"*shell\"` and infix patterns like `\"read_*_file\"` are **not** supported.",
+          "type": "string"
+        },
+        "timeout": {
+          "default": 30,
+          "description": "Optional timeout in seconds (default: 30).",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "HooksConfigToml": {
+      "description": "All hook entries grouped by event type.",
+      "properties": {
+        "after_agent": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        },
+        "notification": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        },
+        "post_tool_use": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        },
+        "pre_tool_use": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        },
+        "stop": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        },
+        "user_prompt_submit": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/HookEntryToml"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -1378,6 +1454,22 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksConfigToml"
+        }
+      ],
+      "default": {
+        "after_agent": [],
+        "notification": [],
+        "post_tool_use": [],
+        "pre_tool_use": [],
+        "stop": [],
+        "user_prompt_submit": []
+      },
+      "description": "Hook definitions grouped by event type. Each hook specifies a command to execute and optionally a matcher pattern for tool-use events."
     },
     "instructions": {
       "description": "System instructions.",
