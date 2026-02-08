@@ -1569,6 +1569,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-keyring-store",
+ "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1905,8 +1906,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "codex-app-server-protocol",
- "codex-core",
  "codex-utils-absolute-path",
  "globset",
  "pretty_assertions",
@@ -1921,11 +1920,23 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "time",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "codex-network-proxy-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-core",
+ "codex-network-proxy",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
