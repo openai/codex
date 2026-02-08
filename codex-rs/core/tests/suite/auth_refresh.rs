@@ -55,6 +55,7 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -117,6 +118,7 @@ async fn returns_fresh_tokens_as_is() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -163,6 +165,7 @@ async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(stale_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -222,6 +225,7 @@ async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Re
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -272,6 +276,7 @@ async fn refresh_token_returns_transient_error_on_server_failure() -> Result<()>
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -324,6 +329,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -333,6 +339,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
         openai_api_key: None,
         tokens: Some(disk_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -416,6 +423,7 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -431,6 +439,7 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
         openai_api_key: None,
         tokens: Some(disk_tokens),
         last_refresh: Some(initial_last_refresh),
+        cloud_token: None,
     };
     save_auth(
         ctx.codex_home.path(),
@@ -495,6 +504,7 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
         openai_api_key: Some("sk-test".to_string()),
         tokens: None,
         last_refresh: None,
+        cloud_token: None,
     };
     ctx.write_auth(&auth)?;
 

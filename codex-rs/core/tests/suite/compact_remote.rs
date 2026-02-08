@@ -808,8 +808,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
 
     let mut start_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.features.enable(Feature::RemoteCompaction);
+        .with_config(|_config| {
         });
     let initial = start_builder.build(&server).await?;
     let home = initial.home.clone();
@@ -902,8 +901,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
 
     let mut resume_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.features.enable(Feature::RemoteCompaction);
+        .with_config(|_config| {
         });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
 
@@ -966,8 +964,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.features.enable(Feature::RemoteCompaction);
+        .with_config(|_config| {
         });
     let test = builder.build(&server).await?;
 

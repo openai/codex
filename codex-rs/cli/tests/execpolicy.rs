@@ -24,7 +24,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("bracket")?)
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",
@@ -81,7 +81,7 @@ prefix_rule(
 "#,
     )?;
 
-    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("bracket")?)
         .env("CODEX_HOME", codex_home.path())
         .args([
             "execpolicy",

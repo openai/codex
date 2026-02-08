@@ -30,23 +30,20 @@ impl Arg0PathEntryGuard {
 
 pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // Determine if we were invoked via the special alias.
-    let mut args = std::env::args_os();
-    let argv0 = args.next().unwrap_or_default();
+    let all_args: Vec<_> = std::env::args_os().collect();
+    let mut args = all_args.iter();
+    let argv0 = args.next().cloned().unwrap_or_default();
     let exe_name = Path::new(&argv0)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-    if exe_name == LINUX_SANDBOX_ARG0 {
-        // Safety: [`run_main`] never returns.
-        codex_linux_sandbox::run_main();
-    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
-        codex_apply_patch::main();
-    }
-
-    let argv1 = args.next().unwrap_or_default();
+    // Check for the special flag first, regardless of argv[0].
+    // This is necessary because sandboxed processes might have their argv[0]
+    // forced to "codex-linux-sandbox" but still need to run the apply-patch logic.
+    let argv1 = all_args.get(1).cloned().unwrap_or_default();
     if argv1 == CODEX_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let patch_arg = all_args.get(2).and_then(|s| s.to_str().map(|s| s.to_owned()));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();
@@ -62,6 +59,13 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
             }
         };
         std::process::exit(exit_code);
+    }
+
+    if exe_name == LINUX_SANDBOX_ARG0 {
+        // Safety: [`run_main`] never returns.
+        codex_linux_sandbox::run_main();
+    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+        codex_apply_patch::main();
     }
 
     // This modifies the environment, which is not thread-safe, so do this
