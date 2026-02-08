@@ -91,4 +91,5 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 
-archive/package-lock.json
+archive/*
+package-lock.json
