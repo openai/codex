@@ -44,6 +44,7 @@ fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
         r#"<environment_context>
   <cwd>{cwd}</cwd>
   <shell>{shell_name}</shell>
+  <network enabled="false" />
 </environment_context>"#
     )
 }
