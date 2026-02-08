@@ -177,6 +177,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Additional system instructions appended to the resolved base instructions.
+    pub append_base_instructions: Option<String>,
+
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
@@ -1273,6 +1276,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub append_base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
@@ -1399,6 +1403,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            append_base_instructions,
             developer_instructions,
             personality,
             compact_prompt,
@@ -1610,6 +1615,7 @@ impl Config {
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
+        let append_base_instructions = append_base_instructions;
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let personality = personality
             .or(config_profile.personality)
@@ -1696,6 +1702,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            append_base_instructions,
             personality,
             developer_instructions,
             compact_prompt,
@@ -4035,6 +4042,7 @@ model_verbosity = "high"
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                append_base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
@@ -4123,6 +4131,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
@@ -4226,6 +4235,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
@@ -4315,6 +4325,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,

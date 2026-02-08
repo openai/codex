@@ -316,11 +316,17 @@ impl Codex {
         // 2. conversation history => session_meta.base_instructions
         // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
-        let base_instructions = config
+        let mut base_instructions = config
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        if let Some(append) = config.append_base_instructions.as_deref() {
+            let trimmed = append.trim();
+            if !trimmed.is_empty() {
+                base_instructions = format!("{base_instructions}\n\n{trimmed}");
+            }
+        }
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -5501,10 +5507,19 @@ mod tests {
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            base_instructions: {
+                let mut base = config
+                    .base_instructions
+                    .clone()
+                    .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+                if let Some(append) = config.append_base_instructions.as_deref() {
+                    let trimmed = append.trim();
+                    if !trimmed.is_empty() {
+                        base = format!("{base}\n\n{trimmed}");
+                    }
+                }
+                base
+            },
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),

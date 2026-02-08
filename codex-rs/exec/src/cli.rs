@@ -99,6 +99,10 @@ pub struct Cli {
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Append system-level instructions to the base prompt.
+    #[arg(long = "append-system-prompt", value_name = "TEXT", global = true)]
+    pub append_system_prompt: Option<String>,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
