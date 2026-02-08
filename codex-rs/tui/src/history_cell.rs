@@ -312,6 +312,20 @@ impl HistoryCell for UserHistoryCell {
             with_outer_spacing
         }
     }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+
+    fn desired_transcript_height(&self, width: u16) -> u16 {
+        self.display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
 }
 
 #[derive(Debug)]
@@ -3455,6 +3469,28 @@ mod tests {
 
         assert!(rendered.contains("[Image #1]"));
         assert!(rendered.contains("[Image #2]"));
+    }
+
+    #[test]
+    fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
+        let cell = UserHistoryCell {
+            message: "line one\nline two".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ],
+        };
+
+        let width = 80;
+        let rendered_len: u16 = cell
+            .display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX);
+        assert_eq!(cell.desired_height(width), rendered_len);
+        assert_eq!(cell.desired_transcript_height(width), rendered_len);
     }
 
     #[test]
