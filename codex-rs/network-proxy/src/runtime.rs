@@ -8,10 +8,11 @@ use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::state::NetworkProxyConstraints;
-use crate::state::build_config_state;
+use crate::state::build_default_config_state_and_reloader;
 use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
 use anyhow::Result;
+use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
 use serde::Serialize;
@@ -22,7 +23,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
 use tokio::sync::RwLock;
@@ -110,27 +110,22 @@ pub(crate) struct ConfigState {
     pub(crate) allow_set: GlobSet,
     pub(crate) deny_set: GlobSet,
     pub(crate) constraints: NetworkProxyConstraints,
-    pub(crate) layer_mtimes: Vec<LayerMtime>,
     pub(crate) cfg_path: PathBuf,
     pub(crate) blocked: VecDeque<BlockedRequest>,
 }
 
-#[derive(Clone)]
-pub(crate) struct LayerMtime {
-    pub(crate) path: PathBuf,
-    pub(crate) mtime: Option<SystemTime>,
+#[async_trait]
+pub(crate) trait ConfigReloader: Send + Sync {
+    /// Return a freshly loaded state if a reload is needed; otherwise, return `None`.
+    async fn maybe_reload(&self) -> Result<Option<ConfigState>>;
+
+    /// Force a reload, regardless of whether a change was detected.
+    async fn reload_now(&self) -> Result<ConfigState>;
 }
 
-impl LayerMtime {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        let mtime = path.metadata().and_then(|m| m.modified()).ok();
-        Self { path, mtime }
-    }
-}
-
-#[derive(Clone)]
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
+    reloader: Arc<dyn ConfigReloader>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -141,12 +136,26 @@ impl std::fmt::Debug for NetworkProxyState {
     }
 }
 
+impl Clone for NetworkProxyState {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            reloader: self.reloader.clone(),
+        }
+    }
+}
+
 impl NetworkProxyState {
     pub async fn new() -> Result<Self> {
-        let cfg_state = build_config_state().await?;
-        Ok(Self {
-            state: Arc::new(RwLock::new(cfg_state)),
-        })
+        let (cfg_state, reloader) = build_default_config_state_and_reloader().await?;
+        Ok(Self::with_reloader(cfg_state, Arc::new(reloader)))
+    }
+
+    pub(crate) fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(state)),
+            reloader,
+        }
     }
 
     pub async fn current_cfg(&self) -> Result<NetworkProxyConfig> {
@@ -178,7 +187,7 @@ impl NetworkProxyState {
             (guard.config.clone(), guard.cfg_path.clone())
         };
 
-        match build_config_state().await {
+        match self.reloader.reload_now().await {
             Ok(mut new_state) => {
                 // Policy changes are operationally sensitive; logging diffs makes changes traceable
                 // without needing to dump full config blobs (which can include unrelated settings).
@@ -367,24 +376,22 @@ impl NetworkProxyState {
     }
 
     async fn reload_if_needed(&self) -> Result<()> {
-        let needs_reload = {
-            let guard = self.state.read().await;
-            guard.layer_mtimes.iter().any(|layer| {
-                let metadata = std::fs::metadata(&layer.path).ok();
-                match (metadata.and_then(|m| m.modified().ok()), layer.mtime) {
-                    (Some(new_mtime), Some(old_mtime)) => new_mtime > old_mtime,
-                    (Some(_), None) => true,
-                    (None, Some(_)) => true,
-                    (None, None) => false,
-                }
-            })
-        };
-
-        if !needs_reload {
-            return Ok(());
+        match self.reloader.maybe_reload().await? {
+            None => Ok(()),
+            Some(mut new_state) => {
+                let (previous_cfg, blocked) = {
+                    let guard = self.state.read().await;
+                    (guard.config.clone(), guard.blocked.clone())
+                };
+                log_policy_changes(&previous_cfg, &new_state.config);
+                new_state.blocked = blocked;
+                let mut guard = self.state.write().await;
+                *guard = new_state;
+                let path = guard.cfg_path.display();
+                info!("reloaded config from {path}");
+                Ok(())
+            }
         }
-
-        self.force_reload().await
     }
 }
 
@@ -497,13 +504,25 @@ pub(crate) fn network_proxy_state_for_policy(
         allow_set,
         deny_set,
         constraints: NetworkProxyConstraints::default(),
-        layer_mtimes: Vec::new(),
         cfg_path: PathBuf::from("/nonexistent/config.toml"),
         blocked: VecDeque::new(),
     };
 
-    NetworkProxyState {
-        state: Arc::new(RwLock::new(state)),
+    NetworkProxyState::with_reloader(state, Arc::new(NoopReloader))
+}
+
+#[cfg(test)]
+struct NoopReloader;
+
+#[cfg(test)]
+#[async_trait]
+impl ConfigReloader for NoopReloader {
+    async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
+        Ok(None)
+    }
+
+    async fn reload_now(&self) -> Result<ConfigState> {
+        Err(anyhow::anyhow!("force reload is not supported in tests"))
     }
 }
 

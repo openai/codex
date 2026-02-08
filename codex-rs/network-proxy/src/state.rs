@@ -2,10 +2,11 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
+use crate::runtime::ConfigReloader;
 use crate::runtime::ConfigState;
-use crate::runtime::LayerMtime;
 use anyhow::Context;
 use anyhow::Result;
+use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConstraintError;
@@ -18,6 +19,7 @@ use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::load_config_layers_state;
 use serde::Deserialize;
 use std::collections::HashSet;
+use tokio::sync::RwLock;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -25,7 +27,13 @@ pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
-pub(crate) async fn build_config_state() -> Result<ConfigState> {
+pub(crate) async fn build_default_config_state_and_reloader()
+-> Result<(ConfigState, MtimeConfigReloader)> {
+    let (state, layer_mtimes) = build_config_state_with_mtimes().await?;
+    Ok((state, MtimeConfigReloader::new(layer_mtimes)))
+}
+
+async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime>)> {
     // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
     // rest of Codex (system/managed layers, user layers, session flags, etc.).
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
@@ -57,15 +65,17 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
-    Ok(ConfigState {
-        config,
-        allow_set,
-        deny_set,
-        constraints,
+    Ok((
+        ConfigState {
+            config,
+            allow_set,
+            deny_set,
+            constraints,
+            cfg_path,
+            blocked: std::collections::VecDeque::new(),
+        },
         layer_mtimes,
-        cfg_path,
-        blocked: std::collections::VecDeque::new(),
-    })
+    ))
 }
 
 fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
@@ -88,6 +98,65 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
             path.map(LayerMtime::new)
         })
         .collect()
+}
+
+#[derive(Clone)]
+struct LayerMtime {
+    path: std::path::PathBuf,
+    mtime: Option<std::time::SystemTime>,
+}
+
+impl LayerMtime {
+    fn new(path: std::path::PathBuf) -> Self {
+        let mtime = path.metadata().and_then(|m| m.modified()).ok();
+        Self { path, mtime }
+    }
+}
+
+pub(crate) struct MtimeConfigReloader {
+    layer_mtimes: RwLock<Vec<LayerMtime>>,
+}
+
+impl MtimeConfigReloader {
+    fn new(layer_mtimes: Vec<LayerMtime>) -> Self {
+        Self {
+            layer_mtimes: RwLock::new(layer_mtimes),
+        }
+    }
+
+    async fn needs_reload(&self) -> bool {
+        let guard = self.layer_mtimes.read().await;
+        guard.iter().any(|layer| {
+            let metadata = std::fs::metadata(&layer.path).ok();
+            match (metadata.and_then(|m| m.modified().ok()), layer.mtime) {
+                (Some(new_mtime), Some(old_mtime)) => new_mtime > old_mtime,
+                (Some(_), None) => true,
+                (None, Some(_)) => true,
+                (None, None) => false,
+            }
+        })
+    }
+}
+
+#[async_trait]
+impl ConfigReloader for MtimeConfigReloader {
+    async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
+        if !self.needs_reload().await {
+            return Ok(None);
+        }
+
+        let (state, layer_mtimes) = build_config_state_with_mtimes().await?;
+        let mut guard = self.layer_mtimes.write().await;
+        *guard = layer_mtimes;
+        Ok(Some(state))
+    }
+
+    async fn reload_now(&self) -> Result<ConfigState> {
+        let (state, layer_mtimes) = build_config_state_with_mtimes().await?;
+        let mut guard = self.layer_mtimes.write().await;
+        *guard = layer_mtimes;
+        Ok(state)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
