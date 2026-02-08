@@ -2204,9 +2204,9 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            shell.as_ref().clone(),
+        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
+            turn_context,
+            shell.as_ref(),
         )));
         items
     }
