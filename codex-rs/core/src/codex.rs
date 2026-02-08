@@ -232,6 +232,8 @@ use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
 
+const PYTHON_TOOL_DEVELOPER_INSTRUCTIONS: &str = include_str!("python_tool_developer_message.md");
+
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
@@ -2164,6 +2166,9 @@ impl Session {
             )
             .into(),
         );
+        if self.features.enabled(Feature::PythonTool) {
+            items.push(DeveloperInstructions::new(PYTHON_TOOL_DEVELOPER_INSTRUCTIONS).into());
+        }
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
         }
