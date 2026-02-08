@@ -3317,6 +3317,9 @@ impl ChatWidget {
                     self.add_info_message("Rollout path is not available yet.".to_string(), None);
                 }
             }
+            SlashCommand::CloudLink => {
+                self.app_event_tx.send(AppEvent::StartCloudLink);
+            }
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
                 use std::collections::HashMap;

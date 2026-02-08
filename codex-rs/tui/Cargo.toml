@@ -96,6 +96,9 @@ unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+hostname = "0.4"
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }

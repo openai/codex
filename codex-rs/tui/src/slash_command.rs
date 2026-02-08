@@ -44,6 +44,7 @@ pub enum SlashCommand {
     Rollout,
     Ps,
     Personality,
+    CloudLink,
     TestApproval,
 }
 
@@ -81,6 +82,7 @@ impl SlashCommand {
             SlashCommand::Apps => "manage apps",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
+            SlashCommand::CloudLink => "link this session to the cloud",
             SlashCommand::TestApproval => "test approval request",
         }
     }
@@ -133,6 +135,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
+            SlashCommand::CloudLink => true,
             SlashCommand::Statusline => false,
         }
     }

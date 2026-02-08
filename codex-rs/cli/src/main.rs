@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -36,6 +37,7 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod cloud_link;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -60,9 +62,9 @@ use codex_core::terminal::TerminalName;
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    // the generic `bracket` command name that users run.
+    bin_name = "bracket",
+    override_usage = "bracket [OPTIONS] [PROMPT]\n       bracket [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -106,6 +108,10 @@ enum Subcommand {
     #[cfg(target_os = "macos")]
     App(app_cmd::AppCommand),
 
+    /// Pair this machine with a Span cloud account.
+    #[clap(name = "cloud-pair", alias = "pair")]
+    CloudPair(CloudPairArgs),
+
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
@@ -132,6 +138,10 @@ enum Subcommand {
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
+
+    /// Connect to a Span cloud server (or compatible) to enable remote control.
+    #[clap(name = "cloud-link", alias = "link")]
+    CloudLink(cloud_link::CloudLinkCli),
 
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
@@ -549,6 +559,54 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
+#[derive(Debug, Parser)]
+struct CloudPairArgs {
+    /// The pairing code from your Span dashboard.
+    #[arg(value_name = "CODE")]
+    code: String,
+
+    /// A label for this machine (e.g., 'MacBook Pro').
+    #[arg(long, short = 'l')]
+    label: Option<String>,
+
+    /// The URL of the Span server.
+    #[arg(long, default_value = "http://localhost:3000")]
+    server_url: String,
+}
+
+async fn run_cloud_pair(args: CloudPairArgs) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/clients/pair", args.server_url.trim_end_matches('/'));
+    
+    println!("Pairing with {}...", args.server_url);
+    
+    let res = client.post(&url)
+        .json(&serde_json::json!({
+            "code": args.code,
+            "label": args.label.unwrap_or_else(|| hostname::get().unwrap_or_default().to_string_lossy().to_string()),
+        }))
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let err: serde_json::Value = res.json().await?;
+        anyhow::bail!("Pairing failed: {}", err["error"]);
+    }
+
+    let data: serde_json::Value = res.json().await?;
+    let refresh_token = data["refreshToken"].as_str().context("No refreshToken in response")?;
+    
+    let codex_home = codex_core::config::find_codex_home()?;
+    codex_cli::login_with_cloud_token(
+        &codex_home,
+        refresh_token,
+        codex_core::auth::AuthCredentialsStoreMode::Auto
+    )?;
+
+    println!("Successfully paired! Your cloud token has been saved.");
+    Ok(())
+}
+
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
@@ -578,7 +636,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Review(review_args)) => {
-            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            let mut exec_cli = ExecCli::try_parse_from(["bracket", "exec"])?;
             exec_cli.command = Some(ExecCommand::Review(review_args));
             prepend_config_flags(
                 &mut exec_cli.config_overrides,
@@ -627,6 +685,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
             app_cmd::run_app(app_cli).await?;
+        }
+        Some(Subcommand::CloudPair(args)) => {
+            run_cloud_pair(args).await?;
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
@@ -709,6 +770,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::CloudLink(link_cli)) => {
+            cloud_link::run_main(link_cli).await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {
@@ -1026,7 +1090,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
+    let name = "bracket";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
 
@@ -1092,7 +1156,7 @@ mod tests {
     #[test]
     fn exec_resume_last_accepts_prompt_positional() {
         let cli =
-            MultitoolCli::try_parse_from(["codex", "exec", "--json", "resume", "--last", "2+2"])
+            MultitoolCli::try_parse_from(["bracket", "exec", "--json", "resume", "--last", "2+2"])
                 .expect("parse should succeed");
 
         let Some(Subcommand::Exec(exec)) = cli.subcommand else {

@@ -1,21 +1,18 @@
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
+    /// Update via `npm install -g @span-io/bracket@latest`.
     NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
+    /// Update via `bun install -g @span-io/bracket@latest`.
     BunGlobalLatest,
-    /// Update via `brew upgrade codex`.
-    BrewUpgrade,
 }
 
 impl UpdateAction {
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@span-io/bracket"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@span-io/bracket"]),
         }
     }
 
@@ -52,10 +49,6 @@ fn detect_update_action(
         Some(UpdateAction::NpmGlobalLatest)
     } else if managed_by_bun {
         Some(UpdateAction::BunGlobalLatest)
-    } else if is_macos
-        && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
-    {
-        Some(UpdateAction::BrewUpgrade)
     } else {
         None
     }
@@ -86,7 +79,7 @@ mod tests {
                 false,
                 false
             ),
-            Some(UpdateAction::BrewUpgrade)
+            None
         );
         assert_eq!(
             detect_update_action(
@@ -95,7 +88,7 @@ mod tests {
                 false,
                 false
             ),
-            Some(UpdateAction::BrewUpgrade)
+            None
         );
     }
 }

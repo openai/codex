@@ -1,6 +1,7 @@
 pub mod debug_sandbox;
 mod exit_status;
 pub mod login;
+pub use codex_core::auth::login_with_cloud_token;
 
 use clap::Parser;
 use codex_common::CliConfigOverrides;

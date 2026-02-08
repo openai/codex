@@ -84,6 +84,21 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns the raw text representation of the cell content, without TUI-specific styling
+    /// or formatting. Useful for cloud logging and history sync.
+    fn raw_text(&self) -> String {
+        self.transcript_lines(80)
+            .into_iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
@@ -275,6 +290,10 @@ impl HistoryCell for UserHistoryCell {
         lines.push(Line::from("").style(style));
         lines
     }
+
+    fn raw_text(&self) -> String {
+        format!("User: {}", self.message)
+    }
 }
 
 #[derive(Debug)]
@@ -380,6 +399,25 @@ impl HistoryCell for AgentMessageCell {
     fn is_stream_continuation(&self) -> bool {
         !self.is_first_line
     }
+
+    fn raw_text(&self) -> String {
+        let content = self
+            .lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+        if self.is_first_line {
+            format!("Assistant: {}", content)
+        } else {
+            content
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -396,6 +434,19 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+
+    fn raw_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 }
 
@@ -1114,10 +1165,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ Bracket (based on Codex) (vX)"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
+            Span::from("Bracket (based on Codex)").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -563,6 +564,9 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+
+    cloud_link_session_id: Option<String>,
+    cloud_link_tx: Option<tokio::sync::mpsc::Sender<String>>,
 }
 
 #[derive(Default)]
@@ -589,7 +593,175 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
+use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use url::Url;
+
 impl App {
+    fn start_background_cloud_link(&mut self, session_id: String) {
+        let app_event_tx = self.app_event_tx.clone();
+        let codex_home = self.config.codex_home.clone();
+        let history_to_send = self.transcript_cells.clone();
+        
+        // Default to localhost if not specified, or we could add a config setting
+        let server_url = "http://localhost:3000".to_string();
+        let client_id = "bracket-tui".to_string();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(100);
+        self.cloud_link_tx = Some(tx);
+
+        tokio::spawn(async move {
+            let result = async {
+                let stored_token = codex_core::auth::load_auth_dot_json(
+                    &codex_home,
+                    codex_core::auth::AuthCredentialsStoreMode::Auto
+                )?.and_then(|a| a.cloud_token);
+
+                if stored_token.is_none() {
+                    anyhow::bail!("No cloud token found. Run 'bracket pair' first.");
+                }
+                let refresh_token = stored_token.unwrap();
+
+                // 1. Exchange for session token
+                let http_client = reqwest::Client::new();
+                let session_url = format!("{}/api/clients/session", server_url.trim_end_matches('/'));
+                
+                let res = http_client.post(&session_url)
+                    .header("Authorization", format!("Bearer {}", refresh_token))
+                    .send()
+                    .await?;
+
+                if !res.status().is_success() {
+                    anyhow::bail!("Auth failed: {}", res.status());
+                }
+
+                let data: serde_json::Value = res.json().await?;
+                let session_token = data["sessionToken"].as_str().context("No sessionToken")?.to_string();
+
+                // 2. WebSocket
+                let mut ws_url = Url::parse(&server_url.replace("http", "ws"))?;
+                ws_url.set_path("/api/ws");
+                ws_url.query_pairs_mut().append_pair("token", &session_token);
+
+                let (ws_stream, _) = connect_async(ws_url.to_string()).await?;
+                let (mut write, mut read) = ws_stream.split();
+
+                // Hello
+                let hello = serde_json::json!({
+                    "type": "hello",
+                    "clientId": client_id,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                    "payload": {
+                        "device": hostname::get().unwrap_or_default().to_string_lossy(),
+                        "platform": std::env::consts::OS,
+                    }
+                });
+                write.send(Message::Text(hello.to_string().into())).await?;
+
+                // Initial status
+                let status = serde_json::json!({
+                    "type": "status",
+                    "clientId": client_id,
+                    "sessionId": session_id,
+                    "ts": chrono::Utc::now().to_rfc3339(),
+                    "payload": {
+                        "state": "running",
+                        "agent": "bracket"
+                    }
+                });
+                write.send(Message::Text(status.to_string().into())).await?;
+
+                // Notify UI success
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event("Cloud link established successfully.".to_string(), None)
+                )));
+
+                // Upload existing history
+                // We need to send these as logs to Span
+                for cell in history_to_send {
+                    let text = cell.raw_text();
+                    if text.is_empty() { continue; }
+                    let envelope = serde_json::json!({
+                        "type": "log",
+                        "clientId": client_id,
+                        "sessionId": session_id,
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {
+                            "stream": "stdout",
+                            "message": text,
+                            "agent": "bracket"
+                        }
+                    });
+                    if let Err(e) = write.send(Message::Text(envelope.to_string().into())).await {
+                        tracing::error!("Cloud link history upload error: {}", e);
+                        break;
+                    }
+                }
+
+                // Message loops
+                loop {
+                    tokio::select! {
+                        Some(msg) = rx.recv() => {
+                            let envelope = serde_json::json!({
+                                "type": "log",
+                                "clientId": client_id,
+                                "sessionId": session_id,
+                                "ts": chrono::Utc::now().to_rfc3339(),
+                                "payload": {
+                                    "stream": "stdout",
+                                    "message": msg,
+                                    "agent": "bracket"
+                                }
+                            });
+                            if let Err(e) = write.send(Message::Text(envelope.to_string().into())).await {
+                                tracing::error!("Cloud link write error: {}", e);
+                                break;
+                            }
+                        }
+                        Some(msg) = read.next() => {
+                            let msg = msg?;
+                            if let Message::Text(text) = msg {
+                                if text == "ping" {
+                                    let pong = serde_json::json!({
+                                        "type": "pong",
+                                        "clientId": client_id,
+                                        "ts": chrono::Utc::now().to_rfc3339()
+                                    });
+                                    write.send(Message::Text(pong.to_string().into())).await?;
+                                    continue;
+                                }
+                                
+                                let data: serde_json::Value = serde_json::from_str(&text)?;
+                                if data["type"] == "ping" {
+                                    let pong = serde_json::json!({
+                                        "type": "pong",
+                                        "clientId": client_id,
+                                        "ts": chrono::Utc::now().to_rfc3339()
+                                    });
+                                    write.send(Message::Text(pong.to_string().into())).await?;
+                                } else if data["type"] == "control" && data["action"] == "spawn" {
+                                    // For now, TUI doesn't support remote spawning into the active session well,
+                                    // but we can at least log it.
+                                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                        history_cell::new_info_event("Remote spawn requested via cloud link.".to_string(), None)
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            }.await;
+
+            if let Err(e) = result {
+                tracing::error!("Cloud link task failed: {}", e);
+                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!("Cloud link failed: {}", e))
+                )));
+            }
+        });
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -927,7 +1099,6 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
     ) -> Result<AppExitInfo> {
-        use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
@@ -1127,6 +1298,8 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            cloud_link_session_id: None,
+            cloud_link_tx: None,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -1203,7 +1376,7 @@ impl App {
                     }
                     AppRunControl::Continue
                 }
-                Some(event) = tui_events.next() => {
+                Some(event) = tokio_stream::StreamExt::next(&mut tui_events) => {
                     app.handle_tui_event(tui, event).await?
                 }
                 // Listen on new thread creation due to collab tools.
@@ -2268,6 +2441,25 @@ impl App {
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
             }
+            AppEvent::StartCloudLink => {
+                if self.cloud_link_session_id.is_some() {
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "This session is already linked to the cloud (ID: {}).",
+                            self.cloud_link_session_id.as_ref().unwrap()
+                        ),
+                        None,
+                    );
+                } else {
+                    let session_id = uuid::Uuid::new_v4().to_string();
+                    self.cloud_link_session_id = Some(session_id.clone());
+                    self.chat_widget.add_info_message(
+                        "Linking session to cloud...".to_string(),
+                        Some(format!("Session ID: {}", session_id)),
+                    );
+                    self.start_background_cloud_link(session_id);
+                }
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -2277,6 +2469,22 @@ impl App {
             event.msg,
             EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
         );
+        
+        // Forward to cloud link if active
+        if let Some(tx) = &self.cloud_link_tx {
+            // We only forward text-heavy events for now
+            let text = match &event.msg {
+                EventMsg::UserMessage(msg) => Some(format!("User: {}", msg.message)),
+                EventMsg::AgentMessage(msg) => Some(format!("Assistant: {}", msg.message)),
+                EventMsg::ExecCommandBegin(msg) => Some(format!("Running: {}", msg.command.join(" "))),
+                EventMsg::ExecCommandEnd(msg) => Some(format!("Exit code: {}", msg.exit_code)),
+                _ => None,
+            };
+            if let Some(text) = text {
+                let _ = tx.try_send(text);
+            }
+        }
+
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;

@@ -305,6 +305,9 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
+    /// Start the background cloud link task.
+    StartCloudLink,
 }
 
 /// The exit strategy requested by the UI layer.
