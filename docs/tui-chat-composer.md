@@ -123,6 +123,51 @@ positional args, Enter auto-submits without calling `prepare_submission_text`. T
 - Prunes attachments based on expanded placeholders.
 - Clears pending pastes after a successful auto-submit.
 
+## History navigation (Up/Down) and backtrack prefill
+
+`ChatComposerHistory` merges two kinds of history:
+
+- **Persistent history** (cross-session, fetched from core on demand): text-only.
+- **Local history** (this UI session): full draft state.
+
+Local history entries capture:
+
+- raw text (including placeholders),
+- `TextElement` ranges for placeholders,
+- local image paths,
+- pending large-paste payloads (for drafts).
+
+Persistent history entries only restore text. They intentionally do **not** rehydrate attachments
+or pending paste payloads.
+
+### Draft recovery (Ctrl+C)
+
+Ctrl+C clears the composer but stashes the full draft state (text elements, image paths, and
+pending paste payloads) into local history. Pressing Up immediately restores that draft, including
+image placeholders and large-paste placeholders with their payloads.
+
+### Submitted message recall
+
+After a successful submission, the local history entry stores the submitted text and any element
+ranges and local image paths. Pending paste payloads are cleared during submission, so large-paste
+placeholders are expanded into their full text before being recorded. This means:
+
+- Up/Down recall of a submitted message restores image placeholders and their local paths.
+- Large-paste placeholders are not expected in recalled submitted history; the text is the
+  expanded paste content.
+
+### Backtrack prefill
+
+Backtrack selections read `UserHistoryCell` data from the transcript. The composer prefill now
+reuses the selected message’s text elements and local image paths, so image placeholders and
+attachments rehydrate when rolling back to a prior user message.
+
+### External editor edits
+
+When the composer content is replaced from an external editor, the composer rebuilds text elements
+and keeps only attachments whose placeholders still appear in the new text. Image placeholders are
+then normalized to `[Image #1]..[Image #N]` to keep attachment mapping consistent after edits.
+
 ## Paste burst: concepts and assumptions
 
 The burst detector is intentionally conservative: it only processes “plain” character input
