@@ -700,7 +700,8 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 ```json
 { "method": "app/list", "id": 50, "params": {
     "cursor": null,
-    "limit": 50
+    "limit": 50,
+    "forceRefetch": false
 } }
 { "id": 50, "result": {
     "data": [
@@ -719,7 +720,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 } }
 ```
 
-`app/list` returns after both accessible apps and directory apps are loaded. The server also emits `app/list/updated` notifications whenever either source (accessible apps or directory apps) finishes loading. Each notification includes the latest merged app list.
+`app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
+
+The server also emits `app/list/updated` notifications whenever either source (accessible apps or directory apps) finishes loading. Each notification includes the latest merged app list.
 
 ```json
 {

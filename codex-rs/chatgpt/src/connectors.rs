@@ -18,6 +18,7 @@ use codex_core::connectors::CONNECTORS_CACHE_TTL;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
+pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 use codex_core::connectors::merge_connectors;
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +76,13 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
+    list_all_connectors_with_options(config, false).await
+}
+
+pub async fn list_all_connectors_with_options(
+    config: &Config,
+    force_refetch: bool,
+) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
@@ -84,7 +92,7 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
     let token_data =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
     let cache_key = all_connectors_cache_key(config, &token_data);
-    if let Some(cached_connectors) = read_cached_all_connectors(&cache_key) {
+    if !force_refetch && let Some(cached_connectors) = read_cached_all_connectors(&cache_key) {
         return Ok(cached_connectors);
     }
 

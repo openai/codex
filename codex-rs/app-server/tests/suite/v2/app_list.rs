@@ -19,6 +19,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -54,6 +55,7 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
         .send_apps_list_request(AppsListParams {
             limit: Some(50),
             cursor: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -122,6 +124,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         .send_apps_list_request(AppsListParams {
             limit: None,
             cursor: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -234,6 +237,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
         .send_apps_list_request(AppsListParams {
             limit: None,
             cursor: None,
+            force_refetch: false,
         })
         .await?;
 
@@ -355,6 +359,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         .send_apps_list_request(AppsListParams {
             limit: Some(1),
             cursor: None,
+            force_refetch: false,
         })
         .await?;
     let first_response: JSONRPCResponse = timeout(
@@ -392,6 +397,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         .send_apps_list_request(AppsListParams {
             limit: Some(1),
             cursor: Some(next_cursor),
+            force_refetch: false,
         })
         .await?;
     let second_response: JSONRPCResponse = timeout(
@@ -419,6 +425,94 @@ async fn list_apps_paginates_results() -> Result<()> {
     assert!(second_cursor.is_none());
 
     server_handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: None,
+        is_accessible: false,
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle) =
+        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let initial_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            force_refetch: false,
+        })
+        .await?;
+    let initial_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(initial_request)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: initial_data,
+        next_cursor: initial_next_cursor,
+    } = to_response(initial_response)?;
+    assert!(initial_next_cursor.is_none());
+    assert_eq!(initial_data.len(), 1);
+    assert!(initial_data.iter().all(|app| app.is_accessible));
+
+    server_handle.abort();
+
+    let refetch_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            force_refetch: true,
+        })
+        .await?;
+    let refetch_error: JSONRPCError = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(refetch_request)),
+    )
+    .await??;
+    assert!(refetch_error.error.message.contains("failed to"));
+
+    let cached_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            force_refetch: false,
+        })
+        .await?;
+    let cached_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cached_request)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: cached_data,
+        next_cursor: cached_next_cursor,
+    } = to_response(cached_response)?;
+
+    assert_eq!(cached_data, initial_data);
+    assert!(cached_next_cursor.is_none());
     Ok(())
 }
 

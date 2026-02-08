@@ -4350,7 +4350,11 @@ impl CodexMessageProcessor {
         params: AppsListParams,
         config: Config,
     ) {
-        let AppsListParams { cursor, limit } = params;
+        let AppsListParams {
+            cursor,
+            limit,
+            force_refetch,
+        } = params;
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
@@ -4372,14 +4376,17 @@ impl CodexMessageProcessor {
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
         tokio::spawn(async move {
-            let result = connectors::list_accessible_connectors_from_mcp_tools(&accessible_config)
-                .await
-                .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
+                &accessible_config,
+                force_refetch,
+            )
+            .await
+            .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors(&config)
+            let result = connectors::list_all_connectors_with_options(&config, force_refetch)
                 .await
                 .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));

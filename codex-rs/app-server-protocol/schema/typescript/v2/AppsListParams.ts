@@ -13,4 +13,8 @@ cursor?: string | null,
 /**
  * Optional page size; defaults to a reasonable server-side value.
  */
-limit?: number | null, };
+limit?: number | null, 
+/**
+ * When true, bypass app caches and fetch the latest data from sources.
+ */
+forceRefetch?: boolean, };

@@ -9952,6 +9952,10 @@
               "null"
             ]
           },
+          "forceRefetch": {
+            "description": "When true, bypass app caches and fetch the latest data from sources.",
+            "type": "boolean"
+          },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
             "format": "uint32",
