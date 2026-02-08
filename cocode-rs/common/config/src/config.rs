@@ -558,12 +558,12 @@ mod tests {
             .with_cwd("/my/project")
             .with_sandbox_mode(SandboxMode::WorkspaceWrite)
             .with_ephemeral(true)
-            .with_feature("subagent", true);
+            .with_feature("web_fetch", true);
 
         assert_eq!(overrides.cwd, Some(PathBuf::from("/my/project")));
         assert_eq!(overrides.sandbox_mode, Some(SandboxMode::WorkspaceWrite));
         assert_eq!(overrides.ephemeral, Some(true));
-        assert_eq!(overrides.features.get("subagent"), Some(&true));
+        assert_eq!(overrides.features.get("web_fetch"), Some(&true));
     }
 
     #[test]

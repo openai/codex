@@ -162,7 +162,7 @@ pub enum FileContent {
 ```
 
 **Features**:
-- Line range syntax: `@file.txt#L10-20`
+- Line range syntax: `@file.txt:10-20`
 - Directory handling: Returns `ls` output
 - Image support: Returns compressed image data
 - Caching: Returns `already_read_file` if unchanged

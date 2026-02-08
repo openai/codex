@@ -15,7 +15,7 @@ use crate::command::UserCommand;
 use crate::editor;
 use crate::event::TuiCommand;
 use crate::event::TuiEvent;
-use crate::event::handle_key_event_with_all_suggestions;
+use crate::event::handle_key_event_full;
 use crate::file_search::FileSearchEvent;
 use crate::file_search::FileSearchManager;
 use crate::file_search::create_file_search_channel;
@@ -227,11 +227,12 @@ impl App {
                 let has_file_suggestions = self.state.ui.has_file_suggestions();
                 let has_skill_suggestions = self.state.ui.has_skill_suggestions();
 
-                if let Some(cmd) = handle_key_event_with_all_suggestions(
+                if let Some(cmd) = handle_key_event_full(
                     key,
                     has_overlay,
                     has_file_suggestions,
                     has_skill_suggestions,
+                    self.state.is_streaming(),
                 ) {
                     self.handle_command_internal(cmd).await;
                 }
@@ -304,6 +305,12 @@ impl App {
     /// Check for @mention in input and trigger file search if needed.
     fn check_at_mention(&mut self) {
         if let Some((start_pos, query)) = self.state.ui.input.current_at_token() {
+            if has_line_range_suffix(&query) {
+                // User is typing a line range suffix — dismiss autocomplete
+                self.state.ui.clear_file_suggestions();
+                self.file_search.cancel();
+                return;
+            }
             // Start or update file suggestions
             self.state
                 .ui
@@ -439,6 +446,19 @@ impl App {
     }
 }
 
+/// Check if query ends with a line range suffix (e.g., ":10" or ":10-20").
+fn has_line_range_suffix(query: &str) -> bool {
+    if let Some(colon_pos) = query.rfind(':') {
+        let after_colon = &query[colon_pos + 1..];
+        !after_colon.is_empty()
+            && after_colon
+                .split('-')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    } else {
+        false
+    }
+}
+
 /// Create a channel pair for TUI-agent communication.
 ///
 /// Returns `(agent_tx, agent_rx, command_tx, command_rx)` where:
@@ -468,6 +488,23 @@ mod tests {
         let config = AppConfig::default();
         assert!(!config.model.is_empty());
         assert!(!config.available_models.is_empty());
+    }
+
+    #[test]
+    fn test_has_line_range_suffix() {
+        // Should detect line range suffixes
+        assert!(has_line_range_suffix("file.rs:10"));
+        assert!(has_line_range_suffix("file.rs:10-20"));
+        assert!(has_line_range_suffix("src/main.rs:1"));
+        assert!(has_line_range_suffix("src/main.rs:100-200"));
+
+        // Should NOT detect non-line-range patterns
+        assert!(!has_line_range_suffix("file.rs"));
+        assert!(!has_line_range_suffix("file.rs:"));
+        assert!(!has_line_range_suffix("file.rs:abc"));
+        assert!(!has_line_range_suffix("file.rs:10-"));
+        assert!(!has_line_range_suffix("file.rs:-20"));
+        assert!(!has_line_range_suffix("file:name.rs"));
     }
 
     #[test]

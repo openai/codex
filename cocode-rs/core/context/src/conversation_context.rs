@@ -214,7 +214,7 @@ impl ConversationContextBuilder {
         })?;
 
         let budget = self.budget.unwrap_or_else(|| {
-            ContextBudget::new(environment.context_window, environment.output_token_limit)
+            ContextBudget::new(environment.context_window, environment.max_output_tokens)
         });
 
         Ok(ConversationContext {
@@ -243,7 +243,7 @@ mod tests {
             .cwd("/tmp/test")
             .model("test-model")
             .context_window(200000)
-            .output_token_limit(16384)
+            .max_output_tokens(16384)
             .build()
             .unwrap()
     }

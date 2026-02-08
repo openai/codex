@@ -1,18 +1,16 @@
 //! Queue types for user input during agent execution.
 //!
-//! Queued commands (Enter while streaming) are visible commands that are
-//! processed as new turns after the current turn completes. They are also
-//! injected as `<system-reminder>User sent: {message}</system-reminder>`
-//! for real-time steering.
+//! Queued commands (Enter while streaming) are consumed once in the agent
+//! loop and injected as steering system-reminders that ask the model to
+//! address each message (consume-then-remove pattern).
 
 use serde::Deserialize;
 use serde::Serialize;
 
 /// A queued command (Enter during streaming).
 ///
-/// These commands are shown in the UI and processed as new user turns
-/// after the current agent turn completes. They are also injected as
-/// system reminders for real-time steering.
+/// These commands are shown in the UI and consumed once in the agent loop
+/// as steering system-reminders (consume-then-remove pattern).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserQueuedCommand {
     /// Unique identifier for this command.

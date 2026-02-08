@@ -28,7 +28,7 @@
 //!     "level": "info"
 //!   },
 //!   "features": {
-//!     "subagent": true
+//!     "web_fetch": true
 //!   },
 //!   "profile": "fast",
 //!   "profiles": {
@@ -125,7 +125,7 @@ pub struct ConfigProfile {
 ///     "target": false
 ///   },
 ///   "features": {
-///     "subagent": true,
+///     "web_fetch": true,
 ///     "web_fetch": true
 ///   },
 ///   "profile": "fast",
@@ -382,7 +382,7 @@ impl LoggingConfig {
 /// ```json
 /// {
 ///   "features": {
-///     "subagent": true,
+///     "web_fetch": true,
 ///     "web_fetch": true
 ///   }
 /// }
@@ -469,7 +469,7 @@ mod tests {
                 "target": false
             },
             "features": {
-                "subagent": true,
+                "web_fetch": true,
                 "web_fetch": true
             }
         }"#;
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(logging.target, Some(false));
 
         let features = config.features.unwrap();
-        assert_eq!(features.get("subagent"), Some(true));
+        assert_eq!(features.get("web_fetch"), Some(true));
         assert_eq!(features.get("web_fetch"), Some(true));
     }
 
@@ -500,7 +500,7 @@ mod tests {
                 "level": "info"
             },
             "features": {
-                "subagent": true
+                "web_fetch": true
             },
             "profiles": {
                 "anthropic": {
@@ -513,7 +513,7 @@ mod tests {
                         "main": "openai/gpt-5-mini"
                     },
                     "features": {
-                        "subagent": false
+                        "web_fetch": false
                     }
                 },
                 "debug": {
@@ -569,7 +569,7 @@ mod tests {
                 "main": "openai/gpt-5"
             },
             "features": {
-                "subagent": true
+                "web_fetch": true
             }
         }"#;
         let config: AppConfig = serde_json::from_str(json_str).unwrap();
@@ -578,7 +578,7 @@ mod tests {
         let main = resolved.models.main().unwrap();
         assert_eq!(main.provider, "openai");
         assert_eq!(main.model, "gpt-5");
-        assert!(resolved.features.enabled(Feature::Subagent));
+        assert!(resolved.features.enabled(Feature::WebFetch));
     }
 
     #[test]
@@ -589,7 +589,7 @@ mod tests {
             },
             "profile": "fast",
             "features": {
-                "subagent": true
+                "web_fetch": true
             },
             "profiles": {
                 "fast": {
@@ -597,7 +597,7 @@ mod tests {
                         "main": "openai/gpt-5-mini"
                     },
                     "features": {
-                        "subagent": false
+                        "web_fetch": false
                     }
                 }
             }
@@ -608,8 +608,8 @@ mod tests {
         // main model from profile
         let main = resolved.models.main().unwrap();
         assert_eq!(main.model, "gpt-5-mini");
-        // features: profile overrides subagent to false
-        assert!(!resolved.features.enabled(Feature::Subagent));
+        // features: profile overrides web_fetch to false
+        assert!(!resolved.features.enabled(Feature::WebFetch));
     }
 
     #[test]
@@ -687,14 +687,14 @@ mod tests {
     #[test]
     fn test_features_config_into_features() {
         let mut entries = BTreeMap::new();
-        entries.insert("subagent".to_string(), true);
+        entries.insert("web_fetch".to_string(), true);
         entries.insert("ls".to_string(), false);
 
         let features_config = FeaturesConfig { entries };
         let features = features_config.into_features();
 
-        // subagent should be enabled (it was set to true)
-        assert!(features.enabled(Feature::Subagent));
+        // web_fetch should be enabled (it was set to true)
+        assert!(features.enabled(Feature::WebFetch));
         // ls should be disabled (it was set to false, overriding default true)
         assert!(!features.enabled(Feature::Ls));
     }
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_app_config_resolve_features_with_features() {
         let mut entries = BTreeMap::new();
-        entries.insert("subagent".to_string(), true);
+        entries.insert("web_fetch".to_string(), true);
 
         let config = AppConfig {
             features: Some(FeaturesConfig { entries }),
@@ -718,7 +718,7 @@ mod tests {
         };
 
         let features = config.resolve_features();
-        assert!(features.enabled(Feature::Subagent));
+        assert!(features.enabled(Feature::WebFetch));
     }
 
     #[test]
@@ -728,13 +728,13 @@ mod tests {
 
         // Should return defaults
         assert!(features.enabled(Feature::Ls));
-        assert!(!features.enabled(Feature::Subagent));
+        assert!(!features.enabled(Feature::WebFetch));
     }
 
     #[test]
     fn test_features_config_unknown_keys_empty() {
         let mut entries = BTreeMap::new();
-        entries.insert("subagent".to_string(), true);
+        entries.insert("web_fetch".to_string(), true);
         entries.insert("ls".to_string(), false);
 
         let features = FeaturesConfig { entries };
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_features_config_unknown_keys_with_unknown() {
         let mut entries = BTreeMap::new();
-        entries.insert("subagent".to_string(), true);
+        entries.insert("web_fetch".to_string(), true);
         entries.insert("unknown_feature".to_string(), true);
         entries.insert("another_unknown".to_string(), false);
 

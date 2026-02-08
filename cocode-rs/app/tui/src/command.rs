@@ -61,12 +61,10 @@ pub enum UserCommand {
         args: String,
     },
 
-    /// Queue a command for later processing (Enter during streaming).
+    /// Queue a command for steering injection (Enter during streaming).
     ///
-    /// The command will be processed as a new user turn after the
-    /// current turn completes. Also serves as real-time steering:
-    /// queued commands are injected into the current turn as
-    /// <system-reminder>User sent: {message}</system-reminder>
+    /// The command is consumed once in the agent loop and injected as a
+    /// steering system-reminder that asks the model to address the message.
     QueueCommand {
         /// The prompt to queue.
         prompt: String,

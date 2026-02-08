@@ -165,7 +165,7 @@ mod tests {
             .date("2025-01-29")
             .model("claude-3-opus")
             .context_window(200000)
-            .output_token_limit(16384)
+            .max_output_tokens(16384)
             .build()
             .unwrap()
     }

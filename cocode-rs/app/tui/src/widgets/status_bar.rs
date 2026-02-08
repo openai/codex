@@ -119,8 +119,8 @@ impl<'a> StatusBar<'a> {
 
     /// Set the queue count.
     ///
-    /// Queued commands serve dual purpose: they are executed as new turns
-    /// after idle, and also injected as steering into the current turn.
+    /// Queued commands are consumed once and injected as steering into the
+    /// current turn (consume-then-remove pattern).
     pub fn queue_counts(mut self, queued: i32, _steering: i32) -> Self {
         self.queued_count = queued;
         // steering_count is deprecated - queued commands now serve as steering

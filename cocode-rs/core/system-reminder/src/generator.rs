@@ -261,9 +261,8 @@ pub struct CollabNotification {
 /// Information about a queued command (real-time steering).
 ///
 /// Queued commands are entered by the user via Enter during streaming.
-/// They serve dual purpose:
-/// 1. Injected as `<system-reminder>User sent: {prompt}</system-reminder>` for real-time steering
-/// 2. Executed as new user turns after the current turn completes
+/// They are consumed once and injected as steering system-reminders that
+/// ask the model to address the message and continue with its tasks.
 #[derive(Debug, Clone)]
 pub struct QueuedCommandInfo {
     /// Unique identifier for this command.
@@ -362,7 +361,7 @@ pub struct GeneratorContext<'a> {
 
     // === Real-time steering ===
     /// Queued commands from user (Enter during streaming).
-    /// These are injected as "User sent: {message}" to steer the model.
+    /// Consumed once and injected as steering that asks the model to address each message.
     pub queued_commands: Vec<QueuedCommandInfo>,
 
     // === Global state flags ===

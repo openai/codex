@@ -21,7 +21,7 @@ use crate::types::SystemReminder;
 /// Generator for @mentioned files.
 ///
 /// Parses the user prompt for @file mentions and injects the file contents.
-/// Supports line ranges via @file.txt#L10-20 syntax.
+/// Supports line ranges via @file.txt:10-20 syntax.
 #[derive(Debug)]
 pub struct AtMentionedFilesGenerator;
 
@@ -177,15 +177,26 @@ fn read_file_content(
             Ok(ReadResult::Content(result))
         }
         (Some(start), None) => {
-            // Single line
+            // From line start to EOF (with max_lines limit)
             let lines: Vec<&str> = content.lines().collect();
-            let idx = (start - 1).max(0) as usize;
-            if idx < lines.len() {
-                let truncated = truncate_line(lines[idx], config.max_line_length);
-                Ok(ReadResult::Content(format!("{start:>6}\t{truncated}\n")))
-            } else {
-                Ok(ReadResult::Content(String::new()))
+            let start_idx = (start - 1).max(0) as usize;
+            if start_idx >= lines.len() {
+                return Ok(ReadResult::Content(String::new()));
             }
+            let mut result = String::new();
+            let mut count = 0;
+            for (i, line) in lines[start_idx..].iter().enumerate() {
+                if count >= config.max_lines {
+                    let remaining = lines.len() - start_idx - count as usize;
+                    result.push_str(&format!("\n... truncated ({remaining} more lines)\n"));
+                    break;
+                }
+                let line_num = start_idx + i + 1;
+                let truncated = truncate_line(line, config.max_line_length);
+                result.push_str(&format!("{line_num:>6}\t{truncated}\n"));
+                count += 1;
+            }
+            Ok(ReadResult::Content(result))
         }
         _ => {
             // Full file with line numbers, respecting max_lines
@@ -328,7 +339,7 @@ mod tests {
             .turn_number(1)
             .is_main_agent(true)
             .has_user_input(true)
-            .user_prompt("Check @test.txt#L3-5 please")
+            .user_prompt("Check @test.txt:3-5 please")
             .cwd(temp_dir.path().to_path_buf())
             .build();
 
@@ -341,6 +352,41 @@ mod tests {
         assert!(reminder.content().unwrap().contains("line 4"));
         assert!(reminder.content().unwrap().contains("line 5"));
         assert!(!reminder.content().unwrap().contains("line 6"));
+    }
+
+    #[tokio::test]
+    async fn test_file_with_line_start_to_eof() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let file_path = temp_dir.path().join("test.txt");
+        {
+            let mut file = fs::File::create(&file_path).expect("create file");
+            for i in 1..=10 {
+                writeln!(file, "line {i}").expect("write");
+            }
+        }
+
+        let config = test_config();
+        let ctx = GeneratorContext::builder()
+            .config(&config)
+            .turn_number(1)
+            .is_main_agent(true)
+            .has_user_input(true)
+            .user_prompt("Check @test.txt:8 please")
+            .cwd(temp_dir.path().to_path_buf())
+            .build();
+
+        let generator = AtMentionedFilesGenerator;
+        let result = generator.generate(&ctx).await.expect("generate");
+        assert!(result.is_some());
+
+        let reminder = result.expect("reminder");
+        let content = reminder.content().unwrap();
+        // Should include lines 8-10 (from line 8 to EOF)
+        assert!(content.contains("line 8"));
+        assert!(content.contains("line 9"));
+        assert!(content.contains("line 10"));
+        // Should NOT include lines before 8
+        assert!(!content.contains("line 7"));
     }
 
     #[test]

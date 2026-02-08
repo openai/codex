@@ -77,9 +77,9 @@ pub struct ModelInfo {
     pub reasoning_summary: Option<ReasoningSummary>,
 
     // === Context Management ===
-    /// Effective context window as percentage (0-100).
+    /// Autocompact percentage of context window (0-100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effective_context_window_percent: Option<i32>,
+    pub autocompact_pct: Option<i32>,
 
     // === Tool Related ===
     /// Shell execution type.
@@ -156,7 +156,7 @@ impl ModelInfo {
         merge_field!(include_thoughts);
         merge_field!(reasoning_summary);
         // Context management
-        merge_field!(effective_context_window_percent);
+        merge_field!(autocompact_pct);
         // Tool related
         merge_field!(shell_type);
         merge_field!(max_tool_output_chars);

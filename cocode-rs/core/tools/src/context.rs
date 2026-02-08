@@ -18,6 +18,8 @@ use cocode_shell::ShellExecutor;
 use cocode_skill::SkillManager;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -193,6 +195,8 @@ pub struct FileReadState {
     pub timestamp: SystemTime,
     /// File modification time at time of read.
     pub file_mtime: Option<SystemTime>,
+    /// SHA256 hex hash of content at time of read (None if partial or too large).
+    pub content_hash: Option<String>,
     /// Line offset of the read (None if from start).
     pub offset: Option<i32>,
     /// Line limit of the read (None if no limit).
@@ -204,12 +208,21 @@ pub struct FileReadState {
 }
 
 impl FileReadState {
+    /// Compute SHA256 hex hash of content.
+    pub fn compute_hash(content: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
     /// Create a new read state for a complete file read.
     pub fn complete(content: String, file_mtime: Option<SystemTime>) -> Self {
+        let hash = Self::compute_hash(&content);
         Self {
             content: Some(content),
             timestamp: SystemTime::now(),
             file_mtime,
+            content_hash: Some(hash),
             offset: None,
             limit: None,
             is_complete_read: true,
@@ -223,6 +236,7 @@ impl FileReadState {
             content: None,
             timestamp: SystemTime::now(),
             file_mtime,
+            content_hash: None,
             offset: Some(offset),
             limit: Some(limit),
             is_complete_read: false,
@@ -270,6 +284,7 @@ impl FileTracker {
                     content: None,
                     timestamp: SystemTime::now(),
                     file_mtime: None,
+                    content_hash: None,
                     offset: None,
                     limit: None,
                     is_complete_read: false,

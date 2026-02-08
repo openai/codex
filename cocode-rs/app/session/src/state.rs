@@ -162,9 +162,7 @@ pub struct SessionState {
     shell_executor: ShellExecutor,
 
     /// Queued commands for real-time steering (Enter during streaming).
-    /// These commands are:
-    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
-    /// 2. Executed as new user turns after the current turn completes
+    /// Consumed once in the agent loop and injected as steering system-reminders.
     queued_commands: Vec<QueuedCommandInfo>,
 
     /// Optional suffix appended to the end of the system prompt.
@@ -328,7 +326,7 @@ impl SessionState {
             .cwd(&self.session.working_dir)
             .model(model_name)
             .context_window(self.context_window)
-            .output_token_limit(16_384)
+            .max_output_tokens(16_384)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
 
@@ -666,12 +664,9 @@ impl SessionState {
 
     /// Queue a command for real-time steering.
     ///
-    /// Queued commands serve dual purpose:
-    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` immediately
-    /// 2. Executed as new user turns after the current turn completes
-    ///
-    /// This matches Claude Code's behavior where Enter during streaming both
-    /// steers the current turn and queues for later execution.
+    /// Queued commands are consumed once in the agent loop and injected as
+    /// steering system-reminders that ask the model to address the message
+    /// and continue (consume-then-remove pattern).
     ///
     /// Returns the command ID.
     pub fn queue_command(&mut self, prompt: impl Into<String>) -> String {
@@ -754,7 +749,7 @@ impl SessionState {
             .cwd(&self.session.working_dir)
             .model(model_name)
             .context_window(self.context_window)
-            .output_token_limit(16_384)
+            .max_output_tokens(16_384)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
 
@@ -768,7 +763,7 @@ impl SessionState {
 
         // Build and run the agent loop with the provided event channel
         // Clone selections so the loop has its own copy (isolation)
-        // Pass queued commands for real-time steering and post-idle processing
+        // Pass queued commands for consume-then-remove steering injection
         let mut loop_instance = AgentLoop::builder()
             .api_client(self.api_client.clone())
             .model_hub(self.model_hub.clone())
@@ -786,13 +781,13 @@ impl SessionState {
             .permission_rules(self.permission_rules.clone())
             .build();
 
-        // Use run_and_process_queue to:
-        // 1. Inject queued commands as steering reminders during current turn
-        // 2. Execute remaining queued commands as new turns after idle
+        // Queued commands are consumed as steering in core_message_loop Step 6.5.
+        // No post-idle re-execution needed — steering asks the model to address
+        // each message ("Please address this message and continue").
         let result = loop_instance.run_and_process_queue(user_input).await?;
 
-        // Capture any new queued commands that were added during the loop
-        // (e.g., if user queues more commands during streaming)
+        // After Step 6.5 drains the queue for steering, this will normally be empty.
+        // Kept as safety net to recover any edge-case residuals.
         self.queued_commands = loop_instance.take_queued_commands();
 
         // Update totals

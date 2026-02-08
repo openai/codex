@@ -58,9 +58,9 @@ pub struct SessionState {
     /// Whether context compaction is in progress.
     pub is_compacting: bool,
 
-    /// Queue of commands to process after current turn (Enter during streaming).
-    /// These also serve as real-time steering: they are injected into the
-    /// current turn as <system-reminder>User sent: {message}</system-reminder>.
+    /// Queue of commands for steering injection (Enter during streaming).
+    /// Commands are consumed once in the agent loop and injected as steering
+    /// system-reminders (consume-then-remove pattern).
     pub queued_commands: Vec<UserQueuedCommand>,
 }
 

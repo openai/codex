@@ -373,7 +373,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ParallelToolCalls,
             ]),
 
-            effective_context_window_percent: Some(95),
+            autocompact_pct: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
                 ThinkingLevel::low(),
@@ -403,7 +403,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ParallelToolCalls,
             ]),
 
-            effective_context_window_percent: Some(95),
+            autocompact_pct: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
                 ThinkingLevel::low(),
@@ -436,7 +436,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ParallelToolCalls,
             ]),
 
-            effective_context_window_percent: Some(95),
+            autocompact_pct: Some(95),
             default_thinking_level: Some(ThinkingLevel::medium()),
             supported_thinking_levels: Some(vec![
                 ThinkingLevel::low(),
@@ -466,7 +466,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ParallelToolCalls,
             ]),
 
-            effective_context_window_percent: Some(95),
+            autocompact_pct: Some(95),
             ..Default::default()
         },
     );
@@ -487,7 +487,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
                 Capability::ParallelToolCalls,
             ]),
 
-            effective_context_window_percent: Some(95),
+            autocompact_pct: Some(95),
             ..Default::default()
         },
     );

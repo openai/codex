@@ -1986,7 +1986,7 @@ mod tests {
     #[test]
     fn test_threshold_status_auto_compact() {
         let config = CompactConfig::default();
-        // With default config (80% effective_context_window_percent):
+        // With default config (80% autocompact_pct):
         // auto_compact_target = 200000 * 0.80 = 160000
         // blocking_limit = 200000 - 13000 = 187000
         // So 170000 is between auto-compact target (160000) and blocking limit (187000)

@@ -1,11 +1,15 @@
 //! Queued commands generator for real-time steering.
 //!
 //! This generator converts queued user commands (entered via Enter during streaming)
-//! into system reminders that steer the model in real-time. This aligns with
-//! Claude Code's dual-purpose queue mechanism where queued commands are:
+//! into system reminders that steer the model in real-time. Each command is consumed
+//! once (consume-then-remove pattern) and wrapped as:
 //!
-//! 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` immediately
-//! 2. Executed as new user turns after the current turn completes
+//! ```text
+//! The user sent the following message:
+//! {prompt}
+//!
+//! Please address this message and continue with your tasks.
+//! ```
 
 use async_trait::async_trait;
 
@@ -50,14 +54,20 @@ impl AttachmentGenerator for QueuedCommandsGenerator {
             return Ok(None);
         }
 
-        // Convert each queued command to "User sent: {message}" format
-        // This matches Claude Code's generateQueuedCommandsAttachment behavior
+        // Wrap each command with Claude Code's steering format that explicitly
+        // asks the model to address the message and continue.
         let content = ctx
             .queued_commands
             .iter()
-            .map(|cmd| format!("User sent: {}", cmd.prompt))
+            .map(|cmd| {
+                format!(
+                    "The user sent the following message:\n{}\n\n\
+                     Please address this message and continue with your tasks.",
+                    cmd.prompt
+                )
+            })
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n\n");
 
         Ok(Some(SystemReminder::new(
             AttachmentType::QueuedCommands,
@@ -112,7 +122,9 @@ mod tests {
         assert_eq!(reminder.attachment_type, AttachmentType::QueuedCommands);
         assert_eq!(
             reminder.content().unwrap(),
-            "User sent: use TypeScript instead"
+            "The user sent the following message:\n\
+             use TypeScript instead\n\n\
+             Please address this message and continue with your tasks."
         );
         assert!(reminder.is_meta);
     }
@@ -143,19 +155,10 @@ mod tests {
         assert!(result.is_some());
 
         let reminder = result.expect("reminder");
-        assert!(
-            reminder
-                .content()
-                .unwrap()
-                .contains("User sent: use TypeScript")
-        );
-        assert!(
-            reminder
-                .content()
-                .unwrap()
-                .contains("User sent: add error handling")
-        );
-        assert!(reminder.content().unwrap().contains('\n'));
+        let content = reminder.content().unwrap();
+        assert!(content.contains("The user sent the following message:\nuse TypeScript\n"));
+        assert!(content.contains("The user sent the following message:\nadd error handling\n"));
+        assert!(content.contains("Please address this message and continue with your tasks."));
     }
 
     #[test]

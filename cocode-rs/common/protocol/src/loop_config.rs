@@ -18,9 +18,6 @@ pub struct LoopConfig {
     /// Maximum tokens to use before stopping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<i32>,
-    /// Threshold (0.0-1.0) for triggering auto-compaction.
-    #[serde(default = "default_auto_compact_threshold")]
-    pub auto_compact_threshold: f32,
     /// Permission mode for tool execution.
     #[serde(default)]
     pub permission_mode: PermissionMode,
@@ -53,16 +50,11 @@ pub struct LoopConfig {
     pub prompt_caching: PromptCachingConfig,
 }
 
-fn default_auto_compact_threshold() -> f32 {
-    0.8
-}
-
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
             max_turns: None,
             max_tokens: None,
-            auto_compact_threshold: default_auto_compact_threshold(),
             permission_mode: PermissionMode::default(),
             enable_streaming_tools: false,
             enable_micro_compaction: false,
@@ -247,7 +239,6 @@ mod tests {
         let config = LoopConfig::default();
         assert_eq!(config.max_turns, None);
         assert_eq!(config.max_tokens, None);
-        assert!((config.auto_compact_threshold - 0.8).abs() < f32::EPSILON);
         assert_eq!(config.permission_mode, PermissionMode::Default);
         assert!(!config.enable_streaming_tools);
         assert!(!config.enable_micro_compaction);
@@ -295,7 +286,6 @@ mod tests {
         let config = LoopConfig {
             max_turns: Some(10),
             max_tokens: Some(100000),
-            auto_compact_threshold: 0.9,
             permission_mode: PermissionMode::AcceptEdits,
             enable_streaming_tools: true,
             enable_micro_compaction: true,

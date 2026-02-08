@@ -173,7 +173,7 @@ pub struct AgentLoop {
 
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
-    /// These are injected as steering reminders and executed after idle.
+    /// Consumed once via `std::mem::take` in Step 6.5 and injected as steering.
     queued_commands: Vec<QueuedCommandInfo>,
 
     // Feature flags
@@ -373,8 +373,8 @@ impl AgentLoopBuilder {
 
     /// Set initial queued commands (for real-time steering).
     ///
-    /// These commands are injected as `<system-reminder>User sent: {message}</system-reminder>`
-    /// to steer the model in real-time, and also executed as new turns after idle.
+    /// Commands are consumed once in `core_message_loop` Step 6.5 and injected
+    /// as steering system-reminders that ask the model to address each message.
     pub fn queued_commands(mut self, commands: Vec<QueuedCommandInfo>) -> Self {
         self.queued_commands = commands;
         self
@@ -500,12 +500,10 @@ impl AgentLoop {
 
     /// Queue a command for real-time steering.
     ///
-    /// Queued commands serve dual purpose:
-    /// 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` immediately
-    /// 2. Executed as new user turns after the current turn completes
-    ///
-    /// This matches Claude Code's behavior where Enter during streaming both
-    /// steers the current turn and queues for later execution.
+    /// Queued commands are consumed once in `core_message_loop` Step 6.5 and
+    /// injected as steering system-reminders. The steering prompt asks the model
+    /// to address the message and continue, so no separate post-idle execution
+    /// is needed (consume-then-remove pattern).
     pub fn queue_command(&mut self, prompt: impl Into<String>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -590,75 +588,17 @@ impl AgentLoop {
             .await
     }
 
-    /// Continue the conversation with a new user message.
+    /// Run the agent loop, consuming any queued commands as steering.
     ///
-    /// This is used to process queued commands after the agent becomes idle.
-    /// Unlike `run`, this continues an existing conversation rather than starting
-    /// a new one.
-    pub async fn continue_with_message(&mut self, message: &str) -> anyhow::Result<LoopResult> {
-        info!("Continuing conversation with new message");
-
-        // Add user message to history
-        let turn_id = uuid::Uuid::new_v4().to_string();
-        let user_msg = TrackedMessage::user(message, &turn_id);
-        let next_turn_number = self.message_history.turn_count() as i32 + 1;
-        let turn = Turn::new(next_turn_number, user_msg);
-        self.message_history.add_turn(turn);
-
-        // Mark that this turn has user input
-        self.current_turn_has_user_input = true;
-
-        // Initialize tracking for this continuation
-        let mut query_tracking = QueryTracking::new_root(uuid::Uuid::new_v4().to_string());
-        let mut auto_compact_tracking = AutoCompactTracking::new();
-
-        self.core_message_loop(&mut query_tracking, &mut auto_compact_tracking)
-            .await
-    }
-
-    /// Run the agent loop and then process any queued commands.
-    ///
-    /// This implements Claude Code's dual-purpose queue mechanism:
-    /// 1. Queued commands are injected as steering during the initial run
-    /// 2. After idle, remaining queued commands are executed as new user turns
-    ///
-    /// Returns the last result from processing (or the initial result if no queued commands).
+    /// Queued commands are consumed in `core_message_loop` Step 6.5 via
+    /// `std::mem::take` and injected as steering system-reminders. The steering
+    /// prompt explicitly asks the model to "address this message and continue
+    /// with your tasks", so no post-idle re-execution is needed.
     pub async fn run_and_process_queue(
         &mut self,
         initial_message: &str,
     ) -> anyhow::Result<LoopResult> {
-        // Run the initial message
-        let mut result = self.run(initial_message).await?;
-
-        // After idle, process any queued commands as new user turns
-        // This matches Claude Code's useQueuedCommandsProcessor behavior
-        while !self.queued_commands.is_empty() {
-            // Take the first queued command
-            let cmd = self.queued_commands.remove(0);
-
-            info!(
-                prompt = %cmd.prompt,
-                remaining = self.queued_commands.len(),
-                "Processing queued command after idle"
-            );
-
-            // Clear queued commands before processing to avoid re-injection
-            // The command is being processed as a new turn now
-            // Note: New commands queued during this turn will be processed next iteration
-
-            // Process as a new user turn
-            result = self.continue_with_message(&cmd.prompt).await?;
-
-            // Check if the loop was interrupted or errored
-            match &result.stop_reason {
-                crate::result::StopReason::UserInterrupted
-                | crate::result::StopReason::Error { .. }
-                | crate::result::StopReason::HookStopped => break,
-                _ => {}
-            }
-        }
-
-        Ok(result)
+        self.run(initial_message).await
     }
 
     /// The 18-step core message loop.
@@ -814,6 +754,13 @@ impl AgentLoop {
             .collect();
 
         let reminder_config = self.reminder_orchestrator.config();
+
+        // Extract user prompt text for @mention parsing
+        let user_prompt_text = self
+            .message_history
+            .current_turn()
+            .map(|turn| turn.user_message.text());
+
         let mut gen_ctx_builder = GeneratorContext::builder()
             .config(reminder_config)
             .turn_number(self.turn_number)
@@ -824,6 +771,11 @@ impl AgentLoop {
             .file_tracker(&self.file_tracker)
             .is_plan_mode(self.plan_mode_state.is_active)
             .is_plan_reentry(self.plan_mode_state.is_reentry());
+
+        // Pass user prompt for @mention file injection
+        if let Some(ref prompt) = user_prompt_text {
+            gen_ctx_builder = gen_ctx_builder.user_prompt(prompt);
+        }
 
         // Add plan file path if in plan mode
         if let Some(path) = self.plan_mode_state.plan_file_path.clone() {
@@ -856,10 +808,13 @@ impl AgentLoop {
             }
         }
 
-        // Add queued commands for real-time steering
-        // These are injected as `<system-reminder>User sent: {message}</system-reminder>`
+        // Consume queued commands for steering injection (consume-then-remove pattern).
+        // Commands are drained here so they are only injected once, not on every
+        // recursive tool-call iteration. The steering prompt asks the model to
+        // "address this message and continue", so no post-idle re-execution is needed.
         if !self.queued_commands.is_empty() {
-            gen_ctx_builder = gen_ctx_builder.queued_commands(self.queued_commands.clone());
+            gen_ctx_builder =
+                gen_ctx_builder.queued_commands(std::mem::take(&mut self.queued_commands));
         }
 
         let gen_ctx = gen_ctx_builder.build();
@@ -2443,7 +2398,6 @@ mod tests {
     fn test_default_config() {
         let config = LoopConfig::default();
         assert_eq!(config.max_turns, None);
-        assert!((config.auto_compact_threshold - 0.8).abs() < f32::EPSILON);
         assert!(!config.enable_streaming_tools);
         assert!(!config.enable_micro_compaction);
     }

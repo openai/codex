@@ -76,10 +76,6 @@ pub enum Feature {
     Ls,
     /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
     McpResourceTools,
-    /// Enable subagent tools (Task, TaskOutput) for spawning specialized subagents.
-    Subagent,
-    /// Enable micro-compact (fast tool result compression without API call).
-    MicroCompact,
 }
 
 impl Feature {
@@ -258,18 +254,6 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Stable,
         default_enabled: true,
     },
-    FeatureSpec {
-        id: Feature::Subagent,
-        key: "subagent",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::MicroCompact,
-        key: "micro_compact",
-        stage: Stage::Experimental,
-        default_enabled: false,
-    },
 ];
 
 #[cfg(test)]
@@ -290,10 +274,10 @@ mod tests {
     fn test_with_defaults_excludes_non_default_features() {
         let features = Features::with_defaults();
 
-        // Subagent is not default enabled
-        assert!(!features.enabled(Feature::Subagent));
         // WebFetch is not default enabled
         assert!(!features.enabled(Feature::WebFetch));
+        // Collab is not default enabled
+        assert!(!features.enabled(Feature::Collab));
         // GhostCommit is not default enabled
         assert!(!features.enabled(Feature::GhostCommit));
     }
@@ -303,25 +287,25 @@ mod tests {
         let mut features = Features::default();
 
         // Enable a feature
-        features.enable(Feature::Subagent);
-        assert!(features.enabled(Feature::Subagent));
+        features.enable(Feature::WebFetch);
+        assert!(features.enabled(Feature::WebFetch));
 
         // Disable the feature
-        features.disable(Feature::Subagent);
-        assert!(!features.enabled(Feature::Subagent));
+        features.disable(Feature::WebFetch);
+        assert!(!features.enabled(Feature::WebFetch));
     }
 
     #[test]
     fn test_apply_map_enables_features() {
         let mut features = Features::default();
         let mut map = BTreeMap::new();
-        map.insert("subagent".to_string(), true);
         map.insert("web_fetch".to_string(), true);
+        map.insert("collab".to_string(), true);
 
         features.apply_map(&map);
 
-        assert!(features.enabled(Feature::Subagent));
         assert!(features.enabled(Feature::WebFetch));
+        assert!(features.enabled(Feature::Collab));
     }
 
     #[test]
@@ -351,8 +335,8 @@ mod tests {
 
     #[test]
     fn test_feature_for_key_known_keys() {
-        assert_eq!(feature_for_key("subagent"), Some(Feature::Subagent));
         assert_eq!(feature_for_key("web_fetch"), Some(Feature::WebFetch));
+        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
         assert_eq!(feature_for_key("undo"), Some(Feature::GhostCommit));
     }
 
@@ -360,43 +344,43 @@ mod tests {
     fn test_feature_for_key_unknown_keys() {
         assert_eq!(feature_for_key("unknown"), None);
         assert_eq!(feature_for_key(""), None);
-        assert_eq!(feature_for_key("SUBAGENT"), None); // Case sensitive
+        assert_eq!(feature_for_key("WEB_FETCH"), None); // Case sensitive
     }
 
     #[test]
     fn test_is_known_feature_key() {
-        assert!(is_known_feature_key("subagent"));
+        assert!(is_known_feature_key("web_fetch"));
         assert!(!is_known_feature_key("unknown"));
         assert!(!is_known_feature_key(""));
     }
 
     #[test]
     fn test_feature_key_method() {
-        assert_eq!(Feature::Subagent.key(), "subagent");
+        assert_eq!(Feature::WebFetch.key(), "web_fetch");
         assert_eq!(Feature::GhostCommit.key(), "undo");
     }
 
     #[test]
     fn test_feature_stage_method() {
         assert_eq!(Feature::McpResourceTools.stage(), Stage::Stable);
-        assert_eq!(Feature::Subagent.stage(), Stage::Experimental);
+        assert_eq!(Feature::WebFetch.stage(), Stage::Experimental);
     }
 
     #[test]
     fn test_feature_default_enabled_method() {
         assert!(Feature::Ls.default_enabled());
-        assert!(!Feature::Subagent.default_enabled());
+        assert!(!Feature::WebFetch.default_enabled());
     }
 
     #[test]
     fn test_enabled_features_returns_all_enabled() {
         let mut features = Features::default();
-        features.enable(Feature::Subagent);
         features.enable(Feature::WebFetch);
+        features.enable(Feature::Collab);
 
         let enabled = features.enabled_features();
-        assert!(enabled.contains(&Feature::Subagent));
         assert!(enabled.contains(&Feature::WebFetch));
+        assert!(enabled.contains(&Feature::Collab));
         assert_eq!(enabled.len(), 2);
     }
 
@@ -404,10 +388,10 @@ mod tests {
     fn test_all_features_contains_all_variants() {
         let specs: Vec<_> = all_features().collect();
         // Ensure we have a reasonable number of features
-        assert!(specs.len() >= 13);
+        assert!(specs.len() >= 11);
 
         // Check that some expected features are present
-        assert!(specs.iter().any(|s| s.id == Feature::Subagent));
+        assert!(specs.iter().any(|s| s.id == Feature::WebFetch));
         assert!(specs.iter().any(|s| s.id == Feature::Ls));
     }
 

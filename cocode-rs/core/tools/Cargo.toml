@@ -36,6 +36,8 @@ ignore.workspace = true
 snafu.workspace = true
 snafu-virtstack.workspace = true
 anyhow.workspace = true
+regex-lite.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -24,6 +24,29 @@ use cocode_protocol::ToolOutput;
 use serde_json::Value;
 use tokio::fs;
 
+/// Compute simple diff statistics between original and modified content.
+fn diff_stats(original: &str, modified: &str) -> String {
+    let old_lines: Vec<&str> = original.lines().collect();
+    let new_lines: Vec<&str> = modified.lines().collect();
+
+    let mut changed = 0;
+    let min_len = old_lines.len().min(new_lines.len());
+    for i in 0..min_len {
+        if old_lines[i] != new_lines[i] {
+            changed += 1;
+        }
+    }
+
+    let added = new_lines.len().saturating_sub(old_lines.len()) + changed;
+    let removed = old_lines.len().saturating_sub(new_lines.len()) + changed;
+
+    if added == 0 && removed == 0 {
+        String::new()
+    } else {
+        format!(" (+{added}/-{removed} lines)")
+    }
+}
+
 /// Tool for writing files to the local filesystem.
 ///
 /// For existing files, requires the file to have been read first.
@@ -216,30 +239,10 @@ impl Tool for WriteTool {
                     .build());
             }
 
-            // Check file_mtime hasn't changed since last read (detect external modifications)
-            let current_mtime = fs::metadata(&path)
-                .await
-                .ok()
-                .and_then(|m| m.modified().ok());
-            if let Some(read_state) = ctx.file_read_state(&path).await {
-                if let (Some(read_mtime), Some(curr_mtime)) = (read_state.file_mtime, current_mtime)
-                {
-                    if curr_mtime > read_mtime {
-                        return Err(crate::error::tool_error::ExecutionFailedSnafu {
-                                message: format!(
-                                    "File has been modified externally since last read: {}. Read the file again before writing.",
-                                    path.display()
-                                ),
-                            }
-                            .build());
-                    }
-                }
-            }
-
-            // Detect encoding and line ending from original file
+            // Read file once for both staleness check and encoding detection
             let bytes = fs::read(&path).await.map_err(|e| {
                 crate::error::tool_error::ExecutionFailedSnafu {
-                    message: format!("Failed to read file for encoding detection: {e}"),
+                    message: format!("Failed to read file: {e}"),
                 }
                 .build()
             })?;
@@ -251,6 +254,26 @@ impl Tool for WriteTool {
                 .build()
             })?;
             let line_ending = detect_line_ending(&original_content);
+
+            // SHA256-based staleness check: detect external modifications
+            if let Some(read_state) = ctx.file_read_state(&path).await {
+                if let Some(ref stored_hash) = read_state.content_hash {
+                    let normalized_check =
+                        normalize_line_endings(&original_content, LineEnding::Lf);
+                    let current_hash =
+                        crate::context::FileReadState::compute_hash(&normalized_check);
+                    if *stored_hash != current_hash {
+                        return Err(crate::error::tool_error::ExecutionFailedSnafu {
+                                message: format!(
+                                    "File has been modified externally since last read: {}. Read the file again before writing.",
+                                    path.display()
+                                ),
+                            }
+                            .build());
+                    }
+                }
+            }
+
             (encoding, line_ending, Some(original_content))
         } else {
             // New file: use defaults (UTF-8, LF), no trailing newline preservation
@@ -307,7 +330,17 @@ impl Tool for WriteTool {
         )
         .await;
 
-        let mut result = ToolOutput::text(format!("Successfully wrote to {}", path.display()));
+        let stats = if let Some(ref orig) = original_content_for_trailing {
+            diff_stats(orig, &content_to_write)
+        } else {
+            String::new()
+        };
+        let msg = if original_content_for_trailing.is_some() {
+            format!("Successfully wrote to {}{stats}", path.display())
+        } else {
+            format!("Successfully created {}", path.display())
+        };
+        let mut result = ToolOutput::text(msg);
         result.modifiers.push(ContextModifier::FileRead {
             path: path.clone(),
             content: normalized_content,
@@ -416,6 +449,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_new_file_says_created() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("brand_new.txt");
+
+        let tool = WriteTool::new();
+        let mut ctx = make_context();
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "content": "Hello"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let text = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("Successfully created"));
+    }
+
+    #[tokio::test]
+    async fn test_write_existing_shows_diff_stats() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("existing_stats.txt");
+        std::fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let tool = WriteTool::new();
+        let mut ctx = make_context();
+        ctx.record_file_read(&file_path).await;
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "content": "line1\nmodified\nextra\n"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let text = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text"),
+        };
+        assert!(text.contains("Successfully wrote to"));
+        assert!(text.contains("(+"), "Should contain diff stats");
+    }
+
+    #[tokio::test]
     async fn test_plan_mode_blocks_non_plan_file() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("code.rs");
@@ -518,5 +596,39 @@ mod tests {
         // Verify LF is used for new files
         let bytes = std::fs::read(&file_path).unwrap();
         assert_eq!(bytes, b"line1\nline2\n");
+    }
+
+    // ── SHA256 staleness detection ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_write_sha256_detects_external_modification() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("sha_write_test.txt");
+        std::fs::write(&file_path, "original content").unwrap();
+
+        let tool = WriteTool::new();
+        let mut ctx = make_context();
+
+        // Record read state with hash
+        let content = "original content".to_string();
+        let mtime = std::fs::metadata(&file_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        use crate::context::FileReadState;
+        ctx.record_file_read_with_state(&file_path, FileReadState::complete(content, mtime))
+            .await;
+
+        // Externally modify the file
+        std::fs::write(&file_path, "externally modified").unwrap();
+
+        let input = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "content": "new content"
+        });
+
+        let result = tool.execute(input, &mut ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("modified externally"));
     }
 }

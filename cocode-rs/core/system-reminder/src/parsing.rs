@@ -1,7 +1,7 @@
 //! Parsing utilities for @mention support.
 //!
 //! Provides parsing for user prompt @mentions:
-//! - File mentions: @file.txt, @"path with spaces", @file.txt#L10-20
+//! - File mentions: @file.txt, @"path with spaces", @file.txt:10-20
 //! - Agent mentions: @agent-search, @agent-edit
 
 use std::collections::HashSet;
@@ -27,7 +27,7 @@ fn agent_mention_regex() -> Regex {
 }
 
 fn line_range_regex() -> Regex {
-    Regex::new(r"^([^#]+)(?:#L(\d+)(?:-(\d+))?)?$").expect("valid line range regex")
+    Regex::new(r"^([^:]+)(?::(\d+)(?:-(\d+))?)?$").expect("valid line range regex")
 }
 
 // ============================================
@@ -74,7 +74,7 @@ pub struct AgentMention {
 /// Result of parsing all @mentions from user prompt.
 #[derive(Debug, Default)]
 pub struct ParsedMentions {
-    /// File mentions (@file, @"path", @file#L10-20).
+    /// File mentions (@file, @"path", @file:10-20).
     pub files: Vec<FileMention>,
     /// Agent mentions (@agent-type).
     pub agents: Vec<AgentMention>,
@@ -114,8 +114,8 @@ pub fn parse_mentions(user_prompt: &str) -> ParsedMentions {
 /// - @file.txt
 /// - @"path with spaces"
 /// - @path/to/file
-/// - @file.txt#L10
-/// - @file.txt#L10-20
+/// - @file.txt:10
+/// - @file.txt:10-20
 pub fn parse_file_mentions(user_prompt: &str) -> Vec<FileMention> {
     let mut mentions = Vec::new();
     let mut seen = HashSet::new();
@@ -192,8 +192,8 @@ pub fn parse_agent_mentions(user_prompt: &str) -> Vec<AgentMention> {
 
 /// Parse line range from file path.
 ///
-/// Input: "file.txt#L10-20" -> ("file.txt", Some(10), Some(20))
-/// Input: "file.txt#L10" -> ("file.txt", Some(10), Some(10))
+/// Input: "file.txt:10-20" -> ("file.txt", Some(10), Some(20))
+/// Input: "file.txt:10" -> ("file.txt", Some(10), None)  // means "to EOF"
 /// Input: "file.txt" -> ("file.txt", None, None)
 fn parse_line_range_with_regex(input: &str, regex: &Regex) -> (String, Option<i32>, Option<i32>) {
     if let Some(caps) = regex.captures(input) {
@@ -202,10 +202,7 @@ fn parse_line_range_with_regex(input: &str, regex: &Regex) -> (String, Option<i3
             .map(|m| m.as_str().to_string())
             .unwrap_or_default();
         let line_start = caps.get(2).and_then(|m| m.as_str().parse::<i32>().ok());
-        let line_end = caps
-            .get(3)
-            .and_then(|m| m.as_str().parse::<i32>().ok())
-            .or(line_start); // If only start specified, end = start
+        let line_end = caps.get(3).and_then(|m| m.as_str().parse::<i32>().ok());
 
         (path, line_start, line_end)
     } else {
@@ -240,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_parse_file_with_line_range() {
-        let mentions = parse_file_mentions("Check @file.txt#L10-20");
+        let mentions = parse_file_mentions("Check @file.txt:10-20");
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].raw_path, "file.txt");
         assert_eq!(mentions[0].line_start, Some(10));
@@ -248,12 +245,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_file_with_single_line() {
-        let mentions = parse_file_mentions("Check @file.txt#L42");
+    fn test_parse_file_with_line_start_only() {
+        let mentions = parse_file_mentions("Check @file.txt:42");
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].raw_path, "file.txt");
         assert_eq!(mentions[0].line_start, Some(42));
-        assert_eq!(mentions[0].line_end, Some(42));
+        assert_eq!(mentions[0].line_end, None); // None means "to EOF"
     }
 
     #[test]
@@ -314,12 +311,12 @@ mod tests {
     fn test_parse_line_range() {
         let regex = line_range_regex();
         assert_eq!(
-            parse_line_range_with_regex("file.txt#L10-20", &regex),
+            parse_line_range_with_regex("file.txt:10-20", &regex),
             ("file.txt".to_string(), Some(10), Some(20))
         );
         assert_eq!(
-            parse_line_range_with_regex("file.txt#L42", &regex),
-            ("file.txt".to_string(), Some(42), Some(42))
+            parse_line_range_with_regex("file.txt:42", &regex),
+            ("file.txt".to_string(), Some(42), None)
         );
         assert_eq!(
             parse_line_range_with_regex("file.txt", &regex),

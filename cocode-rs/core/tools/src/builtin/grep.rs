@@ -515,26 +515,26 @@ fn format_grep_output(
         OutputMode::Content => {
             let mut prev_file: Option<&str> = None;
             for m in matches {
-                // Separator between different files
-                if prev_file.is_some() && prev_file != Some(&m.file_path) {
-                    results.push("--".to_string());
+                // File header when switching to a new file
+                if prev_file != Some(&m.file_path) {
+                    if prev_file.is_some() {
+                        results.push(String::new()); // blank line between files
+                    }
+                    results.push(format!("{}:", m.file_path));
+                    prev_file = Some(&m.file_path);
                 }
-                prev_file = Some(&m.file_path);
 
                 // Context break between non-contiguous groups within a file
                 if m.is_break {
-                    results.push("--".to_string());
+                    results.push("  --".to_string());
                     continue;
                 }
 
                 let separator = if m.is_context { "-" } else { ":" };
                 if show_line_numbers {
-                    results.push(format!(
-                        "{}{separator}{}{separator}{}",
-                        m.file_path, m.line_number, m.line_content
-                    ));
+                    results.push(format!("  {}{separator}{}", m.line_number, m.line_content));
                 } else {
-                    results.push(format!("{}{separator}{}", m.file_path, m.line_content));
+                    results.push(format!("  {}", m.line_content));
                 }
             }
         }
@@ -920,6 +920,29 @@ mod tests {
         // Should have a -- separator between disjoint context groups
         assert!(content.contains("line 1 match"));
         assert!(content.contains("line 8 match"));
-        assert!(content.contains("--"));
+        assert!(content.contains("  --"));
+    }
+
+    #[tokio::test]
+    async fn test_grep_content_grouped_by_file() {
+        let dir = setup_test_dir();
+        let tool = GrepTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        let input = serde_json::json!({
+            "pattern": "fn ",
+            "output_mode": "content"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        // Output should have file headers (ending with :) and indented match lines
+        assert!(content.contains("file1.rs:") || content.contains("file2.rs:"));
+        // Lines should be indented with 2 spaces
+        assert!(content.contains("  "));
     }
 }

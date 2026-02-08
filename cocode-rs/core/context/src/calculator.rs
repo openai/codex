@@ -51,7 +51,7 @@ impl ContextCalculator {
         tool_definitions: &[String],
         memory_files: &[MemoryFile],
     ) -> ContextBudget {
-        let mut budget = ContextBudget::new(env.context_window, env.output_token_limit);
+        let mut budget = ContextBudget::new(env.context_window, env.max_output_tokens);
 
         // Reserve safety margin
         let reserved = (budget.input_budget() as f32 * DEFAULT_RESERVED_PCT) as i32;
@@ -130,7 +130,7 @@ mod tests {
             .cwd("/tmp/test")
             .model("test-model")
             .context_window(100000)
-            .output_token_limit(10000)
+            .max_output_tokens(10000)
             .build()
             .unwrap();
 

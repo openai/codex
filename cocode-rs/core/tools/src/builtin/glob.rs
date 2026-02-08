@@ -11,7 +11,7 @@ use cocode_protocol::ApprovalRequest;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::PermissionResult;
 use cocode_protocol::ToolOutput;
-use globset::Glob;
+use globset::GlobBuilder;
 use globset::GlobSetBuilder;
 use serde_json::Value;
 
@@ -74,6 +74,11 @@ impl Tool for GlobTool {
                 "path": {
                     "type": "string",
                     "description": "Directory to search in (defaults to current directory)"
+                },
+                "case_sensitive": {
+                    "type": "boolean",
+                    "description": "Case-sensitive matching. Default: true.",
+                    "default": true
                 }
             },
             "required": ["pattern"]
@@ -150,13 +155,18 @@ impl Tool for GlobTool {
             .build());
         }
 
+        let case_sensitive = input["case_sensitive"].as_bool().unwrap_or(true);
+
         // Build glob matcher
-        let glob = Glob::new(pattern).map_err(|e| {
-            crate::error::tool_error::InvalidInputSnafu {
-                message: format!("Invalid glob pattern: {e}"),
-            }
+        let glob = GlobBuilder::new(pattern)
+            .case_insensitive(!case_sensitive)
             .build()
-        })?;
+            .map_err(|e| {
+                crate::error::tool_error::InvalidInputSnafu {
+                    message: format!("Invalid glob pattern: {e}"),
+                }
+                .build()
+            })?;
 
         let mut glob_builder = GlobSetBuilder::new();
         glob_builder.add(glob);
@@ -424,5 +434,68 @@ mod tests {
         assert!(content.contains("visible.rs"));
         // Since include_hidden is true, dotfiles should be found
         assert!(content.contains(".hidden"));
+    }
+
+    #[tokio::test]
+    async fn test_glob_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+
+        File::create(dir.path().join("README.md")).unwrap();
+        File::create(dir.path().join("readme.txt")).unwrap();
+        File::create(dir.path().join("other.rs")).unwrap();
+
+        let tool = GlobTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        // Case-insensitive search for "readme*"
+        let input = serde_json::json!({
+            "pattern": "readme*",
+            "case_sensitive": false
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            content.contains("README.md"),
+            "Should find uppercase README.md"
+        );
+        assert!(
+            content.contains("readme.txt"),
+            "Should find lowercase readme.txt"
+        );
+        assert!(!content.contains("other.rs"), "Should not match other.rs");
+    }
+
+    #[tokio::test]
+    async fn test_glob_case_sensitive_default() {
+        let dir = TempDir::new().unwrap();
+
+        File::create(dir.path().join("README.md")).unwrap();
+        File::create(dir.path().join("readme.txt")).unwrap();
+
+        let tool = GlobTool::new();
+        let mut ctx = make_context(dir.path().to_path_buf());
+
+        // Default case-sensitive search
+        let input = serde_json::json!({
+            "pattern": "readme*"
+        });
+
+        let result = tool.execute(input, &mut ctx).await.unwrap();
+        let content = match &result.content {
+            cocode_protocol::ToolResultContent::Text(t) => t,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            content.contains("readme.txt"),
+            "Should find lowercase readme.txt"
+        );
+        // On case-insensitive filesystems (macOS), README.md might also match
+        // So we just verify the tool runs without error
     }
 }

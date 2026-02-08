@@ -47,26 +47,7 @@ pub fn handle_key_event_with_suggestions(
     has_overlay: bool,
     has_file_suggestions: bool,
 ) -> Option<TuiCommand> {
-    handle_key_event_with_all_suggestions(key, has_overlay, has_file_suggestions, false)
-}
-
-/// Handle a key event with file and skill suggestion state.
-///
-/// When suggestions are active, some keys are redirected to
-/// suggestion navigation. Skill suggestions take priority over file suggestions.
-pub fn handle_key_event_with_all_suggestions(
-    key: KeyEvent,
-    has_overlay: bool,
-    has_file_suggestions: bool,
-    has_skill_suggestions: bool,
-) -> Option<TuiCommand> {
-    handle_key_event_full(
-        key,
-        has_overlay,
-        has_file_suggestions,
-        has_skill_suggestions,
-        false,
-    )
+    handle_key_event_full(key, has_overlay, has_file_suggestions, false, false)
 }
 
 /// Handle a key event with full context including streaming state.
@@ -252,27 +233,24 @@ fn handle_input_key(key: KeyEvent) -> Option<TuiCommand> {
 /// Handle input editing keys with streaming context.
 ///
 /// When `is_streaming` is true:
-/// - Enter queues the input for later (QueueInput)
+/// - Enter / Ctrl+Enter queues the input for later (QueueInput)
 ///
 /// When `is_streaming` is false:
-/// - Enter submits immediately (SubmitInput)
+/// - Enter / Ctrl+Enter submits immediately (SubmitInput)
 ///
 /// Both modes:
 /// - Shift+Enter inserts a newline (for multi-line input)
 /// - Alt+Enter inserts a newline (for multi-line input)
-/// - Ctrl+Enter always submits (force submit even during streaming)
 fn handle_input_key_with_streaming(key: KeyEvent, is_streaming: bool) -> Option<TuiCommand> {
     match (key.modifiers, key.code) {
-        // Enter: Submit or Queue depending on streaming state
-        (KeyModifiers::NONE, KeyCode::Enter) => {
+        // Enter / Ctrl+Enter: Submit or Queue depending on streaming state
+        (KeyModifiers::NONE | KeyModifiers::CONTROL, KeyCode::Enter) => {
             if is_streaming {
                 Some(TuiCommand::QueueInput)
             } else {
                 Some(TuiCommand::SubmitInput)
             }
         }
-        // Ctrl+Enter: Always submit (force submit even during streaming)
-        (KeyModifiers::CONTROL, KeyCode::Enter) => Some(TuiCommand::SubmitInput),
 
         // Shift+Enter: Insert newline (aligned with Claude Code behavior)
         (KeyModifiers::SHIFT, KeyCode::Enter) => Some(TuiCommand::InsertNewline),
@@ -485,12 +463,12 @@ mod tests {
     }
 
     #[test]
-    fn test_ctrl_enter_always_submits() {
+    fn test_ctrl_enter_matches_enter_behavior() {
         let event = key(KeyCode::Enter, KeyModifiers::CONTROL);
-        // Ctrl+Enter should always submit, even during streaming
+        // Ctrl+Enter behaves the same as Enter: queue when streaming, submit otherwise
         assert_eq!(
             handle_key_event_full(event, false, false, false, true),
-            Some(TuiCommand::SubmitInput)
+            Some(TuiCommand::QueueInput)
         );
         assert_eq!(
             handle_key_event_full(event, false, false, false, false),

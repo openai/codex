@@ -118,7 +118,7 @@ pub enum AttachmentType {
 
     // === Real-time steering ===
     /// Queued commands from user (Enter during streaming).
-    /// Injected as "User sent: {message}" to steer model in real-time.
+    /// Consumed once and injected as steering to address each message.
     QueuedCommands,
 
     // === Phase 2 (future) ===

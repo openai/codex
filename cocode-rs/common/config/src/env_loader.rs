@@ -122,7 +122,7 @@ impl EnvLoader {
 
         // Overrides
         if let Some(val) = self.get_i32(ENV_AUTOCOMPACT_PCT) {
-            config.effective_context_window_percent = Some(val);
+            config.autocompact_pct = Some(val);
             debug!(env = ENV_AUTOCOMPACT_PCT, value = val, "loaded");
         }
 
@@ -417,7 +417,7 @@ mod tests {
         let loader = EnvLoader::new();
         let config = loader.load_compact_config();
         assert!(config.disable_compact);
-        assert_eq!(config.effective_context_window_percent, Some(80));
+        assert_eq!(config.autocompact_pct, Some(80));
         assert_eq!(config.session_memory_min_tokens, 20000);
     }
 

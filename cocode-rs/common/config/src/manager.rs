@@ -798,9 +798,8 @@ impl ConfigManager {
                     config.disable_micro_compact = true;
                 }
                 // Option fields: use JSON if env didn't set
-                if config.effective_context_window_percent.is_none() {
-                    config.effective_context_window_percent =
-                        json_config.effective_context_window_percent;
+                if config.autocompact_pct.is_none() {
+                    config.autocompact_pct = json_config.autocompact_pct;
                 }
                 if config.blocking_limit_override.is_none() {
                     config.blocking_limit_override = json_config.blocking_limit_override;
@@ -1215,11 +1214,11 @@ mod tests {
     fn test_build_config_feature_overrides() {
         let (_temp, manager) = create_test_manager();
 
-        let overrides = ConfigOverrides::new().with_feature("subagent", true);
+        let overrides = ConfigOverrides::new().with_feature("web_fetch", true);
 
         let config = manager.build_config(overrides).unwrap();
 
-        assert!(config.is_feature_enabled(cocode_protocol::Feature::Subagent));
+        assert!(config.is_feature_enabled(cocode_protocol::Feature::WebFetch));
     }
 
     #[test]

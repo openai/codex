@@ -36,13 +36,13 @@ just help         # All commands
 │                             volcengine-ark, z-ai                │
 ├─────────────────────────────────────────────────────────────────┤
 │  Common: protocol, config, error, otel                          │
-│  Utils: 17 utility crates                                       │
+│  Utils: utility crates                                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Crate Guide (50 crates)
+## Crate Guide
 
-### Common (4)
+### Common
 
 | Crate | Purpose |
 |-------|---------|
@@ -51,7 +51,7 @@ just help         # All commands
 | `error` | Unified errors with stack traces |
 | `otel` | OpenTelemetry tracing |
 
-### Provider SDKs (6)
+### Provider SDKs
 
 | Crate | Purpose |
 |-------|---------|
@@ -62,21 +62,21 @@ just help         # All commands
 | `volcengine-ark` | Volcengine Ark API |
 | `z-ai` | ZhipuAI/Z.AI API |
 
-### Core (9)
+### Core
 
 | Crate | Purpose |
 |-------|---------|
-| `api` | API client abstraction |
-| `message` | Message types and history |
-| `tools` | Tool definitions and execution |
-| `context` | Conversation context management |
-| `prompt` | System prompt generation |
-| `loop` | Agent loop orchestration |
-| `executor` | Task execution and coordination |
-| `subagent` | Sub-agent spawning and management |
-| `system-reminder` | System reminder injection |
+| `api` | Provider-agnostic LLM API client |
+| `message` | Conversation message types and turn history |
+| `tools` | Tool schemas, invocation, and result handling |
+| `context` | Context window assembly and truncation |
+| `prompt` | System prompt templating and composition |
+| `loop` | Main agent turn loop: prompt → LLM → tools → repeat |
+| `executor` | Top-level task driver with permissions and hooks |
+| `subagent` | Spawn isolated agent instances for parallel tasks |
+| `system-reminder` | Inject system reminders mid-conversation |
 
-### App (3)
+### App
 
 | Crate | Purpose |
 |-------|---------|
@@ -84,58 +84,59 @@ just help         # All commands
 | `tui` | Terminal UI (ratatui-based) |
 | `session` | Session persistence and management |
 
-### Exec (3)
+### Exec
 
 | Crate | Purpose |
 |-------|---------|
-| `shell` | Shell command execution |
-| `sandbox` | Sandboxed execution environment |
-| `arg0` | Binary dispatcher for CLI |
+| `shell` | Safe shell command spawning and output capture |
+| `sandbox` | macOS Seatbelt / Linux landlock sandboxing |
+| `arg0` | Dispatch `cocode` subcommands by argv[0] |
 
-### Features (4)
-
-| Crate | Purpose |
-|-------|---------|
-| `skill` | Slash command skills |
-| `hooks` | Event hooks system |
-| `plugin` | Plugin loading and management |
-| `plan-mode` | Plan mode workflow |
-
-### MCP (2)
+### Features
 
 | Crate | Purpose |
 |-------|---------|
-| `mcp-types` | MCP protocol types |
-| `rmcp-client` | Remote MCP client |
+| `skill` | `/command` skill definitions and execution |
+| `hooks` | Pre/post event hooks for tool calls |
+| `plugin` | Dynamic plugin discovery and loading |
+| `plan-mode` | Plan-then-execute workflow orchestration |
 
-### Standalone (2)
+### MCP
+
+| Crate | Purpose |
+|-------|---------|
+| `mcp-types` | Model Context Protocol message types |
+| `rmcp-client` | MCP client over stdio/SSE transport |
+
+### Standalone
 
 | Crate | Purpose | CLAUDE.md |
 |-------|---------|-----------|
 | `retrieval` | Code search: BM25 + vector + AST | [retrieval/CLAUDE.md](cocode-rs/retrieval/CLAUDE.md) |
 | `lsp` | AI-friendly LSP client | [lsp/CLAUDE.md](cocode-rs/lsp/CLAUDE.md) |
 
-### Utils (17)
+### Utils
 
 | Crate | Purpose |
 |-------|---------|
 | `file-ignore` | .gitignore-aware filtering |
 | `file-search` | Fuzzy file search |
+| `file-encoding` | File encoding detection and line-ending preservation |
 | `apply-patch` | Unified diff/patch |
 | `git` | Git operations wrapper |
 | `shell-parser` | Shell command parsing |
 | `keyring-store` | Secure credential storage |
 | `pty` | Pseudo-terminal handling |
 | `image` | Image processing |
-| `cache` | Caching utilities |
-| `common` | Shared utilities |
+| `cache` | In-memory and disk cache helpers |
+| `common` | Cross-crate utility functions |
 | `absolute-path` | Path absolutization |
 | `cargo-bin` | Cargo binary helpers |
 | `json-to-toml` | JSON to TOML conversion |
-| `readiness` | Service readiness checks |
-| `string` | String utilities |
-| `async-utils` | Async helpers |
-| `stdio-to-uds` | Stdio to Unix socket |
+| `readiness` | Health/readiness probes for services |
+| `string` | String manipulation helpers |
+| `async-utils` | Async runtime utilities and combinators |
+| `stdio-to-uds` | Bridge stdio streams to Unix domain sockets |
 
 ## Error Handling
 

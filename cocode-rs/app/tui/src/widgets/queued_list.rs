@@ -1,9 +1,8 @@
 //! Queued commands list widget.
 //!
 //! Displays queued commands waiting to be processed. These commands
-//! were entered during streaming and will be:
-//! 1. Injected as real-time steering into the current turn
-//! 2. Executed as new user turns after the agent becomes idle
+//! were entered during streaming and will be consumed once as steering
+//! system-reminders that ask the model to address each message.
 
 use cocode_protocol::UserQueuedCommand;
 use ratatui::buffer::Buffer;

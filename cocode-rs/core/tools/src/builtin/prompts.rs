@@ -29,7 +29,8 @@ Fast file pattern matching tool that works with any codebase size.\n\
 - You can call multiple tools in a single response for parallel searches\n\
 \n\
 IMPORTANT: Omit the path field to use the default directory. \
-DO NOT enter \"undefined\" or \"null\" — simply omit it.";
+DO NOT enter \"undefined\" or \"null\" — simply omit it.\n\
+- Use case_sensitive=false for case-insensitive file name matching.";
 
 /// Description for the Grep tool.
 pub const GREP_DESCRIPTION: &str = "\
@@ -46,14 +47,16 @@ Usage:\n\
 
 /// Description for the Edit tool.
 pub const EDIT_DESCRIPTION: &str = "\
-Performs exact string replacements in files.\n\
+Performs string replacements in files with enhanced matching (exact, whitespace-flexible, and regex fallback).\n\
 \n\
 Usage:\n\
 - You must use the Read tool at least once before editing. This tool will error if you attempt an edit without reading the file.\n\
 - When editing text from Read tool output, preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix.\n\
 - ALWAYS prefer editing existing files. NEVER write new files unless explicitly required.\n\
 - The edit will FAIL if old_string is not unique in the file. Either provide a larger string with more context to make it unique or use replace_all.\n\
-- Use replace_all for replacing and renaming strings across the file.";
+- Use replace_all for replacing and renaming strings across the file.\n\
+- If exact matching fails, the tool automatically tries whitespace-flexible matching, then regex-based token matching as a last resort.\n\
+- To create a new file, pass an empty string for old_string. The file must not already exist.";
 
 /// Description for the Write tool.
 pub const WRITE_DESCRIPTION: &str = "\
@@ -308,6 +311,19 @@ Edit modes:\n\
 - replace (default): Replace the content of an existing cell\n\
 - insert: Insert a new cell (cell_type required)\n\
 - delete: Delete the specified cell";
+
+/// Description for the ReadManyFiles tool.
+pub const READ_MANY_FILES_DESCRIPTION: &str = "\
+Reads multiple files in a single tool call. Useful for exploring codebases efficiently.\n\
+\n\
+Usage:\n\
+- Provide an array of absolute file paths to read\n\
+- Each file is read up to 500 lines with line numbers\n\
+- Missing files are reported as [NOT FOUND]\n\
+- Binary or non-UTF-8 files are reported as [BINARY/ENCODING ERROR]\n\
+- Total output is capped at 200,000 characters\n\
+- Maximum 50 files per call\n\
+- Use this instead of multiple Read calls when you need to examine several files at once";
 
 /// Description for the LS tool.
 pub const LS_DESCRIPTION: &str = "\

@@ -28,7 +28,7 @@ pub struct EnvironmentInfo {
     /// Maximum context window tokens for this model.
     pub context_window: i32,
     /// Maximum output tokens for this model.
-    pub output_token_limit: i32,
+    pub max_output_tokens: i32,
     /// Preferred response language (e.g., "en", "zh", "ja").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_preference: Option<String>,
@@ -52,7 +52,7 @@ pub struct EnvironmentInfoBuilder {
     date: Option<String>,
     model: Option<String>,
     context_window: Option<i32>,
-    output_token_limit: Option<i32>,
+    max_output_tokens: Option<i32>,
     language_preference: Option<String>,
 }
 
@@ -97,8 +97,8 @@ impl EnvironmentInfoBuilder {
         self
     }
 
-    pub fn output_token_limit(mut self, tokens: i32) -> Self {
-        self.output_token_limit = Some(tokens);
+    pub fn max_output_tokens(mut self, tokens: i32) -> Self {
+        self.max_output_tokens = Some(tokens);
         self
     }
 
@@ -133,7 +133,7 @@ impl EnvironmentInfoBuilder {
                 .build()
             })?,
             context_window: self.context_window.unwrap_or(200000),
-            output_token_limit: self.output_token_limit.unwrap_or(16384),
+            max_output_tokens: self.max_output_tokens.unwrap_or(16384),
             language_preference: self.language_preference,
         })
     }
@@ -168,7 +168,7 @@ mod tests {
             .date("2025-01-29")
             .model("claude-3-opus")
             .context_window(200000)
-            .output_token_limit(16384)
+            .max_output_tokens(16384)
             .build()
             .unwrap();
 
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(env.git_branch.as_deref(), Some("main"));
         assert_eq!(env.date, "2025-01-29");
         assert_eq!(env.context_window, 200000);
-        assert_eq!(env.output_token_limit, 16384);
+        assert_eq!(env.max_output_tokens, 16384);
     }
 
     #[test]

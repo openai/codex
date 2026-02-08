@@ -13,7 +13,6 @@ mod stream;
 pub use broker::EventBroker;
 pub use handler::handle_key_event;
 pub use handler::handle_key_event_full;
-pub use handler::handle_key_event_with_all_suggestions;
 pub use handler::handle_key_event_with_suggestions;
 pub use stream::TuiEventStream;
 
@@ -224,12 +223,10 @@ pub enum TuiCommand {
     PasteFromClipboard,
 
     // ========== Queue ==========
-    /// Queue input for later processing (Enter while streaming).
+    /// Queue input for steering injection (Enter while streaming).
     ///
-    /// The input will be processed as a new user turn after the
-    /// current turn completes. Also serves as real-time steering:
-    /// queued commands are injected into the current turn as
-    /// <system-reminder>User sent: {message}</system-reminder>
+    /// The command is consumed once in the agent loop and injected as a
+    /// steering system-reminder that asks the model to address the message.
     QueueInput,
 
     // ========== Quit ==========

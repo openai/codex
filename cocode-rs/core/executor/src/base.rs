@@ -13,6 +13,7 @@ use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
 use cocode_protocol::LoopEvent;
+use cocode_protocol::ModelSpec;
 use cocode_tools::SpawnAgentFn;
 use cocode_tools::ToolRegistry;
 use tokio::sync::mpsc;
@@ -22,16 +23,14 @@ use tracing::info;
 /// Configuration for the agent executor.
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
-    /// Model name for logging/tracking.
-    pub model: String,
+    /// Model specification (provider + model name).
+    pub model: ModelSpec,
     /// Maximum number of turns before stopping.
     pub max_turns: Option<i32>,
     /// Context window size.
     pub context_window: i32,
-    /// Output token limit.
-    pub output_token_limit: i32,
-    /// Auto-compact threshold (0.0-1.0).
-    pub auto_compact_threshold: f32,
+    /// Maximum output tokens.
+    pub max_output_tokens: i32,
     /// Enable micro-compaction.
     pub enable_micro_compaction: bool,
     /// Enable streaming tools.
@@ -43,11 +42,10 @@ pub struct ExecutorConfig {
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
-            model: "unknown".to_string(),
+            model: ModelSpec::new("unknown", "unknown"),
             max_turns: Some(200),
             context_window: 200_000,
-            output_token_limit: 16_384,
-            auto_compact_threshold: 0.8,
+            max_output_tokens: 16_384,
             enable_micro_compaction: true,
             enable_streaming_tools: true,
             features: cocode_protocol::Features::with_defaults(),
@@ -119,8 +117,8 @@ impl AgentExecutor {
         &self.session_id
     }
 
-    /// Get the model name.
-    pub fn model(&self) -> &str {
+    /// Get the model specification.
+    pub fn model(&self) -> &ModelSpec {
         &self.config.model
     }
 
@@ -188,9 +186,9 @@ impl AgentExecutor {
         // Build environment info
         let environment = EnvironmentInfo::builder()
             .cwd(std::env::current_dir().unwrap_or_default())
-            .model(&self.config.model)
+            .model(&self.config.model.model)
             .context_window(self.config.context_window)
-            .output_token_limit(self.config.output_token_limit)
+            .max_output_tokens(self.config.max_output_tokens)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build environment: {e}"))?;
 
@@ -204,7 +202,6 @@ impl AgentExecutor {
         // Build loop config
         let loop_config = LoopConfig {
             max_turns: self.config.max_turns,
-            auto_compact_threshold: self.config.auto_compact_threshold,
             enable_micro_compaction: self.config.enable_micro_compaction,
             enable_streaming_tools: self.config.enable_streaming_tools,
             ..LoopConfig::default()
@@ -310,9 +307,9 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the model name.
-    pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.config.model = model.into();
+    /// Set the model specification.
+    pub fn model(mut self, model: ModelSpec) -> Self {
+        self.config.model = model;
         self
     }
 
@@ -328,15 +325,9 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the output token limit.
-    pub fn output_token_limit(mut self, limit: i32) -> Self {
-        self.config.output_token_limit = limit;
-        self
-    }
-
-    /// Set the auto-compact threshold.
-    pub fn auto_compact_threshold(mut self, threshold: f32) -> Self {
-        self.config.auto_compact_threshold = threshold;
+    /// Set the maximum output tokens.
+    pub fn max_output_tokens(mut self, limit: i32) -> Self {
+        self.config.max_output_tokens = limit;
         self
     }
 
@@ -417,8 +408,7 @@ mod tests {
         let config = ExecutorConfig::default();
         assert_eq!(config.max_turns, Some(200));
         assert_eq!(config.context_window, 200_000);
-        assert_eq!(config.output_token_limit, 16_384);
-        assert!((config.auto_compact_threshold - 0.8).abs() < f32::EPSILON);
+        assert_eq!(config.max_output_tokens, 16_384);
         assert!(config.enable_micro_compaction);
         assert!(config.enable_streaming_tools);
         assert_eq!(config.features, cocode_protocol::Features::with_defaults());
@@ -437,19 +427,20 @@ mod tests {
     #[test]
     fn test_builder_configuration() {
         let builder = ExecutorBuilder::new()
-            .model("test-model")
+            .model(ModelSpec::new("test-provider", "test-model"))
             .max_turns(100)
             .context_window(128000)
-            .output_token_limit(8192)
-            .auto_compact_threshold(0.7)
+            .max_output_tokens(8192)
             .enable_micro_compaction(false)
             .enable_streaming_tools(false);
 
-        assert_eq!(builder.config.model, "test-model");
+        assert_eq!(
+            builder.config.model,
+            ModelSpec::new("test-provider", "test-model")
+        );
         assert_eq!(builder.config.max_turns, Some(100));
         assert_eq!(builder.config.context_window, 128000);
-        assert_eq!(builder.config.output_token_limit, 8192);
-        assert!((builder.config.auto_compact_threshold - 0.7).abs() < f32::EPSILON);
+        assert_eq!(builder.config.max_output_tokens, 8192);
         assert!(!builder.config.enable_micro_compaction);
         assert!(!builder.config.enable_streaming_tools);
     }

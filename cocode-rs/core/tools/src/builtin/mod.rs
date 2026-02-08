@@ -1,10 +1,11 @@
 //! Built-in tools for the agent.
 //!
-//! This module provides the standard set of 20 built-in tools:
+//! This module provides the standard set of built-in tools:
 //! - [`ReadTool`] - Read file contents
+//! - [`ReadManyFilesTool`] - Batch read multiple files
 //! - [`GlobTool`] - Pattern-based file search
 //! - [`GrepTool`] - Content search with regex
-//! - [`EditTool`] - Exact string replacement in files
+//! - [`EditTool`] - String replacement in files (with flexible whitespace matching)
 //! - [`WriteTool`] - Write/create files
 //! - [`BashTool`] - Execute shell commands
 //! - [`ShellTool`] - Execute commands via array format (direct exec)
@@ -33,6 +34,7 @@ mod apply_patch;
 mod ask_user_question;
 mod bash;
 mod edit;
+mod edit_strategies;
 mod enter_plan_mode;
 mod exit_plan_mode;
 mod glob;
@@ -44,6 +46,7 @@ pub mod mcp_search;
 mod notebook_edit;
 pub mod path_extraction;
 mod read;
+mod read_many;
 mod shell;
 mod skill;
 mod task;
@@ -67,6 +70,7 @@ pub use lsp::LspTool;
 pub use mcp_search::McpSearchTool;
 pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;
+pub use read_many::ReadManyFilesTool;
 pub use shell::ShellTool;
 pub use skill::SkillTool;
 pub use task::TaskTool;
@@ -105,12 +109,14 @@ pub fn register_builtin_tools(registry: &mut ToolRegistry) {
     registry.register(NotebookEditTool::new());
     registry.register(ApplyPatchTool::new());
     registry.register(ShellTool::new());
+    registry.register(ReadManyFilesTool::new());
 }
 
 /// Get a list of built-in tool names.
 pub fn builtin_tool_names() -> Vec<&'static str> {
     vec![
         "Read",
+        "ReadManyFiles",
         "Glob",
         "Grep",
         "Edit",

@@ -442,15 +442,14 @@ async fn run_agent_driver(
                 }
             }
             UserCommand::QueueCommand { prompt } => {
-                // Queue command for real-time steering and post-idle processing.
-                // The command is:
-                // 1. Injected as `<system-reminder>User sent: {message}</system-reminder>` for steering
-                // 2. Executed as a new user turn after the current turn completes
+                // Queue command for consume-then-remove steering injection.
+                // Commands are consumed once in core_message_loop Step 6.5 and
+                // injected as steering that asks the model to address the message.
                 let id = state.queue_command(&prompt);
                 info!(
                     prompt_len = prompt.len(),
                     queued_count = state.queued_count(),
-                    "Command queued for steering and post-idle execution"
+                    "Command queued for steering injection"
                 );
                 let preview = if prompt.len() > 30 {
                     format!("{}...", &prompt[..30])
