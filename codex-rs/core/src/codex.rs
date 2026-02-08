@@ -558,8 +558,9 @@ impl TurnContext {
     }
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
+        let cwd = self.cwd.clone();
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
+            .get_or_init(|| async { build_turn_metadata_header(cwd).await })
             .await
             .clone()
     }
@@ -1099,7 +1100,11 @@ impl Session {
         // when submit_turn() runs.
         sess.services.model_client.pre_establish_connection(
             sess.services.otel_manager.clone(),
-            session_configuration.cwd.clone(),
+            resolve_turn_metadata_header_with_timeout(
+                build_turn_metadata_header(session_configuration.cwd.clone()),
+                None,
+            )
+            .boxed(),
         );
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
