@@ -1172,6 +1172,7 @@ pub struct ListMcpServerStatusResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - list available apps/connectors.
 pub struct AppsListParams {
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
@@ -1184,6 +1185,7 @@ pub struct AppsListParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
     pub id: String,
     pub name: String,
@@ -1199,6 +1201,7 @@ pub struct AppInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app list response.
 pub struct AppsListResponse {
     pub data: Vec<AppInfo>,
     /// Opaque cursor to pass to the next call to continue after the last item.
@@ -1209,6 +1212,7 @@ pub struct AppsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// EXPERIMENTAL - notification emitted when the app list changes.
 pub struct AppListUpdatedNotification {
     pub data: Vec<AppInfo>,
 }
