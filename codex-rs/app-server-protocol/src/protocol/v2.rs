@@ -2089,6 +2089,9 @@ pub struct TurnStartParams {
 
     /// EXPERIMENTAL - Set a pre-set collaboration mode.
     /// Takes precedence over model, reasoning_effort, and developer instructions if set.
+    ///
+    /// For `collaboration_mode.settings.developer_instructions`, `null` means
+    /// "use the built-in instructions for the selected mode".
     #[experimental("turn/start.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,

@@ -206,6 +206,7 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -395,6 +396,27 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    /// If a client sends `developer_instructions: null` during a mode switch,
+    /// use the built-in instructions for that mode.
+    fn normalize_turn_start_collaboration_mode(
+        &self,
+        mut collaboration_mode: CollaborationMode,
+    ) -> CollaborationMode {
+        if collaboration_mode.settings.developer_instructions.is_none()
+            && let Some(instructions) = self
+                .thread_manager
+                .list_collaboration_modes()
+                .into_iter()
+                .find(|preset| preset.mode == Some(collaboration_mode.mode))
+                .and_then(|preset| preset.developer_instructions.flatten())
+                .filter(|instructions| !instructions.is_empty())
+        {
+            collaboration_mode.settings.developer_instructions = Some(instructions);
+        }
+
+        collaboration_mode
     }
 
     fn review_request_from_target(
@@ -4548,6 +4570,10 @@ impl CodexMessageProcessor {
             }
         };
 
+        let collaboration_mode = params
+            .collaboration_mode
+            .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
+
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
             .input
@@ -4561,7 +4587,7 @@ impl CodexMessageProcessor {
             || params.model.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
-            || params.collaboration_mode.is_some()
+            || collaboration_mode.is_some()
             || params.personality.is_some();
 
         // If any overrides are provided, update the session turn context first.
@@ -4575,7 +4601,7 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
+                    collaboration_mode,
                     personality: params.personality,
                 })
                 .await;
