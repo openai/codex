@@ -2,6 +2,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::models_manager::model_presets::all_model_presets;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -32,6 +33,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
+        input_modalities: vec![InputModality::Text, InputModality::Image],
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,

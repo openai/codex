@@ -174,6 +174,13 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputModality {
+    Text,
+    Image,
+}
+
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -212,6 +219,10 @@ const fn default_effective_context_window_percent() -> i64 {
     95
 }
 
+fn default_input_modalities() -> Vec<InputModality> {
+    vec![InputModality::Text, InputModality::Image]
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
@@ -232,6 +243,8 @@ pub struct ModelInfo {
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
+    #[serde(default = "default_input_modalities")]
+    pub input_modalities: Vec<InputModality>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
@@ -498,6 +511,7 @@ mod tests {
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
             apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
