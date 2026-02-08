@@ -36,6 +36,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         cwd: tmp.path().to_path_buf(),
         expiration: 1000.into(),
         env: HashMap::new(),
+        network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
