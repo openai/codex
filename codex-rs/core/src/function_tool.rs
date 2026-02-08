@@ -8,4 +8,6 @@ pub enum FunctionCallError {
     MissingLocalShellCallId,
     #[error("Fatal error: {0}")]
     Fatal(String),
+    #[error("Tool call blocked: {0}")]
+    ToolCallBlocked(String),
 }

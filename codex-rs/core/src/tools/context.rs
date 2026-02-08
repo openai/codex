@@ -53,6 +53,32 @@ impl ToolPayload {
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
         }
     }
+
+    /// Returns a structured representation suitable for hook consumption.
+    ///
+    /// Unlike `log_payload()` which is for human-readable logging,
+    /// this preserves full argument structure for `LocalShell` payloads
+    /// (command as JSON array + workdir override) so hooks can enforce
+    /// accurate security policies.
+    pub fn hook_input(&self) -> String {
+        match self {
+            ToolPayload::Function { arguments } => arguments.clone(),
+            ToolPayload::Custom { input } => input.clone(),
+            ToolPayload::LocalShell { params } => {
+                let mut obj = serde_json::json!({
+                    "command": params.command,
+                });
+                if let Some(workdir) = &params.workdir {
+                    obj["workdir"] = serde_json::Value::String(workdir.clone());
+                }
+                if let Some(timeout_ms) = params.timeout_ms {
+                    obj["timeout_ms"] = serde_json::Value::Number(timeout_ms.into());
+                }
+                obj.to_string()
+            }
+            ToolPayload::Mcp { raw_arguments, .. } => raw_arguments.clone(),
+        }
+    }
 }
 
 #[derive(Clone)]

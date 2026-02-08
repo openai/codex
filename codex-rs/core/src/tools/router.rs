@@ -2,6 +2,11 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::hooks::HookEvent;
+use crate::hooks::HookEventPostToolUse;
+use crate::hooks::HookEventPreToolUse;
+use crate::hooks::HookOutcome;
+use crate::hooks::HookPayload;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -142,21 +147,80 @@ impl ToolRouter {
         let ToolCall {
             tool_name,
             call_id,
-            payload,
+            mut payload,
         } = call;
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
         let failure_call_id = call_id.clone();
 
+        // Extract structured tool input for hooks (preserves shell arg
+        // boundaries and workdir overrides, unlike log_payload()).
+        let tool_input = payload.hook_input();
+
+        // --- PreToolUse hook ---
+        let pre_outcome = session
+            .hooks()
+            .dispatch(HookPayload {
+                session_id: session.conversation_id,
+                cwd: turn.cwd.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::PreToolUse {
+                    event: HookEventPreToolUse {
+                        tool_name: tool_name.clone(),
+                        tool_input: tool_input.clone(),
+                    },
+                },
+            })
+            .await;
+
+        match pre_outcome {
+            HookOutcome::Proceed => {}
+            HookOutcome::Block { message } => {
+                let block_msg =
+                    message.unwrap_or_else(|| "Blocked by pre_tool_use hook".to_string());
+                return Ok(Self::failure_response(
+                    failure_call_id,
+                    payload_outputs_custom,
+                    FunctionCallError::ToolCallBlocked(block_msg),
+                ));
+            }
+            HookOutcome::Modify { content } => {
+                // Apply the modified content to the tool arguments.
+                match &mut payload {
+                    ToolPayload::Function { arguments } => {
+                        *arguments = content;
+                    }
+                    ToolPayload::Mcp { raw_arguments, .. } => {
+                        *raw_arguments = content;
+                    }
+                    ToolPayload::Custom { input } => {
+                        *input = content;
+                    }
+                    ToolPayload::LocalShell { .. } => {
+                        // Modifying shell command structure from a hook is
+                        // not safely supported.  Block the call so the
+                        // hook's policy intent is not silently bypassed.
+                        return Ok(Self::failure_response(
+                            failure_call_id,
+                            payload_outputs_custom,
+                            FunctionCallError::ToolCallBlocked(
+                                "pre_tool_use hook returned Modify for local_shell which is not supported; blocking execution".to_string(),
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
         let invocation = ToolInvocation {
-            session,
-            turn,
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn),
             tracker,
             call_id,
-            tool_name,
+            tool_name: tool_name.clone(),
             payload,
         };
 
-        match self.registry.dispatch(invocation).await {
+        let result = match self.registry.dispatch(invocation).await {
             Ok(response) => Ok(response),
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
             Err(err) => Ok(Self::failure_response(
@@ -164,6 +228,51 @@ impl ToolRouter {
                 payload_outputs_custom,
                 err,
             )),
+        };
+
+        // --- PostToolUse hook (fire-and-forget, does not alter the result) ---
+        // Spawned as a background task so that slow/hung post-hooks do not
+        // add latency to the tool response path.
+        if let Ok(ref response) = result {
+            let tool_output = Self::extract_output_text(response);
+            let hooks = session.hooks().clone();
+            let cwd = turn.cwd.clone();
+            let conversation_id = session.conversation_id;
+            tokio::spawn(async move {
+                hooks
+                    .dispatch(HookPayload {
+                        session_id: conversation_id,
+                        cwd,
+                        triggered_at: chrono::Utc::now(),
+                        hook_event: HookEvent::PostToolUse {
+                            event: HookEventPostToolUse {
+                                tool_name,
+                                tool_output,
+                            },
+                        },
+                    })
+                    .await;
+            });
+        }
+
+        result
+    }
+
+    /// Extract a textual preview from a `ResponseInputItem` for the PostToolUse hook.
+    fn extract_output_text(item: &ResponseInputItem) -> String {
+        match item {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                output.body.to_text().unwrap_or_default()
+            }
+            ResponseInputItem::McpToolCallOutput { result, .. } => match result {
+                Ok(ctr) => {
+                    let payload: codex_protocol::models::FunctionCallOutputPayload = ctr.into();
+                    payload.body.to_text().unwrap_or_default()
+                }
+                Err(err) => err.clone(),
+            },
+            ResponseInputItem::CustomToolCallOutput { output, .. } => output.clone(),
+            _ => String::new(),
         }
     }
 
