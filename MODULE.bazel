@@ -84,7 +84,7 @@ crate.annotation(
     },
     patch_args = ["-p1"],
     patches = [
-        "//patches:aws-lc-sys_skip_memcmp_check.patch",
+        "//patches:aws-lc-sys_memcmp_check.patch",
     ],
     crate = "aws-lc-sys",
 )

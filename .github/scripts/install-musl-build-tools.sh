@@ -102,16 +102,20 @@ for arg in "\$@"; do
   fi
   case "\${arg}" in
     --target)
+      # Drop explicit --target and its value: we always pass zig's -target below.
       skip_next=1
       continue
       ;;
     --target=*|-target=*|-target)
+      # Zig expects -target and rejects Rust triples like *-unknown-linux-musl.
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
       continue
       ;;
     -Wp,-U_FORTIFY_SOURCE)
+      # aws-lc-sys emits this GCC forwarding form in debug builds; zig c++
+      # expects the define flag directly.
       args+=("-U_FORTIFY_SOURCE")
       continue
       ;;
