@@ -1,5 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "EXPERIMENTAL - list available apps/connectors.",
   "properties": {
     "cursor": {
       "description": "Opaque pagination cursor returned by a previous call.",

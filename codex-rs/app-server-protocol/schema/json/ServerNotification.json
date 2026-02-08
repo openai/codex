@@ -166,6 +166,7 @@
       ]
     },
     "AppInfo": {
+      "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
         "description": {
           "type": [
@@ -215,6 +216,7 @@
       "type": "object"
     },
     "AppListUpdatedNotification": {
+      "description": "EXPERIMENTAL - notification emitted when the app list changes.",
       "properties": {
         "data": {
           "items": {

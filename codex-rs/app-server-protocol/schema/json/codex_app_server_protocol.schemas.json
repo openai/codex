@@ -9872,6 +9872,7 @@
         "type": "string"
       },
       "AppInfo": {
+        "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
         "properties": {
           "description": {
             "type": [
@@ -9922,6 +9923,7 @@
       },
       "AppListUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - notification emitted when the app list changes.",
         "properties": {
           "data": {
             "items": {
@@ -9941,6 +9943,7 @@
       },
       "AppsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - list available apps/connectors.",
         "properties": {
           "cursor": {
             "description": "Opaque pagination cursor returned by a previous call.",
@@ -9964,6 +9967,7 @@
       },
       "AppsListResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - app list response.",
         "properties": {
           "data": {
             "items": {
