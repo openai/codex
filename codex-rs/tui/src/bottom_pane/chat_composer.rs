@@ -735,7 +735,6 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
-    #[cfg(test)]
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         let expires_at = Instant::now()
             .checked_add(duration)

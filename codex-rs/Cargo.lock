@@ -1426,6 +1426,7 @@ dependencies = [
  "codex-stdio-to-uds",
  "codex-tui",
  "codex-utils-cargo-bin",
+ "codex-utils-pty",
  "codex-windows-sandbox",
  "libc",
  "owo-colors",

@@ -684,6 +684,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut newline = Line::from("");
     let mut queue_message_tab = Line::from("");
     let mut file_paths = Line::from("");
+    let mut cycle_thinking_level = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
     let mut edit_previous = Line::from("");
@@ -699,6 +700,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
                 ShortcutId::FilePaths => file_paths = text,
+                ShortcutId::CycleThinkingLevel => cycle_thinking_level = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
                 ShortcutId::EditPrevious => edit_previous = text,
@@ -715,6 +717,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         newline,
         queue_message_tab,
         file_paths,
+        cycle_thinking_level,
         paste_image,
         external_editor,
         edit_previous,
@@ -797,6 +800,7 @@ enum ShortcutId {
     InsertNewline,
     QueueMessageTab,
     FilePaths,
+    CycleThinkingLevel,
     PasteImage,
     ExternalEditor,
     EditPrevious,
@@ -922,6 +926,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " for file paths",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::CycleThinkingLevel,
+        bindings: &[ShortcutBinding {
+            key: key_hint::alt(KeyCode::Char('t')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " (Cmd+T on macOS) to cycle thinking level",
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,

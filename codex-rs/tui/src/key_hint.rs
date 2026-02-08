@@ -12,6 +12,10 @@ const ALT_PREFIX: &str = "⌥ + ";
 const ALT_PREFIX: &str = "⌥ + ";
 #[cfg(all(not(test), not(target_os = "macos")))]
 const ALT_PREFIX: &str = "alt + ";
+#[cfg(target_os = "macos")]
+const SUPER_PREFIX: &str = "⌘ + ";
+#[cfg(not(target_os = "macos"))]
+const SUPER_PREFIX: &str = "meta + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
 
@@ -55,6 +59,9 @@ pub(crate) const fn ctrl_alt(key: KeyCode) -> KeyBinding {
 
 fn modifiers_to_string(modifiers: KeyModifiers) -> String {
     let mut result = String::new();
+    if modifiers.contains(KeyModifiers::SUPER) {
+        result.push_str(SUPER_PREFIX);
+    }
     if modifiers.contains(KeyModifiers::CONTROL) {
         result.push_str(CTRL_PREFIX);
     }

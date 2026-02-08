@@ -5874,3 +5874,54 @@ async fn review_queues_user_messages_snapshot() {
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+
+#[test]
+fn next_thinking_level_cycles_supported_efforts() {
+    let supported = vec![
+        ReasoningEffortConfig::Low,
+        ReasoningEffortConfig::Medium,
+        ReasoningEffortConfig::High,
+    ];
+
+    assert_eq!(
+        ChatWidget::next_thinking_level(
+            &supported,
+            Some(ReasoningEffortConfig::Medium),
+            ReasoningEffortConfig::Medium,
+        ),
+        ReasoningEffortConfig::High
+    );
+    assert_eq!(
+        ChatWidget::next_thinking_level(
+            &supported,
+            Some(ReasoningEffortConfig::High),
+            ReasoningEffortConfig::Medium,
+        ),
+        ReasoningEffortConfig::Low
+    );
+    assert_eq!(
+        ChatWidget::next_thinking_level(&supported, None, ReasoningEffortConfig::Medium),
+        ReasoningEffortConfig::High
+    );
+    assert_eq!(
+        ChatWidget::next_thinking_level(
+            &supported,
+            Some(ReasoningEffortConfig::XHigh),
+            ReasoningEffortConfig::Low,
+        ),
+        ReasoningEffortConfig::Medium
+    );
+}
+
+#[test]
+fn next_thinking_level_handles_singleton_supported_list() {
+    let supported = vec![ReasoningEffortConfig::Medium];
+    assert_eq!(
+        ChatWidget::next_thinking_level(
+            &supported,
+            Some(ReasoningEffortConfig::Medium),
+            ReasoningEffortConfig::Medium,
+        ),
+        ReasoningEffortConfig::Medium
+    );
+}

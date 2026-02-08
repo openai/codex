@@ -3061,6 +3061,21 @@ impl ChatWidget {
 
         match key_event {
             KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if {
+                let triggers_alt =
+                    modifiers.contains(KeyModifiers::ALT) && !key_hint::is_altgr(modifiers);
+                let triggers_super =
+                    cfg!(target_os = "macos") && modifiers.contains(KeyModifiers::SUPER);
+                (triggers_alt || triggers_super) && !modifiers.contains(KeyModifiers::CONTROL)
+            } =>
+            {
+                self.cycle_thinking_level();
+            }
+            KeyEvent {
                 code: KeyCode::BackTab,
                 kind: KeyEventKind::Press,
                 ..
@@ -4659,6 +4674,95 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    fn cycle_thinking_level(&mut self) {
+        const FLASH_DURATION: Duration = Duration::from_secs(2);
+
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        if !self.is_session_configured() {
+            self.bottom_pane.show_footer_flash(
+                Line::from("Thinking level: unavailable during startup").dim(),
+                FLASH_DURATION,
+            );
+            return;
+        }
+
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.show_footer_flash(
+                Line::from("Thinking level: wait until idle").dim(),
+                FLASH_DURATION,
+            );
+            return;
+        }
+
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => {
+                self.bottom_pane.show_footer_flash(
+                    Line::from("Models are being updated; try again").dim(),
+                    FLASH_DURATION,
+                );
+                return;
+            }
+        };
+
+        let model = self.current_model().to_string();
+        let Some(preset) = presets.into_iter().find(|preset| preset.model == model) else {
+            self.bottom_pane.show_footer_flash(
+                Line::from("Thinking level: unsupported for current model").dim(),
+                FLASH_DURATION,
+            );
+            return;
+        };
+
+        let mut supported: Vec<ReasoningEffortConfig> = ReasoningEffortConfig::iter()
+            .filter(|effort| {
+                preset
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|option| option.effort == *effort)
+            })
+            .collect();
+        if supported.is_empty() {
+            supported.push(preset.default_reasoning_effort);
+        }
+
+        let next_effort = Self::next_thinking_level(
+            &supported,
+            self.effective_reasoning_effort(),
+            preset.default_reasoning_effort,
+        );
+        self.apply_model_and_effort(model, Some(next_effort));
+
+        let label = Self::reasoning_effort_label(next_effort);
+        self.bottom_pane.show_footer_flash(
+            Line::from(vec!["Thinking level: ".dim(), label.bold()]),
+            FLASH_DURATION,
+        );
+    }
+
+    fn next_thinking_level(
+        supported: &[ReasoningEffortConfig],
+        current: Option<ReasoningEffortConfig>,
+        default_effort: ReasoningEffortConfig,
+    ) -> ReasoningEffortConfig {
+        if supported.is_empty() {
+            return default_effort;
+        }
+
+        let base_idx = current
+            .and_then(|effort| supported.iter().position(|supported| *supported == effort))
+            .or_else(|| {
+                supported
+                    .iter()
+                    .position(|effort| *effort == default_effort)
+            })
+            .unwrap_or(0);
+        supported[(base_idx + 1) % supported.len()]
     }
 
     pub(crate) fn open_personality_popup(&mut self) {
