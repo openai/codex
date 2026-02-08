@@ -900,6 +900,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
 async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

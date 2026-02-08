@@ -666,7 +666,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let instructions_text = request.instructions_text();
 
     assert!(
-        instructions_text.contains("You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals."),
+        instructions_text.contains("You are Bracket, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals."),
         "expected instructions to use the template instructions, got: {instructions_text:?}"
     );
     assert!(
