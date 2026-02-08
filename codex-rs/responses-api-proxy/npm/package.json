@@ -1,9 +1,9 @@
 {
-  "name": "@openai/codex-responses-api-proxy",
+  "name": "@span-io/bracket-responses-api-proxy",
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
-    "codex-responses-api-proxy": "bin/codex-responses-api-proxy.js"
+    "bracket-responses-api-proxy": "bin/codex-responses-api-proxy.js"
   },
   "type": "module",
   "engines": {

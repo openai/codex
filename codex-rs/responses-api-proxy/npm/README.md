@@ -1,6 +1,6 @@
-# @openai/codex-responses-api-proxy
+# @span-io/bracket-responses-api-proxy
 
-<p align="center"><code>npm i -g @openai/codex-responses-api-proxy</code> to install <code>codex-responses-api-proxy</code></p>
+<p align="center"><code>npm i -g @span-io/bracket-responses-api-proxy</code> to install <code>codex-responses-api-proxy</code></p>
 
 This package distributes the prebuilt [Codex Responses API proxy binary](https://github.com/openai/codex/tree/main/codex-rs/responses-api-proxy) for macOS, Linux, and Windows.
 

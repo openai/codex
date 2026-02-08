@@ -1,5 +1,5 @@
 {
-  "name": "codex-monorepo",
+  "name": "bracket-monorepo",
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
