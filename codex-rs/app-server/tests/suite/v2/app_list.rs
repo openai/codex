@@ -480,6 +480,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     assert!(initial_data.iter().all(|app| app.is_accessible));
 
     server_handle.abort();
+    let _ = server_handle.await;
 
     let refetch_request = mcp
         .send_apps_list_request(AppsListParams {
