@@ -52,8 +52,14 @@ pub(crate) enum ColumnWidthMode {
     Fixed,
 }
 
+// Fraction for fixed mode's left (name) column width: 3/10 = 30%.
 const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
 const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
+
+// Upper bound fraction for auto modes' left (name) column width: 7/10 = 70%.
+// This keeps at least 30% available for the right (description) column.
+const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
+const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
 
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
@@ -209,6 +215,14 @@ fn compute_desc_col(
     }
 
     let max_desc_col = content_width.saturating_sub(1) as usize;
+    // In auto modes, keep at least ~30% of width available for descriptions so
+    // very long names do not push wrapped descriptions into a near-vertical
+    // right-edge column.
+    let max_auto_desc_col = max_desc_col.min(
+        ((content_width as usize * AUTO_LEFT_COLUMN_MAX_NUMERATOR)
+            / AUTO_LEFT_COLUMN_MAX_DENOMINATOR)
+            .max(1),
+    );
     match col_width_mode {
         ColumnWidthMode::Fixed => ((content_width as usize * FIXED_LEFT_COLUMN_NUMERATOR)
             / FIXED_LEFT_COLUMN_DENOMINATOR)
@@ -243,7 +257,7 @@ fn compute_desc_col(
                 ColumnWidthMode::Fixed => 0,
             };
 
-            max_name_width.saturating_add(2).min(max_desc_col)
+            max_name_width.saturating_add(2).min(max_auto_desc_col)
         }
     }
 }
@@ -272,12 +286,14 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         (None, None) => None,
     };
 
-    // Enforce single-line name: allow at most desc_col - 2 cells for name,
-    // reserving two spaces before the description column.
-    let name_limit = combined_description
-        .as_ref()
-        .map(|_| desc_col.saturating_sub(2))
-        .unwrap_or(usize::MAX);
+    // Enforce single-line names only when no explicit wrap indent is set.
+    // Callers that set `wrap_indent` can opt into wrapped names even when a
+    // description is present.
+    let name_limit = if combined_description.is_some() && row.wrap_indent.is_none() {
+        desc_col.saturating_sub(2)
+    } else {
+        usize::MAX
+    };
 
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
     let mut used_width = 0usize;
@@ -332,7 +348,11 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         full_spans.push(")".into());
     }
     if let Some(desc) = combined_description.as_ref() {
-        let gap = desc_col.saturating_sub(this_name_width);
+        let gap = if row.wrap_indent.is_some() {
+            desc_col.saturating_sub(this_name_width).max(2)
+        } else {
+            desc_col.saturating_sub(this_name_width)
+        };
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
         }
