@@ -6,18 +6,17 @@ use crate::runtime::ConfigState;
 use crate::runtime::LayerMtime;
 use anyhow::Context;
 use anyhow::Result;
-use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::config::CONFIG_TOML_FILE;
-use codex_core::config::ConstraintError;
-use codex_core::config::find_codex_home;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::load_config_layers_state;
+use codex_utils_home_dir::find_codex_home;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::path::Path;
+use tokio::fs;
+use toml::Value as TomlValue;
+
+const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[cfg(unix)]
+const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -26,35 +25,37 @@ pub use crate::runtime::NetworkProxyState;
 pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
 pub(crate) async fn build_config_state() -> Result<ConfigState> {
-    // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
-    // rest of Codex (system/managed layers, user layers, session flags, etc.).
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let cli_overrides = Vec::new();
-    let overrides = LoaderOverrides::default();
-    let config_layer_stack = load_config_layers_state(
-        &codex_home,
-        None,
-        &cli_overrides,
-        overrides,
-        CloudRequirementsLoader::default(),
-    )
-    .await
-    .context("failed to load Codex config")?;
-
     let cfg_path = codex_home.join(CONFIG_TOML_FILE);
 
-    // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
-    // This avoids a second parser/merger implementation (and the drift that comes with it).
-    let merged_toml = config_layer_stack.effective_config();
+    let system_cfg_path = system_config_path();
+    let system_config = read_toml_file_best_effort(&system_cfg_path)
+        .await
+        .context("failed to read system config")?;
+    let user_config = read_toml_file_best_effort(&cfg_path)
+        .await
+        .context("failed to read user config")?;
+
+    let mut merged_toml = TomlValue::Table(toml::map::Map::new());
+    if let Some(system_config) = system_config.clone() {
+        merge_toml_values(&mut merged_toml, system_config);
+    }
+    if let Some(user_config) = user_config {
+        merge_toml_values(&mut merged_toml, user_config);
+    }
+
     let config: NetworkProxyConfig = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
     // Security boundary: user-controlled layers must not be able to widen restrictions set by
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
-    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
+    let constraints = enforce_trusted_constraints(system_config.as_ref(), &config)?;
 
-    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
+    let layer_mtimes = vec![
+        LayerMtime::new(system_cfg_path),
+        LayerMtime::new(cfg_path.clone()),
+    ];
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     Ok(ConfigState {
@@ -68,26 +69,57 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     })
 }
 
-fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
-    stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-        .iter()
-        .filter_map(|layer| {
-            let path = match &layer.name {
-                ConfigLayerSource::System { file } => Some(file.as_path().to_path_buf()),
-                ConfigLayerSource::User { file } => Some(file.as_path().to_path_buf()),
-                ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
-                    .join(CONFIG_TOML_FILE)
-                    .ok()
-                    .map(|p| p.as_path().to_path_buf()),
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
-                    Some(file.as_path().to_path_buf())
+fn system_config_path() -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        Path::new(SYSTEM_CONFIG_TOML_FILE_UNIX).to_path_buf()
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Use a dummy path on non-Unix platforms. This keeps the reload logic stable without
+        // needing per-platform config stack logic yet.
+        std::path::PathBuf::from("__no_system_config.toml")
+    }
+}
+
+async fn read_toml_file_best_effort(path: &Path) -> Result<Option<TomlValue>> {
+    let contents = match fs::read_to_string(path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "permission denied reading config; ignoring"
+            );
+            return Ok(None);
+        }
+        Err(err) => return Err(err).context(format!("read {}", path.display())),
+    };
+
+    let parsed: TomlValue = contents
+        .parse()
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(parsed))
+}
+
+fn merge_toml_values(base: &mut TomlValue, overlay: TomlValue) {
+    match (base, overlay) {
+        (TomlValue::Table(base_table), TomlValue::Table(overlay_table)) => {
+            for (key, value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(existing) => merge_toml_values(existing, value),
+                    None => {
+                        base_table.insert(key, value);
+                    }
                 }
-                _ => None,
-            };
-            path.map(LayerMtime::new)
-        })
-        .collect()
+            }
+        }
+        (base_slot, overlay_value) => {
+            *base_slot = overlay_value;
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -127,103 +159,83 @@ pub(crate) struct NetworkProxyConstraints {
 }
 
 fn enforce_trusted_constraints(
-    layers: &codex_core::config_loader::ConfigLayerStack,
+    system_config: Option<&TomlValue>,
     config: &NetworkProxyConfig,
 ) -> Result<NetworkProxyConstraints> {
-    let constraints = network_constraints_from_trusted_layers(layers)?;
+    let constraints = network_constraints_from_system_config(system_config)?;
     validate_policy_against_constraints(config, &constraints)
         .context("network proxy constraints")?;
     Ok(constraints)
 }
 
-fn network_constraints_from_trusted_layers(
-    layers: &codex_core::config_loader::ConfigLayerStack,
+fn network_constraints_from_system_config(
+    system_config: Option<&TomlValue>,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
-    for layer in layers.get_layers(
-        codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst,
-        false,
-    ) {
-        // Only trusted layers contribute constraints. User-controlled layers can narrow policy but
-        // must never widen beyond what managed config allows.
-        if is_user_controlled_layer(&layer.name) {
-            continue;
-        }
+    let Some(system_config) = system_config else {
+        return Ok(constraints);
+    };
 
-        let partial: PartialConfig = layer
-            .config
-            .clone()
-            .try_into()
-            .context("failed to deserialize trusted config layer")?;
+    let partial: PartialConfig = system_config
+        .clone()
+        .try_into()
+        .context("failed to deserialize system config constraints")?;
 
-        if let Some(enabled) = partial.network.enabled {
-            constraints.enabled = Some(enabled);
-        }
-        if let Some(mode) = partial.network.mode {
-            constraints.mode = Some(mode);
-        }
-        if let Some(allow_upstream_proxy) = partial.network.allow_upstream_proxy {
-            constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
-        }
-        if let Some(dangerously_allow_non_loopback_proxy) =
-            partial.network.dangerously_allow_non_loopback_proxy
-        {
-            constraints.dangerously_allow_non_loopback_proxy =
-                Some(dangerously_allow_non_loopback_proxy);
-        }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            partial.network.dangerously_allow_non_loopback_admin
-        {
-            constraints.dangerously_allow_non_loopback_admin =
-                Some(dangerously_allow_non_loopback_admin);
-        }
-
-        if let Some(allowed_domains) = partial.network.allowed_domains {
-            constraints.allowed_domains = Some(allowed_domains);
-        }
-        if let Some(denied_domains) = partial.network.denied_domains {
-            constraints.denied_domains = Some(denied_domains);
-        }
-        if let Some(allow_unix_sockets) = partial.network.allow_unix_sockets {
-            constraints.allow_unix_sockets = Some(allow_unix_sockets);
-        }
-        if let Some(allow_local_binding) = partial.network.allow_local_binding {
-            constraints.allow_local_binding = Some(allow_local_binding);
-        }
+    if let Some(enabled) = partial.network.enabled {
+        constraints.enabled = Some(enabled);
     }
-    Ok(constraints)
-}
+    if let Some(mode) = partial.network.mode {
+        constraints.mode = Some(mode);
+    }
+    if let Some(allow_upstream_proxy) = partial.network.allow_upstream_proxy {
+        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
+    }
+    if let Some(dangerously_allow_non_loopback_proxy) =
+        partial.network.dangerously_allow_non_loopback_proxy
+    {
+        constraints.dangerously_allow_non_loopback_proxy =
+            Some(dangerously_allow_non_loopback_proxy);
+    }
+    if let Some(dangerously_allow_non_loopback_admin) =
+        partial.network.dangerously_allow_non_loopback_admin
+    {
+        constraints.dangerously_allow_non_loopback_admin =
+            Some(dangerously_allow_non_loopback_admin);
+    }
 
-fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
-    matches!(
-        layer,
-        ConfigLayerSource::User { .. }
-            | ConfigLayerSource::Project { .. }
-            | ConfigLayerSource::SessionFlags
-    )
+    if let Some(allowed_domains) = partial.network.allowed_domains {
+        constraints.allowed_domains = Some(allowed_domains);
+    }
+    if let Some(denied_domains) = partial.network.denied_domains {
+        constraints.denied_domains = Some(denied_domains);
+    }
+    if let Some(allow_unix_sockets) = partial.network.allow_unix_sockets {
+        constraints.allow_unix_sockets = Some(allow_unix_sockets);
+    }
+    if let Some(allow_local_binding) = partial.network.allow_local_binding {
+        constraints.allow_local_binding = Some(allow_local_binding);
+    }
+
+    Ok(constraints)
 }
 
 pub(crate) fn validate_policy_against_constraints(
     config: &NetworkProxyConfig,
     constraints: &NetworkProxyConstraints,
-) -> std::result::Result<(), ConstraintError> {
+) -> Result<()> {
     fn invalid_value(
         field_name: &'static str,
         candidate: impl Into<String>,
         allowed: impl Into<String>,
-    ) -> ConstraintError {
-        ConstraintError::InvalidValue {
-            field_name,
-            candidate: candidate.into(),
-            allowed: allowed.into(),
-            requirement_source: RequirementSource::Unknown,
-        }
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "invalid value for {field_name}: candidate={} allowed={}",
+            candidate.into(),
+            allowed.into()
+        )
     }
 
-    fn validate<T>(
-        candidate: T,
-        validator: impl FnOnce(&T) -> std::result::Result<(), ConstraintError>,
-    ) -> std::result::Result<(), ConstraintError> {
+    fn validate<T>(candidate: T, validator: impl FnOnce(&T) -> Result<()>) -> Result<()> {
         validator(&candidate)
     }
 
