@@ -1,4 +1,7 @@
 use anyhow::Context;
+use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use url::Url;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -593,10 +596,6 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
-use futures::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use url::Url;
-
 impl App {
     fn start_background_cloud_link(&mut self, session_id: String) {
         let app_event_tx = self.app_event_tx.clone();
@@ -617,17 +616,17 @@ impl App {
                     codex_core::auth::AuthCredentialsStoreMode::Auto
                 )?.and_then(|a| a.cloud_token);
 
-                if stored_token.is_none() {
-                    anyhow::bail!("No cloud token found. Run 'bracket pair' first.");
-                }
-                let refresh_token = stored_token.unwrap();
+                let refresh_token = match stored_token {
+                    Some(token) => token,
+                    None => anyhow::bail!("No cloud token found. Run 'bracket pair' first."),
+                };
 
                 // 1. Exchange for session token
                 let http_client = reqwest::Client::new();
                 let session_url = format!("{}/api/clients/session", server_url.trim_end_matches('/'));
                 
                 let res = http_client.post(&session_url)
-                    .header("Authorization", format!("Bearer {}", refresh_token))
+                    .header("Authorization", format!("Bearer {refresh_token}"))
                     .send()
                     .await?;
 
@@ -754,9 +753,9 @@ impl App {
             }.await;
 
             if let Err(e) = result {
-                tracing::error!("Cloud link task failed: {}", e);
+                tracing::error!("Cloud link task failed: {e}");
                 app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(format!("Cloud link failed: {}", e))
+                    history_cell::new_error_event(format!("Cloud link failed: {e}"))
                 )));
             }
         });
@@ -2442,11 +2441,10 @@ impl App {
                 self.chat_widget.cancel_status_line_setup();
             }
             AppEvent::StartCloudLink => {
-                if self.cloud_link_session_id.is_some() {
+                if let Some(linked_id) = &self.cloud_link_session_id {
                     self.chat_widget.add_info_message(
                         format!(
-                            "This session is already linked to the cloud (ID: {}).",
-                            self.cloud_link_session_id.as_ref().unwrap()
+                            "This session is already linked to the cloud (ID: {linked_id}).",
                         ),
                         None,
                     );
@@ -2455,7 +2453,7 @@ impl App {
                     self.cloud_link_session_id = Some(session_id.clone());
                     self.chat_widget.add_info_message(
                         "Linking session to cloud...".to_string(),
-                        Some(format!("Session ID: {}", session_id)),
+                        Some(format!("Session ID: {session_id}")),
                     );
                     self.start_background_cloud_link(session_id);
                 }
@@ -2928,6 +2926,8 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            cloud_link_session_id: None,
+            cloud_link_tx: None,
         }
     }
 
@@ -2982,6 +2982,8 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                cloud_link_session_id: None,
+                cloud_link_tx: None,
             },
             rx,
             op_rx,
@@ -3359,7 +3361,7 @@ mod tests {
         );
         assert_eq!(
             summary.resume_command,
-            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
+            Some("bracket resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 
@@ -3377,7 +3379,7 @@ mod tests {
             .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("bracket resume my-session".to_string())
         );
     }
 }

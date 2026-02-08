@@ -413,7 +413,7 @@ impl HistoryCell for AgentMessageCell {
             .collect::<Vec<String>>()
             .join("\n");
         if self.is_first_line {
-            format!("Assistant: {}", content)
+            format!("Assistant: {content}")
         } else {
             content
         }
@@ -476,7 +476,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/span-io/bracket-cli".cyan().underlined(),
                 " for installation options."
             ]
         };
@@ -491,7 +491,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             update_instruction,
             "",
             "See full release notes:",
-            "https://github.com/openai/codex/releases/latest"
+            "https://github.com/span-io/bracket-cli/releases/latest"
                 .cyan()
                 .underlined(),
         ];
