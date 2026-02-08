@@ -222,8 +222,10 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -242,6 +244,9 @@ pub struct Codex {
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
     pub(crate) session: Arc<Session>,
 }
+
+const NON_MULTIMODAL_IMAGE_PLACEHOLDER: &str =
+    "[there was an image here but it was removed for non-multimodal models]";
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
@@ -3836,7 +3841,18 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
+        let mut sampling_request_input: Vec<ResponseItem> =
+            { sess.clone_history().await.for_prompt() };
+        if !turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            replace_tool_output_images_with_placeholder(
+                &mut sampling_request_input,
+                NON_MULTIMODAL_IMAGE_PLACEHOLDER,
+            );
+        }
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -3921,9 +3937,10 @@ pub(crate) async fn run_turn(
                 error_or_panic(
                     "Invalid image detected; sanitizing tool output to prevent poisoning",
                 );
-                if state.history.replace_last_turn_images(
-                    "[there was an image here but it was removed for non-multimodal models]",
-                ) {
+                if state
+                    .history
+                    .replace_last_turn_images(NON_MULTIMODAL_IMAGE_PLACEHOLDER)
+                {
                     continue;
                 }
                 let event = EventMsg::Error(ErrorEvent {
@@ -3945,6 +3962,32 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn replace_tool_output_images_with_placeholder(
+    input: &mut [ResponseItem],
+    placeholder: &str,
+) -> bool {
+    let mut replaced = false;
+    let placeholder = placeholder.to_string();
+    for item in input {
+        if let ResponseItem::FunctionCallOutput { output, .. } = item
+            && let Some(content_items) = output.content_items_mut()
+        {
+            for content_item in content_items {
+                if matches!(
+                    content_item,
+                    FunctionCallOutputContentItem::InputImage { .. }
+                ) {
+                    *content_item = FunctionCallOutputContentItem::InputText {
+                        text: placeholder.clone(),
+                    };
+                    replaced = true;
+                }
+            }
+        }
+    }
+    replaced
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
@@ -4960,6 +5003,7 @@ mod tests {
     use codex_otel::TelemetryAuthMode;
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
@@ -5736,6 +5780,72 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn replace_tool_output_images_with_placeholder_replaces_images() {
+        let mut input = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "before".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "data:image/png;base64,AAA".to_string(),
+                    },
+                ]),
+                success: Some(true),
+            },
+        }];
+
+        let replaced = replace_tool_output_images_with_placeholder(
+            &mut input,
+            NON_MULTIMODAL_IMAGE_PLACEHOLDER,
+        );
+
+        assert!(replaced);
+        assert_eq!(
+            input,
+            vec![ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::ContentItems(vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "before".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputText {
+                            text: NON_MULTIMODAL_IMAGE_PLACEHOLDER.to_string(),
+                        },
+                    ]),
+                    success: Some(true),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn replace_tool_output_images_with_placeholder_is_noop_when_no_images() {
+        let mut input = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "only text".to_string(),
+                    },
+                ]),
+                success: Some(true),
+            },
+        }];
+        let original = input.clone();
+
+        let replaced = replace_tool_output_images_with_placeholder(
+            &mut input,
+            NON_MULTIMODAL_IMAGE_PLACEHOLDER,
+        );
+
+        assert!(!replaced);
+        assert_eq!(input, original);
     }
 
     async fn wait_for_thread_rolled_back(
