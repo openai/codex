@@ -597,9 +597,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         "second request should replace the invalid image"
     );
     let user_texts = second_request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| {
-        text == "[there was an image here but it was removed for non-multimodal models]"
-    }));
+    assert!(user_texts.iter().any(|text| text == "Invalid image"));
 
     Ok(())
 }

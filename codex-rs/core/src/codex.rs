@@ -3937,10 +3937,7 @@ pub(crate) async fn run_turn(
                 error_or_panic(
                     "Invalid image detected; sanitizing tool output to prevent poisoning",
                 );
-                if state
-                    .history
-                    .replace_last_turn_images(NON_MULTIMODAL_IMAGE_PLACEHOLDER)
-                {
+                if state.history.replace_last_turn_images("Invalid image") {
                     continue;
                 }
                 let event = EventMsg::Error(ErrorEvent {
