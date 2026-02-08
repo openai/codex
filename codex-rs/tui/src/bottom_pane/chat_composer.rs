@@ -4506,14 +4506,15 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some(HistoryEntry {
-                text: "[Image #1] draft".to_string(),
-                text_elements: vec![TextElement::new(
+            Some(HistoryEntry::with_pending(
+                "[Image #1] draft".to_string(),
+                vec![TextElement::new(
                     (0.."[Image #1]".len()).into(),
                     Some("[Image #1]".to_string())
                 )],
-                local_image_paths: vec![local_image_path],
-            })
+                vec![local_image_path],
+                Vec::new(),
+            ))
         );
     }
 
