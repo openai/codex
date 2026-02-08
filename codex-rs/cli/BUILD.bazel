@@ -6,5 +6,5 @@ codex_rust_crate(
 )
 
 multiplatform_binaries(
-    name = "codex",
+    name = "bracket",
 )

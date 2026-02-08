@@ -1,3 +1,6 @@
+[net]
+git-fetch-with-cli = true
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608"]
 

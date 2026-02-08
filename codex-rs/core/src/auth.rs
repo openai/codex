@@ -313,6 +313,7 @@ impl CodexAuth {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         };
 
         let client = crate::default_client::create_client();
@@ -392,7 +393,26 @@ pub fn login_with_api_key(
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
+        cloud_token: None,
     };
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+}
+
+/// Writes an `auth.json` update that includes the cloud token.
+pub fn login_with_cloud_token(
+    codex_home: &Path,
+    cloud_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let mut auth_dot_json = load_auth_dot_json(codex_home, auth_credentials_store_mode)?
+        .unwrap_or(AuthDotJson {
+            auth_mode: None,
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            cloud_token: None,
+        });
+    auth_dot_json.cloud_token = Some(cloud_token.to_string());
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
 
@@ -741,6 +761,7 @@ impl AuthDotJson {
             openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
+            cloud_token: None,
         }
     }
 
