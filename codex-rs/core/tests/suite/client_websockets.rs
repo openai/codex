@@ -404,7 +404,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
 
     let usage_limit_error = json!({
         "type": "error",
-        "status_code": 429,
+        "status": 429,
         "error": {
             "type": "usage_limit_reached",
             "message": "The usage limit has been reached",
@@ -477,6 +477,57 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
     };
     assert!(
         error_event.message.to_lowercase().contains("usage limit"),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
+    skip_if_no_network!();
+
+    let invalid_request_error = json!({
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "Model 'castor-raikou-0205-ev3' does not support image inputs."
+        }
+    });
+
+    let server = start_websocket_server(vec![vec![vec![invalid_request_error]]]).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+    });
+    let test = builder
+        .build_with_websocket_server(&server)
+        .await
+        .expect("build websocket codex");
+
+    let submission_id = test
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submission should succeed while emitting invalid request events");
+
+    let error_event = wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event
+            .message
+            .to_lowercase()
+            .contains("does not support image inputs"),
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
     );

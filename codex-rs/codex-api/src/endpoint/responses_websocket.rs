@@ -261,36 +261,51 @@ fn map_ws_error(err: WsError, url: &Url) -> ApiError {
 struct WrappedWebsocketErrorEvent {
     #[serde(rename = "type")]
     kind: String,
-    status_code: Option<u16>,
+    #[serde(alias = "status_code")]
+    status: Option<u16>,
     #[serde(default)]
     error: Option<Value>,
     #[serde(default)]
     headers: Option<JsonMap<String, Value>>,
 }
 
-fn parse_wrapped_websocket_error_event(payload: &str) -> Option<ApiError> {
+fn parse_wrapped_websocket_error_event(payload: &str) -> Option<WrappedWebsocketErrorEvent> {
     let event: WrappedWebsocketErrorEvent = serde_json::from_str(payload).ok()?;
     if event.kind != "error" {
         return None;
     }
+    Some(event)
+}
 
-    let status_code = event.status_code?;
-    let status = StatusCode::from_u16(status_code).ok()?;
+fn map_wrapped_websocket_error_event(event: WrappedWebsocketErrorEvent) -> Option<ApiError> {
+    let WrappedWebsocketErrorEvent {
+        status,
+        error,
+        headers,
+        ..
+    } = event;
+
+    let status = StatusCode::from_u16(status?).ok()?;
     if status.is_success() {
         return None;
     }
 
-    let body = event.error.map(|error| {
-        serde_json::json!({
+    let body = error.map(|error| {
+        serde_json::to_string_pretty(&serde_json::json!({
             "error": error
+        }))
+        .unwrap_or_else(|_| {
+            serde_json::json!({
+                "error": error
+            })
+            .to_string()
         })
-        .to_string()
     });
 
     Some(ApiError::Transport(TransportError::Http {
         status,
         url: None,
-        headers: event.headers.map(json_headers_to_http_headers),
+        headers: headers.map(json_headers_to_http_headers),
         body,
     }))
 }
@@ -373,7 +388,9 @@ async fn run_websocket_response_stream(
         match message {
             Message::Text(text) => {
                 trace!("websocket event: {text}");
-                if let Some(error) = parse_wrapped_websocket_error_event(&text) {
+                if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
+                    && let Some(error) = map_wrapped_websocket_error_event(wrapped_error)
+                {
                     return Err(error);
                 }
 
@@ -441,7 +458,7 @@ mod tests {
     fn parse_wrapped_websocket_error_event_maps_to_transport_http() {
         let payload = json!({
             "type": "error",
-            "status_code": 429,
+            "status": 429,
             "error": {
                 "type": "usage_limit_reached",
                 "message": "The usage limit has been reached",
@@ -455,8 +472,10 @@ mod tests {
         })
         .to_string();
 
-        let api_error = parse_wrapped_websocket_error_event(&payload)
+        let wrapped_error = parse_wrapped_websocket_error_event(&payload)
             .expect("expected websocket error payload to be parsed");
+        let api_error = map_wrapped_websocket_error_event(wrapped_error)
+            .expect("expected websocket error payload to map to ApiError");
 
         let ApiError::Transport(TransportError::Http {
             status,
@@ -497,7 +516,53 @@ mod tests {
         })
         .to_string();
 
-        let api_error = parse_wrapped_websocket_error_event(&payload);
+        let wrapped_error = parse_wrapped_websocket_error_event(&payload);
+        assert!(wrapped_error.is_none());
+    }
+
+    #[test]
+    fn parse_wrapped_websocket_error_event_with_status_maps_invalid_request() {
+        let payload = json!({
+            "type": "error",
+            "status": 400,
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Model does not support image inputs"
+            }
+        })
+        .to_string();
+
+        let wrapped_error = parse_wrapped_websocket_error_event(&payload)
+            .expect("expected websocket error payload to be parsed");
+        let api_error = map_wrapped_websocket_error_event(wrapped_error)
+            .expect("expected websocket error payload to map to ApiError");
+        let ApiError::Transport(TransportError::Http { status, body, .. }) = api_error else {
+            panic!("expected ApiError::Transport(Http)");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body = body.expect("expected body");
+        assert!(body.contains("invalid_request_error"));
+        assert!(body.contains("Model does not support image inputs"));
+    }
+
+    #[test]
+    fn parse_wrapped_websocket_error_event_without_status_is_not_mapped() {
+        let payload = json!({
+            "type": "error",
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "The usage limit has been reached"
+            },
+            "headers": {
+                "x-codex-primary-used-percent": "100.0",
+                "x-codex-primary-window-minutes": 15
+            }
+        })
+        .to_string();
+
+        let wrapped_error = parse_wrapped_websocket_error_event(&payload)
+            .expect("expected websocket error payload to be parsed");
+        let api_error = map_wrapped_websocket_error_event(wrapped_error);
         assert!(api_error.is_none());
     }
 }
