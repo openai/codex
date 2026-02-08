@@ -479,8 +479,14 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     assert_eq!(initial_data.len(), 1);
     assert!(initial_data.iter().all(|app| app.is_accessible));
 
-    server_handle.abort();
-    let _ = server_handle.await;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token-invalid")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
 
     let refetch_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -515,6 +521,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
 
     assert_eq!(cached_data, initial_data);
     assert!(cached_next_cursor.is_none());
+    server_handle.abort();
     Ok(())
 }
 
