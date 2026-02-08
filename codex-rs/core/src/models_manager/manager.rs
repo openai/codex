@@ -430,8 +430,20 @@ mod tests {
         }
     }
 
+    fn can_bind_loopback_port() -> bool {
+        match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(_listener) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => false,
+            Err(err) => panic!("unexpected error probing loopback listen permissions: {err}"),
+        }
+    }
+
     #[tokio::test]
     async fn refresh_available_models_sorts_by_priority() {
+        if !can_bind_loopback_port() {
+            return;
+        }
+
         let server = MockServer::start().await;
         let remote_models = vec![
             remote_model("priority-low", "Low", 1),
@@ -489,6 +501,10 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_available_models_uses_cache_when_fresh() {
+        if !can_bind_loopback_port() {
+            return;
+        }
+
         let server = MockServer::start().await;
         let remote_models = vec![remote_model("cached", "Cached", 5)];
         let models_mock = mount_models_once(
@@ -536,6 +552,10 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_available_models_refetches_when_cache_stale() {
+        if !can_bind_loopback_port() {
+            return;
+        }
+
         let server = MockServer::start().await;
         let initial_models = vec![remote_model("stale", "Stale", 1)];
         let initial_mock = mount_models_once(
@@ -605,6 +625,10 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_available_models_refetches_when_version_mismatch() {
+        if !can_bind_loopback_port() {
+            return;
+        }
+
         let server = MockServer::start().await;
         let initial_models = vec![remote_model("old", "Old", 1)];
         let initial_mock = mount_models_once(
@@ -674,6 +698,10 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_available_models_drops_removed_remote_models() {
+        if !can_bind_loopback_port() {
+            return;
+        }
+
         let server = MockServer::start().await;
         let initial_models = vec![remote_model("remote-old", "Remote Old", 1)];
         let initial_mock = mount_models_once(
