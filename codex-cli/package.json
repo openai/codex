@@ -1,6 +1,6 @@
 {
   "name": "@span-io/bracket",
-  "version": "0.1.0-dev",
+  "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
     "bracket": "bin/codex.js"
@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/span-io/bracket-cli.git",
     "directory": "codex-cli"
   },
   "packageManager": "pnpm@10.28.2+sha512.41872f037ad22f7348e3b1debbaf7e867cfd448f2726d9cf74c08f19507c31d2c8e7a11525b983febc2df640b5438dee6023ebb1f84ed43cc2d654d2bc326264"
