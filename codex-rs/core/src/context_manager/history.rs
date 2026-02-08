@@ -269,11 +269,7 @@ impl ContextManager {
         self.items_after_last_model_generated_item()
             .iter()
             .fold(0usize, |acc, item| {
-                acc.saturating_add(
-                    serde_json::to_vec(item)
-                        .map(|bytes| bytes.len())
-                        .unwrap_or_default(),
-                )
+                acc.saturating_add(estimate_item_model_visible_bytes(item))
             })
     }
 
@@ -401,7 +397,11 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .saturating_sub(650)
 }
 
-fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+fn model_visible_text(item: &ResponseItem) -> String {
+    serde_json::to_string(item).unwrap_or_default()
+}
+
+fn estimate_item_model_visible_bytes(item: &ResponseItem) -> usize {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
@@ -410,15 +410,14 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
         }
         | ResponseItem::Compaction {
             encrypted_content: content,
-        } => {
-            let reasoning_bytes = estimate_reasoning_length(content.len());
-            i64::try_from(approx_tokens_from_byte_count(reasoning_bytes)).unwrap_or(i64::MAX)
-        }
-        item => {
-            let serialized = serde_json::to_string(item).unwrap_or_default();
-            i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
-        }
+        } => estimate_reasoning_length(content.len()),
+        item => model_visible_text(item).len(),
     }
+}
+
+fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+    let bytes = estimate_item_model_visible_bytes(item);
+    i64::try_from(approx_tokens_from_byte_count(bytes)).unwrap_or(i64::MAX)
 }
 
 fn is_model_generated_item(item: &ResponseItem) -> bool {
