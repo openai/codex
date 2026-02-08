@@ -8,25 +8,23 @@ use crate::mention_codec::decode_history_mentions;
 use codex_core::protocol::Op;
 use codex_protocol::user_input::TextElement;
 
+/// A composer history entry that can rehydrate draft state.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HistoryEntry {
+    /// Raw text stored in history (may include placeholder strings).
     pub(crate) text: String,
+    /// Text element ranges for placeholders inside `text`.
     pub(crate) text_elements: Vec<TextElement>,
+    /// Local image paths captured alongside `text_elements`.
     pub(crate) local_image_paths: Vec<PathBuf>,
+    /// Mention bindings for tool/app/skill references inside `text`.
     pub(crate) mention_bindings: Vec<MentionBinding>,
+    /// Placeholder-to-payload pairs used to restore large paste content.
+    pub(crate) pending_pastes: Vec<(String, String)>,
 }
 
 impl HistoryEntry {
-    fn empty() -> Self {
-        Self {
-            text: String::new(),
-            text_elements: Vec::new(),
-            local_image_paths: Vec::new(),
-            mention_bindings: Vec::new(),
-        }
-    }
-
-    pub(crate) fn from_text(text: String) -> Self {
+    pub(crate) fn new(text: String) -> Self {
         let decoded = decode_history_mentions(&text);
         Self {
             text: decoded.text,
@@ -40,6 +38,23 @@ impl HistoryEntry {
                     path: mention.path,
                 })
                 .collect(),
+            pending_pastes: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_pending(
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        pending_pastes: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings: Vec::new(),
+            pending_pastes,
         }
     }
 }
@@ -55,9 +70,10 @@ pub(crate) struct ChatComposerHistory {
     history_entry_count: usize,
 
     /// Messages submitted by the user *during this UI session* (newest at END).
+    /// Local entries retain full draft state (text elements, image paths, pending pastes).
     local_history: Vec<HistoryEntry>,
 
-    /// Cache of persistent history entries fetched on-demand.
+    /// Cache of persistent history entries fetched on-demand (text-only).
     fetched_history: HashMap<usize, HistoryEntry>,
 
     /// Current cursor within the combined (persistent + local) history. `None`
@@ -95,10 +111,14 @@ impl ChatComposerHistory {
     /// Record a message submitted by the user in the current session so it can
     /// be recalled later.
     pub fn record_local_submission(&mut self, entry: HistoryEntry) {
-        if entry.text.is_empty() && entry.local_image_paths.is_empty() {
+        if entry.text.is_empty()
+            && entry.text_elements.is_empty()
+            && entry.local_image_paths.is_empty()
+            && entry.mention_bindings.is_empty()
+            && entry.pending_pastes.is_empty()
+        {
             return;
         }
-
         self.history_cursor = None;
         self.last_history_text = None;
 
@@ -177,7 +197,7 @@ impl ChatComposerHistory {
                 // Past newest – clear and exit browsing mode.
                 self.history_cursor = None;
                 self.last_history_text = None;
-                Some(HistoryEntry::empty())
+                Some(HistoryEntry::new(String::new()))
             }
         }
     }
@@ -192,8 +212,7 @@ impl ChatComposerHistory {
         if self.history_log_id != Some(log_id) {
             return None;
         }
-        let text = entry?;
-        let entry = HistoryEntry::from_text(text);
+        let entry = HistoryEntry::new(entry?);
         self.fetched_history.insert(offset, entry.clone());
 
         if self.history_cursor == Some(offset as isize) {
@@ -241,6 +260,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -248,27 +268,27 @@ mod tests {
         let mut history = ChatComposerHistory::new();
 
         // Empty submissions are ignored.
-        history.record_local_submission(HistoryEntry::from_text(String::new()));
+        history.record_local_submission(HistoryEntry::new(String::new()));
         assert_eq!(history.local_history.len(), 0);
 
         // First entry is recorded.
-        history.record_local_submission(HistoryEntry::from_text("hello".to_string()));
+        history.record_local_submission(HistoryEntry::new("hello".to_string()));
         assert_eq!(history.local_history.len(), 1);
         assert_eq!(
             history.local_history.last().unwrap(),
-            &HistoryEntry::from_text("hello".to_string())
+            &HistoryEntry::new("hello".to_string())
         );
 
         // Identical consecutive entry is skipped.
-        history.record_local_submission(HistoryEntry::from_text("hello".to_string()));
+        history.record_local_submission(HistoryEntry::new("hello".to_string()));
         assert_eq!(history.local_history.len(), 1);
 
         // Different entry is recorded.
-        history.record_local_submission(HistoryEntry::from_text("world".to_string()));
+        history.record_local_submission(HistoryEntry::new("world".to_string()));
         assert_eq!(history.local_history.len(), 2);
         assert_eq!(
             history.local_history.last().unwrap(),
-            &HistoryEntry::from_text("world".to_string())
+            &HistoryEntry::new("world".to_string())
         );
     }
 
@@ -300,7 +320,7 @@ mod tests {
 
         // Inject the async response.
         assert_eq!(
-            Some(HistoryEntry::from_text("latest".to_string())),
+            Some(HistoryEntry::new("latest".to_string())),
             history.on_entry_response(1, 2, Some("latest".into()))
         );
 
@@ -321,7 +341,7 @@ mod tests {
         );
 
         assert_eq!(
-            Some(HistoryEntry::from_text("older".to_string())),
+            Some(HistoryEntry::new("older".to_string())),
             history.on_entry_response(1, 1, Some("older".into()))
         );
     }
@@ -335,17 +355,17 @@ mod tests {
         history.set_metadata(1, 3);
         history
             .fetched_history
-            .insert(1, HistoryEntry::from_text("command2".to_string()));
+            .insert(1, HistoryEntry::new("command2".to_string()));
         history
             .fetched_history
-            .insert(2, HistoryEntry::from_text("command3".to_string()));
+            .insert(2, HistoryEntry::new("command3".to_string()));
 
         assert_eq!(
-            Some(HistoryEntry::from_text("command3".to_string())),
+            Some(HistoryEntry::new("command3".to_string())),
             history.navigate_up(&tx)
         );
         assert_eq!(
-            Some(HistoryEntry::from_text("command2".to_string())),
+            Some(HistoryEntry::new("command2".to_string())),
             history.navigate_up(&tx)
         );
 
@@ -354,7 +374,7 @@ mod tests {
         assert!(history.last_history_text.is_none());
 
         assert_eq!(
-            Some(HistoryEntry::from_text("command3".to_string())),
+            Some(HistoryEntry::new("command3".to_string())),
             history.navigate_up(&tx)
         );
     }

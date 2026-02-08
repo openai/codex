@@ -3,6 +3,10 @@ bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
 archive_override(
     module_name = "toolchains_llvm_bootstrapped",
     integrity = "sha256-4/2h4tYSUSptxFVI9G50yJxWGOwHSeTeOGBlaLQBV8g=",
+    patch_strip = 1,
+    patches = [
+        "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
+    ],
     strip_prefix = "toolchains_llvm_bootstrapped-d20baf67e04d8e2887e3779022890d1dc5e6b948",
     urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948.tar.gz"],
 )
@@ -73,6 +77,16 @@ crate.annotation(
     crate = "nucleo-matcher",
     strip_prefix = "matcher",
     version = "0.3.1",
+)
+crate.annotation(
+    build_script_env = {
+        "AWS_LC_SYS_NO_JITTER_ENTROPY": "1",
+    },
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:aws-lc-sys_memcmp_check.patch",
+    ],
+    crate = "aws-lc-sys",
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")

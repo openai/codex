@@ -30,12 +30,16 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+use tungstenite::extensions::ExtensionsConfig;
+use tungstenite::extensions::compression::deflate::DeflateConfig;
+use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+static RUSTLS_PROVIDER_INSTALLED: OnceLock<()> = OnceLock::new();
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -162,6 +166,7 @@ async fn connect_websocket(
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, bool, Option<String>), ApiError> {
+    ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
     let mut request = url
@@ -170,7 +175,12 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let response = tokio_tungstenite::connect_async(request).await;
+    let response = tokio_tungstenite::connect_async_with_config(
+        request,
+        Some(websocket_config()),
+        false, // `false` means "do not disable Nagle", which is tungstenite's recommended default.
+    )
+    .await;
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
@@ -201,6 +211,21 @@ async fn connect_websocket(
         let _ = turn_state.set(header_value.to_string());
     }
     Ok((stream, reasoning_included, models_etag))
+}
+
+fn ensure_rustls_crypto_provider() {
+    let _ = RUSTLS_PROVIDER_INSTALLED.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+fn websocket_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
 }
 
 fn map_ws_error(err: WsError, url: &Url) -> ApiError {
@@ -327,4 +352,15 @@ async fn run_websocket_response_stream(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn websocket_config_enables_permessage_deflate() {
+        let config = websocket_config();
+        assert!(config.extensions.permessage_deflate.is_some());
+    }
 }

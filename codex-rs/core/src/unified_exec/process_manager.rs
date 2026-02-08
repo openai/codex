@@ -505,6 +505,7 @@ impl UnifiedExecProcessManager {
             request.command.clone(),
             cwd,
             env,
+            context.turn.config.network.clone(),
             request.tty,
             request.sandbox_permissions,
             request.justification.clone(),
