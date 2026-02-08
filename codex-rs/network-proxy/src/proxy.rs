@@ -66,7 +66,7 @@ impl NetworkProxyBuilder {
             self.http_addr.unwrap_or(runtime.http_addr),
             runtime.socks_addr,
             self.admin_addr.unwrap_or(runtime.admin_addr),
-            &current_cfg.network_proxy,
+            &current_cfg.network,
         );
 
         Ok(NetworkProxy {
@@ -95,8 +95,8 @@ impl NetworkProxy {
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
         let current_cfg = self.state.current_cfg().await?;
-        if !current_cfg.network_proxy.enabled {
-            warn!("network_proxy.enabled is false; skipping proxy listeners");
+        if !current_cfg.network.enabled {
+            warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
 
@@ -109,12 +109,12 @@ impl NetworkProxy {
             self.http_addr,
             self.policy_decider.clone(),
         ));
-        let socks_task = if current_cfg.network_proxy.enable_socks5 {
+        let socks_task = if current_cfg.network.enable_socks5 {
             Some(tokio::spawn(socks5::run_socks5(
                 self.state.clone(),
                 self.socks_addr,
                 self.policy_decider.clone(),
-                current_cfg.network_proxy.enable_socks5_udp,
+                current_cfg.network.enable_socks5_udp,
             )))
         } else {
             None

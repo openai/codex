@@ -65,9 +65,15 @@ pub(crate) async fn init_if_enabled(
         }
     };
     if backfill_state.status != codex_state::BackfillStatus::Complete {
-        metadata::backfill_sessions(runtime.as_ref(), config, otel).await;
+        let runtime_for_backfill = runtime.clone();
+        let config = config.clone();
+        let otel = otel.cloned();
+        tokio::spawn(async move {
+            metadata::backfill_sessions(runtime_for_backfill.as_ref(), &config, otel.as_ref())
+                .await;
+        });
     }
-    require_backfill_complete(runtime, config.codex_home.as_path()).await
+    Some(runtime)
 }
 
 /// Get the DB if the feature is enabled and the DB exists.

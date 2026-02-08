@@ -105,6 +105,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    const REMOTE_AUTO_COMPACT_LIMIT: i64 = 200_000;
 
     let server = responses::start_mock_server().await;
     let sse1 = responses::sse(vec![
@@ -146,7 +147,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         codex_home.path(),
         &server.uri(),
         &BTreeMap::default(),
-        AUTO_COMPACT_LIMIT,
+        REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
         "openai",
         COMPACT_PROMPT,
