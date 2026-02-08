@@ -302,7 +302,15 @@ impl HistoryCell for UserHistoryCell {
         if !lines.is_empty() {
             lines.push(Line::from("").style(style));
         }
-        lines
+        if self.remote_image_urls.is_empty() {
+            lines
+        } else {
+            let mut with_outer_spacing = Vec::with_capacity(lines.len() + 2);
+            with_outer_spacing.push(Line::from(""));
+            with_outer_spacing.extend(lines);
+            with_outer_spacing.push(Line::from(""));
+            with_outer_spacing
+        }
     }
 }
 

@@ -525,6 +525,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn pending_non_editable_image_urls(&self) -> Vec<String> {
+        self.composer.pending_non_editable_image_urls()
+    }
+
+    pub(crate) fn take_pending_non_editable_image_urls(&mut self) -> Vec<String> {
+        let urls = self.composer.take_pending_non_editable_image_urls();
+        self.request_redraw();
+        urls
+    }
+
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
@@ -1321,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_remote_images_are_prefixed_in_composer_text() {
+    fn pending_remote_images_render_above_composer_text() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1340,7 +1350,13 @@ mod tests {
             "data:image/png;base64,aGVsbG8=".to_string(),
         ]);
 
-        assert_eq!(pane.composer_text(), "[Image #1]\n[Image #2]\n");
+        assert_eq!(pane.composer_text(), "");
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("[Image #1]"));
+        assert!(snapshot.contains("[Image #2]"));
     }
 
     #[test]

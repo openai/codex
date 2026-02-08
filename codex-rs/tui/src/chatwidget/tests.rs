@@ -556,10 +556,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
 
     chat.bottom_pane
         .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
-    assert_eq!(
-        chat.bottom_pane.composer_text(),
-        "[Image #1]\n[Image #2] submit mixed"
-    );
+    assert_eq!(chat.bottom_pane.composer_text(), "[Image #2] submit mixed");
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let items = match next_submit_op(&mut op_rx) {
@@ -640,7 +637,7 @@ async fn enter_with_only_pending_remote_images_submits_user_turn() {
 
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_pending_non_editable_image_urls(vec![remote_url.clone()]);
-    assert_eq!(chat.bottom_pane.composer_text(), "[Image #1]\n");
+    assert_eq!(chat.bottom_pane.composer_text(), "");
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1380,7 +1377,6 @@ async fn make_chatwidget_manual(
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
-        pending_non_editable_image_urls: Vec::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
