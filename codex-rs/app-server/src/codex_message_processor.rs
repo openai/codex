@@ -1878,31 +1878,11 @@ impl CodexMessageProcessor {
                     ..
                 } = new_conv;
                 let config_snapshot = thread.config_snapshot().await;
-                let fallback_provider = self.config.model_provider_id.as_str();
-
-                // A bit hacky, but the summary contains a lot of useful information for the thread
-                // that unfortunately does not get returned from thread_manager.start_thread().
-                let thread = match session_configured.rollout_path.as_ref() {
-                    Some(rollout_path) => {
-                        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider)
-                            .await
-                        {
-                            Ok(summary) => summary_to_thread(summary),
-                            Err(err) => {
-                                self.send_internal_error(
-                                    request_id,
-                                    format!(
-                                        "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                        rollout_path.display()
-                                    ),
-                                )
-                                .await;
-                                return;
-                            }
-                        }
-                    }
-                    None => build_ephemeral_thread(thread_id, &config_snapshot),
-                };
+                let thread = build_thread_from_snapshot(
+                    thread_id,
+                    &config_snapshot,
+                    session_configured.rollout_path.clone(),
+                );
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
@@ -2498,7 +2478,8 @@ impl CodexMessageProcessor {
                 return;
             };
             let config_snapshot = thread.config_snapshot().await;
-            if include_turns {
+            let loaded_rollout_path = thread.rollout_path();
+            if include_turns && loaded_rollout_path.is_none() {
                 self.send_invalid_request_error(
                     request_id,
                     "ephemeral threads do not support includeTurns".to_string(),
@@ -2506,13 +2487,26 @@ impl CodexMessageProcessor {
                 .await;
                 return;
             }
-            build_ephemeral_thread(thread_uuid, &config_snapshot)
+            if include_turns {
+                rollout_path = loaded_rollout_path.clone();
+            }
+            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
         };
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_event_msgs_from_rollout(rollout_path).await {
                 Ok(events) => {
                     thread.turns = build_turns_from_event_msgs(&events);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
+                        ),
+                    )
+                    .await;
+                    return;
                 }
                 Err(err) => {
                     self.send_internal_error(
@@ -5793,7 +5787,11 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
     updated_at.or_else(|| created_at.map(str::to_string))
 }
 
-fn build_ephemeral_thread(thread_id: ThreadId, config_snapshot: &ThreadConfigSnapshot) -> Thread {
+fn build_thread_from_snapshot(
+    thread_id: ThreadId,
+    config_snapshot: &ThreadConfigSnapshot,
+    path: Option<PathBuf>,
+) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
@@ -5801,7 +5799,7 @@ fn build_ephemeral_thread(thread_id: ThreadId, config_snapshot: &ThreadConfigSna
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
-        path: None,
+        path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
         source: config_snapshot.session_source.clone().into(),
