@@ -13,7 +13,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
@@ -344,7 +343,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
-        input_modalities: vec![InputModality::Text, InputModality::Image],
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,

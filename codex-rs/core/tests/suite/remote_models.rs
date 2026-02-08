@@ -18,7 +18,6 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -86,7 +85,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
-        input_modalities: vec![InputModality::Text, InputModality::Image],
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
@@ -325,7 +323,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
-        input_modalities: vec![InputModality::Text, InputModality::Image],
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
@@ -801,7 +798,6 @@ fn test_remote_model_with_policy(
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
-        input_modalities: vec![InputModality::Text, InputModality::Image],
         apply_patch_tool_type: None,
         truncation_policy,
         supports_parallel_tool_calls: false,
