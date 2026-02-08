@@ -242,10 +242,18 @@ fn remote_image_display_line(style: Style, index: usize) -> Line<'static> {
     Line::from(local_image_label_text(index)).style(style)
 }
 
+fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    while lines
+        .last()
+        .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
+    {
+        lines.pop();
+    }
+    lines
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
         let wrap_width = width
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
@@ -255,8 +263,10 @@ impl HistoryCell for UserHistoryCell {
         let style = user_message_style();
         let element_style = style.fg(Color::Cyan);
 
-        if !self.remote_image_urls.is_empty() {
-            let wrapped_remote_images = word_wrap_lines(
+        let wrapped_remote_images = if self.remote_image_urls.is_empty() {
+            None
+        } else {
+            Some(word_wrap_lines(
                 self.remote_image_urls
                     .iter()
                     .enumerate()
@@ -265,52 +275,66 @@ impl HistoryCell for UserHistoryCell {
                     }),
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            ))
+        };
+
+        let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
+            None
+        } else if self.text_elements.is_empty() {
+            let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
+            let wrapped = word_wrap_lines(
+                message_without_trailing_newlines
+                    .split('\n')
+                    .map(|line| Line::from(line).style(style)),
+                // Wrap algorithm matches textarea.rs.
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
             );
-            lines.push(Line::from("").style(style));
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
+        } else {
+            let raw_lines = build_user_message_lines_with_elements(
+                &self.message,
+                &self.text_elements,
+                style,
+                element_style,
+            );
+            let wrapped = word_wrap_lines(
+                raw_lines,
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            );
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
+        };
+
+        if wrapped_remote_images.is_none() && wrapped_message.is_none() {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from("").style(style)];
+
+        if let Some(wrapped_remote_images) = wrapped_remote_images {
             lines.extend(prefix_lines(
                 wrapped_remote_images,
                 "  ".into(),
                 "  ".into(),
             ));
+            if wrapped_message.is_some() {
+                lines.push(Line::from("").style(style));
+            }
         }
 
-        if !self.message.is_empty() || !self.text_elements.is_empty() {
-            let wrapped = if self.text_elements.is_empty() {
-                word_wrap_lines(
-                    self.message.split('\n').map(|l| Line::from(l).style(style)),
-                    // Wrap algorithm matches textarea.rs.
-                    RtOptions::new(usize::from(wrap_width))
-                        .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-                )
-            } else {
-                let raw_lines = build_user_message_lines_with_elements(
-                    &self.message,
-                    &self.text_elements,
-                    style,
-                    element_style,
-                );
-                word_wrap_lines(
-                    raw_lines,
-                    RtOptions::new(usize::from(wrap_width))
-                        .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-                )
-            };
+        if let Some(wrapped_message) = wrapped_message {
+            lines.extend(prefix_lines(
+                wrapped_message,
+                "› ".bold().dim(),
+                "  ".into(),
+            ));
+        }
 
-            lines.push(Line::from("").style(style));
-            lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
-        }
-        if !lines.is_empty() {
-            lines.push(Line::from("").style(style));
-        }
-        if self.remote_image_urls.is_empty() {
-            lines
-        } else {
-            let mut with_outer_spacing = Vec::with_capacity(lines.len() + 2);
-            with_outer_spacing.push(Line::from(""));
-            with_outer_spacing.extend(lines);
-            with_outer_spacing.push(Line::from(""));
-            with_outer_spacing
-        }
+        lines.push(Line::from("").style(style));
+        lines
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -3491,6 +3515,48 @@ mod tests {
             .unwrap_or(u16::MAX);
         assert_eq!(cell.desired_height(width), rendered_len);
         assert_eq!(cell.desired_transcript_height(width), rendered_len);
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines() {
+        let cell = UserHistoryCell {
+            message: "line one\n\n   \n\t \n".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("line one")));
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines_with_text_elements() {
+        let message = "tokenized\n\n\n".to_string();
+        let cell = UserHistoryCell {
+            message,
+            text_elements: vec![TextElement::new(
+                (0..8).into(),
+                Some("tokenized".to_string()),
+            )],
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("tokenized")));
     }
 
     #[test]
