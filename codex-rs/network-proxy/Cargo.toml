@@ -4,10 +4,6 @@ edition = "2024"
 version = { workspace = true }
 license.workspace = true
 
-[[bin]]
-name = "codex-network-proxy"
-path = "src/main.rs"
-
 [lib]
 name = "codex_network_proxy"
 path = "src/lib.rs"
@@ -20,11 +16,11 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
-codex-core = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 globset = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }

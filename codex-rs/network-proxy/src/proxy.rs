@@ -55,10 +55,11 @@ impl NetworkProxyBuilder {
     }
 
     pub async fn build(self) -> Result<NetworkProxy> {
-        let state = match self.state {
-            Some(state) => state,
-            None => Arc::new(NetworkProxyState::new().await?),
-        };
+        let state = self.state.ok_or_else(|| {
+            anyhow::anyhow!(
+                "NetworkProxyBuilder requires a state; supply one via builder.state(...)"
+            )
+        })?;
         let current_cfg = state.current_cfg().await?;
         let runtime = config::resolve_runtime(&current_cfg)?;
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
