@@ -40,6 +40,11 @@ pub struct LandlockCommand {
     #[arg(long = "apply-seccomp-then-exec", hide = true, default_value_t = false)]
     pub apply_seccomp_then_exec: bool,
 
+    /// Internal: permit network syscalls in restricted policies when we rely
+    /// on proxy environment variables for egress routing.
+    #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
+    pub allow_network_for_proxy: bool,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -64,6 +69,7 @@ pub fn run_main() -> ! {
         sandbox_policy,
         use_bwrap_sandbox,
         apply_seccomp_then_exec,
+        allow_network_for_proxy,
         no_proc,
         command,
     } = LandlockCommand::parse();
@@ -75,18 +81,24 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
-        if let Err(e) =
-            apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, false)
-        {
+        if let Err(e) = apply_sandbox_policy_to_current_thread(
+            &sandbox_policy,
+            &sandbox_policy_cwd,
+            false,
+            allow_network_for_proxy,
+        ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
         exec_or_panic(command);
     }
 
     if sandbox_policy.has_full_disk_write_access() {
-        if let Err(e) =
-            apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, false)
-        {
+        if let Err(e) = apply_sandbox_policy_to_current_thread(
+            &sandbox_policy,
+            &sandbox_policy_cwd,
+            false,
+            allow_network_for_proxy,
+        ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
         exec_or_panic(command);
@@ -100,15 +112,25 @@ pub fn run_main() -> ! {
             &sandbox_policy_cwd,
             &sandbox_policy,
             use_bwrap_sandbox,
+            allow_network_for_proxy,
             command,
         );
-        run_bwrap_with_proc_fallback(&sandbox_policy_cwd, &sandbox_policy, inner, !no_proc);
+        run_bwrap_with_proc_fallback(
+            &sandbox_policy_cwd,
+            &sandbox_policy,
+            inner,
+            !no_proc,
+            allow_network_for_proxy,
+        );
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
-    if let Err(e) =
-        apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd, true)
-    {
+    if let Err(e) = apply_sandbox_policy_to_current_thread(
+        &sandbox_policy,
+        &sandbox_policy_cwd,
+        true,
+        allow_network_for_proxy,
+    ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }
     exec_or_panic(command);
@@ -119,6 +141,7 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
+    allow_network_for_proxy: bool,
 ) -> ! {
     let mut mount_proc = mount_proc;
 
@@ -127,7 +150,10 @@ fn run_bwrap_with_proc_fallback(
         mount_proc = false;
     }
 
-    let options = BwrapOptions { mount_proc };
+    let options = BwrapOptions {
+        mount_proc,
+        isolate_network: !sandbox_policy.has_full_network_access() && !allow_network_for_proxy,
+    };
     let argv = build_bwrap_argv(inner, sandbox_policy, sandbox_policy_cwd, options);
     exec_vendored_bwrap(argv);
 }
@@ -164,7 +190,10 @@ fn preflight_proc_mount_support(
         preflight_command,
         sandbox_policy,
         sandbox_policy_cwd,
-        BwrapOptions { mount_proc: true },
+        BwrapOptions {
+            mount_proc: true,
+            isolate_network: false,
+        },
     );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
@@ -268,6 +297,7 @@ fn build_inner_seccomp_command(
     sandbox_policy_cwd: &Path,
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
     use_bwrap_sandbox: bool,
+    allow_network_for_proxy: bool,
     command: Vec<String>,
 ) -> Vec<String> {
     let current_exe = match std::env::current_exe() {
@@ -289,6 +319,9 @@ fn build_inner_seccomp_command(
     if use_bwrap_sandbox {
         inner.push("--use-bwrap-sandbox".to_string());
         inner.push("--apply-seccomp-then-exec".to_string());
+    }
+    if allow_network_for_proxy {
+        inner.push("--allow-network-for-proxy".to_string());
     }
     inner.push("--".to_string());
     inner.extend(command);
@@ -342,7 +375,10 @@ mod tests {
             vec!["/bin/true".to_string()],
             &SandboxPolicy::ReadOnly,
             Path::new("/"),
-            BwrapOptions { mount_proc: true },
+            BwrapOptions {
+                mount_proc: true,
+                isolate_network: false,
+            },
         );
         assert_eq!(
             argv,
@@ -365,5 +401,19 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn inserts_unshare_net_when_network_isolation_requested() {
+        let argv = build_bwrap_argv(
+            vec!["/bin/true".to_string()],
+            &SandboxPolicy::ReadOnly,
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                isolate_network: true,
+            },
+        );
+        assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
     }
 }

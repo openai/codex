@@ -1,6 +1,7 @@
 use crate::protocol::SandboxPolicy;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ where
         sandbox_policy,
         sandbox_policy_cwd,
         use_bwrap_sandbox,
+        !sandbox_policy.has_full_network_access() && has_proxy_env_vars(&env),
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(
@@ -56,6 +58,7 @@ pub(crate) fn create_linux_sandbox_command_args(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     use_bwrap_sandbox: bool,
+    allow_network_for_proxy: bool,
 ) -> Vec<String> {
     #[expect(clippy::expect_used)]
     let sandbox_policy_cwd = sandbox_policy_cwd
@@ -76,6 +79,9 @@ pub(crate) fn create_linux_sandbox_command_args(
     if use_bwrap_sandbox {
         linux_cmd.push("--use-bwrap-sandbox".to_string());
     }
+    if allow_network_for_proxy {
+        linux_cmd.push("--allow-network-for-proxy".to_string());
+    }
 
     // Separator so that command arguments starting with `-` are not parsed as
     // options of the helper itself.
@@ -85,6 +91,12 @@ pub(crate) fn create_linux_sandbox_command_args(
     linux_cmd.extend(command);
 
     linux_cmd
+}
+
+fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
+    PROXY_URL_ENV_KEYS
+        .iter()
+        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
 }
 
 #[cfg(test)]
@@ -98,16 +110,30 @@ mod tests {
         let cwd = Path::new("/tmp");
         let policy = SandboxPolicy::ReadOnly;
 
-        let with_bwrap = create_linux_sandbox_command_args(command.clone(), &policy, cwd, true);
+        let with_bwrap =
+            create_linux_sandbox_command_args(command.clone(), &policy, cwd, true, false);
         assert_eq!(
             with_bwrap.contains(&"--use-bwrap-sandbox".to_string()),
             true
         );
 
-        let without_bwrap = create_linux_sandbox_command_args(command, &policy, cwd, false);
+        let without_bwrap = create_linux_sandbox_command_args(command, &policy, cwd, false, false);
         assert_eq!(
             without_bwrap.contains(&"--use-bwrap-sandbox".to_string()),
             false
+        );
+    }
+
+    #[test]
+    fn proxy_flag_is_included_when_requested() {
+        let command = vec!["/bin/true".to_string()];
+        let cwd = Path::new("/tmp");
+        let policy = SandboxPolicy::ReadOnly;
+
+        let args = create_linux_sandbox_command_args(command, &policy, cwd, true, true);
+        assert_eq!(
+            args.contains(&"--allow-network-for-proxy".to_string()),
+            true
         );
     }
 }

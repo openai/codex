@@ -1,10 +1,13 @@
 #![cfg(target_os = "macos")]
 
+use codex_network_proxy::PROXY_URL_ENV_KEYS;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
+use url::Url;
 
 use crate::protocol::SandboxPolicy;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
@@ -28,7 +31,7 @@ pub async fn spawn_command_under_seatbelt(
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
+    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, &env);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
@@ -43,10 +46,93 @@ pub async fn spawn_command_under_seatbelt(
     .await
 }
 
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+fn proxy_scheme_default_port(scheme: &str) -> u16 {
+    match scheme {
+        "https" => 443,
+        "socks5" | "socks5h" | "socks4" | "socks4a" => 1080,
+        _ => 80,
+    }
+}
+
+fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
+    let mut ports = BTreeSet::new();
+    for key in PROXY_URL_ENV_KEYS {
+        let Some(proxy_url) = env.get(*key) else {
+            continue;
+        };
+        let trimmed = proxy_url.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let candidate = if trimmed.contains("://") {
+            trimmed.to_string()
+        } else {
+            format!("http://{trimmed}")
+        };
+        let Ok(parsed) = Url::parse(&candidate) else {
+            continue;
+        };
+        let Some(host) = parsed.host_str() else {
+            continue;
+        };
+        if !is_loopback_host(host) {
+            continue;
+        }
+
+        let scheme = parsed.scheme().to_ascii_lowercase();
+        let port = parsed
+            .port()
+            .unwrap_or_else(|| proxy_scheme_default_port(scheme.as_str()));
+        ports.insert(port);
+    }
+    ports.into_iter().collect()
+}
+
+fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
+    PROXY_URL_ENV_KEYS
+        .iter()
+        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
+}
+
+fn dynamic_network_policy(sandbox_policy: &SandboxPolicy, env: &HashMap<String, String>) -> String {
+    let proxy_ports = proxy_loopback_ports_from_env(env);
+    if !proxy_ports.is_empty() {
+        let mut policy =
+            String::from("; allow outbound access only to configured loopback proxy endpoints\n");
+        for port in proxy_ports {
+            policy.push_str(&format!(
+                "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
+            ));
+        }
+        return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
+    }
+
+    if has_proxy_env_vars(env) {
+        // Proxy configuration is present but we could not infer any valid loopback endpoints.
+        // Fail closed to avoid silently widening network access in proxy-enforced sessions.
+        return String::new();
+    }
+
+    if sandbox_policy.has_full_network_access() {
+        // No proxy env is configured: retain the existing full-network behavior.
+        format!(
+            "(allow network-outbound)\n(allow network-inbound)\n{MACOS_SEATBELT_NETWORK_POLICY}"
+        )
+    } else {
+        String::new()
+    }
+}
+
 pub(crate) fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    env: &HashMap<String, String>,
 ) -> Vec<String> {
     let (file_write_policy, file_write_dir_params) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -112,11 +198,7 @@ pub(crate) fn create_seatbelt_command_args(
     };
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
-    let network_policy = if sandbox_policy.has_full_network_access() {
-        MACOS_SEATBELT_NETWORK_POLICY
-    } else {
-        ""
-    };
+    let network_policy = dynamic_network_policy(sandbox_policy, env);
 
     let full_policy = format!(
         "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
@@ -168,6 +250,7 @@ mod tests {
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
@@ -181,6 +264,122 @@ mod tests {
             stderr == expected
                 || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"),
             "unexpected stderr: {stderr}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_routes_network_through_proxy_ports() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        let command = vec!["/bin/echo".to_string(), "ok".to_string()];
+
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:43128".to_string(),
+        );
+        env.insert(
+            "ALL_PROXY".to_string(),
+            "socks5h://127.0.0.1:48081".to_string(),
+        );
+
+        let args = create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, &env);
+        let policy = args
+            .get(1)
+            .expect("seatbelt args should include policy at index 1");
+
+        assert!(
+            policy.contains("(allow network-outbound (remote ip \"localhost:43128\"))"),
+            "expected HTTP proxy port allow rule in policy:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-outbound (remote ip \"localhost:48081\"))"),
+            "expected SOCKS proxy port allow rule in policy:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should not include blanket outbound allowance when proxy ports are present:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_fails_closed_for_invalid_proxy_env() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        let command = vec!["/bin/echo".to_string(), "ok".to_string()];
+
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "not-a-valid-proxy-url".to_string(),
+        );
+
+        let args = create_seatbelt_command_args(
+            command,
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            &cwd,
+            &env,
+        );
+        let policy = args
+            .get(1)
+            .expect("seatbelt args should include policy at index 1");
+
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should not include blanket outbound allowance when proxy env is invalid:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network-outbound (remote ip \"localhost:"),
+            "policy should not include proxy port allowance when proxy env is invalid:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_full_network_with_proxy_is_still_proxy_only() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        let command = vec!["/bin/echo".to_string(), "ok".to_string()];
+
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:43128".to_string(),
+        );
+
+        let args = create_seatbelt_command_args(
+            command,
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            &cwd,
+            &env,
+        );
+        let policy = args
+            .get(1)
+            .expect("seatbelt args should include policy at index 1");
+
+        assert!(
+            policy.contains("(allow network-outbound (remote ip \"localhost:43128\"))"),
+            "expected proxy endpoint allow rule in policy:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should not include blanket outbound allowance when proxy is configured:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-inbound)\n"),
+            "policy should not include blanket inbound allowance when proxy is configured:\n{policy}"
         );
     }
 
@@ -227,7 +426,8 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args = create_seatbelt_command_args(shell_command.clone(), &policy, &cwd);
+        let args =
+            create_seatbelt_command_args(shell_command.clone(), &policy, &cwd, &HashMap::new());
 
         // Build the expected policy text using a raw string for readability.
         // Note that the policy includes:
@@ -315,7 +515,8 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let write_hooks_file_args = create_seatbelt_command_args(shell_command_git, &policy, &cwd);
+        let write_hooks_file_args =
+            create_seatbelt_command_args(shell_command_git, &policy, &cwd, &HashMap::new());
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_hooks_file_args)
             .current_dir(&cwd)
@@ -346,7 +547,7 @@ mod tests {
         .map(std::string::ToString::to_string)
         .collect();
         let write_allowed_file_args =
-            create_seatbelt_command_args(shell_command_allowed, &policy, &cwd);
+            create_seatbelt_command_args(shell_command_allowed, &policy, &cwd, &HashMap::new());
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_allowed_file_args)
             .current_dir(&cwd)
@@ -406,7 +607,7 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
+        let args = create_seatbelt_command_args(shell_command, &policy, &cwd, &HashMap::new());
 
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&args)
@@ -436,7 +637,8 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let gitdir_args = create_seatbelt_command_args(shell_command_gitdir, &policy, &cwd);
+        let gitdir_args =
+            create_seatbelt_command_args(shell_command_gitdir, &policy, &cwd, &HashMap::new());
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&gitdir_args)
             .current_dir(&cwd)
@@ -492,8 +694,12 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args =
-            create_seatbelt_command_args(shell_command.clone(), &policy, vulnerable_root.as_path());
+        let args = create_seatbelt_command_args(
+            shell_command.clone(),
+            &policy,
+            vulnerable_root.as_path(),
+            &HashMap::new(),
+        );
 
         let tmpdir_env_var = std::env::var("TMPDIR")
             .ok()

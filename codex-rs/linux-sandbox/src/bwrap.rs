@@ -26,11 +26,19 @@ pub(crate) struct BwrapOptions {
     /// This is the secure default, but some restrictive container environments
     /// deny `--proc /proc` even when PID namespaces are available.
     pub mount_proc: bool,
+    /// Whether to isolate networking with a dedicated network namespace.
+    ///
+    /// When true, bubblewrap adds `--unshare-net`, which removes access to the
+    /// host network stack and leaves only loopback inside the sandbox.
+    pub isolate_network: bool,
 }
 
 impl Default for BwrapOptions {
     fn default() -> Self {
-        Self { mount_proc: true }
+        Self {
+            mount_proc: true,
+            isolate_network: false,
+        }
     }
 }
 
@@ -65,6 +73,9 @@ fn create_bwrap_flags(
     args.extend(create_filesystem_args(sandbox_policy, cwd)?);
     // Isolate the PID namespace.
     args.push("--unshare-pid".to_string());
+    if options.isolate_network {
+        args.push("--unshare-net".to_string());
+    }
     // Mount a fresh /proc unless the caller explicitly disables it.
     if options.mount_proc {
         args.push("--proc".to_string());

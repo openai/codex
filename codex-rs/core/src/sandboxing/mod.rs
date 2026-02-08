@@ -22,6 +22,7 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_protocol::config_types::WindowsSandboxLevel;
 pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
@@ -148,7 +149,7 @@ impl SandboxManager {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
                 let mut args =
-                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd);
+                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd, &env);
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
@@ -159,11 +160,14 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+                let allow_network_for_proxy =
+                    !policy.has_full_network_access() && has_proxy_env_vars(&env);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
                     policy,
                     sandbox_policy_cwd,
                     use_linux_sandbox_bwrap,
+                    allow_network_for_proxy,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
@@ -202,6 +206,12 @@ impl SandboxManager {
     pub fn denied(&self, sandbox: SandboxType, out: &ExecToolCallOutput) -> bool {
         crate::exec::is_likely_sandbox_denied(sandbox, out)
     }
+}
+
+fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
+    PROXY_URL_ENV_KEYS
+        .iter()
+        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
 }
 
 pub async fn execute_env(

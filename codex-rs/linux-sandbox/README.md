@@ -26,6 +26,8 @@ into this binary.
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.
 - When enabled, the helper isolates the PID namespace via `--unshare-pid`.
+- When enabled and network is restricted without proxy routing, the helper also
+  isolates the network namespace via `--unshare-net`.
 - When enabled, it mounts a fresh `/proc` via `--proc /proc` by default, but
   you can skip this in restrictive container environments with `--no-proc`.
 

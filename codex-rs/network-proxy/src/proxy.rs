@@ -176,6 +176,7 @@ impl NetworkProxyBuilder {
             state,
             http_addr,
             socks_addr,
+            socks_enabled: current_cfg.network.enable_socks5,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -202,6 +203,7 @@ pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
+    socks_enabled: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -229,18 +231,101 @@ impl PartialEq for NetworkProxy {
 
 impl Eq for NetworkProxy {}
 
+pub const PROXY_URL_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "FTP_PROXY",
+    "GRPC_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "ftp_proxy",
+    "grpc_proxy",
+    "YARN_HTTP_PROXY",
+    "YARN_HTTPS_PROXY",
+    "npm_config_http_proxy",
+    "npm_config_https_proxy",
+    "npm_config_proxy",
+    "NPM_CONFIG_HTTP_PROXY",
+    "NPM_CONFIG_HTTPS_PROXY",
+    "NPM_CONFIG_PROXY",
+    "BUNDLE_HTTP_PROXY",
+    "BUNDLE_HTTPS_PROXY",
+    "PIP_PROXY",
+    "DOCKER_HTTP_PROXY",
+    "DOCKER_HTTPS_PROXY",
+];
+
+pub const ALL_PROXY_ENV_KEYS: &[&str] = &[
+    "ALL_PROXY",
+    "all_proxy",
+    "FTP_PROXY",
+    "ftp_proxy",
+    "GRPC_PROXY",
+    "grpc_proxy",
+];
+
+pub const NO_PROXY_ENV_KEYS: &[&str] = &[
+    "NO_PROXY",
+    "no_proxy",
+    "npm_config_noproxy",
+    "NPM_CONFIG_NOPROXY",
+    "YARN_NO_PROXY",
+    "BUNDLE_NO_PROXY",
+];
+
+pub const DEFAULT_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
+
+fn apply_proxy_env_overrides(
+    env: &mut HashMap<String, String>,
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    socks_enabled: bool,
+) {
+    let http_proxy_url = format!("http://{http_addr}");
+    let all_proxy_url = if socks_enabled {
+        format!("socks5h://{socks_addr}")
+    } else {
+        http_proxy_url.clone()
+    };
+
+    for key in PROXY_URL_ENV_KEYS {
+        env.insert((*key).to_string(), http_proxy_url.clone());
+    }
+    for key in ALL_PROXY_ENV_KEYS {
+        env.insert((*key).to_string(), all_proxy_url.clone());
+    }
+    for key in NO_PROXY_ENV_KEYS {
+        env.insert((*key).to_string(), DEFAULT_NO_PROXY_VALUE.to_string());
+    }
+
+    env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
+
+    env.insert("CLOUDSDK_PROXY_TYPE".to_string(), "https".to_string());
+    env.insert(
+        "CLOUDSDK_PROXY_ADDRESS".to_string(),
+        http_addr.ip().to_string(),
+    );
+    env.insert(
+        "CLOUDSDK_PROXY_PORT".to_string(),
+        http_addr.port().to_string(),
+    );
+
+    if socks_enabled {
+        env.insert("RSYNC_PROXY".to_string(), socks_addr.to_string());
+    }
+}
+
 impl NetworkProxy {
     pub fn builder() -> NetworkProxyBuilder {
         NetworkProxyBuilder::default()
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        // Enforce proxying for all child processes when configured. We always override to ensure
-        // the proxy is actually used even if the caller passed conflicting environment variables.
-        let proxy_url = format!("http://{}", self.http_addr);
-        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env.insert(key.to_string(), proxy_url.clone());
-        }
+        // Enforce proxying for child processes. We intentionally override existing values so
+        // command-level environment cannot bypass the managed proxy endpoint.
+        apply_proxy_env_overrides(env, self.http_addr, self.socks_addr, self.socks_enabled);
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -406,6 +491,9 @@ mod tests {
     use super::*;
     use crate::config::NetworkProxySettings;
     use crate::state::network_proxy_state_for_policy;
+    use pretty_assertions::assert_eq;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ephemeral_ports() {
@@ -461,5 +549,53 @@ mod tests {
             proxy.admin_addr,
             "127.0.0.1:48080".parse::<SocketAddr>().unwrap()
         );
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_sets_common_tool_vars() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("npm_config_proxy"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"socks5h://127.0.0.1:8081".to_string())
+        );
+        assert_eq!(
+            env.get("NO_PROXY"),
+            Some(&DEFAULT_NO_PROXY_VALUE.to_string())
+        );
+        assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
+        assert_eq!(env.get("CLOUDSDK_PROXY_PORT"), Some(&"3128".to_string()));
+        assert_eq!(env.get("RSYNC_PROXY"), Some(&"127.0.0.1:8081".to_string()));
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_uses_http_for_all_proxy_without_socks() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            false,
+        );
+
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(env.get("RSYNC_PROXY"), None);
     }
 }
