@@ -39,8 +39,9 @@ where
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
 
-    // Keep the hardware cursor hidden while we jump it around to emit scrollback lines above the
-    // viewport. Without this, line-by-line history commits can show visible cursor jitter.
+    // Keep the terminal's hardware cursor hidden while we reposition it to inject wrapped
+    // history lines into scrollback. Otherwise, users can see the cursor "teleport" between
+    // intermediate rows during streaming/scroll updates.
     queue!(writer, Hide)?;
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
