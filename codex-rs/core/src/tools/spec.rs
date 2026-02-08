@@ -2033,10 +2033,12 @@ mod tests {
             web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
-        let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
 
         assert!(
-            !tool_names.contains(&VIEW_IMAGE_TOOL_NAME),
+            !tools
+                .iter()
+                .map(|t| t.spec.name())
+                .any(|name| name == VIEW_IMAGE_TOOL_NAME),
             "view_image should be excluded for non-multimodal models"
         );
     }
