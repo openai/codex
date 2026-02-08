@@ -4,6 +4,7 @@ use std::io::Write;
 
 use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::Command;
+use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
@@ -37,6 +38,10 @@ where
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
+
+    // Keep the hardware cursor hidden while we jump it around to emit scrollback lines above the
+    // viewport. Without this, line-by-line history commits can show visible cursor jitter.
+    queue!(writer, Hide)?;
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
