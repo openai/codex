@@ -354,7 +354,9 @@ fn replace_last_turn_images_replaces_tool_output_images() {
     ];
     let mut history = create_history_with_items(items);
 
-    assert!(history.replace_last_turn_images("Invalid image"));
+    assert!(history.replace_last_turn_images(
+        "[there was an image here but it was removed for non-multimodal models]"
+    ));
 
     assert_eq!(
         history.raw_items(),
@@ -365,7 +367,9 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 output: FunctionCallOutputPayload {
                     body: FunctionCallOutputBody::ContentItems(vec![
                         FunctionCallOutputContentItem::InputText {
-                            text: "Invalid image".to_string(),
+                            text:
+                                "[there was an image here but it was removed for non-multimodal models]"
+                                    .to_string(),
                         },
                     ]),
                     success: Some(true),
@@ -388,7 +392,9 @@ fn replace_last_turn_images_does_not_touch_user_images() {
     }];
     let mut history = create_history_with_items(items.clone());
 
-    assert!(!history.replace_last_turn_images("Invalid image"));
+    assert!(!history.replace_last_turn_images(
+        "[there was an image here but it was removed for non-multimodal models]"
+    ));
     assert_eq!(history.raw_items(), items);
 }
 
