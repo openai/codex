@@ -1,5 +1,7 @@
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsVariables;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
@@ -11,6 +13,11 @@ use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
+const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+const LOCAL_FRIENDLY_TEMPLATE: &str =
+    "You optimize for team morale and being a supportive teammate as much as code quality.";
+const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
@@ -61,7 +68,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         priority: 99,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
-        model_messages: None,
+        model_messages: local_personality_messages_for_slug(slug),
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,
@@ -73,5 +80,21 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+    }
+}
+
+fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
+    match slug {
+        "gpt-5.2-codex" | "exp-codex-personality" => Some(ModelMessages {
+            instructions_template: Some(format!(
+                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}"
+            )),
+            instructions_variables: Some(ModelInstructionsVariables {
+                personality_default: Some(String::new()),
+                personality_friendly: Some(LOCAL_FRIENDLY_TEMPLATE.to_string()),
+                personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
+            }),
+        }),
+        _ => None,
     }
 }
