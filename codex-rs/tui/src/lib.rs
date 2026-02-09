@@ -215,7 +215,6 @@ pub async fn run_main(
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
-
     let cloud_auth_manager = AuthManager::shared(
         codex_home.to_path_buf(),
         false,

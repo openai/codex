@@ -1798,22 +1798,22 @@ impl App {
                         );
                     }
                     let profile = self.active_profile.as_deref();
-                    let feature_key = Feature::WindowsSandbox.key();
-                    let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let mut builder =
-                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
-                    if elevated_enabled {
-                        builder = builder.set_feature_enabled(elevated_key, true);
-                    } else {
-                        builder = builder
-                            .set_feature_enabled(feature_key, true)
-                            .set_feature_enabled(elevated_key, false);
-                    }
+                    let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                        .with_profile(profile)
+                        .set_windows_sandbox_mode(if elevated_enabled {
+                            "elevated"
+                        } else {
+                            "unelevated"
+                        })
+                        .clear_legacy_windows_sandbox_keys();
                     match builder.apply().await {
                         Ok(()) => {
                             if elevated_enabled {
+                                self.config.set_windows_sandbox_enabled(false);
                                 self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandbox, false);
                                 self.chat_widget
                                     .set_feature_enabled(Feature::WindowsSandboxElevated, true);
                             } else {

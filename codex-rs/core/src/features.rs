@@ -9,9 +9,11 @@ use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use crate::config::types::WindowsSandboxModeToml;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::WarningEvent;
+use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -320,6 +322,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        apply_windows_sandbox_mode(
+            &mut features,
+            resolve_windows_sandbox_mode(cfg, config_profile),
+        );
 
         features
     }
@@ -363,6 +369,24 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 
 fn web_search_details() -> &'static str {
     "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+}
+
+fn apply_windows_sandbox_mode(features: &mut Features, mode: Option<WindowsSandboxModeToml>) {
+    let Some(mode) = mode else {
+        return;
+    };
+
+    features.disable(Feature::WindowsSandbox);
+    features.disable(Feature::WindowsSandboxElevated);
+
+    match mode {
+        WindowsSandboxModeToml::Elevated => {
+            features.enable(Feature::WindowsSandboxElevated);
+        }
+        WindowsSandboxModeToml::Unelevated => {
+            features.enable(Feature::WindowsSandbox);
+        }
+    }
 }
 
 /// Keys accepted in `[features]` tables.
@@ -486,13 +510,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
