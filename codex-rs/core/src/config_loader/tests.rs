@@ -286,10 +286,9 @@ async fn returns_empty_when_all_layers_missing() {
         .iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
         .count();
-    let expected_system_layers = if cfg!(unix) { 1 } else { 0 };
     assert_eq!(
-        num_system_layers, expected_system_layers,
-        "system layer should be present only on unix"
+        num_system_layers, 1,
+        "system layer should always be present"
     );
 
     #[cfg(not(target_os = "macos"))]
@@ -568,6 +567,7 @@ allowed_approval_policies = ["on-request"]
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         }),
     )
@@ -615,6 +615,7 @@ allowed_approval_policies = ["on-request"]
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -651,6 +652,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
+        network: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });

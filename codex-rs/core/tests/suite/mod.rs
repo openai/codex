@@ -82,7 +82,6 @@ mod list_dir;
 mod list_models;
 mod live_cli;
 mod live_reload;
-mod memory_tool;
 mod model_info_overrides;
 mod model_overrides;
 mod model_switching;

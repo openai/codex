@@ -95,7 +95,6 @@ Rules:
                 reasoning_effort: Some(ReasoningEffort::Medium),
                 description: r#"Use `explorer` for all codebase questions.
 Explorers are fast and authoritative.
-Always prefer them over manual search or file reading.
 Rules:
 - Ask explorers first and precisely.
 - Do not re-read or re-search code they cover.

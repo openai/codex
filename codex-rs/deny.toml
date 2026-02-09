@@ -120,6 +120,9 @@ allow = [
     # MPL-2.0 - https://www.mozilla.org/MPL/2.0/
     # Used by: nucleo-matcher
     "MPL-2.0",
+    # OpenSSL - https://spdx.org/licenses/OpenSSL.html
+    # Used by: aws-lc-sys
+    "OpenSSL",
     # Unicode-3.0 - https://opensource.org/license/unicode
     # Used by: icu_decimal, icu_locale_core, icu_provider
     "Unicode-3.0",

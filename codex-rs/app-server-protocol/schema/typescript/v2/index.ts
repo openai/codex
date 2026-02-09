@@ -8,6 +8,7 @@ export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotificat
 export type { AnalyticsConfig } from "./AnalyticsConfig";
 export type { AppDisabledReason } from "./AppDisabledReason";
 export type { AppInfo } from "./AppInfo";
+export type { AppListUpdatedNotification } from "./AppListUpdatedNotification";
 export type { AppsConfig } from "./AppsConfig";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";
@@ -91,6 +92,7 @@ export type { Model } from "./Model";
 export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";
 export type { NetworkAccess } from "./NetworkAccess";
+export type { NetworkRequirements } from "./NetworkRequirements";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";

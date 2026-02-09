@@ -385,6 +385,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
     }
@@ -426,6 +427,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
     }
@@ -470,6 +472,7 @@ mod tests {
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);

@@ -903,41 +903,23 @@ remote_models = true
             },
         );
         let layers = response.layers.expect("layers present");
-        if cfg!(unix) {
-            let system_file = AbsolutePathBuf::from_absolute_path(
-                crate::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX,
-            )
-            .expect("system file");
-            assert_eq!(layers.len(), 3, "expected three layers on unix");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User {
-                    file: user_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(2).unwrap().name,
-                ConfigLayerSource::System { file: system_file }
-            );
-        } else {
-            assert_eq!(layers.len(), 2, "expected two layers");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User { file: user_file }
-            );
-        }
+        assert_eq!(layers.len(), 3, "expected three layers");
+        assert_eq!(
+            layers.first().unwrap().name,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: managed_file.clone()
+            }
+        );
+        assert_eq!(
+            layers.get(1).unwrap().name,
+            ConfigLayerSource::User {
+                file: user_file.clone()
+            }
+        );
+        assert!(matches!(
+            layers.get(2).unwrap().name,
+            ConfigLayerSource::System { .. }
+        ));
     }
 
     #[tokio::test]

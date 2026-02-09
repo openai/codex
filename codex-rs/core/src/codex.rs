@@ -77,8 +77,8 @@ use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use serde_json;
@@ -314,7 +314,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -559,7 +559,7 @@ impl TurnContext {
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(self.cwd.as_path()).await })
+            .get_or_init(|| async { build_turn_metadata_header(self.cwd.clone()).await })
             .await
             .clone()
     }
@@ -1097,10 +1097,14 @@ impl Session {
         // Warm a websocket in the background so the first turn can reuse it.
         // This performs only connection setup; user input is still sent later via response.create
         // when submit_turn() runs.
-        sess.services.model_client.pre_establish_connection(
-            sess.services.otel_manager.clone(),
-            session_configuration.cwd.clone(),
-        );
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            build_turn_metadata_header(session_configuration.cwd.clone()),
+            None,
+        )
+        .boxed();
+        sess.services
+            .model_client
+            .pre_establish_connection(sess.services.otel_manager.clone(), turn_metadata_header);
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1204,6 +1208,18 @@ impl Session {
             && let Err(e) = rec.flush().await
         {
             warn!("failed to flush rollout recorder: {e}");
+        }
+    }
+
+    pub(crate) async fn ensure_rollout_materialized(&self) {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.persist().await
+        {
+            warn!("failed to materialize rollout recorder: {e}");
         }
     }
 
@@ -1322,6 +1338,10 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                 }
+
+                // Forked threads should remain file-backed immediately after startup.
+                self.ensure_rollout_materialized().await;
+
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -2184,9 +2204,9 @@ impl Session {
                 .into(),
             );
         }
-        items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            shell.as_ref().clone(),
+        items.push(ResponseItem::from(EnvironmentContext::from_turn_context(
+            turn_context,
+            shell.as_ref(),
         )));
         items
     }
@@ -2343,6 +2363,7 @@ impl Session {
         let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
+        self.ensure_rollout_materialized().await;
     }
 
     pub(crate) async fn notify_background_event(
@@ -2480,7 +2501,7 @@ impl Session {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourcesResult> {
         self.services
             .mcp_connection_manager
@@ -2493,7 +2514,7 @@ impl Session {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> anyhow::Result<ListResourceTemplatesResult> {
         self.services
             .mcp_connection_manager
@@ -2506,7 +2527,7 @@ impl Session {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
@@ -2678,6 +2699,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
         match sub.op.clone() {
             Op::Interrupt => {
                 handlers::interrupt(&sess).await;
+            }
+            Op::CleanBackgroundTerminals => {
+                handlers::clean_background_terminals(&sess).await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -2867,6 +2891,10 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
+    }
+
+    pub async fn clean_background_terminals(sess: &Arc<Session>) {
+        sess.close_unified_exec_processes().await;
     }
 
     pub async fn override_turn_context(
@@ -6637,6 +6665,7 @@ mod tests {
             cwd: turn_context.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
+            network: None,
             sandbox_permissions,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: Some("test".to_string()),
@@ -6649,6 +6678,7 @@ mod tests {
             cwd: params.cwd.clone(),
             expiration: timeout_ms.into(),
             env: HashMap::new(),
+            network: None,
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
             arg0: None,

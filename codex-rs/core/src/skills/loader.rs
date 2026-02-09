@@ -2200,7 +2200,7 @@ interface:
     }
 
     #[tokio::test]
-    async fn skill_roots_include_admin_with_lowest_priority_on_unix() {
+    async fn skill_roots_include_admin_with_lowest_priority() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&codex_home).await;
 
@@ -2212,9 +2212,7 @@ interface:
         if home_dir().is_some() {
             expected.insert(1, SkillScope::User);
         }
-        if cfg!(unix) {
-            expected.push(SkillScope::Admin);
-        }
+        expected.push(SkillScope::Admin);
         assert_eq!(scopes, expected);
     }
 }

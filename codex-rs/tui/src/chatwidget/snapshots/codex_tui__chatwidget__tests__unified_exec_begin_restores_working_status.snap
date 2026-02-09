@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 "                                                                                "
 "• Working (0s • esc to interrupt)                                               "
-"  1 background terminal running · /ps to view                                   "
+"  1 background terminal running · /ps to view · /clean to close                 "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

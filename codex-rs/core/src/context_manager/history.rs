@@ -236,15 +236,23 @@ impl ContextManager {
             })
     }
 
-    fn get_trailing_codex_generated_items_tokens(&self) -> i64 {
-        let mut total = 0i64;
-        for item in self.items.iter().rev() {
-            if !is_codex_generated_item(item) {
-                break;
-            }
-            total = total.saturating_add(estimate_item_token_count(item));
-        }
-        total
+    // These are local items added after the most recent model-emitted item.
+    // They are not reflected in `last_token_usage.total_tokens`.
+    fn items_after_last_model_generated_item(&self) -> &[ResponseItem] {
+        let start = self
+            .items
+            .iter()
+            .rposition(is_model_generated_item)
+            .map_or(self.items.len(), |index| index.saturating_add(1));
+        &self.items[start..]
+    }
+
+    fn get_items_after_last_model_generated_tokens(&self) -> i64 {
+        self.items_after_last_model_generated_item()
+            .iter()
+            .fold(0i64, |acc, item| {
+                acc.saturating_add(estimate_item_token_count(item))
+            })
     }
 
     /// When true, the server already accounted for past reasoning tokens and
@@ -255,13 +263,14 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
-        let trailing_codex_generated_tokens = self.get_trailing_codex_generated_items_tokens();
+        let items_after_last_model_generated_tokens =
+            self.get_items_after_last_model_generated_tokens();
         if server_reasoning_included {
-            last_tokens.saturating_add(trailing_codex_generated_tokens)
+            last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
             last_tokens
                 .saturating_add(self.get_non_last_reasoning_items_tokens())
-                .saturating_add(trailing_codex_generated_tokens)
+                .saturating_add(items_after_last_model_generated_tokens)
         }
     }
 
@@ -364,6 +373,22 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
             let serialized = serde_json::to_string(item).unwrap_or_default();
             i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
         }
+    }
+}
+
+fn is_model_generated_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role == "assistant",
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => false,
     }
 }
 

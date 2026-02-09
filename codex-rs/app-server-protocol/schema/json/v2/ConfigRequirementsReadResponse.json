@@ -52,6 +52,84 @@
       },
       "type": "object"
     },
+    "NetworkRequirements": {
+      "properties": {
+        "allowLocalBinding": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowUnixSockets": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowUpstreamProxy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowedDomains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "dangerouslyAllowNonLoopbackAdmin": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dangerouslyAllowNonLoopbackProxy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "deniedDomains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "httpPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "socksPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ResidencyRequirement": {
       "enum": [
         "us"

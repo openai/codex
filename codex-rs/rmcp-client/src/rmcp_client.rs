@@ -10,23 +10,24 @@ use anyhow::Result;
 use anyhow::anyhow;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use oauth2::TokenResponse;
 use reqwest::header::HeaderMap;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::Extensions;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::ServerResult;
@@ -36,6 +37,7 @@ use rmcp::service::RunningService;
 use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -143,7 +145,7 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParam;
+pub type Elicitation = CreateElicitationRequestParams;
 pub type ElicitationResponse = CreateElicitationResult;
 
 /// Interface for sending elicitation requests to the UI and awaiting a response.
@@ -254,17 +256,44 @@ impl RmcpClient {
         };
 
         let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
-            let (transport, oauth_persistor) = create_oauth_transport_and_runtime(
+            match create_oauth_transport_and_runtime(
                 server_name,
                 url,
-                initial_tokens,
+                initial_tokens.clone(),
                 store_mode,
                 default_headers.clone(),
             )
-            .await?;
-            PendingTransport::StreamableHttpWithOAuth {
-                transport,
-                oauth_persistor,
+            .await
+            {
+                Ok((transport, oauth_persistor)) => PendingTransport::StreamableHttpWithOAuth {
+                    transport,
+                    oauth_persistor,
+                },
+                Err(err)
+                    if err.downcast_ref::<AuthError>().is_some_and(|auth_err| {
+                        matches!(auth_err, AuthError::NoAuthorizationSupport)
+                    }) =>
+                {
+                    let access_token = initial_tokens
+                        .token_response
+                        .0
+                        .access_token()
+                        .secret()
+                        .to_string();
+                    warn!(
+                        "OAuth metadata discovery is unavailable for MCP server `{server_name}`; falling back to stored bearer token authentication"
+                    );
+                    let http_config =
+                        StreamableHttpClientTransportConfig::with_uri(url.to_string())
+                            .auth_header(access_token);
+                    let http_client =
+                        apply_default_headers(reqwest::Client::builder(), &default_headers)
+                            .build()?;
+                    let transport =
+                        StreamableHttpClientTransport::with_client(http_client, http_config);
+                    PendingTransport::StreamableHttp { transport }
+                }
+                Err(err) => return Err(err),
             }
         } else {
             let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
@@ -289,7 +318,7 @@ impl RmcpClient {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
     pub async fn initialize(
         &self,
-        params: InitializeRequestParam,
+        params: InitializeRequestParams,
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
@@ -362,7 +391,7 @@ impl RmcpClient {
 
     pub async fn list_tools(
         &self,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
         self.refresh_oauth_if_needed().await;
@@ -375,7 +404,7 @@ impl RmcpClient {
 
     pub async fn list_tools_with_connector_ids(
         &self,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
@@ -415,7 +444,7 @@ impl RmcpClient {
 
     pub async fn list_resources(
         &self,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
         self.refresh_oauth_if_needed().await;
@@ -429,7 +458,7 @@ impl RmcpClient {
 
     pub async fn list_resource_templates(
         &self,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
         self.refresh_oauth_if_needed().await;
@@ -443,7 +472,7 @@ impl RmcpClient {
 
     pub async fn read_resource(
         &self,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
         self.refresh_oauth_if_needed().await;
@@ -471,9 +500,11 @@ impl RmcpClient {
             }
             None => None,
         };
-        let rmcp_params = CallToolRequestParam {
+        let rmcp_params = CallToolRequestParams {
+            meta: None,
             name: name.into(),
             arguments,
+            task: None,
         };
         let fut = service.call_tool(rmcp_params);
         let result = run_with_timeout(fut, timeout, "tools/call").await?;

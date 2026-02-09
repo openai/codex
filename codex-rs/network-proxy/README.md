@@ -147,8 +147,8 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
-- HTTPS tunneling uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
-  native toolchain and CMake on macOS/Linux/Windows.
+- HTTPS tunneling uses rustls via Rama's `rama-tls-rustls`; this avoids BoringSSL/OpenSSL symbol
+  collisions in mixed TLS dependency graphs.
 
 ## Security notes (important)
 
