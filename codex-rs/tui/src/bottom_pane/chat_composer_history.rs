@@ -17,12 +17,12 @@ pub(crate) struct HistoryEntry {
     pub(crate) text_elements: Vec<TextElement>,
     /// Local image paths captured alongside `text_elements`.
     pub(crate) local_image_paths: Vec<PathBuf>,
+    /// Remote image URLs captured alongside `local_image_paths`.
+    pub(crate) remote_image_urls: Vec<String>,
     /// Mention bindings for tool/app/skill references inside `text`.
     pub(crate) mention_bindings: Vec<MentionBinding>,
     /// Placeholder-to-payload pairs used to restore large paste content.
     pub(crate) pending_pastes: Vec<(String, String)>,
-    /// Remote image URLs shown above the composer text input.
-    pub(crate) pending_remote_image_urls: Vec<String>,
 }
 
 impl HistoryEntry {
@@ -32,6 +32,7 @@ impl HistoryEntry {
             text: decoded.text,
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
             mention_bindings: decoded
                 .mentions
                 .into_iter()
@@ -41,7 +42,6 @@ impl HistoryEntry {
                 })
                 .collect(),
             pending_pastes: Vec::new(),
-            pending_remote_image_urls: Vec::new(),
         }
     }
 
@@ -56,9 +56,9 @@ impl HistoryEntry {
             text,
             text_elements,
             local_image_paths,
+            remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
             pending_pastes,
-            pending_remote_image_urls: Vec::new(),
         }
     }
 
@@ -68,15 +68,15 @@ impl HistoryEntry {
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
         pending_pastes: Vec<(String, String)>,
-        pending_remote_image_urls: Vec<String>,
+        remote_image_urls: Vec<String>,
     ) -> Self {
         Self {
             text,
             text_elements,
             local_image_paths,
+            remote_image_urls,
             mention_bindings: Vec::new(),
             pending_pastes,
-            pending_remote_image_urls,
         }
     }
 }
@@ -137,9 +137,9 @@ impl ChatComposerHistory {
         if entry.text.is_empty()
             && entry.text_elements.is_empty()
             && entry.local_image_paths.is_empty()
+            && entry.remote_image_urls.is_empty()
             && entry.mention_bindings.is_empty()
             && entry.pending_pastes.is_empty()
-            && entry.pending_remote_image_urls.is_empty()
         {
             return;
         }

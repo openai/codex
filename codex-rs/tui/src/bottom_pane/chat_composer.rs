@@ -919,9 +919,9 @@ impl ChatComposer {
             text: previous.clone(),
             text_elements,
             local_image_paths,
+            remote_image_urls: pending_remote_image_urls,
             mention_bindings,
             pending_pastes,
-            pending_remote_image_urls,
         });
         Some(previous)
     }
@@ -943,11 +943,11 @@ impl ChatComposer {
             text,
             text_elements,
             local_image_paths,
+            remote_image_urls,
             mention_bindings,
             pending_pastes,
-            pending_remote_image_urls,
         } = entry;
-        self.set_pending_remote_image_urls(pending_remote_image_urls);
+        self.set_pending_remote_image_urls(remote_image_urls);
         self.set_text_content_with_mention_bindings(
             text,
             text_elements,
@@ -2179,9 +2179,9 @@ impl ChatComposer {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
                 local_image_paths,
+                remote_image_urls: self.pending_remote_image_urls.clone(),
                 mention_bindings: original_mention_bindings,
                 pending_pastes: Vec::new(),
-                pending_remote_image_urls: self.pending_remote_image_urls.clone(),
             });
         }
         self.pending_pastes.clear();
