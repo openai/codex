@@ -1030,7 +1030,6 @@ impl ChatWidget {
             None,
         );
         self.refresh_model_display();
-        self.sync_personality_command_enabled();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2680,7 +2679,6 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
-        widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -2844,7 +2842,6 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
-        widget.sync_personality_command_enabled();
 
         widget
     }
@@ -2997,7 +2994,6 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
-        widget.sync_personality_command_enabled();
         #[cfg(target_os = "windows")]
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -3776,11 +3772,7 @@ impl ChatWidget {
         } else {
             None
         };
-        let personality = self
-            .config
-            .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|_| self.current_model_supports_personality());
+        let personality = self.config.personality;
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
@@ -3791,7 +3783,7 @@ impl ChatWidget {
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
             collaboration_mode,
-            personality,
+            personality: Some(personality),
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -4727,7 +4719,7 @@ impl ChatWidget {
     }
 
     fn open_personality_popup_for_current_model(&mut self) {
-        let current_personality = self.config.personality.unwrap_or(Personality::Friendly);
+        let current_personality = self.config.personality;
         let personalities = [Personality::Friendly, Personality::Pragmatic];
         let supports_personality = self.current_model_supports_personality();
 
@@ -5975,9 +5967,6 @@ impl ChatWidget {
             self.refresh_model_display();
             self.request_redraw();
         }
-        if feature == Feature::Personality {
-            self.sync_personality_command_enabled();
-        }
         #[cfg(target_os = "windows")]
         if matches!(
             feature,
@@ -6030,7 +6019,7 @@ impl ChatWidget {
 
     /// Set the personality in the widget's config copy.
     pub(crate) fn set_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
+        self.config.personality = personality;
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
@@ -6054,11 +6043,6 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
-    }
-
-    fn sync_personality_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
     }
 
     fn current_model_supports_personality(&self) -> bool {

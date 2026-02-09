@@ -466,9 +466,6 @@ impl ChatComposer {
         self.collaboration_mode_indicator = indicator;
     }
 
-    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
-        self.personality_command_enabled = enabled;
-    }
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled

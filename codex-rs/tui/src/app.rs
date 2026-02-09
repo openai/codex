@@ -2414,7 +2414,7 @@ impl App {
     }
 
     fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
+        self.config.personality = personality;
         self.chat_widget.set_personality(personality);
     }
 

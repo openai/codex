@@ -522,7 +522,7 @@ pub(crate) struct TurnContext {
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
-    pub(crate) personality: Option<Personality>,
+    pub(crate) personality: Personality,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
@@ -605,7 +605,7 @@ pub(crate) struct SessionConfiguration {
     user_instructions: Option<String>,
 
     /// Personality preference for the model.
-    personality: Option<Personality>,
+    personality: Personality,
 
     /// Base instructions for the session.
     base_instructions: String,
@@ -666,7 +666,7 @@ impl SessionConfiguration {
             next_configuration.model_reasoning_summary = summary;
         }
         if let Some(personality) = updates.personality {
-            next_configuration.personality = Some(personality);
+            next_configuration.personality = personality;
         }
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
@@ -1564,20 +1564,14 @@ impl Session {
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        if !self.features.enabled(Feature::Personality) {
-            return None;
-        }
         let previous = previous?;
         if next.model_info.slug != previous.model_info.slug {
             return None;
         }
 
-        // if a personality is specified and it's different from the previous one, build a personality update item
-        if let Some(personality) = next.personality
-            && next.personality != previous.personality
-        {
+        if next.personality != previous.personality {
             let model_info = &next.model_info;
-            let personality_message = Self::personality_message_for(model_info, personality);
+            let personality_message = Self::personality_message_for(model_info, next.personality);
             personality_message.map(|personality_message| {
                 DeveloperInstructions::personality_spec_message(personality_message).into()
             })
@@ -1590,7 +1584,7 @@ impl Session {
         model_info
             .model_messages
             .as_ref()
-            .and_then(|spec| spec.get_personality_message(Some(personality)))
+            .and_then(|spec| spec.get_personality_message(personality))
             .filter(|message| !message.is_empty())
     }
 
@@ -2180,21 +2174,17 @@ impl Session {
         {
             items.push(collab_instructions.into());
         }
-        if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
+
+        let model_info = turn_context.model_info.clone();
+        let has_baked_personality = model_info.supports_personality()
+            && base_instructions == model_info.get_model_instructions(turn_context.personality);
+        if !has_baked_personality
+            && let Some(personality_message) =
+                Self::personality_message_for(&model_info, turn_context.personality)
         {
-            let model_info = turn_context.model_info.clone();
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
-            if !has_baked_personality
-                && let Some(personality_message) =
-                    Self::personality_message_for(&model_info, personality)
-            {
-                items.push(
-                    DeveloperInstructions::personality_spec_message(personality_message).into(),
-                );
-            }
+            items.push(DeveloperInstructions::personality_spec_message(personality_message).into());
         }
+
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(
                 UserInstructions {
@@ -4136,7 +4126,6 @@ async fn run_sampling_request(
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
-        personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -4644,7 +4633,7 @@ async fn try_run_sampling_request(
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.model_info.slug.clone(),
-        personality: turn_context.personality,
+        personality: Some(turn_context.personality),
         collaboration_mode: Some(collaboration_mode),
         effort: turn_context.reasoning_effort,
         summary: turn_context.reasoning_summary,

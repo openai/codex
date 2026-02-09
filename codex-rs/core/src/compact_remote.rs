@@ -86,7 +86,6 @@ async fn run_remote_compact_task_inner_impl(
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions,
-        personality: turn_context.personality,
         output_schema: None,
     };
 

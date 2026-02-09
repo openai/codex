@@ -1,6 +1,5 @@
 use anyhow::Result;
 use codex_core::config::types::Personality;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -110,11 +109,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
     )
     .await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.2-codex")
-        .with_config(|config| {
-            config.features.enable(Feature::Personality);
-        });
+    let mut builder = test_codex().with_model("gpt-5.2-codex");
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
 
