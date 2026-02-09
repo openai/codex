@@ -441,6 +441,9 @@ async fn run_ratatui_app(
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
+    // Configure syntax highlighting theme before any rendering can occur.
+    crate::render::highlight::set_theme_override(initial_config.tui_theme.clone());
+
     tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
