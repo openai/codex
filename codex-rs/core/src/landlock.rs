@@ -2,7 +2,6 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use codex_network_proxy::has_proxy_url_env_vars;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -52,10 +51,13 @@ where
 }
 
 pub(crate) fn allow_network_for_proxy(
-    sandbox_policy: &SandboxPolicy,
-    env: &HashMap<String, String>,
+    _sandbox_policy: &SandboxPolicy,
+    _env: &HashMap<String, String>,
 ) -> bool {
-    !sandbox_policy.has_full_network_access() && has_proxy_url_env_vars(env)
+    // Proxy environment variables are advisory only. In restricted policies we
+    // keep network sandboxing fail-closed unless we have explicit proxy-only
+    // enforcement in the sandbox runtime.
+    false
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
@@ -137,6 +139,20 @@ mod tests {
         assert_eq!(
             args.contains(&"--allow-network-for-proxy".to_string()),
             true
+        );
+    }
+
+    #[test]
+    fn proxy_env_does_not_bypass_restricted_network_policy() {
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+        );
+
+        assert_eq!(
+            allow_network_for_proxy(&SandboxPolicy::ReadOnly, &env),
+            false
         );
     }
 }

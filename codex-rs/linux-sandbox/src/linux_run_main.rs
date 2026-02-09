@@ -40,8 +40,9 @@ pub struct LandlockCommand {
     #[arg(long = "apply-seccomp-then-exec", hide = true, default_value_t = false)]
     pub apply_seccomp_then_exec: bool,
 
-    /// Internal: permit network syscalls in restricted policies when we rely
-    /// on proxy environment variables for egress routing.
+    /// Internal compatibility flag.
+    ///
+    /// Proxy environment variables do not disable restricted-network sandboxing.
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
@@ -115,13 +116,7 @@ pub fn run_main() -> ! {
             allow_network_for_proxy,
             command,
         );
-        run_bwrap_with_proc_fallback(
-            &sandbox_policy_cwd,
-            &sandbox_policy,
-            inner,
-            !no_proc,
-            allow_network_for_proxy,
-        );
+        run_bwrap_with_proc_fallback(&sandbox_policy_cwd, &sandbox_policy, inner, !no_proc);
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
@@ -141,7 +136,6 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
-    allow_network_for_proxy: bool,
 ) -> ! {
     let mut mount_proc = mount_proc;
 
@@ -152,7 +146,7 @@ fn run_bwrap_with_proc_fallback(
 
     let options = BwrapOptions {
         mount_proc,
-        isolate_network: !sandbox_policy.has_full_network_access() && !allow_network_for_proxy,
+        isolate_network: !sandbox_policy.has_full_network_access(),
     };
     let argv = build_bwrap_argv(inner, sandbox_policy, sandbox_policy_cwd, options);
     exec_vendored_bwrap(argv);

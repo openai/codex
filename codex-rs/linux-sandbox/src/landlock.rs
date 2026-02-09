@@ -35,18 +35,16 @@ use seccompiler::apply_filter;
 ///
 /// This function is responsible for:
 /// - enabling `PR_SET_NO_NEW_PRIVS` when restrictions apply, and
-/// - installing the network seccomp filter when network access is disabled and
-///   proxy-based routing is not enabled.
+/// - installing the network seccomp filter when network access is disabled.
 ///
 /// Filesystem restrictions are intentionally handled by bubblewrap.
 pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
-    allow_network_for_proxy: bool,
+    _allow_network_for_proxy: bool,
 ) -> Result<()> {
-    let install_network_seccomp =
-        !sandbox_policy.has_full_network_access() && !allow_network_for_proxy;
+    let install_network_seccomp = !sandbox_policy.has_full_network_access();
 
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
     // setuid privilege elevation. Many `bwrap` deployments rely on setuid, so
