@@ -324,10 +324,12 @@ fn apply_proxy_env_overrides(
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
         env.insert("RSYNC_PROXY".to_string(), socks_addr.to_string());
         #[cfg(target_os = "macos")]
-        env.insert(
-            "GIT_SSH_COMMAND".to_string(),
-            format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"),
-        );
+        {
+            // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
+            // and only provide a SOCKS ProxyCommand fallback when one is not present.
+            env.entry("GIT_SSH_COMMAND".to_string())
+                .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
+        }
     } else {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
     }
@@ -626,5 +628,26 @@ mod tests {
         assert_eq!(env.get("RSYNC_PROXY"), None);
         assert_eq!(env.get("FTP_PROXY"), None);
         assert_eq!(env.get("GRPC_PROXY"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_proxy_env_overrides_preserves_existing_git_ssh_command() {
+        let mut env = HashMap::new();
+        env.insert(
+            "GIT_SSH_COMMAND".to_string(),
+            "ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string(),
+        );
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+        );
+
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string())
+        );
     }
 }
