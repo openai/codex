@@ -9,6 +9,7 @@ use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::tasks::RegularTask;
 use crate::truncate::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
@@ -26,6 +27,8 @@ pub(crate) struct SessionState {
     pub(crate) initial_context_seeded: bool,
     /// Previous rollout model for one-shot model-switch handling on first turn after resume.
     pub(crate) pending_resume_previous_model: Option<String>,
+    /// Startup regular task pre-created during session initialization.
+    pub(crate) startup_regular_task: Option<RegularTask>,
 }
 
 impl SessionState {
@@ -41,6 +44,7 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             initial_context_seeded: false,
             pending_resume_previous_model: None,
+            startup_regular_task: None,
         }
     }
 
@@ -127,6 +131,14 @@ impl SessionState {
 
     pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
         self.dependency_env.clone()
+    }
+
+    pub(crate) fn set_startup_regular_task(&mut self, task: RegularTask) {
+        self.startup_regular_task = Some(task);
+    }
+
+    pub(crate) fn take_startup_regular_task(&mut self) -> Option<RegularTask> {
+        self.startup_regular_task.take()
     }
 }
 

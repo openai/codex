@@ -9,26 +9,24 @@
 //! call site.
 //!
 //! A [`ModelClientSession`] is created per turn and is used to stream one or more Responses API
-//! requests during that turn. It caches a Responses WebSocket connection (opened lazily, or reused
-//! from a session-level preconnect) and stores per-turn state such as the `x-codex-turn-state`
-//! token used for sticky routing.
+//! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
+//! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Preconnect is intentionally handshake-only: it may warm a socket and capture sticky-routing
+//! Prewarm is intentionally handshake-only: it may warm a socket and capture sticky-routing
 //! state, but the first `response.create` payload is still sent only when a turn starts.
 //!
-//! Internally, startup preconnect stores a single task handle. On first use in a turn, the session
-//! awaits that task and adopts the warmed socket if it succeeds; if it fails, the stream attempt
-//! fails and the normal retry/fallback loop decides what to do next.
+//! Startup prewarm is owned by turn-scoped callers (for example, a pre-created regular task). When
+//! a warmed [`ModelClientSession`] is available, turn execution can reuse it; otherwise the turn
+//! lazily opens a websocket on first stream call.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! Startup preconnect is treated as the first websocket connection attempt for the first turn. If
+//! Startup prewarm is treated as the first websocket connection attempt for the first turn. If
 //! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
-//! back. This avoids duplicate handshakes but means a failed preconnect can consume one retry
+//! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
 //! budget slot before any turn payload is sent.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -73,7 +71,6 @@ use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
-use futures::future::BoxFuture;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
@@ -83,7 +80,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
-use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::warn;
@@ -109,17 +105,11 @@ pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
-
-struct PreconnectedWebSocket {
-    connection: ApiWebSocketConnection,
-    turn_state: Option<String>,
-}
-
-type PreconnectTask = JoinHandle<Option<PreconnectedWebSocket>>;
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
+#[derive(Debug)]
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
@@ -132,40 +122,11 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
-
-    preconnect: Mutex<Option<PreconnectTask>>,
-}
-
-impl std::fmt::Debug for ModelClientState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModelClientState")
-            .field("auth_manager", &self.auth_manager)
-            .field("conversation_id", &self.conversation_id)
-            .field("provider", &self.provider)
-            .field("session_source", &self.session_source)
-            .field("model_verbosity", &self.model_verbosity)
-            .field(
-                "enable_responses_websockets",
-                &self.enable_responses_websockets,
-            )
-            .field(
-                "enable_request_compression",
-                &self.enable_request_compression,
-            )
-            .field("include_timing_metrics", &self.include_timing_metrics)
-            .field("beta_features_header", &self.beta_features_header)
-            .field(
-                "disable_websockets",
-                &self.disable_websockets.load(Ordering::Relaxed),
-            )
-            .field("preconnect", &"<opaque>")
-            .finish()
-    }
 }
 
 /// Resolved API client setup for a single request attempt.
 ///
-/// Keeping this as a single bundle ensures preconnect and normal request paths
+/// Keeping this as a single bundle ensures prewarm and normal request paths
 /// share the same auth/provider setup flow.
 struct CurrentClientSetup {
     auth: Option<CodexAuth>,
@@ -192,16 +153,13 @@ pub struct ModelClient {
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
 ///
-/// The session establishes a Responses WebSocket connection lazily (or adopts a preconnected one)
-/// and reuses it across multiple requests within the turn. It also caches per-turn state:
+/// The session establishes a Responses WebSocket connection lazily and reuses it across multiple
+/// requests within the turn. It also caches per-turn state:
 ///
 /// - The last request's input items, so subsequent calls can use `response.append` when the input
 ///   is an incremental extension of the previous request.
 /// - The `x-codex-turn-state` sticky-routing token, which must be replayed for all requests within
 ///   the same turn.
-///
-/// When startup preconnect is still running, first use of this session awaits that in-flight task
-/// before opening a new websocket so preconnect acts as the first connection attempt for the turn.
 ///
 /// Create a fresh `ModelClientSession` for each Codex turn. Reusing it across turns would replay
 /// the previous turn's sticky-routing token into the next turn, which violates the client/server
@@ -261,16 +219,14 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
-                preconnect: Mutex::new(None),
             }),
         }
     }
 
     /// Creates a fresh turn-scoped streaming session.
     ///
-    /// This constructor does not perform network I/O itself. The returned session either adopts a
-    /// previously preconnected websocket or opens a websocket lazily when the first stream request
-    /// is issued.
+    /// This constructor does not perform network I/O itself; the session opens a websocket lazily
+    /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
@@ -280,79 +236,6 @@ impl ModelClient {
             websocket_last_response_id_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
-    }
-
-    /// Spawns a best-effort task that warms a websocket for the first turn.
-    ///
-    /// This call performs only connection setup; it never sends prompt payloads.
-    ///
-    /// A timeout when computing turn metadata is treated the same as "no metadata" so startup
-    /// cannot block indefinitely on optional preconnect context.
-    pub fn pre_establish_connection(
-        &self,
-        otel_manager: OtelManager,
-        turn_metadata_header: BoxFuture<'static, Option<String>>,
-    ) {
-        if !self.responses_websocket_enabled() || self.disable_websockets() {
-            return;
-        }
-
-        let model_client = self.clone();
-        let handle = tokio::spawn(async move {
-            let turn_metadata_header = turn_metadata_header.await;
-
-            model_client
-                .preconnect(&otel_manager, turn_metadata_header.as_deref())
-                .await
-        });
-        self.set_preconnected_task(Some(handle));
-    }
-
-    /// Opportunistically pre-establishes a Responses WebSocket connection for this session.
-    ///
-    /// This method is best-effort: it returns an error on setup/connect failure and the caller
-    /// can decide whether to ignore it. A successful preconnect reduces first-turn latency but
-    /// never sends an initial prompt; the first `response.create` is still sent only when a turn
-    /// starts.
-    ///
-    /// The preconnected slot is single-consumer and single-use: the next `ModelClientSession` may
-    /// adopt it once, after which later turns either keep using that same turn-local connection or
-    /// create a new one.
-    async fn preconnect(
-        &self,
-        otel_manager: &OtelManager,
-        turn_metadata_header: Option<&str>,
-    ) -> Option<PreconnectedWebSocket> {
-        if !self.responses_websocket_enabled() || self.disable_websockets() {
-            return None;
-        }
-
-        let client_setup = self
-            .current_client_setup()
-            .await
-            .map_err(|err| {
-                ApiError::Stream(format!(
-                    "failed to build websocket preconnect client setup: {err}"
-                ))
-            })
-            .ok()?;
-
-        let turn_state = Arc::new(OnceLock::new());
-        let connection = self
-            .connect_websocket(
-                otel_manager,
-                client_setup.api_provider,
-                client_setup.api_auth,
-                Some(Arc::clone(&turn_state)),
-                turn_metadata_header,
-            )
-            .await
-            .ok()?;
-
-        Some(PreconnectedWebSocket {
-            connection,
-            turn_state: turn_state.get().cloned(),
-        })
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -475,7 +358,7 @@ impl ModelClient {
 
     /// Returns auth + provider configuration resolved from the current session auth state.
     ///
-    /// This centralizes setup used by both preconnect and normal request paths so they stay in
+    /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = match self.state.auth_manager.as_ref() {
@@ -496,7 +379,7 @@ impl ModelClient {
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
     ///
-    /// Both startup preconnect and in-turn `needs_new` reconnects call this path so handshake
+    /// Both startup prewarm and in-turn `needs_new` reconnects call this path so handshake
     /// behavior remains consistent across both flows.
     async fn connect_websocket(
         &self,
@@ -513,7 +396,7 @@ impl ModelClient {
             .await
     }
 
-    /// Builds websocket handshake headers for both preconnect and turn-time reconnect.
+    /// Builds websocket handshake headers for both prewarm and turn-time reconnect.
     ///
     /// Callers should pass the current turn-state lock when available so sticky-routing state is
     /// replayed on reconnect within the same turn.
@@ -547,28 +430,6 @@ impl ModelClient {
             );
         }
         headers
-    }
-
-    /// Consumes the warmed websocket task slot.
-    fn take_preconnected_task(&self) -> Option<PreconnectTask> {
-        let mut state = self
-            .state
-            .preconnect
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.take()
-    }
-
-    fn set_preconnected_task(&self, task: Option<PreconnectTask>) {
-        let mut state = self
-            .state
-            .preconnect
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(running_task) = state.take() {
-            running_task.abort();
-        }
-        *state = task;
     }
 }
 
@@ -772,13 +633,42 @@ impl ModelClientSession {
         )
     }
 
-    /// Returns a websocket connection for this turn, reusing preconnect when possible.
+    /// Opportunistically warms a websocket for this turn-scoped client session.
     ///
-    /// This method first tries to adopt the session-level preconnect slot, then falls back to a
-    /// fresh websocket handshake only when the turn has no live connection. If startup preconnect
-    /// is still running, it is awaited first so that task acts as the first connection attempt for
-    /// this turn instead of racing a second handshake. If that attempt fails, the normal connect
-    /// and stream retry flow continues unchanged.
+    /// This performs only connection setup; it never sends prompt payloads.
+    pub async fn prewarm_websocket(
+        &mut self,
+        otel_manager: &OtelManager,
+        turn_metadata_header: Option<&str>,
+    ) -> std::result::Result<(), ApiError> {
+        if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
+            return Ok(());
+        }
+        if self.connection.is_some() {
+            return Ok(());
+        }
+
+        let client_setup = self.client.current_client_setup().await.map_err(|err| {
+            ApiError::Stream(format!(
+                "failed to build websocket prewarm client setup: {err}"
+            ))
+        })?;
+
+        let connection = self
+            .client
+            .connect_websocket(
+                otel_manager,
+                client_setup.api_provider,
+                client_setup.api_auth,
+                Some(Arc::clone(&self.turn_state)),
+                turn_metadata_header,
+            )
+            .await?;
+        self.connection = Some(connection);
+        Ok(())
+    }
+
+    /// Returns a websocket connection for this turn.
     async fn websocket_connection(
         &mut self,
         otel_manager: &OtelManager,
@@ -787,27 +677,6 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
-        // Prefer the session-level preconnect slot before creating a new websocket.
-        if self.connection.is_none()
-            && let Some(task) = self.client.take_preconnected_task()
-        {
-            match task.await {
-                Ok(Some(preconnected)) => {
-                    let PreconnectedWebSocket {
-                        connection,
-                        turn_state,
-                    } = preconnected;
-                    if let Some(turn_state) = turn_state {
-                        let _ = self.turn_state.set(turn_state);
-                    }
-                    self.connection = Some(connection);
-                }
-                _ => {
-                    warn!("startup websocket preconnect task failed");
-                }
-            };
-        }
-
         let needs_new = match self.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
             None => true,
@@ -1083,8 +952,7 @@ impl ModelClientSession {
     /// Permanently disables WebSockets for this Codex session and resets WebSocket state.
     ///
     /// This is used after exhausting the provider retry budget, to force subsequent requests onto
-    /// the HTTP transport. It also clears any warmed websocket preconnect state so future turns
-    /// cannot accidentally adopt a stale socket after fallback has been activated.
+    /// the HTTP transport.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
     pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
@@ -1098,7 +966,6 @@ impl ModelClientSession {
                 &[("from_wire_api", "responses_websocket")],
             );
 
-            self.client.set_preconnected_task(None);
             self.connection = None;
             self.websocket_last_items.clear();
         }
