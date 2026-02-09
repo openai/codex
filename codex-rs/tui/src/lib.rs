@@ -100,6 +100,7 @@ mod audio_device {
 mod bottom_pane;
 mod chatwidget;
 mod cli;
+mod clipboard_copy;
 mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;

@@ -779,6 +779,8 @@ pub(crate) struct ChatWidget {
     // Latest agent message observed during the active turn. App-server turn completion
     // notifications do not repeat this payload, so we promote it when the turn completes.
     pending_turn_copyable_output: Option<String>,
+    /// Raw markdown of the most recently completed agent response.
+    last_agent_markdown: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
@@ -2278,6 +2280,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
+        self.last_agent_markdown = None;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2306,11 +2309,17 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
         let copyable_turn_output = last_agent_message
+            .as_ref()
             .filter(|message| !message.trim().is_empty())
+            .cloned()
             .or_else(|| self.pending_turn_copyable_output.take());
         if let Some(message) = copyable_turn_output.as_ref() {
             self.last_copyable_output = Some(message.clone());
         }
+        self.last_agent_markdown = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            .cloned();
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -4652,6 +4661,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
+            last_agent_markdown: None,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -4759,6 +4769,16 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Alt+C - copy last agent response from the main view.
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.copy_last_agent_markdown();
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4991,6 +5011,27 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
         false
+    }
+
+    /// Copy the last agent response (raw markdown) to the system clipboard.
+    pub(crate) fn copy_last_agent_markdown(&mut self) {
+        match &self.last_agent_markdown {
+            Some(markdown) if !markdown.is_empty() => {
+                match crate::clipboard_copy::copy_to_clipboard(markdown) {
+                    Ok(()) => self.add_to_history(history_cell::new_info_event(
+                        "Copied last message to clipboard".into(),
+                        None,
+                    )),
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
+                }
+            }
+            _ => self.add_to_history(history_cell::new_error_event(
+                "No agent response to copy".into(),
+            )),
+        }
+        self.request_redraw();
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
