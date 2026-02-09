@@ -58,21 +58,6 @@ pub(crate) enum ColumnWidthMode {
 const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
 const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
-// Auto-width modes can otherwise allocate almost all width to the label
-// column; prefer a 50/50 split when rows opt into wrapped two-column labels.
-const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 1;
-const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 2;
-
-// Preserve historical auto-width behavior for standard popup rows.
-const LEGACY_AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
-const LEGACY_AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
-
-// For wrapped two-column rows (request_user_input options), clamp the label
-// column to at most half the width so long labels do not squeeze descriptions
-// into a narrow strip.
-const WRAPPED_BALANCED_COL_NUMERATOR: usize = 1;
-const WRAPPED_BALANCED_COL_DENOMINATOR: usize = 2;
-
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
 
@@ -225,30 +210,6 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     }
 }
 
-/// Computes the shared start column used for descriptions in selection rows.
-/// The column is derived from the widest row name plus two spaces of padding
-/// while always leaving at least one terminal cell for description content.
-/// [`ColumnWidthMode::AutoAllRows`] computes width across the full dataset so
-/// the description column does not shift as the user scrolls.
-fn should_use_balanced_auto_cap(
-    rows_all: &[GenericDisplayRow],
-    start_idx: usize,
-    visible_items: usize,
-    col_width_mode: ColumnWidthMode,
-) -> bool {
-    match col_width_mode {
-        ColumnWidthMode::AutoVisible => rows_all
-            .iter()
-            .enumerate()
-            .skip(start_idx)
-            .take(visible_items)
-            .map(|(_, row)| row)
-            .any(should_wrap_name_in_column),
-        ColumnWidthMode::AutoAllRows => rows_all.iter().any(should_wrap_name_in_column),
-        ColumnWidthMode::Fixed => false,
-    }
-}
-
 fn compute_desc_col(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
@@ -261,20 +222,14 @@ fn compute_desc_col(
     }
 
     let max_desc_col = content_width.saturating_sub(1) as usize;
-    let (auto_num, auto_den) =
-        if should_use_balanced_auto_cap(rows_all, start_idx, visible_items, col_width_mode) {
-            (
-                AUTO_LEFT_COLUMN_MAX_NUMERATOR,
-                AUTO_LEFT_COLUMN_MAX_DENOMINATOR,
-            )
-        } else {
-            (
-                LEGACY_AUTO_LEFT_COLUMN_MAX_NUMERATOR,
-                LEGACY_AUTO_LEFT_COLUMN_MAX_DENOMINATOR,
-            )
-        };
-    let max_auto_desc_col =
-        max_desc_col.min(((content_width as usize * auto_num) / auto_den).max(1));
+    // Reuse the existing fixed split constants to derive the auto cap:
+    // if fixed mode is 30/70 (label/description), auto mode caps label width
+    // at 70% to keep at least 30% available for descriptions.
+    let max_auto_desc_col = max_desc_col.min(
+        ((content_width as usize * (FIXED_LEFT_COLUMN_DENOMINATOR - FIXED_LEFT_COLUMN_NUMERATOR))
+            / FIXED_LEFT_COLUMN_DENOMINATOR)
+            .max(1),
+    );
     match col_width_mode {
         ColumnWidthMode::Fixed => ((content_width as usize * FIXED_LEFT_COLUMN_NUMERATOR)
             / FIXED_LEFT_COLUMN_DENOMINATOR)
@@ -351,10 +306,7 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
         return Vec::new();
     }
 
-    let balanced_desc_col = ((width as usize * WRAPPED_BALANCED_COL_NUMERATOR)
-        / WRAPPED_BALANCED_COL_DENOMINATOR)
-        .clamp(1, max_desc_col);
-    let desc_col = desc_col.clamp(1, max_desc_col).min(balanced_desc_col);
+    let desc_col = desc_col.clamp(1, max_desc_col);
     let left_width = desc_col.saturating_sub(2).max(1);
     let right_width = width.saturating_sub(desc_col as u16).max(1) as usize;
     let name_wrap_indent = row
