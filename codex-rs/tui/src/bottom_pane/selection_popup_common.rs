@@ -59,9 +59,13 @@ const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
 const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
 // Auto-width modes can otherwise allocate almost all width to the label
-// column; cap it at 70% so descriptions remain readable.
-const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
-const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
+// column; prefer a 50/50 split when rows opt into wrapped two-column labels.
+const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 1;
+const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 2;
+
+// Preserve historical auto-width behavior for standard popup rows.
+const LEGACY_AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
+const LEGACY_AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
 
 // For wrapped two-column rows (request_user_input options), clamp the label
 // column to at most half the width so long labels do not squeeze descriptions
@@ -226,6 +230,25 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
 /// while always leaving at least one terminal cell for description content.
 /// [`ColumnWidthMode::AutoAllRows`] computes width across the full dataset so
 /// the description column does not shift as the user scrolls.
+fn should_use_balanced_auto_cap(
+    rows_all: &[GenericDisplayRow],
+    start_idx: usize,
+    visible_items: usize,
+    col_width_mode: ColumnWidthMode,
+) -> bool {
+    match col_width_mode {
+        ColumnWidthMode::AutoVisible => rows_all
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_items)
+            .map(|(_, row)| row)
+            .any(should_wrap_name_in_column),
+        ColumnWidthMode::AutoAllRows => rows_all.iter().any(should_wrap_name_in_column),
+        ColumnWidthMode::Fixed => false,
+    }
+}
+
 fn compute_desc_col(
     rows_all: &[GenericDisplayRow],
     start_idx: usize,
@@ -238,11 +261,20 @@ fn compute_desc_col(
     }
 
     let max_desc_col = content_width.saturating_sub(1) as usize;
-    let max_auto_desc_col = max_desc_col.min(
-        ((content_width as usize * AUTO_LEFT_COLUMN_MAX_NUMERATOR)
-            / AUTO_LEFT_COLUMN_MAX_DENOMINATOR)
-            .max(1),
-    );
+    let (auto_num, auto_den) =
+        if should_use_balanced_auto_cap(rows_all, start_idx, visible_items, col_width_mode) {
+            (
+                AUTO_LEFT_COLUMN_MAX_NUMERATOR,
+                AUTO_LEFT_COLUMN_MAX_DENOMINATOR,
+            )
+        } else {
+            (
+                LEGACY_AUTO_LEFT_COLUMN_MAX_NUMERATOR,
+                LEGACY_AUTO_LEFT_COLUMN_MAX_DENOMINATOR,
+            )
+        };
+    let max_auto_desc_col =
+        max_desc_col.min(((content_width as usize * auto_num) / auto_den).max(1));
     match col_width_mode {
         ColumnWidthMode::Fixed => ((content_width as usize * FIXED_LEFT_COLUMN_NUMERATOR)
             / FIXED_LEFT_COLUMN_DENOMINATOR)
