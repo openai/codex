@@ -163,7 +163,7 @@ fn wrap_row_two_columns(row: &GenericDisplayRow, width: u16) -> Vec<Line<'static
     let row_count = label_lines.len().max(desc_lines.len()).max(1);
     let mut lines = Vec::with_capacity(row_count);
     for idx in 0..row_count {
-        let mut spans = Vec::new();
+        let mut spans: Vec<Span<'static>> = Vec::new();
         if let Some(label_line) = label_lines.get(idx) {
             spans.push(label_line.to_string().into());
         }
