@@ -204,11 +204,8 @@ impl OtelManager {
             "session_source",
             Some(self.metadata.session_source.as_str()),
         )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "originator",
-            Some(self.metadata.originator.as_str()),
-        )?;
+        let originator = sanitize_metric_tag_value(self.metadata.originator.as_str());
+        Self::push_metadata_tag(&mut tags, "originator", Some(originator.as_str()))?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)
