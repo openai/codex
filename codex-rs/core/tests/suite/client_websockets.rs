@@ -30,7 +30,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
-use futures::FutureExt;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use pretty_assertions::assert_eq;
@@ -98,11 +97,11 @@ async fn responses_websocket_preconnect_reuses_connection() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness
-        .client
-        .pre_establish_connection(harness.otel_manager.clone(), async { None }.boxed());
-
     let mut client_session = harness.client.new_session();
+    client_session
+        .prewarm_websocket(&harness.otel_manager, None)
+        .await
+        .expect("websocket prewarm failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
@@ -123,11 +122,11 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness
-        .client
-        .pre_establish_connection(harness.otel_manager.clone(), async { None }.boxed());
-
     let mut client_session = harness.client.new_session();
+    client_session
+        .prewarm_websocket(&harness.otel_manager, None)
+        .await
+        .expect("websocket prewarm failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
     let mut stream = client_session
         .stream(
