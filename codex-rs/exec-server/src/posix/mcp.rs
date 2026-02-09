@@ -126,6 +126,7 @@ impl ExecTool {
                     sandbox_policy: SandboxPolicy::ReadOnly,
                     codex_linux_sandbox_exe: None,
                     sandbox_cwd: PathBuf::from(&params.workdir),
+                    use_linux_sandbox_bwrap: false,
                 });
         let escalate_server = EscalateServer::new(
             self.bash_path.clone(),
@@ -184,7 +185,7 @@ impl ServerHandler for ExecTool {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())

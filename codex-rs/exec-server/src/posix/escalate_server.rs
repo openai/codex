@@ -87,6 +87,7 @@ impl EscalateServer {
                 cwd: PathBuf::from(&workdir),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
+                network: None,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 justification: None,
@@ -95,6 +96,7 @@ impl EscalateServer {
             &sandbox_state.sandbox_policy,
             &sandbox_state.sandbox_cwd,
             &sandbox_state.codex_linux_sandbox_exe,
+            sandbox_state.use_linux_sandbox_bwrap,
             None,
         )
         .await?;

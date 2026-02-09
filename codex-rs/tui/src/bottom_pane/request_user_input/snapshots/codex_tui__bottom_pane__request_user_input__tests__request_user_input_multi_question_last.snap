@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/request_user_input/mod.rs
+assertion_line: 2770
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
@@ -12,4 +13,4 @@ expression: "render_snapshot(&overlay, area)"
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  enter to submit all | ctrl + n first question | esc to interrupt
+  enter to submit all | ctrl + p / ctrl + n change question | esc to interrupt

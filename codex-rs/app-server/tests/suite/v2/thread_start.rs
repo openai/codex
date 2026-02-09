@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -58,6 +59,12 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         thread.created_at > 0,
         "created_at should be a positive UNIX timestamp"
     );
+    let thread_path = thread.path.clone().expect("thread path should be present");
+    assert!(thread_path.is_absolute(), "thread path should be absolute");
+    assert!(
+        !thread_path.exists(),
+        "fresh thread rollout should not be materialized until first user message"
+    );
 
     // A corresponding thread/started notification should arrive.
     let notif: JSONRPCNotification = timeout(
@@ -113,6 +120,73 @@ model_reasoning_effort = "high"
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert_eq!(
+        thread.path, None,
+        "ephemeral threads should not expose a path"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_fails_when_required_mcp_server_fails_to_initialize() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+
+    assert!(
+        err.error
+            .message
+            .contains("required MCP servers failed to initialize"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+    assert!(
+        err.error.message.contains("required_broken"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+
+    Ok(())
+}
+
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
@@ -132,6 +206,36 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_required_broken_mcp(
+    codex_home: &Path,
+    server_uri: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[mcp_servers.required_broken]
+command = "codex-definitely-not-a-real-binary"
+required = true
 "#
         ),
     )

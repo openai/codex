@@ -322,6 +322,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListCustomPromptsResponse(_)
                     | EventMsg::ListSkillsResponse(_)
+                    | EventMsg::ListRemoteSkillsResponse(_)
+                    | EventMsg::RemoteSkillDownloaded(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)
                     | EventMsg::ExecCommandOutputDelta(_)
@@ -362,6 +364,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::CollabWaitingEnd(_)
                     | EventMsg::CollabCloseBegin(_)
                     | EventMsg::CollabCloseEnd(_)
+                    | EventMsg::CollabResumeBegin(_)
+                    | EventMsg::CollabResumeEnd(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that

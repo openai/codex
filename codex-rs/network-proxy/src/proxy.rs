@@ -8,6 +8,7 @@ use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -55,10 +56,11 @@ impl NetworkProxyBuilder {
     }
 
     pub async fn build(self) -> Result<NetworkProxy> {
-        let state = match self.state {
-            Some(state) => state,
-            None => Arc::new(NetworkProxyState::new().await?),
-        };
+        let state = self.state.ok_or_else(|| {
+            anyhow::anyhow!(
+                "NetworkProxyBuilder requires a state; supply one via builder.state(...)"
+            )
+        })?;
         let current_cfg = state.current_cfg().await?;
         let runtime = config::resolve_runtime(&current_cfg)?;
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
@@ -66,7 +68,7 @@ impl NetworkProxyBuilder {
             self.http_addr.unwrap_or(runtime.http_addr),
             runtime.socks_addr,
             self.admin_addr.unwrap_or(runtime.admin_addr),
-            &current_cfg.network_proxy,
+            &current_cfg.network,
         );
 
         Ok(NetworkProxy {
@@ -88,15 +90,46 @@ pub struct NetworkProxy {
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
 
+impl std::fmt::Debug for NetworkProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid logging internal state (config contents, derived globsets, etc.) which can be noisy
+        // and may contain sensitive paths.
+        f.debug_struct("NetworkProxy")
+            .field("http_addr", &self.http_addr)
+            .field("socks_addr", &self.socks_addr)
+            .field("admin_addr", &self.admin_addr)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for NetworkProxy {
+    fn eq(&self, other: &Self) -> bool {
+        self.http_addr == other.http_addr
+            && self.socks_addr == other.socks_addr
+            && self.admin_addr == other.admin_addr
+    }
+}
+
+impl Eq for NetworkProxy {}
+
 impl NetworkProxy {
     pub fn builder() -> NetworkProxyBuilder {
         NetworkProxyBuilder::default()
     }
 
+    pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        // Enforce proxying for all child processes when configured. We always override to ensure
+        // the proxy is actually used even if the caller passed conflicting environment variables.
+        let proxy_url = format!("http://{}", self.http_addr);
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            env.insert(key.to_string(), proxy_url.clone());
+        }
+    }
+
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
         let current_cfg = self.state.current_cfg().await?;
-        if !current_cfg.network_proxy.enabled {
-            warn!("network_proxy.enabled is false; skipping proxy listeners");
+        if !current_cfg.network.enabled {
+            warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
 
@@ -109,12 +142,12 @@ impl NetworkProxy {
             self.http_addr,
             self.policy_decider.clone(),
         ));
-        let socks_task = if current_cfg.network_proxy.enable_socks5 {
+        let socks_task = if current_cfg.network.enable_socks5 {
             Some(tokio::spawn(socks5::run_socks5(
                 self.state.clone(),
                 self.socks_addr,
                 self.policy_decider.clone(),
-                current_cfg.network_proxy.enable_socks5_udp,
+                current_cfg.network.enable_socks5_udp,
             )))
         } else {
             None

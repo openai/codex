@@ -1,5 +1,11 @@
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
+use crate::metrics::names::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
@@ -23,6 +29,11 @@ impl RuntimeMetricTotals {
     pub fn is_empty(self) -> bool {
         self.count == 0 && self.duration_ms == 0
     }
+
+    pub fn merge(&mut self, other: Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.duration_ms = self.duration_ms.saturating_add(other.duration_ms);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -32,6 +43,12 @@ pub struct RuntimeMetricsSummary {
     pub streaming_events: RuntimeMetricTotals,
     pub websocket_calls: RuntimeMetricTotals,
     pub websocket_events: RuntimeMetricTotals,
+    pub responses_api_overhead_ms: u64,
+    pub responses_api_inference_time_ms: u64,
+    pub responses_api_engine_iapi_ttft_ms: u64,
+    pub responses_api_engine_service_ttft_ms: u64,
+    pub responses_api_engine_iapi_tbt_ms: u64,
+    pub responses_api_engine_service_tbt_ms: u64,
 }
 
 impl RuntimeMetricsSummary {
@@ -41,6 +58,50 @@ impl RuntimeMetricsSummary {
             && self.streaming_events.is_empty()
             && self.websocket_calls.is_empty()
             && self.websocket_events.is_empty()
+            && self.responses_api_overhead_ms == 0
+            && self.responses_api_inference_time_ms == 0
+            && self.responses_api_engine_iapi_ttft_ms == 0
+            && self.responses_api_engine_service_ttft_ms == 0
+            && self.responses_api_engine_iapi_tbt_ms == 0
+            && self.responses_api_engine_service_tbt_ms == 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.tool_calls.merge(other.tool_calls);
+        self.api_calls.merge(other.api_calls);
+        self.streaming_events.merge(other.streaming_events);
+        self.websocket_calls.merge(other.websocket_calls);
+        self.websocket_events.merge(other.websocket_events);
+        if other.responses_api_overhead_ms > 0 {
+            self.responses_api_overhead_ms = other.responses_api_overhead_ms;
+        }
+        if other.responses_api_inference_time_ms > 0 {
+            self.responses_api_inference_time_ms = other.responses_api_inference_time_ms;
+        }
+        if other.responses_api_engine_iapi_ttft_ms > 0 {
+            self.responses_api_engine_iapi_ttft_ms = other.responses_api_engine_iapi_ttft_ms;
+        }
+        if other.responses_api_engine_service_ttft_ms > 0 {
+            self.responses_api_engine_service_ttft_ms = other.responses_api_engine_service_ttft_ms;
+        }
+        if other.responses_api_engine_iapi_tbt_ms > 0 {
+            self.responses_api_engine_iapi_tbt_ms = other.responses_api_engine_iapi_tbt_ms;
+        }
+        if other.responses_api_engine_service_tbt_ms > 0 {
+            self.responses_api_engine_service_tbt_ms = other.responses_api_engine_service_tbt_ms;
+        }
+    }
+
+    pub fn responses_api_summary(&self) -> RuntimeMetricsSummary {
+        Self {
+            responses_api_overhead_ms: self.responses_api_overhead_ms,
+            responses_api_inference_time_ms: self.responses_api_inference_time_ms,
+            responses_api_engine_iapi_ttft_ms: self.responses_api_engine_iapi_ttft_ms,
+            responses_api_engine_service_ttft_ms: self.responses_api_engine_service_ttft_ms,
+            responses_api_engine_iapi_tbt_ms: self.responses_api_engine_iapi_tbt_ms,
+            responses_api_engine_service_tbt_ms: self.responses_api_engine_service_tbt_ms,
+            ..RuntimeMetricsSummary::default()
+        }
     }
 
     pub(crate) fn from_snapshot(snapshot: &ResourceMetrics) -> Self {
@@ -64,12 +125,30 @@ impl RuntimeMetricsSummary {
             count: sum_counter(snapshot, WEBSOCKET_EVENT_COUNT_METRIC),
             duration_ms: sum_histogram_ms(snapshot, WEBSOCKET_EVENT_DURATION_METRIC),
         };
+        let responses_api_overhead_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_OVERHEAD_DURATION_METRIC);
+        let responses_api_inference_time_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_INFERENCE_TIME_DURATION_METRIC);
+        let responses_api_engine_iapi_ttft_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC);
+        let responses_api_engine_service_ttft_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC);
+        let responses_api_engine_iapi_tbt_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC);
+        let responses_api_engine_service_tbt_ms =
+            sum_histogram_ms(snapshot, RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC);
         Self {
             tool_calls,
             api_calls,
             streaming_events,
             websocket_calls,
             websocket_events,
+            responses_api_overhead_ms,
+            responses_api_inference_time_ms,
+            responses_api_engine_iapi_ttft_ms,
+            responses_api_engine_service_ttft_ms,
+            responses_api_engine_iapi_tbt_ms,
+            responses_api_engine_service_tbt_ms,
         }
     }
 }

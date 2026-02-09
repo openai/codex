@@ -1,0 +1,85 @@
+diff --git a/toolchain/args/BUILD.bazel b/toolchain/args/BUILD.bazel
+index e6dc56c..b323589 100644
+--- a/toolchain/args/BUILD.bazel
++++ b/toolchain/args/BUILD.bazel
+@@ -17,8 +17,8 @@ package(default_visibility = ["//visibility:public"])
+ cc_args(
+     name = "resource_dir",
+     actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
+         "@rules_cc//cc/toolchains/actions:link_actions",
+-        # We may need it for other actions too?
+     ],
+     args = [
+         "-resource-dir",
+@@ -32,6 +32,46 @@ cc_args(
+     ],
+ )
+ 
++alias(
++    name = "clang_builtin_headers_include_search_directory",
++    actual = select({
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64_gnu": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64_gnu": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64_musl": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64_musl": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:macos_x86_64": "@llvm-toolchain-minimal-21.1.8-darwin-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:macos_aarch64": "@llvm-toolchain-minimal-21.1.8-darwin-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:windows_x86_64": "@llvm-toolchain-minimal-21.1.8-windows-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:windows_aarch64": "@llvm-toolchain-minimal-21.1.8-windows-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:none_wasm32": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:none_wasm64": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++    }),
++    visibility = ["//toolchain:__subpackages__"],
++)
++
++cc_args(
++    name = "clang_builtin_headers_include_search_paths",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
++        "@rules_cc//cc/toolchains/actions:link_actions",
++    ],
++    args = [
++        "-isystem",
++        "{clang_builtin_headers_include_search_path}",
++    ],
++    format = {
++        "clang_builtin_headers_include_search_path": ":clang_builtin_headers_include_search_directory",
++    },
++    data = [
++        ":clang_builtin_headers_include_search_directory",
++    ],
++    allowlist_include_directories = [
++        ":clang_builtin_headers_include_search_directory",
++    ],
++)
++
+ cc_args(
+     name = "llvm_target_for_platform",
+     actions = [
+diff --git a/toolchain/BUILD.bazel b/toolchain/BUILD.bazel
+index 6ffc9f7..e02089a 100644
+--- a/toolchain/BUILD.bazel
++++ b/toolchain/BUILD.bazel
+@@ -100,6 +100,7 @@ cc_args_list(
+         "@platforms//os:macos": [],
+         "//conditions:default": [
+             "//toolchain/args:resource_dir",
++            "//toolchain/args:clang_builtin_headers_include_search_paths",
+         ],
+     }),
+ )
+diff --git a/toolchain/llvm/llvm.bzl b/toolchain/llvm/llvm.bzl
+index d068085..c152552 100644
+--- a/toolchain/llvm/llvm.bzl
++++ b/toolchain/llvm/llvm.bzl
+@@ -7,6 +7,7 @@ def declare_llvm_targets(*, suffix = ""):
+         name = "builtin_headers",
+         # Grab whichever version-specific dir is there.
+         path = native.glob(["lib/clang/*"], exclude_directories = 0)[0] + "/include",
++        visibility = ["//visibility:public"],
+     )
+ 
+     # Convenient exports

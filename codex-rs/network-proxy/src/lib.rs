@@ -13,7 +13,8 @@ mod socks5;
 mod state;
 mod upstream;
 
-use anyhow::Result;
+pub use config::NetworkMode;
+pub use config::NetworkProxyConfig;
 pub use network_policy::NetworkDecision;
 pub use network_policy::NetworkPolicyDecider;
 pub use network_policy::NetworkPolicyRequest;
@@ -23,9 +24,12 @@ pub use proxy::Args;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
 pub use proxy::NetworkProxyHandle;
-
-pub async fn run_main(args: Args) -> Result<()> {
-    let _ = args;
-    let proxy = NetworkProxy::builder().build().await?;
-    proxy.run().await?.wait().await
-}
+pub use runtime::ConfigReloader;
+pub use runtime::ConfigState;
+pub use runtime::NetworkProxyState;
+pub use state::NetworkProxyConstraintError;
+pub use state::NetworkProxyConstraints;
+pub use state::PartialNetworkConfig;
+pub use state::PartialNetworkProxyConfig;
+pub use state::build_config_state;
+pub use state::validate_policy_against_constraints;

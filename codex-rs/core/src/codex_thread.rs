@@ -1,5 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
+use crate::codex::SteerInputError;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
@@ -9,6 +10,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
 use tokio::sync::watch;
 
@@ -43,6 +45,14 @@ impl CodexThread {
 
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
+    }
+
+    pub async fn steer_input(
+        &self,
+        input: Vec<UserInput>,
+        expected_turn_id: Option<&str>,
+    ) -> Result<String, SteerInputError> {
+        self.codex.steer_input(input, expected_turn_id).await
     }
 
     /// Use sparingly: this is intended to be removed soon.

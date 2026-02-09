@@ -73,6 +73,8 @@ Send input to the active turn:
 - `sendUserMessage` → enqueue items to the conversation
 - `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, `summary`, optional `personality`, and optional `outputSchema` (JSON Schema for the final assistant message)
 
+Valid `personality` values are `friendly`, `pragmatic`, and `none`. When `none` is selected, the personality placeholder is replaced with an empty string.
+
 For v2 threads, `turn/start` also accepts `outputSchema` to constrain the final assistant message for that turn.
 
 Interrupt a running turn: `interruptConversation`.
@@ -100,6 +102,7 @@ Each response yields:
   - `defaultReasoningEffort` – suggested effort for the UI
   - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
+  - `upgrade` – optional recommended upgrade model id
 - `nextCursor` – pass into the next request to continue paging (optional)
 
 ## Collaboration modes (experimental)
@@ -108,6 +111,8 @@ Fetch the built-in collaboration mode presets with `collaborationMode/list`. Thi
 
 - `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
   - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
+
+When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 
 ## Event stream
 

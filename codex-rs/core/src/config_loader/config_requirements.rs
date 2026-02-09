@@ -1,8 +1,10 @@
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -44,26 +46,72 @@ impl fmt::Display for RequirementSource {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstrainedWithSource<T> {
+    pub value: Constrained<T>,
+    pub source: Option<RequirementSource>,
+}
+
+impl<T> ConstrainedWithSource<T> {
+    pub fn new(value: Constrained<T>, source: Option<RequirementSource>) -> Self {
+        Self { value, source }
+    }
+}
+
+impl<T> std::ops::Deref for ConstrainedWithSource<T> {
+    type Target = Constrained<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
 /// Normalized version of [`ConfigRequirementsToml`] after deserialization and
 /// normalization.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigRequirements {
-    pub approval_policy: Constrained<AskForApproval>,
-    pub sandbox_policy: Constrained<SandboxPolicy>,
+    pub approval_policy: ConstrainedWithSource<AskForApproval>,
+    pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
+    pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
-    pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
+    pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
+    /// Managed network constraints derived from requirements.
+    pub network: Option<Sourced<NetworkConstraints>>,
 }
 
 impl Default for ConfigRequirements {
     fn default() -> Self {
         Self {
-            approval_policy: Constrained::allow_any_from_default(),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly),
+            approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                None,
+            ),
+            sandbox_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(SandboxPolicy::ReadOnly),
+                None,
+            ),
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                None,
+            ),
             mcp_servers: None,
             exec_policy: None,
-            enforce_residency: Constrained::allow_any(None),
+            enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            network: None,
         }
+    }
+}
+
+impl ConfigRequirements {
+    pub fn exec_policy_source(&self) -> Option<&RequirementSource> {
+        self.exec_policy.as_ref().map(|policy| &policy.source)
     }
 }
 
@@ -79,14 +127,113 @@ pub struct McpServerRequirement {
     pub identity: McpServerIdentity,
 }
 
-/// Base config deserialized from /etc/codex/requirements.toml or MDM.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkRequirementsToml {
+    pub enabled: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+/// Normalized network constraints derived from requirements TOML.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkConstraints {
+    pub enabled: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+impl From<NetworkRequirementsToml> for NetworkConstraints {
+    fn from(value: NetworkRequirementsToml) -> Self {
+        let NetworkRequirementsToml {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_non_loopback_admin,
+            allowed_domains,
+            denied_domains,
+            allow_unix_sockets,
+            allow_local_binding,
+        } = value;
+        Self {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_non_loopback_admin,
+            allowed_domains,
+            denied_domains,
+            allow_unix_sockets,
+            allow_local_binding,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum WebSearchModeRequirement {
+    Disabled,
+    Cached,
+    Live,
+}
+
+impl From<WebSearchMode> for WebSearchModeRequirement {
+    fn from(mode: WebSearchMode) -> Self {
+        match mode {
+            WebSearchMode::Disabled => WebSearchModeRequirement::Disabled,
+            WebSearchMode::Cached => WebSearchModeRequirement::Cached,
+            WebSearchMode::Live => WebSearchModeRequirement::Live,
+        }
+    }
+}
+
+impl From<WebSearchModeRequirement> for WebSearchMode {
+    fn from(mode: WebSearchModeRequirement) -> Self {
+        match mode {
+            WebSearchModeRequirement::Disabled => WebSearchMode::Disabled,
+            WebSearchModeRequirement::Cached => WebSearchMode::Cached,
+            WebSearchModeRequirement::Live => WebSearchMode::Live,
+        }
+    }
+}
+
+impl fmt::Display for WebSearchModeRequirement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WebSearchModeRequirement::Disabled => write!(f, "disabled"),
+            WebSearchModeRequirement::Cached => write!(f, "cached"),
+            WebSearchModeRequirement::Live => write!(f, "live"),
+        }
+    }
+}
+
+/// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
+    pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
+    #[serde(rename = "experimental_network")]
+    pub network: Option<NetworkRequirementsToml>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -115,9 +262,11 @@ impl<T> std::ops::Deref for Sourced<T> {
 pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
+    pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
+    pub network: Option<Sourced<NetworkRequirementsToml>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -148,9 +297,11 @@ impl ConfigRequirementsWithSources {
             {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
+                allowed_web_search_modes,
                 mcp_servers,
                 rules,
                 enforce_residency,
+                network,
             }
         );
     }
@@ -159,16 +310,20 @@ impl ConfigRequirementsWithSources {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
+            allowed_web_search_modes,
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
+            allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
+            network: network.map(|sourced| sourced.value),
         }
     }
 }
@@ -210,9 +365,11 @@ impl ConfigRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
+            && self.allowed_web_search_modes.is_none()
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
+            && self.network.is_none()
     }
 }
 
@@ -223,12 +380,14 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         let ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
+            allowed_web_search_modes,
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = toml;
 
-        let approval_policy: Constrained<AskForApproval> = match allowed_approval_policies {
+        let approval_policy = match allowed_approval_policies {
             Some(Sourced {
                 value: policies,
                 source: requirement_source,
@@ -237,7 +396,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     return Err(ConstraintError::empty_field("allowed_approval_policies"));
                 };
 
-                Constrained::new(initial_value, move |candidate| {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(initial_value, move |candidate| {
                     if policies.contains(candidate) {
                         Ok(())
                     } else {
@@ -245,12 +405,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "approval_policy",
                             candidate: format!("{candidate:?}"),
                             allowed: format!("{policies:?}"),
-                            requirement_source: requirement_source.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
                         })
                     }
-                })?
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => Constrained::allow_any_from_default(),
+            None => ConstrainedWithSource::new(Constrained::allow_any_from_default(), None),
         };
 
         // TODO(gt): `ConfigRequirementsToml` should let the author specify the
@@ -261,7 +422,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         // additional parameters. Ultimately, we should expand the config
         // format to allow specifying those parameters.
         let default_sandbox_policy = SandboxPolicy::ReadOnly;
-        let sandbox_policy: Constrained<SandboxPolicy> = match allowed_sandbox_modes {
+        let sandbox_policy = match allowed_sandbox_modes {
             Some(Sourced {
                 value: modes,
                 source: requirement_source,
@@ -275,7 +436,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                     });
                 };
 
-                Constrained::new(default_sandbox_policy, move |candidate| {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(default_sandbox_policy, move |candidate| {
                     let mode = match candidate {
                         SandboxPolicy::ReadOnly => SandboxModeRequirement::ReadOnly,
                         SandboxPolicy::WorkspaceWrite { .. } => {
@@ -293,12 +455,15 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "sandbox_mode",
                             candidate: format!("{mode:?}"),
                             allowed: format!("{modes:?}"),
-                            requirement_source: requirement_source.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
                         })
                     }
-                })?
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => Constrained::allow_any(default_sandbox_policy),
+            None => {
+                ConstrainedWithSource::new(Constrained::allow_any(default_sandbox_policy), None)
+            }
         };
         let exec_policy = match rules {
             Some(Sourced { value, source }) => {
@@ -312,14 +477,55 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => None,
         };
+        let web_search_mode = match allowed_web_search_modes {
+            Some(Sourced {
+                value: modes,
+                source: requirement_source,
+            }) => {
+                let mut accepted = modes.into_iter().collect::<std::collections::BTreeSet<_>>();
+                accepted.insert(WebSearchModeRequirement::Disabled);
+                let allowed_for_error = format!(
+                    "{:?}",
+                    accepted
+                        .iter()
+                        .copied()
+                        .map(WebSearchMode::from)
+                        .collect::<Vec<_>>()
+                );
 
-        let enforce_residency: Constrained<Option<ResidencyRequirement>> = match enforce_residency {
+                let initial_value = if accepted.contains(&WebSearchModeRequirement::Cached) {
+                    WebSearchMode::Cached
+                } else if accepted.contains(&WebSearchModeRequirement::Live) {
+                    WebSearchMode::Live
+                } else {
+                    WebSearchMode::Disabled
+                };
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(initial_value, move |candidate| {
+                    if accepted.contains(&(*candidate).into()) {
+                        Ok(())
+                    } else {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "web_search_mode",
+                            candidate: format!("{candidate:?}"),
+                            allowed: allowed_for_error.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
+                        })
+                    }
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
+        };
+
+        let enforce_residency = match enforce_residency {
             Some(Sourced {
                 value: residency,
                 source: requirement_source,
             }) => {
                 let required = Some(residency);
-                Constrained::new(required, move |candidate| {
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained = Constrained::new(required, move |candidate| {
                     if candidate == &required {
                         Ok(())
                     } else {
@@ -327,19 +533,26 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                             field_name: "enforce_residency",
                             candidate: format!("{candidate:?}"),
                             allowed: format!("{required:?}"),
-                            requirement_source: requirement_source.clone(),
+                            requirement_source: requirement_source_for_error.clone(),
                         })
                     }
-                })?
+                })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => Constrained::allow_any(None),
+            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
         };
+        let network = network.map(|sourced_network| {
+            let Sourced { value, source } = sourced_network;
+            Sourced::new(NetworkConstraints::from(value), source)
+        });
         Ok(ConfigRequirements {
             approval_policy,
             sandbox_policy,
+            web_search_mode,
             mcp_servers,
             exec_policy,
             enforce_residency,
+            network,
         })
     }
 }
@@ -347,6 +560,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_loader::system_requirements_toml_file;
     use anyhow::Result;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
@@ -364,19 +578,24 @@ mod tests {
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_sandbox_modes,
+            allowed_web_search_modes,
             mcp_servers,
             rules,
             enforce_residency,
+            network,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_web_search_modes: allowed_web_search_modes
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -390,6 +609,10 @@ mod tests {
             SandboxModeRequirement::WorkspaceWrite,
             SandboxModeRequirement::DangerFullAccess,
         ];
+        let allowed_web_search_modes = vec![
+            WebSearchModeRequirement::Cached,
+            WebSearchModeRequirement::Live,
+        ];
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
 
@@ -398,9 +621,11 @@ mod tests {
         let other = ConfigRequirementsToml {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
+            allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
+            network: None,
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -413,9 +638,14 @@ mod tests {
                     source.clone()
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
+                allowed_web_search_modes: Some(Sourced::new(
+                    allowed_web_search_modes,
+                    enforce_source.clone(),
+                )),
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
+                network: None,
             }
         );
     }
@@ -443,9 +673,11 @@ mod tests {
                     source_location,
                 )),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             }
         );
         Ok(())
@@ -481,9 +713,11 @@ mod tests {
                     existing_source,
                 )),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             }
         );
         Ok(())
@@ -498,12 +732,7 @@ mod tests {
             "#,
         )?;
 
-        let requirements_toml_file = if cfg!(windows) {
-            "C:\\etc\\codex\\requirements.toml"
-        } else {
-            "/etc/codex/requirements.toml"
-        };
-        let requirements_toml_file = AbsolutePathBuf::from_absolute_path(requirements_toml_file)?;
+        let requirements_toml_file = system_requirements_toml_file()?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };
@@ -559,6 +788,39 @@ mod tests {
                 requirement_source: source_location,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_fields_store_requirement_source() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_approval_policies = ["on-request"]
+                allowed_sandbox_modes = ["read-only"]
+                allowed_web_search_modes = ["cached"]
+                enforce_residency = "us"
+            "#,
+        )?;
+
+        let source_location = RequirementSource::CloudRequirements;
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(source_location.clone(), source);
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert_eq!(
+            requirements.approval_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements.sandbox_policy.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements.web_search_mode.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(requirements.enforce_residency.source, Some(source_location));
 
         Ok(())
     }
@@ -673,6 +935,144 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_allowed_web_search_modes() -> Result<()> {
+        let toml_str = r#"
+            allowed_web_search_modes = ["cached"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(requirements.web_search_mode.value(), WebSearchMode::Cached);
+        assert!(
+            requirements
+                .web_search_mode
+                .can_set(&WebSearchMode::Disabled)
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.web_search_mode.can_set(&WebSearchMode::Live),
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: "Live".into(),
+                allowed: "[Disabled, Cached]".into(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        assert!(
+            requirements
+                .web_search_mode
+                .can_set(&WebSearchMode::Cached)
+                .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_web_search_modes_allows_disabled() -> Result<()> {
+        let toml_str = r#"
+            allowed_web_search_modes = ["disabled"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.web_search_mode.value(),
+            WebSearchMode::Disabled
+        );
+        assert!(
+            requirements
+                .web_search_mode
+                .can_set(&WebSearchMode::Disabled)
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.web_search_mode.can_set(&WebSearchMode::Cached),
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: "Cached".into(),
+                allowed: "[Disabled]".into(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_web_search_modes_empty_restricts_to_disabled() -> Result<()> {
+        let toml_str = r#"
+            allowed_web_search_modes = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.web_search_mode.value(),
+            WebSearchMode::Disabled
+        );
+        assert!(
+            requirements
+                .web_search_mode
+                .can_set(&WebSearchMode::Disabled)
+                .is_ok()
+        );
+        assert_eq!(
+            requirements.web_search_mode.can_set(&WebSearchMode::Cached),
+            Err(ConstraintError::InvalidValue {
+                field_name: "web_search_mode",
+                candidate: "Cached".into(),
+                allowed: "[Disabled]".into(),
+                requirement_source: RequirementSource::Unknown,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
+        let toml_str = r#"
+            [experimental_network]
+            enabled = true
+            allow_upstream_proxy = false
+            allowed_domains = ["api.example.com", "*.openai.com"]
+            denied_domains = ["blocked.example.com"]
+            allow_unix_sockets = ["/tmp/example.sock"]
+            allow_local_binding = false
+        "#;
+
+        let source = RequirementSource::CloudRequirements;
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
+
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+        let sourced_network = requirements
+            .network
+            .expect("network requirements should be preserved as constraints");
+
+        assert_eq!(sourced_network.source, source);
+        assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
+        assert_eq!(
+            sourced_network.value.allowed_domains.as_ref(),
+            Some(&vec![
+                "api.example.com".to_string(),
+                "*.openai.com".to_string()
+            ])
+        );
+        assert_eq!(
+            sourced_network.value.denied_domains.as_ref(),
+            Some(&vec!["blocked.example.com".to_string()])
+        );
+        assert_eq!(
+            sourced_network.value.allow_unix_sockets.as_ref(),
+            Some(&vec!["/tmp/example.sock".to_string()])
+        );
+        assert_eq!(sourced_network.value.allow_local_binding, Some(false));
+
+        Ok(())
+    }
+
+    #[test]
     fn deserialize_mcp_server_requirements() -> Result<()> {
         let toml_str = r#"
             [mcp_servers.docs.identity]
@@ -749,8 +1149,7 @@ mod tests {
             ]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
-        let requirements_toml_file =
-            AbsolutePathBuf::from_absolute_path("/etc/codex/requirements.toml")?;
+        let requirements_toml_file = system_requirements_toml_file()?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };

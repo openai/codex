@@ -45,15 +45,6 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-      - name: Verify config schema fixture
-        shell: bash
-        working-directory: codex-rs
-        run: |
-          set -euo pipefail
-          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
-          cargo run -p codex-core --bin codex-write-config-schema
-          git diff --exit-code core/config.schema.json
-
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
@@ -65,6 +56,8 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
 
     strategy:
       fail-fast: false
@@ -89,6 +82,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - name: Install Linux bwrap build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - name: Install UBSan runtime (musl)
         if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         shell: bash

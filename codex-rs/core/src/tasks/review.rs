@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -82,11 +83,24 @@ async fn start_review_conversation(
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<async_channel::Receiver<Event>> {
-    let config = ctx.client.config();
+    let config = ctx.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
-    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
+    if let Err(err) = sub_agent_config
+        .web_search_mode
+        .set(WebSearchMode::Disabled)
+    {
+        tracing::warn!(
+            "failed to force review web_search_mode=disabled; falling back to a normalizer: {err}"
+        );
+        sub_agent_config.web_search_mode =
+            Constrained::normalized(WebSearchMode::Disabled, |_| WebSearchMode::Disabled)
+                .unwrap_or_else(|err| {
+                    tracing::warn!("failed to build normalizer for review web_search_mode: {err}");
+                    Constrained::allow_any(WebSearchMode::Disabled)
+                });
+    }
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -94,7 +108,7 @@ async fn start_review_conversation(
     let model = config
         .review_model
         .clone()
-        .unwrap_or_else(|| ctx.client.get_model());
+        .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
     (run_codex_thread_one_shot(
         sub_agent_config,
@@ -226,6 +240,7 @@ pub(crate) async fn exit_review_mode(
             }],
         )
         .await;
+
     session
         .send_event(
             ctx.as_ref(),
@@ -246,4 +261,9 @@ pub(crate) async fn exit_review_mode(
             },
         )
         .await;
+
+    // Review turns can run before any regular user turn, so explicitly
+    // materialize rollout persistence. Do this after emitting review output so
+    // file creation + git metadata collection cannot delay client-facing items.
+    session.ensure_rollout_materialized().await;
 }

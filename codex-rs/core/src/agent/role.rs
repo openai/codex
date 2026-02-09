@@ -8,7 +8,7 @@ use serde::Serialize;
 const ORCHESTRATOR_PROMPT: &str = include_str!("../../templates/agents/orchestrator.md");
 /// Default model override used.
 // TODO(jif) update when we have something smarter.
-const EXPLORER_MODEL: &str = "gpt-5.2-codex";
+const EXPLORER_MODEL: &str = "gpt-5.1-codex-mini";
 
 /// Enumerated list of all supported agent roles.
 const ALL_ROLES: [AgentRole; 3] = [
@@ -95,7 +95,6 @@ Rules:
                 reasoning_effort: Some(ReasoningEffort::Medium),
                 description: r#"Use `explorer` for all codebase questions.
 Explorers are fast and authoritative.
-Always prefer them over manual search or file reading.
 Rules:
 - Ask explorers first and precisely.
 - Do not re-read or re-search code they cover.
