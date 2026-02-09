@@ -15,6 +15,8 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -269,6 +271,7 @@ const THREAD_LIST_MAX_LIMIT: usize = 100;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
@@ -277,6 +280,11 @@ struct ActiveLogin {
 #[derive(Clone, Copy, Debug)]
 enum CancelLoginError {
     NotFound(Uuid),
+}
+
+enum AppListLoadResult {
+    Accessible(Result<Vec<AppInfo>, String>),
+    Directory(Result<Vec<AppInfo>, String>),
 }
 
 impl Drop for ActiveLogin {
@@ -4324,7 +4332,6 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let AppsListParams { cursor, limit } = params;
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -4346,65 +4353,182 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let connectors = match connectors::list_connectors(&config).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                self.send_internal_error(request_id, format!("failed to list apps: {err}"))
-                    .await;
-                return;
-            }
-        };
+        let request = request_id.clone();
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            Self::apps_list_task(outgoing, request, params, config).await;
+        });
+    }
 
-        let total = connectors.len();
-        if total == 0 {
-            self.outgoing
-                .send_response(
-                    request_id,
-                    AppsListResponse {
-                        data: Vec::new(),
-                        next_cursor: None,
-                    },
-                )
-                .await;
-            return;
-        }
-
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = effective_limit.min(total);
+    async fn apps_list_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        params: AppsListParams,
+        config: Config,
+    ) {
+        let AppsListParams {
+            cursor,
+            limit,
+            force_refetch,
+        } = params;
         let start = match cursor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
                 Err(_) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("invalid cursor: {cursor}"),
-                    )
-                    .await;
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
             None => 0,
         };
 
-        if start > total {
-            self.send_invalid_request_error(
-                request_id,
-                format!("cursor {start} exceeds total apps {total}"),
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let accessible_config = config.clone();
+        let accessible_tx = tx.clone();
+        tokio::spawn(async move {
+            let result = connectors::list_accessible_connectors_from_mcp_tools_with_options(
+                &accessible_config,
+                force_refetch,
             )
-            .await;
-            return;
+            .await
+            .map_err(|err| format!("failed to load accessible apps: {err}"));
+            let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
+        });
+
+        tokio::spawn(async move {
+            let result = connectors::list_all_connectors_with_options(&config, force_refetch)
+                .await
+                .map_err(|err| format!("failed to list apps: {err}"));
+            let _ = tx.send(AppListLoadResult::Directory(result));
+        });
+
+        let mut accessible_connectors: Option<Vec<AppInfo>> = None;
+        let mut all_connectors: Option<Vec<AppInfo>> = None;
+        let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
+
+        loop {
+            let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
+                Ok(Some(result)) => result,
+                Ok(None) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: "failed to load app lists".to_string(),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+                Err(_) => {
+                    let timeout_seconds = APP_LIST_LOAD_TIMEOUT.as_secs();
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!(
+                            "timed out waiting for app lists after {timeout_seconds} seconds"
+                        ),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            match result {
+                AppListLoadResult::Accessible(Ok(connectors)) => {
+                    accessible_connectors = Some(connectors);
+                }
+                AppListLoadResult::Accessible(Err(err)) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: err,
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+                AppListLoadResult::Directory(Ok(connectors)) => {
+                    all_connectors = Some(connectors);
+                }
+                AppListLoadResult::Directory(Err(err)) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: err,
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            }
+
+            let merged = Self::merge_loaded_apps(
+                all_connectors.as_deref(),
+                accessible_connectors.as_deref(),
+            );
+            Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+
+            if accessible_connectors.is_some() && all_connectors.is_some() {
+                match Self::paginate_apps(merged.as_slice(), start, limit) {
+                    Ok(response) => {
+                        outgoing.send_response(request_id, response).await;
+                        return;
+                    }
+                    Err(error) => {
+                        outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn merge_loaded_apps(
+        all_connectors: Option<&[AppInfo]>,
+        accessible_connectors: Option<&[AppInfo]>,
+    ) -> Vec<AppInfo> {
+        let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
+        let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
+        connectors::merge_connectors_with_accessible(all, accessible)
+    }
+
+    fn paginate_apps(
+        connectors: &[AppInfo],
+        start: usize,
+        limit: Option<u32>,
+    ) -> Result<AppsListResponse, JSONRPCErrorError> {
+        let total = connectors.len();
+        if start > total {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total apps {total}"),
+                data: None,
+            });
         }
 
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let end = start.saturating_add(effective_limit).min(total);
         let data = connectors[start..end].to_vec();
-
         let next_cursor = if end < total {
             Some(end.to_string())
         } else {
             None
         };
-        self.outgoing
-            .send_response(request_id, AppsListResponse { data, next_cursor })
+
+        Ok(AppsListResponse { data, next_cursor })
+    }
+
+    async fn send_app_list_updated_notification(
+        outgoing: &Arc<OutgoingMessageSender>,
+        data: Vec<AppInfo>,
+    ) {
+        outgoing
+            .send_server_notification(ServerNotification::AppListUpdated(
+                AppListUpdatedNotification { data },
+            ))
             .await;
     }
 
