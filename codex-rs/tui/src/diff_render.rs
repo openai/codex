@@ -609,7 +609,9 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
             remaining = rest;
 
             // If we exactly filled or exceeded the line, start a new one.
-            if col >= max_cols && !remaining.is_empty() {
+            // Do not gate on !remaining.is_empty() — the next span in the
+            // outer loop may still have content that must start on a fresh line.
+            if col >= max_cols {
                 result.push(std::mem::take(&mut current_line));
                 col = 0;
             }
@@ -994,6 +996,34 @@ mod tests {
             result.len() >= 3,
             "100 chars at 40 cols should produce at least 3 lines, got {}",
             result.len()
+        );
+    }
+
+    #[test]
+    fn wrap_styled_spans_flushes_at_span_boundary() {
+        // When span A fills exactly to max_cols and span B follows, the line
+        // must be flushed before B starts. Otherwise B's first character lands
+        // on an already-full line, producing over-width output.
+        let style_a = Style::default().fg(Color::Red);
+        let style_b = Style::default().fg(Color::Blue);
+        let spans = vec![
+            RtSpan::styled("aaaa", style_a), // 4 cols, fills line exactly at max_cols=4
+            RtSpan::styled("bb", style_b),   // should start on a new line
+        ];
+        let result = wrap_styled_spans(&spans, 4);
+        assert_eq!(
+            result.len(),
+            2,
+            "span ending exactly at max_cols should flush before next span: {result:?}"
+        );
+        // First line should only contain the 'a' span.
+        let first_width: usize = result[0]
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        assert!(
+            first_width <= 4,
+            "first line should be at most 4 cols wide, got {first_width}"
         );
     }
 
