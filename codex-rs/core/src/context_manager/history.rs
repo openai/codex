@@ -5,7 +5,7 @@ use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
-use crate::truncate::approx_tokens_from_byte_count;
+use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
@@ -390,11 +390,7 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
-    if model_visible_bytes <= 0 {
-        return 0;
-    }
-    let model_visible_bytes = usize::try_from(model_visible_bytes).unwrap_or(usize::MAX);
-    i64::try_from(approx_tokens_from_byte_count(model_visible_bytes)).unwrap_or(i64::MAX)
+    approx_tokens_from_byte_count_i64(model_visible_bytes)
 }
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
