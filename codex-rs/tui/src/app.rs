@@ -2310,6 +2310,16 @@ impl App {
                     .await;
                 match apply_result {
                     Ok(()) => {
+                        // Ensure the selected theme is active in the current
+                        // session.  The preview callback covers arrow-key
+                        // navigation, but if the user presses Enter without
+                        // navigating, the runtime theme must still be applied.
+                        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+                            &name,
+                            Some(&self.config.codex_home),
+                        ) {
+                            crate::render::highlight::set_syntax_theme(theme);
+                        }
                         self.config.tui_theme = Some(name);
                     }
                     Err(err) => {
