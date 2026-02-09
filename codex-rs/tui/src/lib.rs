@@ -433,7 +433,7 @@ pub async fn run_main(
 
 async fn run_ratatui_app(
     cli: Cli,
-    initial_config: Config,
+    mut initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
@@ -442,7 +442,13 @@ async fn run_ratatui_app(
     color_eyre::install()?;
 
     // Configure syntax highlighting theme before any rendering can occur.
-    crate::render::highlight::set_theme_override(initial_config.tui_theme.clone());
+    // Surface resolution failures as a startup warning (⚠ banner in chat).
+    if let Some(warning) = crate::render::highlight::set_theme_override(
+        initial_config.tui_theme.clone(),
+        find_codex_home().ok(),
+    ) {
+        initial_config.startup_warnings.push(warning);
+    }
 
     tooltips::announcement::prewarm();
 
