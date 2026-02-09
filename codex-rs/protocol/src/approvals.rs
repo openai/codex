@@ -37,6 +37,19 @@ impl From<Vec<String>> for ExecPolicyAmendment {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkApprovalProtocol {
+    Http,
+    Https,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct NetworkApprovalContext {
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated exec call, if available.
@@ -52,6 +65,10 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional network context for a blocked request that can be approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network_approval_context: Option<NetworkApprovalContext>,
     /// Proposed execpolicy amendment that can be applied to allow future runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
