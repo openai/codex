@@ -1928,18 +1928,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-network-proxy-cli"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-core",
- "codex-network-proxy",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [

@@ -29,7 +29,6 @@ members = [
     "login",
     "mcp-server",
     "network-proxy",
-    "network-proxy-cli",
     "ollama",
     "process-hardening",
     "protocol",
