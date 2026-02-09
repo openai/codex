@@ -455,6 +455,7 @@ mod tests {
     fn shell_command_handler_respects_explicit_login_flag() {
         let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
             path: PathBuf::from("/tmp/snapshot.sh"),
+            cwd: PathBuf::from("/tmp"),
         })));
         let shell = Shell {
             shell_type: ShellType::Bash,

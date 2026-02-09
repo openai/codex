@@ -4574,17 +4574,58 @@ impl CodexMessageProcessor {
     }
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            force_reload,
+            per_cwd_extra_user_roots,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
             cwds
         };
+        let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
+
+        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for entry in per_cwd_extra_user_roots.unwrap_or_default() {
+            if !cwd_set.contains(&entry.cwd) {
+                warn!(
+                    cwd = %entry.cwd.display(),
+                    "ignoring per-cwd extra roots for cwd not present in skills/list cwds"
+                );
+                continue;
+            }
+
+            let mut valid_extra_roots = Vec::new();
+            for root in entry.extra_user_roots {
+                if !root.is_absolute() {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "skills/list perCwdExtraUserRoots extraUserRoots paths must be absolute: {}",
+                            root.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+                valid_extra_roots.push(root);
+            }
+            extra_roots_by_cwd
+                .entry(entry.cwd)
+                .or_default()
+                .extend(valid_extra_roots);
+        }
 
         let skills_manager = self.thread_manager.skills_manager();
         let mut data = Vec::new();
         for cwd in cwds {
-            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let extra_roots = extra_roots_by_cwd
+                .get(&cwd)
+                .map_or(&[][..], std::vec::Vec::as_slice);
+            let outcome = skills_manager
+                .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
+                .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
