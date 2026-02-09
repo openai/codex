@@ -4168,6 +4168,42 @@ async fn interrupt_clears_unified_exec_processes() {
 }
 
 #[tokio::test]
+async fn review_ended_keeps_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::ReviewEnded,
+        }),
+    });
+
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.add_ps_output();
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Background terminals"),
+        "expected /ps to remain available after review-ended abort; got {combined:?}"
+    );
+    assert!(
+        combined.contains("sleep 5") && combined.contains("sleep 6"),
+        "expected /ps to list running unified exec processes; got {combined:?}"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
