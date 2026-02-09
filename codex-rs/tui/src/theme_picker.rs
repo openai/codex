@@ -1,13 +1,5 @@
 use std::path::Path;
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Widget;
-use unicode_width::UnicodeWidthStr;
-
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -15,6 +7,12 @@ use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Widget;
 
 /// Rust snippet for the theme preview — compact enough to fit in the picker,
 /// varied enough to exercise keywords, types, strings, and macros.
@@ -36,7 +34,10 @@ const NARROW_PREVIEW_LINES: usize = 3;
 /// Minimum side-panel width for side-by-side theme preview.
 const WIDE_PREVIEW_MIN_WIDTH: u16 = 44;
 
-/// Minimum frame padding used for centered wide preview.
+/// Left inset used for wide preview content.
+const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
+
+/// Minimum frame padding used for vertically centered wide preview.
 const PREVIEW_FRAME_PADDING: u16 = 1;
 
 /// Renders a syntax-highlighted code snippet below the theme list so users can
@@ -54,18 +55,18 @@ fn centered_offset(available: u16, content: u16, min_frame: u16) -> u16 {
     frame + free.saturating_sub(frame.saturating_mul(2)) / 2
 }
 
-fn render_preview(area: Rect, buf: &mut Buffer, max_lines: usize, center: bool) {
+fn render_preview(
+    area: Rect,
+    buf: &mut Buffer,
+    max_lines: usize,
+    center_vertically: bool,
+    left_inset: u16,
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
     let syntax_lines = highlight::highlight_code_to_styled_spans(PREVIEW_CODE, "rust");
-    let total_lines = PREVIEW_CODE.lines().count();
-    let ln_width = if total_lines == 0 {
-        1
-    } else {
-        total_lines.to_string().len()
-    };
 
     let preview_lines: Vec<(usize, &str)> = PREVIEW_CODE
         .lines()
@@ -76,24 +77,16 @@ fn render_preview(area: Rect, buf: &mut Buffer, max_lines: usize, center: bool) 
     if preview_lines.is_empty() {
         return;
     }
+    let max_line_no = preview_lines
+        .last()
+        .map(|(line_no, _)| *line_no)
+        .unwrap_or(1);
+    let ln_width = max_line_no.to_string().len();
 
-    let widest_line = preview_lines
-        .iter()
-        .map(|(line_no, raw)| {
-            let gutter = format!("{line_no:>ln_width$} ");
-            UnicodeWidthStr::width(gutter.as_str()) + UnicodeWidthStr::width(*raw)
-        })
-        .max()
-        .unwrap_or(1) as u16;
-    let content_width = widest_line.min(area.width);
     let content_height = (preview_lines.len() as u16).min(area.height);
 
-    let left_pad = if center {
-        centered_offset(area.width, content_width, PREVIEW_FRAME_PADDING)
-    } else {
-        0
-    };
-    let top_pad = if center {
+    let left_pad = left_inset.min(area.width.saturating_sub(1));
+    let top_pad = if center_vertically {
         centered_offset(area.height, content_height, PREVIEW_FRAME_PADDING)
     } else {
         0
@@ -126,7 +119,7 @@ impl Renderable for ThemePreviewWideRenderable {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, usize::MAX, true);
+        render_preview(area, buf, usize::MAX, true, WIDE_PREVIEW_LEFT_INSET);
     }
 }
 
@@ -136,7 +129,7 @@ impl Renderable for ThemePreviewNarrowRenderable {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, NARROW_PREVIEW_LINES, false);
+        render_preview(area, buf, NARROW_PREVIEW_LINES, false, 0);
     }
 }
 
@@ -279,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn wide_preview_renders_all_lines_with_center_padding() {
+    fn wide_preview_renders_all_lines_with_vertical_center_and_left_inset() {
         let lines = render_lines(&ThemePreviewWideRenderable, 80, 20);
         let numbered_rows: Vec<usize> = lines
             .iter()
@@ -305,14 +298,10 @@ mod tests {
         );
 
         let first_line = &lines[first_row];
-        let first_col = first_line
-            .find(|ch: char| !ch.is_whitespace())
-            .expect("expected rendered content");
-        let last_col = first_line
-            .rfind(|ch: char| !ch.is_whitespace())
-            .expect("expected rendered content");
-        assert!(first_col > 0, "expected left padding before preview code");
-        assert!(last_col < 79, "expected right padding after preview code");
+        assert!(
+            first_line.starts_with("   1 fn greet"),
+            "expected wide preview to start after a 2-char inset"
+        );
     }
 
     #[test]
@@ -324,5 +313,13 @@ mod tests {
             .collect();
 
         assert_eq!(numbered_lines, vec![1, 2, 3]);
+        let first_numbered = lines
+            .iter()
+            .find(|line| preview_line_number(line).is_some())
+            .expect("expected at least one rendered preview row");
+        assert!(
+            first_numbered.starts_with("1 fn greet"),
+            "expected narrow preview line numbers to start at the left edge"
+        );
     }
 }
