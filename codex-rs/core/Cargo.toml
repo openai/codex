@@ -56,7 +56,6 @@ futures = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
-indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 multimap = { workspace = true }
