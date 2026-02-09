@@ -944,6 +944,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        should_prompt_windows_sandbox_nux_at_startup: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -1107,7 +1108,9 @@ impl App {
             }
         };
 
-        chat_widget.maybe_prompt_windows_sandbox_enable();
+        chat_widget.maybe_prompt_windows_sandbox_enable(
+            should_prompt_windows_sandbox_nux_at_startup,
+        );
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
@@ -1821,7 +1824,6 @@ impl App {
                                 self.chat_widget
                                     .set_feature_enabled(Feature::WindowsSandboxElevated, false);
                             }
-                            self.chat_widget.clear_forced_auto_mode_downgrade();
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -1992,12 +1994,6 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || WindowsSandboxLevel::from_config(&self.config)
-                        != WindowsSandboxLevel::Disabled
-                {
-                    self.config.forced_auto_mode_downgraded_on_windows = false;
-                }
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
