@@ -25,6 +25,7 @@ use crate::default_client::is_first_party_originator;
 use crate::default_client::originator;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
+use crate::skills::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
@@ -431,6 +432,9 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: Some(SkillDependencies { tools }),
+            policy: SkillPolicy {
+                allow_implicit_invocation: true,
+            },
             path: PathBuf::from("skill"),
             scope: SkillScope::User,
         }

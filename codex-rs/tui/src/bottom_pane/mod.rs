@@ -28,6 +28,7 @@ use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::model::SkillPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
@@ -1332,6 +1333,9 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
+                policy: SkillPolicy {
+                    allow_implicit_invocation: true,
+                },
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

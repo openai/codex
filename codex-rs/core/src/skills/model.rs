@@ -10,8 +10,22 @@ pub struct SkillMetadata {
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
+    pub policy: SkillPolicy,
     pub path: PathBuf,
     pub scope: SkillScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkillPolicy {
+    pub allow_implicit_invocation: bool,
+}
+
+impl Default for SkillPolicy {
+    fn default() -> Self {
+        Self {
+            allow_implicit_invocation: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +74,7 @@ impl SkillLoadOutcome {
     pub fn enabled_skills(&self) -> Vec<SkillMetadata> {
         self.skills
             .iter()
-            .filter(|skill| self.is_skill_enabled(skill))
+            .filter(|skill| self.is_skill_enabled(skill) && skill.policy.allow_implicit_invocation)
             .cloned()
             .collect()
     }

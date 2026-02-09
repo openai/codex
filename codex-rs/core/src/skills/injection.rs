@@ -7,6 +7,7 @@ use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
+use crate::skills::SkillPolicy;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -473,6 +474,9 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: None,
+            policy: SkillPolicy {
+                allow_implicit_invocation: true,
+            },
             path: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,
         }
