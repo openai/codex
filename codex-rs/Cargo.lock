@@ -1907,6 +1907,7 @@ dependencies = [
  "async-trait",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-home-dir",
  "globset",
  "pretty_assertions",
  "rama-core",
@@ -1923,6 +1924,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "url",
 ]
