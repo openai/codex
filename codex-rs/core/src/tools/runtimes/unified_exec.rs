@@ -27,6 +27,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -53,28 +55,6 @@ pub struct UnifiedExecApprovalKey {
 
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
-}
-
-impl UnifiedExecRequest {
-    pub fn new(
-        command: Vec<String>,
-        cwd: PathBuf,
-        env: HashMap<String, String>,
-        tty: bool,
-        sandbox_permissions: SandboxPermissions,
-        justification: Option<String>,
-        exec_approval_requirement: ExecApprovalRequirement,
-    ) -> Self {
-        Self {
-            command,
-            cwd,
-            env,
-            tty,
-            sandbox_permissions,
-            justification,
-            exec_approval_requirement,
-        }
-    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -181,10 +161,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             command
         };
 
+        let mut env = req.env.clone();
+        if let Some(network) = req.network.as_ref() {
+            network.apply_to_env(&mut env);
+        }
         let spec = build_command_spec(
             &command,
             &req.cwd,
-            &req.env,
+            &env,
             ExecExpiration::DefaultTimeout,
             req.sandbox_permissions,
             req.justification.clone(),
