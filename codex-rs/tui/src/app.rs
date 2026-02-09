@@ -3368,7 +3368,7 @@ mod tests {
 
         app.apply_backtrack_rollback(selection);
         assert_eq!(
-            app.chat_widget.pending_remote_image_urls(),
+            app.chat_widget.remote_image_urls(),
             vec!["https://example.com/backtrack.png".to_string()]
         );
 
@@ -3405,10 +3405,7 @@ mod tests {
         });
 
         assert_eq!(app.chat_widget.composer_text_with_pending(), "");
-        assert_eq!(
-            app.chat_widget.pending_remote_image_urls(),
-            vec![remote_image_url]
-        );
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {

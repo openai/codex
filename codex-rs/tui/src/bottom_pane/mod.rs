@@ -520,17 +520,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_pending_remote_image_urls(&mut self, urls: Vec<String>) {
-        self.composer.set_pending_remote_image_urls(urls);
+    pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
+        self.composer.set_remote_image_urls(urls);
         self.request_redraw();
     }
 
-    pub(crate) fn pending_remote_image_urls(&self) -> Vec<String> {
-        self.composer.pending_remote_image_urls()
+    pub(crate) fn remote_image_urls(&self) -> Vec<String> {
+        self.composer.remote_image_urls()
     }
 
-    pub(crate) fn take_pending_remote_image_urls(&mut self) -> Vec<String> {
-        let urls = self.composer.take_pending_remote_image_urls();
+    pub(crate) fn take_remote_image_urls(&mut self) -> Vec<String> {
+        let urls = self.composer.take_remote_image_urls();
         self.request_redraw();
         urls
     }
@@ -1331,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_remote_images_render_above_composer_text() {
+    fn remote_images_render_above_composer_text() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1345,7 +1345,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_pending_remote_image_urls(vec![
+        pane.set_remote_image_urls(vec![
             "https://example.com/one.png".to_string(),
             "data:image/png;base64,aGVsbG8=".to_string(),
         ]);

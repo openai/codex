@@ -216,8 +216,7 @@ impl App {
             thread_id: self.chat_widget.thread_id(),
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
-        self.chat_widget
-            .set_pending_remote_image_urls(remote_image_urls);
+        self.chat_widget.set_remote_image_urls(remote_image_urls);
         if !prefill.is_empty()
             || !text_elements.is_empty()
             || !local_image_paths.is_empty()
