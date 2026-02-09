@@ -30,9 +30,9 @@ pub(crate) struct ContextManager {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TotalTokenUsageBreakdown {
     pub last_api_response_total_tokens: i64,
-    pub all_history_items_model_visible_bytes: i64,
+    pub all_history_items_model_visible_bytes: usize,
     pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
-    pub estimated_bytes_of_items_added_since_last_successful_api_response: i64,
+    pub estimated_bytes_of_items_added_since_last_successful_api_response: usize,
 }
 
 impl ContextManager {
@@ -292,8 +292,7 @@ impl ContextManager {
                 .items
                 .iter()
                 .map(estimate_response_item_model_visible_bytes)
-                .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
-                .fold(0i64, i64::saturating_add),
+                .fold(0usize, usize::saturating_add),
             estimated_tokens_of_items_added_since_last_successful_api_response:
                 items_after_last_model_generated
                     .iter()
@@ -303,8 +302,7 @@ impl ContextManager {
                 items_after_last_model_generated
                     .iter()
                     .map(estimate_response_item_model_visible_bytes)
-                    .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
-                    .fold(0i64, i64::saturating_add),
+                    .fold(0usize, usize::saturating_add),
         }
     }
 
