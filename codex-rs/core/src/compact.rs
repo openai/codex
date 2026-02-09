@@ -14,11 +14,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
-use crate::sandbox_tags::sandbox_tag;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
-use crate::turn_metadata::include_sandbox_in_turn_metadata;
 use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -86,13 +84,7 @@ async fn run_compact_task_inner(
 
     let max_retries = turn_context.provider.stream_max_retries();
     let mut retries = 0;
-    let turn_metadata_header = include_sandbox_in_turn_metadata(
-        turn_context.resolve_turn_metadata_header().await,
-        sandbox_tag(
-            &turn_context.sandbox_policy,
-            turn_context.windows_sandbox_level,
-        ),
-    );
+    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.

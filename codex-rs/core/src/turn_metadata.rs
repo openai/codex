@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -60,41 +60,30 @@ struct TurnMetadata {
     sandbox: Option<String>,
 }
 
-pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
-    let cwd = cwd.as_path();
-    let repo_root = get_git_repo_root(cwd)?;
+pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
+    let repo_root = get_git_repo_root(cwd);
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd)
     );
-    if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
+    if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() && sandbox.is_none() {
         return None;
     }
 
     let mut workspaces = BTreeMap::new();
-    workspaces.insert(
-        repo_root.to_string_lossy().into_owned(),
-        TurnMetadataWorkspace {
-            associated_remote_urls,
-            latest_git_commit_hash,
-        },
-    );
+    if let Some(repo_root) = repo_root {
+        workspaces.insert(
+            repo_root.to_string_lossy().into_owned(),
+            TurnMetadataWorkspace {
+                associated_remote_urls,
+                latest_git_commit_hash,
+            },
+        );
+    }
     serde_json::to_string(&TurnMetadata {
         workspaces,
-        sandbox: None,
+        sandbox: sandbox.map(ToString::to_string),
     })
     .ok()
-}
-
-pub(crate) fn include_sandbox_in_turn_metadata(
-    turn_metadata_header: Option<String>,
-    sandbox: &str,
-) -> Option<String> {
-    let mut metadata = turn_metadata_header
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<TurnMetadata>(value).ok())
-        .unwrap_or_default();
-    metadata.sandbox = Some(sandbox.to_string());
-    serde_json::to_string(&metadata).ok()
 }

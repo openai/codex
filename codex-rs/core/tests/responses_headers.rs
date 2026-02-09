@@ -430,32 +430,25 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .await
             .expect("submit post-git turn prompt");
 
-        let maybe_header = request_recorder
+        let maybe_metadata = request_recorder
             .single_request()
-            .header("x-codex-turn-metadata");
-        let Some(header_value) = maybe_header else {
+            .header("x-codex-turn-metadata")
+            .and_then(|header_value| {
+                let parsed: serde_json::Value = serde_json::from_str(&header_value).ok()?;
+                let workspace = parsed
+                    .get("workspaces")
+                    .and_then(serde_json::Value::as_object)
+                    .and_then(|workspaces| workspaces.values().next())
+                    .cloned()?;
+                Some((parsed, workspace))
+            });
+        let Some((parsed, workspace)) = maybe_metadata else {
             if tokio::time::Instant::now() >= deadline {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             continue;
         };
-        let parsed: serde_json::Value = serde_json::from_str(&header_value)
-            .expect("x-codex-turn-metadata should be valid JSON");
-        let Some(workspaces) = parsed
-            .get("workspaces")
-            .and_then(serde_json::Value::as_object)
-        else {
-            if tokio::time::Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            continue;
-        };
-        let workspace = workspaces
-            .values()
-            .next()
-            .expect("metadata should include at least one workspace entry");
 
         assert_eq!(
             parsed.get("sandbox").and_then(serde_json::Value::as_str),

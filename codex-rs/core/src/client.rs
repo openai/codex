@@ -253,7 +253,7 @@ impl ModelClient {
         let model_client = self.clone();
         let handle = tokio::spawn(async move {
             let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-                build_turn_metadata_header(cwd),
+                build_turn_metadata_header(cwd.as_path(), None),
                 None,
             )
             .await;
