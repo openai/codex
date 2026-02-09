@@ -7,7 +7,6 @@ use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
-use crate::skills::SkillPolicy;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -463,6 +462,7 @@ fn is_mention_name_char(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skills::SkillPolicy;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::collections::HashSet;

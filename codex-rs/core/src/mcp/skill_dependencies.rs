@@ -25,7 +25,6 @@ use crate::default_client::is_first_party_originator;
 use crate::default_client::originator;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
-use crate::skills::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
@@ -420,6 +419,7 @@ fn mcp_dependency_to_server_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skills::SkillPolicy;
     use crate::skills::model::SkillDependencies;
     use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;

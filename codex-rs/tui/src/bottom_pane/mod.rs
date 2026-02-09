@@ -28,7 +28,6 @@ use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
@@ -957,6 +956,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
+    use codex_core::skills::model::SkillPolicy;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
