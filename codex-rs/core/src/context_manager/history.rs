@@ -266,15 +266,15 @@ impl ContextManager {
     fn get_items_after_last_model_generated_bytes(&self) -> usize {
         self.items_after_last_model_generated_item()
             .iter()
-            .fold(0usize, |acc, item| {
-                acc.saturating_add(estimate_response_item_model_visible_bytes(item))
-            })
+            .map(estimate_response_item_model_visible_bytes)
+            .fold(0usize, usize::saturating_add)
     }
 
     fn get_all_items_model_visible_bytes(&self) -> usize {
-        self.items.iter().fold(0usize, |acc, item| {
-            acc.saturating_add(estimate_response_item_model_visible_bytes(item))
-        })
+        self.items
+            .iter()
+            .map(estimate_response_item_model_visible_bytes)
+            .fold(0usize, usize::saturating_add)
     }
 
     /// When true, the server already accounted for past reasoning tokens and
