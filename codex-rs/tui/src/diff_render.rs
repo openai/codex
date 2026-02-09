@@ -12,8 +12,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::highlight::highlight_code_to_styled_spans;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
@@ -42,13 +45,13 @@ impl DiffSummary {
 impl Renderable for FileChange {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let mut lines = vec![];
-        render_change(self, &mut lines, area.width as usize);
+        render_change(self, &mut lines, area.width as usize, None);
         Paragraph::new(lines).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         let mut lines = vec![];
-        render_change(self, &mut lines, width as usize);
+        render_change(self, &mut lines, width as usize, None);
         lines.len() as u16
     }
 }
@@ -185,38 +188,79 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
             out.push(RtLine::from(header));
         }
 
+        let lang = detect_lang_for_path(&r.path);
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4);
+        render_change(&r.change, &mut lines, wrap_cols - 4, lang.as_deref());
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
     out
 }
 
-fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
+/// Detect the programming language for a file path by its extension.
+/// Returns the raw extension string for `normalize_lang` / `find_syntax`
+/// to resolve downstream.
+fn detect_lang_for_path(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?;
+    Some(ext.to_string())
+}
+
+fn render_change(
+    change: &FileChange,
+    out: &mut Vec<RtLine<'static>>,
+    width: usize,
+    lang: Option<&str>,
+) {
     match change {
         FileChange::Add { content } => {
+            // Pre-highlight the entire file content as a whole.
+            let syntax_lines = lang.and_then(|l| highlight_code_to_styled_spans(content, l));
             let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
-                out.extend(push_wrapped_diff_line(
-                    i + 1,
-                    DiffLineType::Insert,
-                    raw,
-                    width,
-                    line_number_width,
-                ));
+                let syn = syntax_lines.as_ref().and_then(|sl| sl.get(i));
+                if let Some(spans) = syn {
+                    out.extend(push_wrapped_diff_line_with_syntax(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        width,
+                        line_number_width,
+                        spans,
+                    ));
+                } else {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        width,
+                        line_number_width,
+                    ));
+                }
             }
         }
         FileChange::Delete { content } => {
+            let syntax_lines = lang.and_then(|l| highlight_code_to_styled_spans(content, l));
             let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
-                out.extend(push_wrapped_diff_line(
-                    i + 1,
-                    DiffLineType::Delete,
-                    raw,
-                    width,
-                    line_number_width,
-                ));
+                let syn = syntax_lines.as_ref().and_then(|sl| sl.get(i));
+                if let Some(spans) = syn {
+                    out.extend(push_wrapped_diff_line_with_syntax(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        width,
+                        line_number_width,
+                        spans,
+                    ));
+                } else {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        width,
+                        line_number_width,
+                    ));
+                }
             }
         }
         FileChange::Update { unified_diff, .. } => {
@@ -256,38 +300,77 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                     let mut old_ln = h.old_range().start();
                     let mut new_ln = h.new_range().start();
                     for l in h.lines() {
+                        // Per-line highlighting for unified diffs.
+                        let highlight_line = |s: &str| -> Option<Vec<RtSpan<'static>>> {
+                            let l = lang?;
+                            let spans = highlight_code_to_styled_spans(s, l)?;
+                            spans.into_iter().next()
+                        };
                         match l {
                             diffy::Line::Insert(text) => {
                                 let s = text.trim_end_matches('\n');
-                                out.extend(push_wrapped_diff_line(
-                                    new_ln,
-                                    DiffLineType::Insert,
-                                    s,
-                                    width,
-                                    line_number_width,
-                                ));
+                                if let Some(syn) = highlight_line(s) {
+                                    out.extend(push_wrapped_diff_line_with_syntax(
+                                        new_ln,
+                                        DiffLineType::Insert,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                        &syn,
+                                    ));
+                                } else {
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Insert,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                    ));
+                                }
                                 new_ln += 1;
                             }
                             diffy::Line::Delete(text) => {
                                 let s = text.trim_end_matches('\n');
-                                out.extend(push_wrapped_diff_line(
-                                    old_ln,
-                                    DiffLineType::Delete,
-                                    s,
-                                    width,
-                                    line_number_width,
-                                ));
+                                if let Some(syn) = highlight_line(s) {
+                                    out.extend(push_wrapped_diff_line_with_syntax(
+                                        old_ln,
+                                        DiffLineType::Delete,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                        &syn,
+                                    ));
+                                } else {
+                                    out.extend(push_wrapped_diff_line(
+                                        old_ln,
+                                        DiffLineType::Delete,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                    ));
+                                }
                                 old_ln += 1;
                             }
                             diffy::Line::Context(text) => {
                                 let s = text.trim_end_matches('\n');
-                                out.extend(push_wrapped_diff_line(
-                                    new_ln,
-                                    DiffLineType::Context,
-                                    s,
-                                    width,
-                                    line_number_width,
-                                ));
+                                if let Some(syn) = highlight_line(s) {
+                                    out.extend(push_wrapped_diff_line_with_syntax(
+                                        new_ln,
+                                        DiffLineType::Context,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                        &syn,
+                                    ));
+                                } else {
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Context,
+                                        s,
+                                        width,
+                                        line_number_width,
+                                    ));
+                                }
                                 old_ln += 1;
                                 new_ln += 1;
                             }
@@ -349,26 +432,100 @@ fn push_wrapped_diff_line(
     width: usize,
     line_number_width: usize,
 ) -> Vec<RtLine<'static>> {
+    push_wrapped_diff_line_inner(line_number, kind, text, width, line_number_width, None)
+}
+
+fn push_wrapped_diff_line_with_syntax(
+    line_number: usize,
+    kind: DiffLineType,
+    text: &str,
+    width: usize,
+    line_number_width: usize,
+    syntax_spans: &[RtSpan<'static>],
+) -> Vec<RtLine<'static>> {
+    push_wrapped_diff_line_inner(
+        line_number,
+        kind,
+        text,
+        width,
+        line_number_width,
+        Some(syntax_spans),
+    )
+}
+
+fn push_wrapped_diff_line_inner(
+    line_number: usize,
+    kind: DiffLineType,
+    text: &str,
+    width: usize,
+    line_number_width: usize,
+    syntax_spans: Option<&[RtSpan<'static>]>,
+) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
     let gutter_width = line_number_width.max(1);
     let prefix_cols = gutter_width + 1;
 
-    let mut first = true;
     let (sign_char, line_style) = match kind {
         DiffLineType::Insert => ('+', style_add()),
         DiffLineType::Delete => ('-', style_del()),
         DiffLineType::Context => (' ', style_context()),
     };
+
+    // When we have syntax spans, compose them with the diff style for a richer
+    // view. The sign character keeps the diff color; content gets syntax colors
+    // with an overlay modifier for delete lines (dim).
+    if let Some(syn_spans) = syntax_spans {
+        let gutter = format!("{ln_str:>gutter_width$} ");
+        let sign = format!("{sign_char}");
+        let dim_overlay = matches!(kind, DiffLineType::Delete);
+
+        // Apply dim overlay to syntax spans if this is a delete line.
+        let styled: Vec<RtSpan<'static>> = syn_spans
+            .iter()
+            .map(|sp| {
+                let mut style = sp.style;
+                if dim_overlay {
+                    style.add_modifier |= Modifier::DIM;
+                }
+                RtSpan::styled(sp.content.clone().into_owned(), style)
+            })
+            .collect();
+
+        // Determine how many display columns remain for content after the
+        // gutter and sign character.
+        let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
+
+        // Wrap the styled content spans to fit within the available columns.
+        let wrapped_chunks = wrap_styled_spans(&styled, available_content_cols);
+
+        let mut lines: Vec<RtLine<'static>> = Vec::new();
+        for (i, chunk) in wrapped_chunks.into_iter().enumerate() {
+            let mut row_spans: Vec<RtSpan<'static>> = Vec::new();
+            if i == 0 {
+                // First line: gutter + sign + content
+                row_spans.push(RtSpan::styled(gutter.clone(), style_gutter()));
+                row_spans.push(RtSpan::styled(sign.clone(), line_style));
+            } else {
+                // Continuation: empty gutter + two-space indent (matches
+                // the plain-text wrapping continuation style).
+                let cont_gutter = format!("{:gutter_width$}  ", "");
+                row_spans.push(RtSpan::styled(cont_gutter, style_gutter()));
+            }
+            row_spans.extend(chunk);
+            lines.push(RtLine::from(row_spans));
+        }
+        return lines;
+    }
+
+    // Fallback: no syntax spans — use the original wrapping behavior.
+    let mut remaining_text: &str = text;
+    let mut first = true;
     let mut lines: Vec<RtLine<'static>> = Vec::new();
 
     loop {
-        // Fit the content for the current terminal row:
-        // compute how many columns are available after the prefix, then split
-        // at a UTF-8 character boundary so this row's chunk fits exactly.
         let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
         let split_at_byte_index = remaining_text
             .char_indices()
@@ -379,9 +536,7 @@ fn push_wrapped_diff_line(
         remaining_text = rest;
 
         if first {
-            // Build gutter (right-aligned line number plus spacer) as a dimmed span
             let gutter = format!("{ln_str:>gutter_width$} ");
-            // Content with a sign ('+'/'-'/' ') styled per diff kind
             let content = format!("{sign_char}{chunk}");
             lines.push(RtLine::from(vec![
                 RtSpan::styled(gutter, style_gutter()),
@@ -389,7 +544,6 @@ fn push_wrapped_diff_line(
             ]));
             first = false;
         } else {
-            // Continuation lines keep a space for the sign column so content aligns
             let gutter = format!("{:gutter_width$}  ", "");
             lines.push(RtLine::from(vec![
                 RtSpan::styled(gutter, style_gutter()),
@@ -401,6 +555,73 @@ fn push_wrapped_diff_line(
         }
     }
     lines
+}
+
+/// Split styled spans into chunks that fit within `max_cols` display columns.
+/// Returns one `Vec<RtSpan>` per output line.  Styles are preserved across
+/// split boundaries so that wrapping never loses syntax coloring.
+fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSpan<'static>>> {
+    let mut result: Vec<Vec<RtSpan<'static>>> = Vec::new();
+    let mut current_line: Vec<RtSpan<'static>> = Vec::new();
+    let mut col: usize = 0;
+
+    for span in spans {
+        let style = span.style;
+        let text = span.content.as_ref();
+        let mut remaining = text;
+
+        while !remaining.is_empty() {
+            // Accumulate characters until we fill the line.
+            let mut byte_end = 0;
+            let mut chars_col = 0;
+
+            for ch in remaining.chars() {
+                let w = ch.width().unwrap_or(0);
+                if col + chars_col + w > max_cols && byte_end > 0 {
+                    // Adding this character would exceed the line width and we
+                    // already have some content — break here.
+                    break;
+                }
+                byte_end += ch.len_utf8();
+                chars_col += w;
+            }
+
+            if byte_end == 0 {
+                // Single character wider than remaining space — force onto a
+                // new line so we make progress.
+                if !current_line.is_empty() {
+                    result.push(std::mem::take(&mut current_line));
+                }
+                // Take at least one character to avoid an infinite loop.
+                let Some(ch) = remaining.chars().next() else {
+                    break;
+                };
+                let ch_len = ch.len_utf8();
+                current_line.push(RtSpan::styled(remaining[..ch_len].to_string(), style));
+                col = ch.width().unwrap_or(1);
+                remaining = &remaining[ch_len..];
+                continue;
+            }
+
+            let (chunk, rest) = remaining.split_at(byte_end);
+            current_line.push(RtSpan::styled(chunk.to_string(), style));
+            col += chars_col;
+            remaining = rest;
+
+            // If we exactly filled or exceeded the line, start a new one.
+            if col >= max_cols && !remaining.is_empty() {
+                result.push(std::mem::take(&mut current_line));
+                col = 0;
+            }
+        }
+    }
+
+    // Push the last line (always at least one, even if empty).
+    if !current_line.is_empty() || result.is_empty() {
+        result.push(current_line);
+    }
+
+    result
 }
 
 fn line_number_width(max_line_number: usize) -> usize {
@@ -693,5 +914,100 @@ mod tests {
         let lines = create_diff_summary(&changes, &cwd, 80);
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_syntax_highlighted_insert_wraps() {
+        // A long Rust line that exceeds 80 cols with syntax highlighting should
+        // wrap to multiple output lines rather than being clipped.
+        let long_rust = "fn very_long_function_name(arg_one: String, arg_two: String, arg_three: String, arg_four: String) -> Result<String, Box<dyn std::error::Error>> { Ok(arg_one) }";
+
+        let syntax_spans =
+            highlight_code_to_styled_spans(long_rust, "rust").expect("rust highlighting");
+        let spans = &syntax_spans[0];
+
+        let lines = push_wrapped_diff_line_with_syntax(
+            1,
+            DiffLineType::Insert,
+            long_rust,
+            80,
+            line_number_width(1),
+            spans,
+        );
+
+        assert!(
+            lines.len() > 1,
+            "syntax-highlighted long line should wrap to multiple lines, got {}",
+            lines.len()
+        );
+
+        snapshot_lines("syntax_highlighted_insert_wraps", lines, 90, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_syntax_highlighted_insert_wraps_text() {
+        let long_rust = "fn very_long_function_name(arg_one: String, arg_two: String, arg_three: String, arg_four: String) -> Result<String, Box<dyn std::error::Error>> { Ok(arg_one) }";
+
+        let syntax_spans =
+            highlight_code_to_styled_spans(long_rust, "rust").expect("rust highlighting");
+        let spans = &syntax_spans[0];
+
+        let lines = push_wrapped_diff_line_with_syntax(
+            1,
+            DiffLineType::Insert,
+            long_rust,
+            80,
+            line_number_width(1),
+            spans,
+        );
+
+        snapshot_lines_text("syntax_highlighted_insert_wraps_text", &lines);
+    }
+
+    #[test]
+    fn detect_lang_for_common_paths() {
+        // Standard extensions are detected.
+        assert!(detect_lang_for_path(Path::new("foo.rs")).is_some());
+        assert!(detect_lang_for_path(Path::new("bar.py")).is_some());
+        assert!(detect_lang_for_path(Path::new("app.tsx")).is_some());
+
+        // Extensionless files return None.
+        assert!(detect_lang_for_path(Path::new("Makefile")).is_none());
+        assert!(detect_lang_for_path(Path::new("randomfile")).is_none());
+    }
+
+    #[test]
+    fn wrap_styled_spans_single_line() {
+        // Content that fits in one line should produce exactly one chunk.
+        let spans = vec![RtSpan::raw("short")];
+        let result = wrap_styled_spans(&spans, 80);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn wrap_styled_spans_splits_long_content() {
+        // Content wider than max_cols should produce multiple chunks.
+        let long_text = "a".repeat(100);
+        let spans = vec![RtSpan::raw(long_text)];
+        let result = wrap_styled_spans(&spans, 40);
+        assert!(
+            result.len() >= 3,
+            "100 chars at 40 cols should produce at least 3 lines, got {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn wrap_styled_spans_preserves_styles() {
+        // Verify that styles survive split boundaries.
+        let style = Style::default().fg(Color::Green);
+        let text = "x".repeat(50);
+        let spans = vec![RtSpan::styled(text, style)];
+        let result = wrap_styled_spans(&spans, 20);
+        for chunk in &result {
+            for span in chunk {
+                assert_eq!(span.style, style, "style should be preserved across wraps");
+            }
+        }
     }
 }
