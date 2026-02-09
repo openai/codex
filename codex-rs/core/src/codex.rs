@@ -1100,8 +1100,9 @@ impl Session {
             ),
         };
 
+        let prewarm_cwd = session_configuration.cwd.clone();
         let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.as_path(), None),
+            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
             None,
         )
         .boxed();
