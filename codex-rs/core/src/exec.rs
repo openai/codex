@@ -32,6 +32,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
+use codex_network_proxy::NetworkProxy;
 use codex_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
@@ -63,6 +64,7 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
@@ -169,14 +171,17 @@ pub async fn process_exec_tool_call(
     let ExecParams {
         command,
         cwd,
+        mut env,
         expiration,
-        env,
+        network,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
         arg0: _,
     } = params;
-
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -208,18 +213,19 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_env, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_env, sandbox_policy, network, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
     env: ExecEnv,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    network: Option<NetworkProxy>,
 ) -> Result<ExecToolCallOutput> {
     let ExecEnv {
         command,
         cwd,
-        env,
+        mut env,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -228,11 +234,16 @@ pub(crate) async fn execute_exec_env(
         arg0,
     } = env;
 
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
+
     let params = ExecParams {
         command,
         cwd,
         expiration,
         env,
+        network,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -324,11 +335,16 @@ async fn exec_windows_sandbox(
     let ExecParams {
         command,
         cwd,
-        env,
+        mut env,
+        network,
         expiration,
         windows_sandbox_level,
         ..
     } = params;
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
+
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
     // variants of ExecExpiration, not just timeout.
     let timeout_ms = expiration.timeout_ms();
@@ -678,6 +694,7 @@ async fn exec(
         command,
         cwd,
         env,
+        network: _,
         arg0,
         expiration,
         windows_sandbox_level: _,
@@ -1061,6 +1078,7 @@ mod tests {
             cwd: std::env::current_dir()?,
             expiration: 500.into(),
             env,
+            network: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
@@ -1107,6 +1125,7 @@ mod tests {
             cwd: cwd.clone(),
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
+            network: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
