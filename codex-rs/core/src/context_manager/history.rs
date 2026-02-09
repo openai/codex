@@ -270,13 +270,6 @@ impl ContextManager {
             .fold(0usize, usize::saturating_add)
     }
 
-    fn get_all_items_model_visible_bytes(&self) -> usize {
-        self.items
-            .iter()
-            .map(estimate_response_item_model_visible_bytes)
-            .fold(0usize, usize::saturating_add)
-    }
-
     /// When true, the server already accounted for past reasoning tokens and
     /// the client should not re-estimate them.
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
@@ -305,10 +298,13 @@ impl ContextManager {
 
         TotalTokenUsageBreakdown {
             last_api_response_total_tokens: last_usage.total_tokens,
-            all_history_items_model_visible_bytes: i64::try_from(
-                self.get_all_items_model_visible_bytes(),
-            )
-            .unwrap_or(i64::MAX),
+            all_history_items_model_visible_bytes: self
+                .items
+                .iter()
+                .map(estimate_response_item_model_visible_bytes)
+                .fold(0i64, |acc, bytes| {
+                    acc.saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX))
+                }),
             estimated_tokens_of_items_added_since_last_successful_api_response: self
                 .get_items_after_last_model_generated_tokens(),
             estimated_bytes_of_items_added_since_last_successful_api_response: i64::try_from(
