@@ -21,6 +21,7 @@ use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
@@ -206,7 +207,8 @@ impl SandboxManager {
 pub async fn execute_env(
     env: ExecEnv,
     policy: &SandboxPolicy,
+    network: Option<NetworkProxy>,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env, policy, stdout_stream).await
+    execute_exec_env(env, policy, stdout_stream, network).await
 }
