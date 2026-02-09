@@ -4,11 +4,13 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::error;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -71,6 +73,8 @@ struct PreparedProcessHandles {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
+    output_closed: Arc<AtomicBool>,
+    output_closed_notify: Arc<Notify>,
     cancellation_token: CancellationToken,
     command: Vec<String>,
     process_id: String,
@@ -117,14 +121,17 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+        let workflow_started = Instant::now();
         let cwd = request
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
 
+        let open_session_started = Instant::now();
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
+        let open_session_ms = open_session_started.elapsed().as_millis();
 
         let process = match process {
             Ok(process) => Arc::new(process),
@@ -147,13 +154,16 @@ impl UnifiedExecProcessManager {
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.clone()),
         );
+        let begin_event_started = Instant::now();
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
+        let begin_event_ms = begin_event_started.elapsed().as_millis();
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
+        let collect_started = Instant::now();
         let start = Instant::now();
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
@@ -161,16 +171,21 @@ impl UnifiedExecProcessManager {
         let OutputHandles {
             output_buffer,
             output_notify,
+            output_closed,
+            output_closed_notify,
             cancellation_token,
         } = process.output_handles();
         let deadline = start + Duration::from_millis(yield_time_ms);
         let collected = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
+            &output_closed,
+            &output_closed_notify,
             &cancellation_token,
             deadline,
         )
         .await;
+        let collect_output_ms = collect_started.elapsed().as_millis();
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
@@ -179,11 +194,13 @@ impl UnifiedExecProcessManager {
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
+        let mut end_event_ms = 0u128;
         if has_exited {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
             let exit = exit_code.unwrap_or(-1);
+            let end_event_started = Instant::now();
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.turn),
@@ -197,6 +214,7 @@ impl UnifiedExecProcessManager {
                 wall_time,
             )
             .await;
+            end_event_ms = end_event_started.elapsed().as_millis();
 
             self.release_process_id(&request.process_id).await;
             process.check_for_sandbox_denial_with_text(&text).await?;
@@ -235,6 +253,25 @@ impl UnifiedExecProcessManager {
             session_command: Some(request.command.clone()),
         };
 
+        let total_ms = workflow_started.elapsed().as_millis();
+        let post_collect_ms = total_ms
+            .saturating_sub(open_session_ms)
+            .saturating_sub(begin_event_ms)
+            .saturating_sub(collect_output_ms)
+            .saturating_sub(end_event_ms);
+        error!(
+            call_id = %context.call_id,
+            process_id = %request.process_id,
+            open_session_ms,
+            begin_event_ms,
+            collect_output_ms,
+            end_event_ms,
+            post_collect_ms,
+            total_ms,
+            has_exited,
+            "unified_exec_latency"
+        );
+
         Ok(response)
     }
 
@@ -248,6 +285,8 @@ impl UnifiedExecProcessManager {
             writer_tx,
             output_buffer,
             output_notify,
+            output_closed,
+            output_closed_notify,
             cancellation_token,
             command: session_command,
             process_id,
@@ -279,6 +318,8 @@ impl UnifiedExecProcessManager {
         let collected = Self::collect_output_until_deadline(
             &output_buffer,
             &output_notify,
+            &output_closed,
+            &output_closed_notify,
             &cancellation_token,
             deadline,
         )
@@ -369,6 +410,8 @@ impl UnifiedExecProcessManager {
         let OutputHandles {
             output_buffer,
             output_notify,
+            output_closed,
+            output_closed_notify,
             cancellation_token,
         } = entry.process.output_handles();
 
@@ -376,6 +419,8 @@ impl UnifiedExecProcessManager {
             writer_tx: entry.process.writer_sender(),
             output_buffer,
             output_notify,
+            output_closed,
+            output_closed_notify,
             cancellation_token,
             command: entry.command.clone(),
             process_id: entry.process_id.clone(),
@@ -532,13 +577,16 @@ impl UnifiedExecProcessManager {
     pub(super) async fn collect_output_until_deadline(
         output_buffer: &OutputBuffer,
         output_notify: &Arc<Notify>,
+        output_closed: &Arc<AtomicBool>,
+        output_closed_notify: &Arc<Notify>,
         cancellation_token: &CancellationToken,
         deadline: Instant,
     ) -> Vec<u8> {
-        const POST_EXIT_OUTPUT_GRACE: Duration = Duration::from_millis(50);
+        const POST_EXIT_CLOSE_WAIT_CAP: Duration = Duration::from_millis(50);
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let mut exit_signal_received = cancellation_token.is_cancelled();
+        let mut post_exit_deadline: Option<Instant> = None;
         loop {
             let drained_chunks: Vec<Vec<u8>>;
             let mut wait_for_output = None;
@@ -552,20 +600,36 @@ impl UnifiedExecProcessManager {
 
             if drained_chunks.is_empty() {
                 exit_signal_received |= cancellation_token.is_cancelled();
+                if exit_signal_received && output_closed.load(std::sync::atomic::Ordering::Acquire)
+                {
+                    break;
+                }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining == Duration::ZERO {
                     break;
                 }
 
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
                 if exit_signal_received {
-                    let grace = remaining.min(POST_EXIT_OUTPUT_GRACE);
-                    if tokio::time::timeout(grace, notified).await.is_err() {
+                    let now = Instant::now();
+                    let close_wait_deadline = *post_exit_deadline
+                        .get_or_insert_with(|| now + remaining.min(POST_EXIT_CLOSE_WAIT_CAP));
+                    let close_wait_remaining = close_wait_deadline.saturating_duration_since(now);
+                    if close_wait_remaining == Duration::ZERO {
                         break;
+                    }
+                    let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                    let closed = output_closed_notify.notified();
+                    tokio::pin!(notified);
+                    tokio::pin!(closed);
+                    tokio::select! {
+                        _ = &mut notified => {}
+                        _ = &mut closed => {}
+                        _ = tokio::time::sleep(close_wait_remaining) => break,
                     }
                     continue;
                 }
 
+                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
                 tokio::pin!(notified);
                 let exit_notified = cancellation_token.cancelled();
                 tokio::pin!(exit_notified);
