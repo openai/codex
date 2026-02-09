@@ -71,10 +71,14 @@ impl SkillLoadOutcome {
         !self.disabled_paths.contains(&skill.path)
     }
 
+    pub fn is_skill_enabled_for_implicit_use(&self, skill: &SkillMetadata) -> bool {
+        self.is_skill_enabled(skill) && skill.policy.allow_implicit_invocation
+    }
+
     pub fn enabled_skills(&self) -> Vec<SkillMetadata> {
         self.skills
             .iter()
-            .filter(|skill| self.is_skill_enabled(skill) && skill.policy.allow_implicit_invocation)
+            .filter(|skill| self.is_skill_enabled_for_implicit_use(skill))
             .cloned()
             .collect()
     }

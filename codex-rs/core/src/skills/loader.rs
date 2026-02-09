@@ -49,7 +49,7 @@ struct SkillMetadataFile {
     #[serde(default)]
     dependencies: Option<Dependencies>,
     #[serde(default)]
-    policy: SkillPolicyFile,
+    policy: Policy,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -69,12 +69,12 @@ struct Dependencies {
 }
 
 #[derive(Debug, Deserialize)]
-struct SkillPolicyFile {
+struct Policy {
     #[serde(default)]
     allow_implicit_invocation: bool,
 }
 
-impl Default for SkillPolicyFile {
+impl Default for Policy {
     fn default() -> Self {
         Self {
             allow_implicit_invocation: true,
