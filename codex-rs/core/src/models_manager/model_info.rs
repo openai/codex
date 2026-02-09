@@ -75,7 +75,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         apply_patch_tool_type: None,
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
-        context_window: None,
+        context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
