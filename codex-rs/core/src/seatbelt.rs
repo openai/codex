@@ -108,10 +108,34 @@ fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
     })
 }
 
-fn proxy_env_from_network(network: &NetworkProxy) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    network.apply_to_env(&mut env);
-    env
+#[derive(Debug, Default)]
+struct ProxyPolicyInputs {
+    ports: Vec<u16>,
+    has_proxy_config: bool,
+    allow_local_binding: bool,
+}
+
+fn proxy_policy_inputs(
+    network: Option<&NetworkProxy>,
+    env: &HashMap<String, String>,
+) -> ProxyPolicyInputs {
+    let network_env;
+    let effective_env = if let Some(network) = network {
+        network_env = {
+            let mut env = HashMap::new();
+            network.apply_to_env(&mut env);
+            env
+        };
+        &network_env
+    } else {
+        env
+    };
+
+    ProxyPolicyInputs {
+        ports: proxy_loopback_ports_from_env(effective_env),
+        has_proxy_config: has_proxy_url_env_vars(effective_env),
+        allow_local_binding: local_binding_enabled(effective_env),
+    }
 }
 
 fn dynamic_network_policy(
@@ -119,25 +143,17 @@ fn dynamic_network_policy(
     network: Option<&NetworkProxy>,
     env: &HashMap<String, String>,
 ) -> String {
-    let proxy_env;
-    let policy_env = if let Some(network) = network {
-        proxy_env = proxy_env_from_network(network);
-        &proxy_env
-    } else {
-        env
-    };
-
-    let proxy_ports = proxy_loopback_ports_from_env(policy_env);
-    if !proxy_ports.is_empty() {
+    let proxy = proxy_policy_inputs(network, env);
+    if !proxy.ports.is_empty() {
         let mut policy =
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
-        if local_binding_enabled(policy_env) {
+        if proxy.allow_local_binding {
             policy.push_str("; allow localhost-only binding and loopback traffic\n");
             policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         }
-        for port in proxy_ports {
+        for port in proxy.ports {
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
             ));
@@ -145,7 +161,7 @@ fn dynamic_network_policy(
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
     }
 
-    if has_proxy_url_env_vars(policy_env) {
+    if proxy.has_proxy_config {
         // Proxy configuration is present but we could not infer any valid loopback endpoints.
         // Fail closed to avoid silently widening network access in proxy-enforced sessions.
         return String::new();
