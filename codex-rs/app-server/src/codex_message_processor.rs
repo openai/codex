@@ -21,7 +21,6 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
-use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -451,8 +450,15 @@ impl CodexMessageProcessor {
         // Map v2 input items to core input items.
         let items: Vec<CoreInputItem> = input.into_iter().map(V2UserInput::into_core).collect();
 
-        let collaboration_mode =
-            collaboration_mode.map(|mode| self.normalize_turn_start_collaboration_mode(mode));
+        let collaboration_mode = collaboration_mode
+            .map(|mode| self.normalize_turn_start_collaboration_mode(mode))
+            .or_else(|| {
+                Some(config_snapshot.collaboration_mode.with_updates(
+                    model.clone(),
+                    effort.map(Some),
+                    None,
+                ))
+            });
 
         Op::UserTurn {
             items,
@@ -464,9 +470,8 @@ impl CodexMessageProcessor {
                 .map(|p| p.to_core())
                 .unwrap_or(config_snapshot.sandbox_policy),
             model: model.unwrap_or(config_snapshot.model),
-            effort,
-            // TODO: need to add to config_snapshot
-            summary: summary.unwrap_or_default(),
+            effort: effort.or(config_snapshot.reasoning_effort),
+            summary: summary.unwrap_or(config_snapshot.reasoning_summary),
             final_output_json_schema: output_schema,
             collaboration_mode,
             personality,

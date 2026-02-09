@@ -651,7 +651,9 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
+            collaboration_mode: self.collaboration_mode.clone(),
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
             session_source: self.session_source.clone(),
         }

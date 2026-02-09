@@ -5,7 +5,9 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -23,7 +25,9 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
+    pub collaboration_mode: CollaborationMode,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: ReasoningSummary,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
 }
