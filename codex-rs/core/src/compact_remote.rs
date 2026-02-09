@@ -140,17 +140,20 @@ async fn run_remote_compact_task_inner_impl(
 
 #[derive(Debug)]
 struct CompactRequestLogData {
-    failing_compaction_request_model_visible_bytes: usize,
+    failing_compaction_request_model_visible_bytes: i64,
 }
 
 fn build_compact_request_log_data(
     input: &[ResponseItem],
     instructions: &str,
 ) -> CompactRequestLogData {
-    let failing_compaction_request_model_visible_bytes =
-        input.iter().fold(instructions.len(), |acc, item| {
-            acc.saturating_add(estimate_response_item_model_visible_bytes(item))
-        });
+    let failing_compaction_request_model_visible_bytes = input
+        .iter()
+        .map(estimate_response_item_model_visible_bytes)
+        .fold(
+            i64::try_from(instructions.len()).unwrap_or(i64::MAX),
+            i64::saturating_add,
+        );
 
     CompactRequestLogData {
         failing_compaction_request_model_visible_bytes,

@@ -292,7 +292,6 @@ impl ContextManager {
                 .items
                 .iter()
                 .map(estimate_response_item_model_visible_bytes)
-                .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
                 .fold(0i64, i64::saturating_add),
             estimated_tokens_of_items_added_since_last_successful_api_response:
                 items_after_last_model_generated
@@ -303,7 +302,6 @@ impl ContextManager {
                 items_after_last_model_generated
                     .iter()
                     .map(estimate_response_item_model_visible_bytes)
-                    .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
                     .fold(0i64, i64::saturating_add),
         }
     }
@@ -391,13 +389,15 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 }
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
-    i64::try_from(approx_tokens_from_byte_count(
-        estimate_response_item_model_visible_bytes(item),
-    ))
-    .unwrap_or(i64::MAX)
+    let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
+    if model_visible_bytes <= 0 {
+        return 0;
+    }
+    let model_visible_bytes = usize::try_from(model_visible_bytes).unwrap_or(usize::MAX);
+    i64::try_from(approx_tokens_from_byte_count(model_visible_bytes)).unwrap_or(i64::MAX)
 }
 
-pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> usize {
+pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
@@ -406,9 +406,9 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
         }
         | ResponseItem::Compaction {
             encrypted_content: content,
-        } => estimate_reasoning_length(content.len()),
+        } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
         item => serde_json::to_string(item)
-            .map(|serialized| serialized.len())
+            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
             .unwrap_or_default(),
     }
 }
