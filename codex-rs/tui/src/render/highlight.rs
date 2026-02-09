@@ -34,34 +34,6 @@ fn theme() -> &'static Theme {
     })
 }
 
-// -- Language normalization ---------------------------------------------------
-
-/// Normalize common language aliases to canonical names that syntect can
-/// resolve via name or extension lookup.
-fn normalize_lang(lang: &str) -> &str {
-    match lang {
-        "js" | "jsx" => "javascript",
-        "ts" => "typescript",
-        "tsx" => "tsx",
-        "py" | "python3" => "python",
-        "rb" => "ruby",
-        "rs" => "rust",
-        "go" | "golang" => "go",
-        "c" | "h" => "c",
-        "c++" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => "cpp",
-        "yml" => "yaml",
-        "sh" | "zsh" | "shell" | "bash" => "bash",
-        "kt" => "kotlin",
-        "md" => "markdown",
-        "sql" => "sql",
-        "lua" => "lua",
-        "zig" => "zig",
-        "swift" => "swift",
-        "java" => "java",
-        other => other,
-    }
-}
-
 // -- Style conversion (syntect -> ratatui) ------------------------------------
 
 /// Convert a syntect `Style` to a ratatui `Style`.
@@ -94,25 +66,29 @@ fn convert_style(syn_style: SyntectStyle) -> Style {
 
 /// Try to find a syntect `SyntaxReference` for the given language identifier.
 ///
-/// Resolution order:
-/// 1. By token (matches against file_extensions case-insensitively).
-/// 2. By exact syntax name (e.g. "Rust", "Python").
-/// 3. By case-insensitive syntax name (e.g. "rust" -> "Rust").
-/// 4. By raw (un-normalized) input as file extension.
+/// two-face's extended syntax set (~250 languages) resolves most names and
+/// extensions directly.  We only patch the few aliases it cannot handle.
 fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
     let ss = syntax_set();
-    let normalized = normalize_lang(lang);
 
-    // Try by token (matches against file_extensions case-insensitively).
-    if let Some(s) = ss.find_syntax_by_token(normalized) {
+    // Aliases that two-face does not resolve on its own.
+    let patched = match lang {
+        "golang" => "go",
+        "python3" => "python",
+        "shell" => "bash",
+        _ => lang,
+    };
+
+    // Try by token (matches file_extensions case-insensitively).
+    if let Some(s) = ss.find_syntax_by_token(patched) {
         return Some(s);
     }
     // Try by exact syntax name (e.g. "Rust", "Python").
-    if let Some(s) = ss.find_syntax_by_name(normalized) {
+    if let Some(s) = ss.find_syntax_by_name(patched) {
         return Some(s);
     }
     // Try case-insensitive name match (e.g. "rust" -> "Rust").
-    let lower = normalized.to_ascii_lowercase();
+    let lower = patched.to_ascii_lowercase();
     if let Some(s) = ss
         .syntaxes()
         .iter()
@@ -120,7 +96,7 @@ fn find_syntax(lang: &str) -> Option<&'static SyntaxReference> {
     {
         return Some(s);
     }
-    // Try raw (un-normalized) input as file extension.
+    // Try raw input as file extension.
     if let Some(s) = ss.find_syntax_by_extension(lang) {
         return Some(s);
     }
@@ -275,25 +251,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_lang_aliases() {
-        assert_eq!(normalize_lang("js"), "javascript");
-        assert_eq!(normalize_lang("jsx"), "javascript");
-        assert_eq!(normalize_lang("ts"), "typescript");
-        assert_eq!(normalize_lang("py"), "python");
-        assert_eq!(normalize_lang("rb"), "ruby");
-        assert_eq!(normalize_lang("rs"), "rust");
-        assert_eq!(normalize_lang("c++"), "cpp");
-        assert_eq!(normalize_lang("cc"), "cpp");
-        assert_eq!(normalize_lang("yml"), "yaml");
-        assert_eq!(normalize_lang("sh"), "bash");
-        assert_eq!(normalize_lang("zsh"), "bash");
-        assert_eq!(normalize_lang("shell"), "bash");
-        assert_eq!(normalize_lang("kt"), "kotlin");
-        assert_eq!(normalize_lang("md"), "markdown");
-        assert_eq!(normalize_lang("rust"), "rust");
-    }
-
-    #[test]
     #[allow(clippy::disallowed_methods)]
     fn style_conversion_correctness() {
         let syn = SyntectStyle {
@@ -371,25 +328,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_lang_new_aliases() {
-        assert_eq!(normalize_lang("go"), "go");
-        assert_eq!(normalize_lang("golang"), "go");
-        assert_eq!(normalize_lang("c"), "c");
-        assert_eq!(normalize_lang("h"), "c");
-        assert_eq!(normalize_lang("hpp"), "cpp");
-        assert_eq!(normalize_lang("hxx"), "cpp");
-        assert_eq!(normalize_lang("hh"), "cpp");
-        assert_eq!(normalize_lang("tsx"), "tsx");
-        assert_eq!(normalize_lang("sql"), "sql");
-        assert_eq!(normalize_lang("lua"), "lua");
-        assert_eq!(normalize_lang("zig"), "zig");
-        assert_eq!(normalize_lang("swift"), "swift");
-        assert_eq!(normalize_lang("java"), "java");
-    }
-
-    #[test]
-    fn find_syntax_resolves_all_canonical_languages() {
-        let canonical = [
+    fn find_syntax_resolves_languages_and_aliases() {
+        // Languages resolved directly by two-face's extended syntax set.
+        let languages = [
             "javascript",
             "typescript",
             "tsx",
@@ -408,18 +349,42 @@ mod tests {
             "zig",
             "swift",
             "java",
+            "elixir",
+            "haskell",
+            "scala",
+            "dart",
+            "r",
+            "perl",
+            "php",
+            "html",
+            "css",
+            "json",
+            "toml",
+            "xml",
+            "dockerfile",
         ];
-        for lang in canonical {
+        for lang in languages {
             assert!(
                 find_syntax(lang).is_some(),
                 "find_syntax({lang:?}) returned None"
             );
         }
-        let extensions = ["rs", "py", "js", "ts", "rb", "go", "sh", "md", "yml"];
+        // Common file extensions.
+        let extensions = [
+            "rs", "py", "js", "ts", "rb", "go", "sh", "md", "yml", "kt", "ex", "hs", "pl", "php",
+            "css", "html",
+        ];
         for ext in extensions {
             assert!(
                 find_syntax(ext).is_some(),
                 "find_syntax({ext:?}) returned None"
+            );
+        }
+        // Patched aliases that two-face cannot resolve on its own.
+        for alias in ["golang", "python3", "shell"] {
+            assert!(
+                find_syntax(alias).is_some(),
+                "find_syntax({alias:?}) returned None — patched alias broken"
             );
         }
     }
