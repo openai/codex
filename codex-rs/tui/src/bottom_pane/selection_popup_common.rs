@@ -396,6 +396,105 @@ fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disable
     }
 }
 
+fn compute_item_window_start(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_items: usize,
+) -> usize {
+    if rows_all.is_empty() || max_items == 0 {
+        return 0;
+    }
+
+    let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
+    if let Some(sel) = state.selected_idx {
+        if sel < start_idx {
+            start_idx = sel;
+        } else {
+            let bottom = start_idx.saturating_add(max_items.saturating_sub(1));
+            if sel > bottom {
+                start_idx = sel + 1 - max_items;
+            }
+        }
+    }
+    start_idx
+}
+
+fn is_selected_visible_in_wrapped_viewport(
+    rows_all: &[GenericDisplayRow],
+    start_idx: usize,
+    max_items: usize,
+    selected_idx: usize,
+    desc_col: usize,
+    width: u16,
+    viewport_height: u16,
+) -> bool {
+    if viewport_height == 0 {
+        return false;
+    }
+
+    let mut used_lines = 0usize;
+    let viewport_height = viewport_height as usize;
+    for (idx, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
+        let row_lines = wrap_row_lines(row, desc_col, width).len().max(1);
+        // Keep rendering semantics in sync: always show the first row, even if
+        // it overflows the viewport.
+        if used_lines > 0 && used_lines.saturating_add(row_lines) > viewport_height {
+            break;
+        }
+        if idx == selected_idx {
+            return true;
+        }
+        used_lines = used_lines.saturating_add(row_lines);
+        if used_lines >= viewport_height {
+            break;
+        }
+    }
+    false
+}
+
+fn adjust_start_for_wrapped_selection_visibility(
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_items: usize,
+    desc_measure_items: usize,
+    width: u16,
+    viewport_height: u16,
+    col_width_mode: ColumnWidthMode,
+) -> usize {
+    let mut start_idx = compute_item_window_start(rows_all, state, max_items);
+    let Some(sel) = state.selected_idx else {
+        return start_idx;
+    };
+    if viewport_height == 0 {
+        return start_idx;
+    }
+
+    // If wrapped row heights push the selected item out of view, advance the
+    // item window until the selected row is visible.
+    while start_idx < sel {
+        let desc_col = compute_desc_col(
+            rows_all,
+            start_idx,
+            desc_measure_items,
+            width,
+            col_width_mode,
+        );
+        if is_selected_visible_in_wrapped_viewport(
+            rows_all,
+            start_idx,
+            max_items,
+            sel,
+            desc_col,
+            width,
+            viewport_height,
+        ) {
+            break;
+        }
+        start_idx = start_idx.saturating_add(1);
+    }
+    start_idx
+}
+
 /// Build the full display line for a row with the description padded to start
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
@@ -498,28 +597,28 @@ fn render_rows_inner(
         return;
     }
 
-    // Determine which logical rows (items) are visible given the selection and
-    // the max_results clamp. Scrolling is still item-based for simplicity.
-    let visible_items = max_results
-        .min(rows_all.len())
-        .min(area.height.max(1) as usize);
-
-    let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
-    if let Some(sel) = state.selected_idx {
-        if sel < start_idx {
-            start_idx = sel;
-        } else if visible_items > 0 {
-            let bottom = start_idx + visible_items - 1;
-            if sel > bottom {
-                start_idx = sel + 1 - visible_items;
-            }
-        }
+    let max_items = max_results.min(rows_all.len());
+    if max_items == 0 {
+        return;
     }
+    let desc_measure_items = max_items.min(area.height.max(1) as usize);
+
+    // Keep item-window semantics, then correct for wrapped row heights so the
+    // selected row remains visible in a line-based viewport.
+    let start_idx = adjust_start_for_wrapped_selection_visibility(
+        rows_all,
+        state,
+        max_items,
+        desc_measure_items,
+        area.width,
+        area.height,
+        col_width_mode,
+    );
 
     let desc_col = compute_desc_col(
         rows_all,
         start_idx,
-        visible_items,
+        desc_measure_items,
         area.width,
         col_width_mode,
     );
@@ -527,12 +626,7 @@ fn render_rows_inner(
     // Render items, wrapping descriptions and aligning wrapped lines under the
     // shared description column. Stop when we run out of vertical space.
     let mut cur_y = area.y;
-    for (i, row) in rows_all
-        .iter()
-        .enumerate()
-        .skip(start_idx)
-        .take(visible_items)
-    {
+    for (i, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
         if cur_y >= area.y + area.height {
             break;
         }
