@@ -2,6 +2,8 @@
 
 use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
+use codex_network_proxy::has_proxy_url_env_vars;
+use codex_network_proxy::proxy_url_env_value;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -64,7 +66,7 @@ fn proxy_scheme_default_port(scheme: &str) -> u16 {
 fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
     let mut ports = BTreeSet::new();
     for key in PROXY_URL_ENV_KEYS {
-        let Some(proxy_url) = env.get(*key) else {
+        let Some(proxy_url) = proxy_url_env_value(env, key) else {
             continue;
         };
         let trimmed = proxy_url.trim();
@@ -96,12 +98,6 @@ fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
     ports.into_iter().collect()
 }
 
-fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
-    PROXY_URL_ENV_KEYS
-        .iter()
-        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
-}
-
 fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
     env.get(ALLOW_LOCAL_BINDING_ENV_KEY).is_some_and(|value| {
         let trimmed = value.trim();
@@ -128,7 +124,7 @@ fn dynamic_network_policy(sandbox_policy: &SandboxPolicy, env: &HashMap<String, 
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
     }
 
-    if has_proxy_env_vars(env) {
+    if has_proxy_url_env_vars(env) {
         // Proxy configuration is present but we could not infer any valid loopback endpoints.
         // Fail closed to avoid silently widening network access in proxy-enforced sessions.
         return String::new();

@@ -239,15 +239,8 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "HTTPS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "ftp_proxy",
     "YARN_HTTP_PROXY",
     "YARN_HTTPS_PROXY",
-    "npm_config_http_proxy",
-    "npm_config_https_proxy",
-    "npm_config_proxy",
     "NPM_CONFIG_HTTP_PROXY",
     "NPM_CONFIG_HTTPS_PROXY",
     "NPM_CONFIG_PROXY",
@@ -277,6 +270,23 @@ pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
     "*.local,.local,",
     "169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 );
+
+pub fn proxy_url_env_value<'a>(
+    env: &'a HashMap<String, String>,
+    canonical_key: &str,
+) -> Option<&'a str> {
+    if let Some(value) = env.get(canonical_key) {
+        return Some(value.as_str());
+    }
+    let lower_key = canonical_key.to_ascii_lowercase();
+    env.get(lower_key.as_str()).map(String::as_str)
+}
+
+pub fn has_proxy_url_env_vars(env: &HashMap<String, String>) -> bool {
+    PROXY_URL_ENV_KEYS
+        .iter()
+        .any(|key| proxy_url_env_value(env, key).is_some_and(|value| !value.trim().is_empty()))
+}
 
 fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     for key in keys {
@@ -585,6 +595,31 @@ mod tests {
             proxy.admin_addr,
             "127.0.0.1:48080".parse::<SocketAddr>().unwrap()
         );
+    }
+
+    #[test]
+    fn proxy_url_env_value_resolves_lowercase_aliases() {
+        let mut env = HashMap::new();
+        env.insert(
+            "http_proxy".to_string(),
+            "http://127.0.0.1:3128".to_string(),
+        );
+
+        assert_eq!(
+            proxy_url_env_value(&env, "HTTP_PROXY"),
+            Some("http://127.0.0.1:3128")
+        );
+    }
+
+    #[test]
+    fn has_proxy_url_env_vars_detects_lowercase_aliases() {
+        let mut env = HashMap::new();
+        env.insert(
+            "all_proxy".to_string(),
+            "socks5h://127.0.0.1:8081".to_string(),
+        );
+
+        assert_eq!(has_proxy_url_env_vars(&env), true);
     }
 
     #[test]

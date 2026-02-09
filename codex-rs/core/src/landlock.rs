@@ -2,7 +2,7 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use codex_network_proxy::PROXY_URL_ENV_KEYS;
+use codex_network_proxy::has_proxy_url_env_vars;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -55,7 +55,7 @@ pub(crate) fn allow_network_for_proxy(
     sandbox_policy: &SandboxPolicy,
     env: &HashMap<String, String>,
 ) -> bool {
-    !sandbox_policy.has_full_network_access() && has_proxy_env_vars(env)
+    !sandbox_policy.has_full_network_access() && has_proxy_url_env_vars(env)
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
@@ -100,12 +100,6 @@ pub(crate) fn create_linux_sandbox_command_args(
     linux_cmd.extend(command);
 
     linux_cmd
-}
-
-fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
-    PROXY_URL_ENV_KEYS
-        .iter()
-        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
 }
 
 #[cfg(test)]
