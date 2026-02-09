@@ -6,6 +6,7 @@ use ratatui::text::Span;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::highlighting::Style as SyntectStyle;
@@ -19,7 +20,7 @@ use two_face::theme::EmbeddedThemeName;
 // -- Global singletons -------------------------------------------------------
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME: OnceLock<Theme> = OnceLock::new();
+static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
 static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
 static CODEX_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -113,33 +114,165 @@ fn load_custom_theme(name: &str, codex_home: &Path) -> Option<Theme> {
     ThemeSet::get_theme(custom_theme_path(name, codex_home)).ok()
 }
 
-fn theme() -> &'static Theme {
-    THEME.get_or_init(|| {
-        let ts = two_face::theme::extra();
+/// Build the theme from current override/auto-detection settings.
+/// Extracted from the old `theme()` init closure so it can be reused.
+fn build_default_theme() -> Theme {
+    let ts = two_face::theme::extra();
 
-        // Honor user-configured theme if valid.
-        if let Some(Some(name)) = THEME_OVERRIDE.get() {
-            // 1. Try bundled theme by kebab-case name.
-            if let Some(theme_name) = parse_theme_name(name) {
-                return ts.get(theme_name).clone();
+    // Honor user-configured theme if valid.
+    if let Some(Some(name)) = THEME_OVERRIDE.get() {
+        // 1. Try bundled theme by kebab-case name.
+        if let Some(theme_name) = parse_theme_name(name) {
+            return ts.get(theme_name).clone();
+        }
+        // 2. Try loading ~/.codex/themes/{name}.tmTheme from disk.
+        if let Some(Some(home)) = CODEX_HOME.get() {
+            if let Some(theme) = load_custom_theme(name, home) {
+                return theme;
             }
-            // 2. Try loading ~/.codex/themes/{name}.tmTheme from disk.
-            if let Some(Some(home)) = CODEX_HOME.get() {
-                if let Some(theme) = load_custom_theme(name, home) {
-                    return theme;
+        }
+        tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
+    }
+
+    // Adaptive default: light or dark based on terminal background.
+    let name = match crate::terminal_palette::default_bg() {
+        Some(bg) if crate::color::is_light(bg) => EmbeddedThemeName::CatppuccinLatte,
+        _ => EmbeddedThemeName::CatppuccinMocha,
+    };
+    ts.get(name).clone()
+}
+
+fn theme_lock() -> &'static RwLock<Theme> {
+    THEME.get_or_init(|| RwLock::new(build_default_theme()))
+}
+
+/// Swap the active syntax theme at runtime (for live preview).
+pub(crate) fn set_syntax_theme(theme: Theme) {
+    if let Ok(mut guard) = theme_lock().write() {
+        *guard = theme;
+    }
+}
+
+/// Clone the current syntax theme (e.g. to save for cancel-restore).
+pub(crate) fn current_syntax_theme() -> Theme {
+    theme_lock().read().unwrap().clone()
+}
+
+/// Return the kebab-case name of the currently active theme.
+/// This accounts for the user override, custom .tmTheme files, and the
+/// adaptive auto-detection fallback.
+pub(crate) fn current_theme_name() -> String {
+    // Explicit user override?
+    if let Some(Some(name)) = THEME_OVERRIDE.get() {
+        if parse_theme_name(name).is_some() {
+            return name.clone();
+        }
+        if let Some(Some(home)) = CODEX_HOME.get() {
+            if custom_theme_path(name, home).is_file() {
+                return name.clone();
+            }
+        }
+    }
+    // Adaptive default: light or dark based on terminal background.
+    match crate::terminal_palette::default_bg() {
+        Some(bg) if crate::color::is_light(bg) => "catppuccin-latte".to_string(),
+        _ => "catppuccin-mocha".to_string(),
+    }
+}
+
+/// Resolve a theme name to a `Theme` (bundled or custom). Returns `None`
+/// when the name is unknown and no matching `.tmTheme` file exists.
+pub(crate) fn resolve_theme_by_name(name: &str, codex_home: Option<&Path>) -> Option<Theme> {
+    let ts = two_face::theme::extra();
+    // Bundled theme?
+    if let Some(embedded) = parse_theme_name(name) {
+        return Some(ts.get(embedded).clone());
+    }
+    // Custom .tmTheme file?
+    if let Some(home) = codex_home {
+        if let Some(theme) = load_custom_theme(name, home) {
+            return Some(theme);
+        }
+    }
+    None
+}
+
+/// A theme available in the picker.
+pub(crate) struct ThemeEntry {
+    pub name: String,
+    pub is_custom: bool,
+}
+
+/// List all available theme names: bundled themes + custom `.tmTheme` files
+/// found in `{codex_home}/themes/`.
+pub(crate) fn list_available_themes(codex_home: Option<&Path>) -> Vec<ThemeEntry> {
+    let mut entries: Vec<ThemeEntry> = BUILTIN_THEME_NAMES
+        .iter()
+        .map(|name| ThemeEntry {
+            name: name.to_string(),
+            is_custom: false,
+        })
+        .collect();
+
+    // Discover custom themes on disk, deduplicating against builtins.
+    if let Some(home) = codex_home {
+        let themes_dir = home.join("themes");
+        if let Ok(read_dir) = std::fs::read_dir(&themes_dir) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        let name = stem.to_string();
+                        if !entries.iter().any(|e| e.name == name) {
+                            entries.push(ThemeEntry {
+                                name,
+                                is_custom: true,
+                            });
+                        }
+                    }
                 }
             }
-            tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
         }
+    }
 
-        // Adaptive default: light or dark based on terminal background.
-        let name = match crate::terminal_palette::default_bg() {
-            Some(bg) if crate::color::is_light(bg) => EmbeddedThemeName::CatppuccinLatte,
-            _ => EmbeddedThemeName::CatppuccinMocha,
-        };
-        ts.get(name).clone()
-    })
+    entries
 }
+
+/// All 32 bundled theme names in kebab-case, ordered alphabetically.
+const BUILTIN_THEME_NAMES: &[&str] = &[
+    "1337",
+    "ansi",
+    "base16",
+    "base16-256",
+    "base16-eighties-dark",
+    "base16-mocha-dark",
+    "base16-ocean-dark",
+    "base16-ocean-light",
+    "catppuccin-frappe",
+    "catppuccin-latte",
+    "catppuccin-macchiato",
+    "catppuccin-mocha",
+    "coldark-cold",
+    "coldark-dark",
+    "dark-neon",
+    "dracula",
+    "github",
+    "gruvbox-dark",
+    "gruvbox-light",
+    "inspired-github",
+    "monokai-extended",
+    "monokai-extended-bright",
+    "monokai-extended-light",
+    "monokai-extended-origin",
+    "nord",
+    "one-half-dark",
+    "one-half-light",
+    "solarized-dark",
+    "solarized-light",
+    "sublime-snazzy",
+    "two-dark",
+    "zenburn",
+];
 
 // -- Style conversion (syntect -> ratatui) ------------------------------------
 
@@ -241,14 +374,15 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
     }
 
     // Bail out early for oversized inputs to avoid excessive resource usage.
-    if code.len() > MAX_HIGHLIGHT_BYTES
-        || code.as_bytes().iter().filter(|&&b| b == b'\n').count() > MAX_HIGHLIGHT_LINES
-    {
+    // Count actual lines (not newline bytes) to avoid an off-by-one when
+    // the input does not end with a newline.
+    if code.len() > MAX_HIGHLIGHT_BYTES || code.lines().count() > MAX_HIGHLIGHT_LINES {
         return None;
     }
 
     let syntax = find_syntax(lang)?;
-    let mut h = HighlightLines::new(syntax, theme());
+    let theme_guard = theme_lock().read().unwrap();
+    let mut h = HighlightLines::new(syntax, &*theme_guard);
     let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
 
     for line in LinesWithEndings::from(code) {
@@ -509,6 +643,21 @@ mod tests {
         let many_lines = "let x = 1;\n".repeat(MAX_HIGHLIGHT_LINES + 1);
         let result = highlight_code_to_styled_spans(&many_lines, "rust");
         assert!(result.is_none(), "too many lines should fall back to None");
+    }
+
+    #[test]
+    fn highlight_many_lines_no_trailing_newline_falls_back() {
+        // A snippet with exactly MAX_HIGHLIGHT_LINES+1 lines but no trailing
+        // newline has only MAX_HIGHLIGHT_LINES newline bytes.  The guard must
+        // count actual lines, not newline bytes, to catch this.
+        let mut code = "let x = 1;\n".repeat(MAX_HIGHLIGHT_LINES);
+        code.push_str("let x = 1;"); // line MAX_HIGHLIGHT_LINES+1, no trailing \n
+        assert_eq!(code.lines().count(), MAX_HIGHLIGHT_LINES + 1);
+        let result = highlight_code_to_styled_spans(&code, "rust");
+        assert!(
+            result.is_none(),
+            "MAX_HIGHLIGHT_LINES+1 lines without trailing newline should fall back"
+        );
     }
 
     #[test]

@@ -3404,6 +3404,9 @@ impl ChatWidget {
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
             }
+            SlashCommand::Theme => {
+                self.open_theme_picker();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -4281,6 +4284,15 @@ impl ChatWidget {
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn open_theme_picker(&mut self) {
+        let codex_home = codex_core::config::find_codex_home().ok();
+        let params = crate::theme_picker::build_theme_picker_params(
+            self.config.tui_theme.as_deref(),
+            codex_home.as_deref(),
+        );
+        self.bottom_pane.show_selection_view(params);
     }
 
     /// Parses configured status-line ids into known items and collects unknown ids.

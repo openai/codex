@@ -28,8 +28,9 @@ use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
 
-// Internal representation for diff line rendering
-enum DiffLineType {
+// Diff line type used for gutter sign + style selection.
+#[derive(Clone, Copy)]
+pub(crate) enum DiffLineType {
     Insert,
     Delete,
     Context,
@@ -192,7 +193,10 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
             out.push(RtLine::from(header));
         }
 
-        let lang = detect_lang_for_path(&r.path);
+        // For renames, use the destination extension for highlighting — the
+        // diff content reflects the new file, not the old one.
+        let lang_path = r.move_path.as_deref().unwrap_or(&r.path);
+        let lang = detect_lang_for_path(lang_path);
         let mut lines = vec![];
         render_change(&r.change, &mut lines, wrap_cols - 4, lang.as_deref());
         out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
@@ -448,7 +452,7 @@ pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     }
 }
 
-fn push_wrapped_diff_line(
+pub(crate) fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
     text: &str,
@@ -458,7 +462,7 @@ fn push_wrapped_diff_line(
     push_wrapped_diff_line_inner(line_number, kind, text, width, line_number_width, None)
 }
 
-fn push_wrapped_diff_line_with_syntax(
+pub(crate) fn push_wrapped_diff_line_with_syntax(
     line_number: usize,
     kind: DiffLineType,
     text: &str,
@@ -650,7 +654,7 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
     result
 }
 
-fn line_number_width(max_line_number: usize) -> usize {
+pub(crate) fn line_number_width(max_line_number: usize) -> usize {
     if max_line_number == 0 {
         1
     } else {
@@ -1127,5 +1131,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn rename_diff_uses_destination_extension_for_highlighting() {
+        // A rename from an unknown extension to .rs should highlight as Rust.
+        // Without the fix, detect_lang_for_path uses the source path (.xyzzy),
+        // which has no syntax definition, so highlighting is skipped.
+        let original = "fn main() {}\n";
+        let modified = "fn main() { println!(\"hi\"); }\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("foo.xyzzy"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: Some(PathBuf::from("foo.rs")),
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+        let has_rgb = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+        });
+        assert!(
+            has_rgb,
+            "rename from .xyzzy to .rs should produce syntax-highlighted (RGB) spans"
+        );
     }
 }

@@ -327,6 +327,9 @@ pub(crate) enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
+    /// Apply a user-confirmed syntax theme selection.
+    SyntaxThemeSelected { name: String },
 }
 
 /// The exit strategy requested by the UI layer.

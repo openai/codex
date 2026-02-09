@@ -286,10 +286,9 @@ where
 
         // When inside a fenced code block with a known language, accumulate
         // text into the buffer for batch highlighting in end_codeblock().
+        // Append verbatim — pulldown-cmark text events already contain the
+        // original line breaks, so inserting separators would double them.
         if self.in_code_block && self.code_block_lang.is_some() {
-            if !self.code_block_buffer.is_empty() {
-                self.code_block_buffer.push('\n');
-            }
             self.code_block_buffer.push_str(&text);
             return;
         }
@@ -417,8 +416,15 @@ where
         }
         self.in_code_block = true;
 
-        // Store the language for syntax highlighting; clear the buffer.
-        let lang = lang.filter(|l| !l.is_empty());
+        // Extract the language token from the info string.  CommonMark info
+        // strings can contain metadata after the language, separated by commas,
+        // spaces, or other delimiters (e.g. "rust,no_run", "rust title=demo").
+        // Take only the first token so the syntax lookup succeeds.
+        let lang = lang
+            .as_deref()
+            .and_then(|s| s.split([',', ' ', '\t']).next())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         self.code_block_lang = lang;
         self.code_block_buffer.clear();
 
@@ -709,6 +715,41 @@ mod tests {
         assert_eq!(
             lines,
             vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
+        );
+    }
+
+    #[test]
+    fn fenced_code_info_string_with_metadata_highlights() {
+        // CommonMark info strings like "rust,no_run" or "rust title=demo"
+        // contain metadata after the language token.  The language must be
+        // extracted (first word / comma-separated token) so highlighting works.
+        for info in &["rust,no_run", "rust no_run", "rust title=\"demo\""] {
+            let markdown = format!("```{info}\nfn main() {{}}\n```\n");
+            let rendered = render_markdown_text(&markdown);
+            let has_rgb = rendered.lines.iter().any(|line| {
+                line.spans
+                    .iter()
+                    .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+            });
+            assert!(
+                has_rgb,
+                "info string \"{info}\" should still produce syntax highlighting"
+            );
+        }
+    }
+
+    #[test]
+    fn crlf_code_block_no_extra_blank_lines() {
+        // pulldown-cmark can split CRLF code blocks into multiple Text events.
+        // The buffer must concatenate them verbatim — no inserted separators.
+        let markdown = "```rust\r\nfn main() {}\r\n    line2\r\n```\r\n";
+        let rendered = render_markdown_text(markdown);
+        let lines = lines_to_strings(&rendered);
+        // Should be exactly two code lines; no spurious blank line between them.
+        assert_eq!(
+            lines,
+            vec!["fn main() {}".to_string(), "    line2".to_string()],
+            "CRLF code block should not produce extra blank lines: {lines:?}"
         );
     }
 }

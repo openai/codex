@@ -101,6 +101,7 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod theme_picker;
 mod text_formatting;
 mod tooltips;
 mod tui;
