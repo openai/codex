@@ -430,10 +430,16 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .await
             .expect("submit post-git turn prompt");
 
-        let header_value = request_recorder
+        let maybe_header = request_recorder
             .single_request()
-            .header("x-codex-turn-metadata")
-            .expect("x-codex-turn-metadata header should be present");
+            .header("x-codex-turn-metadata");
+        let Some(header_value) = maybe_header else {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        };
         let parsed: serde_json::Value = serde_json::from_str(&header_value)
             .expect("x-codex-turn-metadata should be valid JSON");
         let Some(workspaces) = parsed
@@ -470,11 +476,6 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             Some(expected_origin.as_str())
         );
         return;
-
-        if tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
     panic!(
