@@ -18,6 +18,7 @@ use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use futures::TryFutureExt;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -96,7 +97,7 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
-    let compact_result = sess
+    let mut new_history = sess
         .services
         .model_client
         .compact_conversation_history(
@@ -104,10 +105,7 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.model_info,
             &turn_context.otel_manager,
         )
-        .await;
-    let mut new_history = match compact_result {
-        Ok(history) => history,
-        Err(err) => {
+        .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
             let compact_request_metrics = build_compact_request_metrics(
                 &turn_context.model_info.slug,
@@ -120,9 +118,9 @@ async fn run_remote_compact_task_inner_impl(
                 total_usage_breakdown,
                 &err,
             );
-            return Err(err);
-        }
-    };
+            Err(err)
+        })
+        .await?;
     new_history = sess
         .process_compacted_history(turn_context, new_history)
         .await;
