@@ -165,6 +165,71 @@
         }
       ]
     },
+    "AppInfo": {
+      "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "distributionChannel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isAccessible": {
+          "default": false,
+          "type": "boolean"
+        },
+        "logoUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "AppListUpdatedNotification": {
+      "description": "EXPERIMENTAL - notification emitted when the app list changes.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/AppInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -7884,6 +7949,26 @@
         "params"
       ],
       "title": "Account/rateLimits/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "app/list/updated"
+          ],
+          "title": "App/list/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AppListUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "App/list/updatedNotification",
       "type": "object"
     },
     {

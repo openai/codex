@@ -8,6 +8,7 @@ export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotificat
 export type { AnalyticsConfig } from "./AnalyticsConfig";
 export type { AppDisabledReason } from "./AppDisabledReason";
 export type { AppInfo } from "./AppInfo";
+export type { AppListUpdatedNotification } from "./AppListUpdatedNotification";
 export type { AppsConfig } from "./AppsConfig";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";

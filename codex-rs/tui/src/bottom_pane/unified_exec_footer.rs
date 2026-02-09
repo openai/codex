@@ -37,7 +37,9 @@ impl UnifiedExecFooter {
 
         let count = self.processes.len();
         let plural = if count == 1 { "" } else { "s" };
-        let message = format!("  {count} background terminal{plural} running · /ps to view");
+        let message = format!(
+            "  {count} background terminal{plural} running · /ps to view · /clean to close"
+        );
         let (truncated, _, _) = take_prefix_by_width(&message, width as usize);
         vec![Line::from(truncated.dim())]
     }

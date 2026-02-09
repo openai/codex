@@ -13,13 +13,13 @@ use anyhow::Context;
 use codex_mcp_server::CodexToolCallParam;
 
 use pretty_assertions::assert_eq;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::JsonRpcNotification;
 use rmcp::model::JsonRpcRequest;
@@ -112,7 +112,8 @@ impl McpProcess {
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
-        let params = InitializeRequestParam {
+        let params = InitializeRequestParams {
+            meta: None,
             capabilities: ClientCapabilities {
                 elicitation: Some(ElicitationCapability {
                     schema_validation: None,
@@ -120,6 +121,7 @@ impl McpProcess {
                 experimental: None,
                 roots: None,
                 sampling: None,
+                tasks: None,
             },
             client_info: Implementation {
                 name: "elicitation test".into(),
@@ -194,12 +196,14 @@ impl McpProcess {
         &mut self,
         params: CodexToolCallParam,
     ) -> anyhow::Result<i64> {
-        let codex_tool_call_params = CallToolRequestParam {
+        let codex_tool_call_params = CallToolRequestParams {
+            meta: None,
             name: "codex".into(),
             arguments: Some(match serde_json::to_value(params)? {
                 serde_json::Value::Object(map) => map,
                 _ => unreachable!("params serialize to object"),
             }),
+            task: None,
         };
         self.send_request(
             "tools/call",

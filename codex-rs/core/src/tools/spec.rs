@@ -16,6 +16,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,6 +30,7 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub supports_image_input: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub memory_tools: bool,
@@ -84,6 +86,7 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            supports_image_input: model_info.input_modalities.contains(&InputModality::Image),
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             memory_tools: include_memory_tools,
@@ -1426,8 +1429,10 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-    builder.register_handler("view_image", view_image_handler);
+    if config.supports_image_input {
+        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+        builder.register_handler("view_image", view_image_handler);
+    }
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -2012,6 +2017,29 @@ mod tests {
                 "web_search",
                 "view_image",
             ],
+        );
+    }
+
+    #[test]
+    fn test_non_multimodal_models_exclude_view_image() {
+        let config = test_config();
+        let mut model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
+        model_info.input_modalities = vec![InputModality::Text];
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
+
+        assert!(
+            !tools
+                .iter()
+                .map(|t| t.spec.name())
+                .any(|name| name == VIEW_IMAGE_TOOL_NAME),
+            "view_image should be excluded for non-multimodal models"
         );
     }
 

@@ -52,25 +52,18 @@
       "type": "object"
     }
   },
-  "description": "EXPERIMENTAL - app list response.",
+  "description": "EXPERIMENTAL - notification emitted when the app list changes.",
   "properties": {
     "data": {
       "items": {
         "$ref": "#/definitions/AppInfo"
       },
       "type": "array"
-    },
-    "nextCursor": {
-      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
-      "type": [
-        "string",
-        "null"
-      ]
     }
   },
   "required": [
     "data"
   ],
-  "title": "AppsListResponse",
+  "title": "AppListUpdatedNotification",
   "type": "object"
 }
