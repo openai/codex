@@ -505,26 +505,27 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Initial plain-text task for the new agent. Use either message or items."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert("items".to_string(), create_collab_input_items_schema());
-    properties.insert(
-        "agent_type".to_string(),
-        JsonSchema::String {
-            description: Some(format!(
-                "Optional agent type ({}). Use an explicit type when delegating.",
-                AgentRole::enum_values().join(", ")
-            )),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Initial plain-text task for the new agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "agent_type".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Optional agent type ({}). Use an explicit type when delegating.",
+                    AgentRole::enum_values().join(", ")
+                )),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -541,32 +542,33 @@ fn create_spawn_agent_tool() -> ToolSpec {
 }
 
 fn create_send_input_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to message (from spawn_agent).".to_string()),
-        },
-    );
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Legacy plain-text message to send to the agent. Use either message or items."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert("items".to_string(), create_collab_input_items_schema());
-    properties.insert(
-        "interrupt".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some("Agent id to message (from spawn_agent).".to_string()),
+            },
+        ),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Legacy plain-text message to send to the agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
