@@ -39,7 +39,7 @@ pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bo
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) {
+) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
@@ -47,27 +47,28 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input).await;
+    run_compact_task_inner(sess, turn_context, input).await?;
+    Ok(())
 }
 
 pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) {
+) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await;
+    run_compact_task_inner(sess.clone(), turn_context, input).await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-) {
+) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
@@ -142,7 +143,7 @@ async fn run_compact_task_inner(
                 break;
             }
             Err(CodexErr::Interrupted) => {
-                return;
+                return Err(CodexErr::Interrupted);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
@@ -158,7 +159,7 @@ async fn run_compact_task_inner(
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
-                return;
+                return Err(e);
             }
             Err(e) => {
                 if retries < max_retries {
@@ -175,7 +176,7 @@ async fn run_compact_task_inner(
                 } else {
                     let event = EventMsg::Error(e.to_error_event(None));
                     sess.send_event(&turn_context, event).await;
-                    return;
+                    return Err(e);
                 }
             }
         }
@@ -210,6 +211,7 @@ async fn run_compact_task_inner(
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
+    Ok(())
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -487,11 +489,15 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
+                    text: r#"# AGENTS.md instructions for project
+
+<INSTRUCTIONS>
+do things
+</INSTRUCTIONS>"#
                         .to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -500,7 +506,7 @@ mod tests {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -509,7 +515,7 @@ mod tests {
                     text: "real user message".to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
             },
         ];
 
@@ -627,7 +633,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>cwd=/tmp</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/tmp</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -658,7 +668,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>cwd=/tmp</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/tmp</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -710,7 +724,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -719,7 +738,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -728,7 +751,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>".to_string(),
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -750,7 +777,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -759,7 +791,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -768,7 +804,10 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
                         .to_string(),
                 }],
                 end_turn: None,
@@ -794,7 +833,12 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nkeep me updated\n</INSTRUCTIONS>".to_string(),
+                    text: r#"# AGENTS.md instructions for /repo
+
+<INSTRUCTIONS>
+keep me updated
+</INSTRUCTIONS>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -803,7 +847,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<environment_context>\n  <cwd>/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>".to_string(),
+                    text: r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,
@@ -812,7 +860,11 @@ mod tests {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "<turn_aborted>\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>".to_string(),
+                    text: r#"<turn_aborted>
+  <turn_id>turn-1</turn_id>
+  <reason>interrupted</reason>
+</turn_aborted>"#
+                        .to_string(),
                 }],
                 end_turn: None,
                 phase: None,

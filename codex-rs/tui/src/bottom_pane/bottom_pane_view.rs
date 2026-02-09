@@ -16,6 +16,11 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Stable identifier for views that need external refreshes while open.
+    fn view_id(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Handle Ctrl-C while this view is active.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled

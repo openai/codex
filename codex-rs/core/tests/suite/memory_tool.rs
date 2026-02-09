@@ -2,7 +2,12 @@
 
 use anyhow::Result;
 use codex_core::features::Feature;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_function_call_agent_response;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -25,6 +30,18 @@ async fn get_memory_tool_returns_persisted_thread_memory() -> Result<()> {
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.session_id;
     let thread_id_string = thread_id.to_string();
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-init"),
+            ev_assistant_message("msg-init", "Materialized"),
+            ev_completed("resp-init"),
+        ]),
+    )
+    .await;
+    test.submit_turn("materialize thread before memory write")
+        .await?;
 
     let mut thread_exists = false;
     // Wait for DB creation.

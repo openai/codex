@@ -59,8 +59,8 @@ use rama_net::stream::SocketInfo;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
-use rama_tls_boring::client::TlsConnectorDataBuilder;
-use rama_tls_boring::client::TlsConnectorLayer;
+use rama_tls_rustls::client::TlsConnectorDataBuilder;
+use rama_tls_rustls::client::TlsConnectorLayer;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -301,7 +301,9 @@ async fn forward_connect_tunnel(
     let req = TcpRequest::new_with_extensions(authority.clone(), extensions)
         .with_protocol(Protocol::HTTPS);
     let proxy_connector = HttpProxyConnector::optional(TcpConnector::new());
-    let tls_config = TlsConnectorDataBuilder::new_http_auto().into_shared_builder();
+    let tls_config = TlsConnectorDataBuilder::new()
+        .with_alpn_protocols_http_auto()
+        .build();
     let connector = TlsConnectorLayer::tunnel(None)
         .with_connector_data(tls_config)
         .into_layer(proxy_connector);
@@ -688,7 +690,7 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkMode;
-    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
@@ -697,7 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkPolicy {
+        let policy = NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             ..Default::default()
         };

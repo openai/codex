@@ -5,6 +5,9 @@ use crate::outgoing_message::OutgoingMessage;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
+use owo_colors::OwoColorize;
+use owo_colors::Stream;
+use owo_colors::Style;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -32,6 +35,36 @@ use tracing::warn;
 /// is a balance between throughput and memory usage - 128 messages should be
 /// plenty for an interactive CLI.
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
+
+fn colorize(text: &str, style: Style) -> String {
+    text.if_supports_color(Stream::Stderr, |value| value.style(style))
+        .to_string()
+}
+
+#[allow(clippy::print_stderr)]
+fn print_websocket_startup_banner(addr: SocketAddr) {
+    let title = colorize("codex app-server (WebSockets)", Style::new().bold().cyan());
+    let listening_label = colorize("listening on:", Style::new().dimmed());
+    let listen_url = colorize(&format!("ws://{addr}"), Style::new().green());
+    let note_label = colorize("note:", Style::new().dimmed());
+    eprintln!("{title}");
+    eprintln!("  {listening_label} {listen_url}");
+    if addr.ip().is_loopback() {
+        eprintln!(
+            "  {note_label} binds localhost only (use SSH port-forwarding for remote access)"
+        );
+    } else {
+        eprintln!(
+            "  {note_label} this is a raw WS server; consider running behind TLS/auth for real remote use"
+        );
+    }
+}
+
+#[allow(clippy::print_stderr)]
+fn print_websocket_connection(peer_addr: SocketAddr) {
+    let connected_label = colorize("websocket client connected from", Style::new().dimmed());
+    eprintln!("{connected_label} {peer_addr}");
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
@@ -191,13 +224,15 @@ pub(crate) async fn start_websocket_acceptor(
 ) -> IoResult<JoinHandle<()>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
+    print_websocket_startup_banner(local_addr);
     info!("app-server websocket listening on ws://{local_addr}");
 
     let connection_counter = Arc::new(AtomicU64::new(1));
     Ok(tokio::spawn(async move {
         loop {
             match listener.accept().await {
-                Ok((stream, _peer_addr)) => {
+                Ok((stream, peer_addr)) => {
+                    print_websocket_connection(peer_addr);
                     let connection_id =
                         ConnectionId(connection_counter.fetch_add(1, Ordering::Relaxed));
                     let transport_event_tx_for_connection = transport_event_tx.clone();
