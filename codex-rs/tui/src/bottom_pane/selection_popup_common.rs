@@ -421,6 +421,11 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
 
     let width = width.max(1);
     let max_desc_col = width.saturating_sub(1) as usize;
+    if max_desc_col == 0 {
+        // No valid description column exists at this width; let callers fall
+        // back to single-line wrapping path.
+        return Vec::new();
+    }
     let balanced_desc_col = ((width as usize * WRAPPED_BALANCED_COL_NUMERATOR)
         / WRAPPED_BALANCED_COL_DENOMINATOR)
         .clamp(1, max_desc_col);
@@ -863,4 +868,26 @@ fn measure_rows_height_inner(
         total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn one_cell_width_falls_back_without_panic_for_wrapped_two_column_rows() {
+        let row = GenericDisplayRow {
+            name: "1. Very long option label".to_string(),
+            description: Some("Very long description".to_string()),
+            wrap_indent: Some(4),
+            ..Default::default()
+        };
+
+        let two_col = wrap_two_column_row(&row, 0, 1);
+        assert_eq!(two_col.len(), 0);
+
+        let fallback = wrap_row_lines(&row, 0, 1);
+        assert_eq!(fallback.is_empty(), false);
+    }
 }
