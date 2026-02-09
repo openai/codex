@@ -23,7 +23,8 @@
 //! - Persistent cross-session history (text-only; no element ranges or attachments).
 //! - Local in-session history (full text + text elements + local/remote image attachments).
 //!
-//! When recalling a local entry, the composer rehydrates text elements and image attachments.
+//! When recalling a local entry, the composer rehydrates text elements and both attachment kinds
+//! (local image paths + remote image URLs).
 //! When recalling a persistent entry, only the text is restored.
 //! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
 //! history traversal semantics instead of dropping to column 0.
@@ -39,12 +40,32 @@
 //! - Expands pending paste placeholders so element ranges align with the final text.
 //! - Trims whitespace and rebases text elements accordingly.
 //! - Expands `/prompts:` custom prompts (named or numeric args), preserving text elements.
-//! - Prunes attached images so only placeholders that survive expansion are sent.
+//! - Prunes local attached images so only placeholders that survive expansion are sent.
+//! - Preserves remote image URLs as separate attachments even when text is empty.
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
 //! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
 //! pasted content and text elements are preserved when extracting args.
+//!
+//! # Remote Image Rows (Up/Down/Delete)
+//!
+//! Remote image URLs are rendered as non-editable `[Image #N]` rows above the textarea (inside the
+//! same composer block). These rows represent image attachments rehydrated from app-server/backtrack
+//! history; TUI users can remove them, but cannot type into that row region.
+//!
+//! Keyboard behavior:
+//!
+//! - `Up` at textarea cursor `0` enters remote-row selection at the last remote image.
+//! - `Up`/`Down` move selection between remote rows.
+//! - `Down` on the last row clears selection and returns control to the textarea.
+//! - `Delete`/`Backspace` remove the selected remote image row.
+//!
+//! Placeholder numbering is unified across remote and local images:
+//!
+//! - Remote rows occupy `[Image #1]..[Image #M]`.
+//! - Local placeholders are offset after that range (`[Image #M+1]..`).
+//! - Deleting a remote row relabels local placeholders to keep numbering contiguous.
 //!
 //! # Non-bracketed Paste Bursts
 //!
