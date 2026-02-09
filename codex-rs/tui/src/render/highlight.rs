@@ -219,9 +219,13 @@ pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'stati
         line_spans.into_iter().map(Line::from).collect()
     } else {
         // Fallback: plain text, one Line per source line.
-        code.split('\n')
-            .map(|l| Line::from(l.to_string()))
-            .collect()
+        // Use `lines()` instead of `split('\n')` to avoid a phantom trailing
+        // empty element when the input ends with '\n' (as pulldown-cmark emits).
+        let mut result: Vec<Line<'static>> = code.lines().map(|l| Line::from(l.to_string())).collect();
+        if result.is_empty() {
+            result.push(Line::from(String::new()));
+        }
+        result
     }
 }
 
@@ -289,6 +293,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fallback_trailing_newline_no_phantom_line() {
+        // pulldown-cmark sends code block text ending with '\n'.
+        // The fallback path (unknown language) must not produce a phantom
+        // empty trailing line from that newline.
+        let code = "hello world\n";
+        let lines = highlight_code_to_lines(code, "xyzlang");
+        assert_eq!(
+            lines.len(),
+            1,
+            "trailing newline should not produce phantom blank line, got {lines:?}"
+        );
+        assert_eq!(reconstructed(&lines), "hello world");
     }
 
     #[test]
