@@ -11,6 +11,7 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use notify::Event;
+use notify::EventKind;
 use notify::RecommendedWatcher;
 use notify::RecursiveMode;
 use notify::Watcher;
@@ -19,7 +20,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
-use tracing::info;
 use tracing::warn;
 
 use crate::config::Config;
@@ -163,12 +163,6 @@ impl FileWatcher {
                         res = raw_rx.recv() => {
                             match res {
                                 Some(Ok(event)) => {
-                                    info!(
-                                        event_kind = ?event.kind,
-                                        event_paths = ?event.paths,
-                                        event_attrs = ?event.attrs,
-                                        "file watcher received filesystem event"
-                                    );
                                     let skills_paths = classify_event(&event, &state);
                                     let now = Instant::now();
                                     skills.add(skills_paths);
@@ -245,6 +239,13 @@ impl FileWatcher {
 }
 
 fn classify_event(event: &Event, state: &RwLock<WatchState>) -> Vec<PathBuf> {
+    if !matches!(
+        event.kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    ) {
+        return Vec::new();
+    }
+
     let mut skills_paths = Vec::new();
     let skills_roots = match state.read() {
         Ok(state) => state.skills_roots.clone(),
@@ -271,6 +272,11 @@ fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
 mod tests {
     use super::*;
     use notify::EventKind;
+    use notify::event::AccessKind;
+    use notify::event::AccessMode;
+    use notify::event::CreateKind;
+    use notify::event::ModifyKind;
+    use notify::event::RemoveKind;
     use pretty_assertions::assert_eq;
     use tokio::time::timeout;
 
@@ -278,8 +284,8 @@ mod tests {
         PathBuf::from(name)
     }
 
-    fn notify_event(paths: Vec<PathBuf>) -> Event {
-        let mut event = Event::new(EventKind::Any);
+    fn notify_event(kind: EventKind, paths: Vec<PathBuf>) -> Event {
+        let mut event = Event::new(kind);
         for path in paths {
             event = event.add_path(path);
         }
@@ -327,10 +333,13 @@ mod tests {
         let state = RwLock::new(WatchState {
             skills_roots: HashSet::from([root.clone()]),
         });
-        let event = notify_event(vec![
-            root.join("demo/SKILL.md"),
-            path("/tmp/other/not-a-skill.txt"),
-        ]);
+        let event = notify_event(
+            EventKind::Create(CreateKind::Any),
+            vec![
+                root.join("demo/SKILL.md"),
+                path("/tmp/other/not-a-skill.txt"),
+            ],
+        );
 
         let classified = classify_event(&event, &state);
         assert_eq!(classified, vec![root.join("demo/SKILL.md")]);
@@ -343,17 +352,41 @@ mod tests {
         let state = RwLock::new(WatchState {
             skills_roots: HashSet::from([root_a.clone(), root_b.clone()]),
         });
-        let event = notify_event(vec![
-            root_a.join("alpha/SKILL.md"),
-            path("/tmp/skills-extra/not-under-skills.txt"),
-            root_b.join("beta/SKILL.md"),
-        ]);
+        let event = notify_event(
+            EventKind::Modify(ModifyKind::Any),
+            vec![
+                root_a.join("alpha/SKILL.md"),
+                path("/tmp/skills-extra/not-under-skills.txt"),
+                root_b.join("beta/SKILL.md"),
+            ],
+        );
 
         let classified = classify_event(&event, &state);
         assert_eq!(
             classified,
             vec![root_a.join("alpha/SKILL.md"), root_b.join("beta/SKILL.md")]
         );
+    }
+
+    #[test]
+    fn classify_event_ignores_non_mutating_event_kinds() {
+        let root = path("/tmp/skills");
+        let state = RwLock::new(WatchState {
+            skills_roots: HashSet::from([root.clone()]),
+        });
+        let path = root.join("demo/SKILL.md");
+
+        let access_event = notify_event(
+            EventKind::Access(AccessKind::Open(AccessMode::Any)),
+            vec![path.clone()],
+        );
+        assert_eq!(classify_event(&access_event, &state), Vec::<PathBuf>::new());
+
+        let any_event = notify_event(EventKind::Any, vec![path.clone()]);
+        assert_eq!(classify_event(&any_event, &state), Vec::<PathBuf>::new());
+
+        let other_event = notify_event(EventKind::Other, vec![path]);
+        assert_eq!(classify_event(&other_event, &state), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -382,7 +415,10 @@ mod tests {
         watcher.spawn_event_loop(raw_rx, Arc::clone(&watcher.state), tx);
 
         raw_tx
-            .send(Ok(notify_event(vec![root.join("a/SKILL.md")])))
+            .send(Ok(notify_event(
+                EventKind::Create(CreateKind::File),
+                vec![root.join("a/SKILL.md")],
+            )))
             .expect("send first event");
         let first = timeout(Duration::from_secs(2), rx.recv())
             .await
@@ -396,7 +432,10 @@ mod tests {
         );
 
         raw_tx
-            .send(Ok(notify_event(vec![root.join("b/SKILL.md")])))
+            .send(Ok(notify_event(
+                EventKind::Remove(RemoveKind::File),
+                vec![root.join("b/SKILL.md")],
+            )))
             .expect("send second event");
         drop(raw_tx);
 

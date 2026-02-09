@@ -200,6 +200,7 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
+use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -566,8 +567,8 @@ impl TurnContext {
 
     /// Resolves the per-turn metadata header under a shared timeout policy.
     ///
-    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
-    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
+    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
+    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -579,7 +580,7 @@ impl TurnContext {
     /// Starts best-effort background computation of turn metadata.
     ///
     /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
+    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -1044,7 +1045,7 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1082,6 +1083,18 @@ impl Session {
             ),
         };
 
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            build_turn_metadata_header(session_configuration.cwd.clone()),
+            None,
+        )
+        .boxed();
+        let startup_regular_task = RegularTask::with_startup_prewarm(
+            services.model_client.clone(),
+            services.otel_manager.clone(),
+            turn_metadata_header,
+        );
+        state.set_startup_regular_task(startup_regular_task);
+
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1093,18 +1106,6 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
-
-        // Warm a websocket in the background so the first turn can reuse it.
-        // This performs only connection setup; user input is still sent later via response.create
-        // when submit_turn() runs.
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.clone()),
-            None,
-        )
-        .boxed();
-        sess.services
-            .model_client
-            .pre_establish_connection(sess.services.otel_manager.clone(), turn_metadata_header);
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1491,6 +1492,11 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
+        let mut state = self.state.lock().await;
+        state.take_startup_regular_task()
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
@@ -2849,7 +2855,6 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
-    use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -2992,7 +2997,8 @@ mod handlers {
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+            let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+            sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
             *previous_context = Some(current_context);
         }
@@ -3708,6 +3714,7 @@ pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
@@ -3825,7 +3832,8 @@ pub(crate) async fn run_turn(
     let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session = sess.services.model_client.new_session();
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
         // Note that pending_input would be something like a message the user
