@@ -2831,8 +2831,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
             }
-            Op::ExecApproval { id, decision } => {
-                handlers::exec_approval(&sess, id, decision).await;
+            Op::ExecApproval {
+                id: approval_id,
+                turn_id,
+                decision,
+            } => {
+                handlers::exec_approval(&sess, approval_id, turn_id, decision).await;
             }
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
@@ -3155,7 +3159,13 @@ mod handlers {
 
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
-    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn exec_approval(
+        sess: &Arc<Session>,
+        approval_id: String,
+        turn_id: Option<String>,
+        decision: ReviewDecision,
+    ) {
+        let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
@@ -3165,15 +3175,18 @@ mod handlers {
                 .await
             {
                 Ok(()) => {
-                    sess.record_execpolicy_amendment_message(&id, proposed_execpolicy_amendment)
-                        .await;
+                    sess.record_execpolicy_amendment_message(
+                        &event_turn_id,
+                        proposed_execpolicy_amendment,
+                    )
+                    .await;
                 }
                 Err(err) => {
                     let message = format!("Failed to apply execpolicy amendment: {err}");
                     tracing::warn!("{message}");
                     let warning = EventMsg::Warning(WarningEvent { message });
                     sess.send_event_raw(Event {
-                        id: id.clone(),
+                        id: event_turn_id.clone(),
                         msg: warning,
                     })
                     .await;
@@ -3184,7 +3197,7 @@ mod handlers {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
-            other => sess.notify_approval(&id, other).await,
+            other => sess.notify_approval(&approval_id, other).await,
         }
     }
 

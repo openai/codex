@@ -1041,6 +1041,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await
@@ -1105,6 +1106,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await
@@ -1169,6 +1171,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await
@@ -1233,6 +1236,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Denied,
         })
         .await
@@ -1297,6 +1301,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await
@@ -1362,6 +1367,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Denied,
         })
         .await

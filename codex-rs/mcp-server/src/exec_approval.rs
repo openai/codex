@@ -102,14 +102,16 @@ pub(crate) async fn handle_exec_approval_request(
     {
         let codex = codex.clone();
         let approval_id = approval_id.clone();
+        let event_id = event_id.clone();
         tokio::spawn(async move {
-            on_exec_approval_response(approval_id, on_response, codex).await;
+            on_exec_approval_response(approval_id, event_id, on_response, codex).await;
         });
     }
 }
 
 async fn on_exec_approval_response(
     approval_id: String,
+    event_id: String,
     receiver: tokio::sync::oneshot::Receiver<serde_json::Value>,
     codex: Arc<CodexThread>,
 ) {
@@ -135,6 +137,7 @@ async fn on_exec_approval_response(
     if let Err(err) = codex
         .submit(Op::ExecApproval {
             id: approval_id,
+            turn_id: Some(event_id),
             decision: response.decision,
         })
         .await

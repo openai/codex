@@ -307,7 +307,7 @@ async fn forward_ops(
 /// Handle an ExecApprovalRequest by consulting the parent session and replying.
 async fn handle_exec_approval(
     codex: &Codex,
-    _id: String,
+    turn_id: String,
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ExecApprovalRequestEvent,
@@ -337,6 +337,7 @@ async fn handle_exec_approval(
     let _ = codex
         .submit(Op::ExecApproval {
             id: approval_id,
+            turn_id: Some(turn_id),
             decision,
         })
         .await;

@@ -99,6 +99,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     test.codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await

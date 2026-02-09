@@ -1529,6 +1529,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::ExecApproval {
                     id: approval.call_id,
+                    turn_id: None,
                     decision: decision.clone(),
                 })
                 .await?;
@@ -1747,6 +1748,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     test.codex
         .submit(Op::ExecApproval {
             id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
             },
