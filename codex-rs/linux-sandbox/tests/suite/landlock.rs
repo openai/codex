@@ -75,6 +75,7 @@ async fn run_cmd_result_with_writable_roots(
         cwd,
         expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
+        network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
@@ -231,6 +232,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // do not stall the suite.
         expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
+        network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,

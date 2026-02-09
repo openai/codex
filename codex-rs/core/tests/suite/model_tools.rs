@@ -36,7 +36,10 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
         });
     let test = builder
@@ -78,6 +81,11 @@ async fn model_selects_expected_tools() {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         ),
         "codex-mini-latest should expose the local shell tool",
@@ -97,6 +105,11 @@ async fn model_selects_expected_tools() {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         ),
         "gpt-5-codex should expose the apply_patch tool",
@@ -116,6 +129,11 @@ async fn model_selects_expected_tools() {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         ),
         "gpt-5.1-codex should expose the apply_patch tool",
@@ -134,6 +152,11 @@ async fn model_selects_expected_tools() {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         ),
         "gpt-5 should expose the apply_patch tool",
@@ -153,6 +176,11 @@ async fn model_selects_expected_tools() {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         ),
         "gpt-5.1 should expose the apply_patch tool",
@@ -170,7 +198,12 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "spawn_agent".to_string(),
+            "send_input".to_string(),
+            "resume_agent".to_string(),
+            "wait".to_string(),
+            "close_agent".to_string()
         ],
         "exp-5.1 should expose the apply_patch tool",
     );

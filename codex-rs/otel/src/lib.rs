@@ -44,6 +44,7 @@ pub struct OtelEventMetadata {
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
+    pub(crate) originator: String,
     pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,

@@ -381,9 +381,11 @@ mod tests {
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
     }
@@ -421,9 +423,11 @@ mod tests {
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
     }
@@ -464,9 +468,11 @@ mod tests {
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
+                network: None,
             })
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);

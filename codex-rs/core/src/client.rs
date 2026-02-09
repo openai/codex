@@ -16,26 +16,17 @@
 //! Preconnect is intentionally handshake-only: it may warm a socket and capture sticky-routing
 //! state, but the first `response.create` payload is still sent only when a turn starts.
 //!
-//! Internally, startup preconnect and warmed-socket adoption share one session-level lifecycle:
-//! `Idle` (no task/socket), `InFlight` (startup preconnect task running), and `Ready` (one-shot
-//! warmed socket available). On first use in a turn, the session tries to adopt `Ready`; if not
-//! ready, it awaits `InFlight` and retries adoption before opening a new websocket. This prevents
-//! racing duplicate first-turn handshakes while keeping preconnect best-effort.
+//! Internally, startup preconnect stores a single task handle. On first use in a turn, the session
+//! awaits that task and adopts the warmed socket if it succeeds; if it fails, the stream attempt
+//! fails and the normal retry/fallback loop decides what to do next.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! `stream_max_retries` applies to retryable turn stream failures, not to background startup
-//! preconnect handshakes. In failure cases this can produce two websocket handshakes on the first
-//! turn (startup preconnect, then turn-time connect) before HTTP fallback becomes sticky. We keep
-//! this split intentionally so opportunistic preconnect cannot consume the user-visible stream
-//! retry budget before any turn payload is sent.
-//!
-//! If this policy needs to change later, preconnect can be modeled as an explicit first connection
-//! attempt in the same retry budget as turn streaming. That would require plumbing websocket
-//! attempt accounting from connection acquisition into the turn retry loop and updating fallback
-//! expectations/tests accordingly.
+//! Startup preconnect is treated as the first websocket connection attempt for the first turn. If
+//! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
+//! back. This avoids duplicate handshakes but means a failed preconnect can consume one retry
+//! budget slot before any turn payload is sent.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -82,6 +73,7 @@ use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
@@ -89,10 +81,11 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::debug;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -108,8 +101,6 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::tools::spec::create_tools_json_for_responses_api;
-use crate::turn_metadata::build_turn_metadata_header;
-use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
@@ -117,7 +108,14 @@ pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
+struct PreconnectedWebSocket {
+    connection: ApiWebSocketConnection,
+    turn_state: Option<String>,
+}
+
+type PreconnectTask = JoinHandle<Option<PreconnectedWebSocket>>;
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -129,15 +127,13 @@ struct ModelClientState {
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
     enable_responses_websockets: bool,
+    enable_responses_websockets_v2: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
-    /// Session-scoped preconnect lifecycle state.
-    ///
-    /// This keeps startup preconnect task tracking and warmed-socket adoption in one lock so
-    /// turn-time websocket setup observes a single, coherent state.
-    preconnect: Mutex<PreconnectState>,
+
+    preconnect: Mutex<Option<PreconnectTask>>,
 }
 
 impl std::fmt::Debug for ModelClientState {
@@ -177,28 +173,6 @@ struct CurrentClientSetup {
     api_auth: CoreAuthProvider,
 }
 
-/// One-shot preconnected websocket slot consumed by the next turn.
-///
-/// This bundles the socket with optional sticky-routing state captured during
-/// handshake so they are taken and cleared atomically.
-struct PreconnectedWebSocket {
-    connection: ApiWebSocketConnection,
-    turn_state: Option<String>,
-}
-
-/// Session-level lifecycle of startup websocket preconnect.
-///
-/// `InFlight` tracks the startup task so the first turn can await it and reuse the same socket.
-/// `Ready` stores a one-shot warmed socket for turn adoption.
-enum PreconnectState {
-    /// No startup preconnect task is active and no warmed socket is available.
-    Idle,
-    /// Startup preconnect is currently running; first turn may await this task.
-    InFlight(JoinHandle<()>),
-    /// Startup preconnect finished and produced a one-shot warmed socket.
-    Ready(PreconnectedWebSocket),
-}
-
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
@@ -211,8 +185,6 @@ enum PreconnectState {
 /// Turn-scoped settings (model selection, reasoning controls, telemetry context, and turn
 /// metadata) are passed explicitly to the relevant methods to keep turn lifetime visible at the
 /// call site.
-///
-/// This type is cheap to clone.
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
@@ -238,6 +210,8 @@ pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    websocket_last_response_id: Option<String>,
+    websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -249,6 +223,11 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
+}
+
+enum WebsocketStreamOutcome {
+    Stream(ResponseStream),
+    FallbackToHttp,
 }
 
 impl ModelClient {
@@ -264,6 +243,7 @@ impl ModelClient {
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
         enable_responses_websockets: bool,
+        enable_responses_websockets_v2: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -276,11 +256,12 @@ impl ModelClient {
                 session_source,
                 model_verbosity,
                 enable_responses_websockets,
+                enable_responses_websockets_v2,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
-                preconnect: Mutex::new(PreconnectState::Idle),
+                preconnect: Mutex::new(None),
             }),
         }
     }
@@ -295,6 +276,8 @@ impl ModelClient {
             client: self.clone(),
             connection: None,
             websocket_last_items: Vec::new(),
+            websocket_last_response_id: None,
+            websocket_last_response_id_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -305,53 +288,57 @@ impl ModelClient {
     ///
     /// A timeout when computing turn metadata is treated the same as "no metadata" so startup
     /// cannot block indefinitely on optional preconnect context.
-    pub fn pre_establish_connection(&self, otel_manager: OtelManager, cwd: PathBuf) {
+    pub fn pre_establish_connection(
+        &self,
+        otel_manager: OtelManager,
+        turn_metadata_header: BoxFuture<'static, Option<String>>,
+    ) {
         if !self.responses_websocket_enabled() || self.disable_websockets() {
             return;
         }
 
         let model_client = self.clone();
         let handle = tokio::spawn(async move {
-            let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-                build_turn_metadata_header(cwd.as_path()),
-                None,
-            )
-            .await;
-            let _ = model_client
+            let turn_metadata_header = turn_metadata_header.await;
+
+            model_client
                 .preconnect(&otel_manager, turn_metadata_header.as_deref())
-                .await;
+                .await
         });
-        self.store_preconnect_task(handle);
+        self.set_preconnected_task(Some(handle));
     }
 
     /// Opportunistically pre-establishes a Responses WebSocket connection for this session.
     ///
-    /// This method is best-effort: it returns `false` on any setup/connect failure and the caller
-    /// should continue normally. A successful preconnect reduces first-turn latency but never sends
-    /// an initial prompt; the first `response.create` is still sent only when a turn starts.
+    /// This method is best-effort: it returns an error on setup/connect failure and the caller
+    /// can decide whether to ignore it. A successful preconnect reduces first-turn latency but
+    /// never sends an initial prompt; the first `response.create` is still sent only when a turn
+    /// starts.
     ///
     /// The preconnected slot is single-consumer and single-use: the next `ModelClientSession` may
     /// adopt it once, after which later turns either keep using that same turn-local connection or
     /// create a new one.
-    pub async fn preconnect(
+    async fn preconnect(
         &self,
         otel_manager: &OtelManager,
         turn_metadata_header: Option<&str>,
-    ) -> bool {
+    ) -> Option<PreconnectedWebSocket> {
         if !self.responses_websocket_enabled() || self.disable_websockets() {
-            return false;
+            return None;
         }
 
-        let client_setup = match self.current_client_setup().await {
-            Ok(client_setup) => client_setup,
-            Err(err) => {
-                warn!("failed to build websocket preconnect client setup: {err}");
-                return false;
-            }
-        };
-        let turn_state = Arc::new(OnceLock::new());
+        let client_setup = self
+            .current_client_setup()
+            .await
+            .map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to build websocket preconnect client setup: {err}"
+                ))
+            })
+            .ok()?;
 
-        match self
+        let turn_state = Arc::new(OnceLock::new());
+        let connection = self
             .connect_websocket(
                 otel_manager,
                 client_setup.api_provider,
@@ -360,16 +347,12 @@ impl ModelClient {
                 turn_metadata_header,
             )
             .await
-        {
-            Ok(connection) => {
-                self.store_preconnected_websocket(connection, turn_state.get().cloned());
-                true
-            }
-            Err(err) => {
-                debug!("websocket preconnect failed: {err}");
-                false
-            }
-        }
+            .ok()?;
+
+        Some(PreconnectedWebSocket {
+            connection,
+            turn_state: turn_state.get().cloned(),
+        })
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -479,6 +462,10 @@ impl ModelClient {
         self.state.provider.supports_websockets && self.state.enable_responses_websockets
     }
 
+    fn responses_websockets_v2_enabled(&self) -> bool {
+        self.state.enable_responses_websockets_v2
+    }
+
     /// Returns whether websocket transport has been permanently disabled for this session.
     ///
     /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
@@ -544,9 +531,14 @@ impl ModelClient {
         headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
+        let responses_websockets_beta_header = if self.responses_websockets_v2_enabled() {
+            RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE
+        } else {
+            OPENAI_BETA_RESPONSES_WEBSOCKETS
+        };
         headers.insert(
             OPENAI_BETA_HEADER,
-            HeaderValue::from_static(OPENAI_BETA_RESPONSES_WEBSOCKETS),
+            HeaderValue::from_static(responses_websockets_beta_header),
         );
         if self.state.include_timing_metrics {
             headers.insert(
@@ -557,132 +549,26 @@ impl ModelClient {
         headers
     }
 
-    /// Consumes the warmed websocket slot.
-    fn take_preconnected_websocket(&self) -> Option<PreconnectedWebSocket> {
+    /// Consumes the warmed websocket task slot.
+    fn take_preconnected_task(&self) -> Option<PreconnectTask> {
         let mut state = self
             .state
             .preconnect
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = std::mem::replace(&mut *state, PreconnectState::Idle);
-        match previous {
-            PreconnectState::Ready(preconnected) => Some(preconnected),
-            other => {
-                *state = other;
-                None
-            }
-        }
+        state.take()
     }
 
-    /// Stores a freshly preconnected websocket and optional captured turn-state token.
-    ///
-    /// This overwrites any previously warmed socket because only one preconnect candidate is kept.
-    fn store_preconnected_websocket(
-        &self,
-        connection: ApiWebSocketConnection,
-        turn_state: Option<String>,
-    ) {
+    fn set_preconnected_task(&self, task: Option<PreconnectTask>) {
         let mut state = self
             .state
             .preconnect
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.disable_websockets() {
-            debug!("discarding startup websocket preconnect because websocket fallback is active");
-            *state = PreconnectState::Idle;
-            return;
+        if let Some(running_task) = state.take() {
+            running_task.abort();
         }
-        *state = PreconnectState::Ready(PreconnectedWebSocket {
-            connection,
-            turn_state,
-        });
-    }
-
-    /// Stores the latest startup preconnect task handle.
-    ///
-    /// If a previous task is still running, it is aborted so only one in-flight startup attempt
-    /// is tracked.
-    fn store_preconnect_task(&self, task: JoinHandle<()>) {
-        let mut task = Some(task);
-        let previous_in_flight = {
-            let mut state = self
-                .state
-                .preconnect
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match &*state {
-                // A very fast startup preconnect can complete before this method stores the
-                // task handle; keep the warmed socket and drop the now-useless handle.
-                PreconnectState::Ready(_) => None,
-                _ => match task.take() {
-                    Some(next_task) => {
-                        match std::mem::replace(&mut *state, PreconnectState::InFlight(next_task)) {
-                            PreconnectState::InFlight(previous) => Some(previous),
-                            _ => None,
-                        }
-                    }
-                    None => None,
-                },
-            }
-        };
-        if let Some(previous) = previous_in_flight {
-            previous.abort();
-        }
-        if let Some(task) = task {
-            task.abort();
-        }
-    }
-
-    /// Awaits the startup preconnect task once, if one is currently tracked.
-    ///
-    /// This lets the first turn treat startup preconnect as the first websocket connection
-    /// attempt, avoiding a redundant second connect while the preconnect attempt is in flight.
-    ///
-    /// This await intentionally has no separate timeout wrapper. WebSocket connect handshakes
-    /// already run without an app-level timeout, so waiting on the in-flight preconnect task does
-    /// not add a new unbounded wait class; it reuses the same first connection attempt.
-    async fn await_preconnect_task(&self) {
-        let task = {
-            let mut state = self
-                .state
-                .preconnect
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previous = std::mem::replace(&mut *state, PreconnectState::Idle);
-            match previous {
-                PreconnectState::InFlight(task) => Some(task),
-                other => {
-                    *state = other;
-                    None
-                }
-            }
-        };
-        if let Some(task) = task {
-            let in_flight = !task.is_finished();
-            if in_flight {
-                debug!("awaiting startup websocket preconnect before opening a new websocket");
-            }
-            if let Err(err) = task.await {
-                debug!("startup websocket preconnect task failed: {err}");
-            }
-        }
-    }
-
-    /// Clears all startup preconnect state.
-    ///
-    /// This aborts any in-flight startup preconnect task and drops any warmed socket.
-    fn clear_preconnect(&self) {
-        let previous = {
-            let mut state = self
-                .state
-                .preconnect
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::replace(&mut *state, PreconnectState::Idle)
-        };
-        if let PreconnectState::InFlight(task) = previous {
-            task.abort();
-        }
+        *state = task;
     }
 }
 
@@ -789,18 +675,37 @@ impl ModelClientSession {
         }
     }
 
-    fn prepare_websocket_request(
+    fn refresh_websocket_last_response_id(&mut self) {
+        if let Some(mut receiver) = self.websocket_last_response_id_rx.take() {
+            match receiver.try_recv() {
+                Ok(response_id) if !response_id.is_empty() => {
+                    self.websocket_last_response_id = Some(response_id);
+                }
+                Ok(_) | Err(TryRecvError::Closed) => {
+                    self.websocket_last_response_id = None;
+                }
+                Err(TryRecvError::Empty) => {
+                    self.websocket_last_response_id_rx = Some(receiver);
+                }
+            }
+        }
+    }
+
+    fn websocket_previous_response_id(&mut self) -> Option<String> {
+        self.refresh_websocket_last_response_id();
+        self.websocket_last_response_id
+            .clone()
+            .filter(|id| !id.is_empty())
+    }
+
+    fn prepare_websocket_create_request(
         &self,
         model_slug: &str,
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
+        input: Vec<ResponseItem>,
+        previous_response_id: Option<String>,
     ) -> ResponsesWsRequest {
-        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
-            return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                input: append_items,
-            });
-        }
-
         let ApiResponsesOptions {
             reasoning,
             include,
@@ -814,7 +719,8 @@ impl ModelClientSession {
         let payload = ResponseCreateWsRequest {
             model: model_slug.to_string(),
             instructions: api_prompt.instructions.clone(),
-            input: api_prompt.input.clone(),
+            previous_response_id,
+            input,
             tools: api_prompt.tools.clone(),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: api_prompt.parallel_tool_calls,
@@ -827,6 +733,43 @@ impl ModelClientSession {
         };
 
         ResponsesWsRequest::ResponseCreate(payload)
+    }
+
+    fn prepare_websocket_request(
+        &mut self,
+        model_slug: &str,
+        api_prompt: &ApiPrompt,
+        options: &ApiResponsesOptions,
+    ) -> ResponsesWsRequest {
+        let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
+        let incremental_items = self.get_incremental_items(&api_prompt.input);
+        if let Some(append_items) = incremental_items {
+            if responses_websockets_v2_enabled
+                && let Some(previous_response_id) = self.websocket_previous_response_id()
+            {
+                return self.prepare_websocket_create_request(
+                    model_slug,
+                    api_prompt,
+                    options,
+                    append_items,
+                    Some(previous_response_id),
+                );
+            }
+
+            if !responses_websockets_v2_enabled {
+                return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+                    input: append_items,
+                });
+            }
+        }
+
+        self.prepare_websocket_create_request(
+            model_slug,
+            api_prompt,
+            options,
+            api_prompt.input.clone(),
+            None,
+        )
     }
 
     /// Returns a websocket connection for this turn, reusing preconnect when possible.
@@ -845,15 +788,24 @@ impl ModelClientSession {
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         // Prefer the session-level preconnect slot before creating a new websocket.
-        if self.connection.is_none() {
-            if let Some(preconnected) = self.try_use_preconnected_websocket() {
-                self.adopt_preconnected_websocket(preconnected);
-            } else {
-                self.client.await_preconnect_task().await;
-                if let Some(preconnected) = self.try_use_preconnected_websocket() {
-                    self.adopt_preconnected_websocket(preconnected);
+        if self.connection.is_none()
+            && let Some(task) = self.client.take_preconnected_task()
+        {
+            match task.await {
+                Ok(Some(preconnected)) => {
+                    let PreconnectedWebSocket {
+                        connection,
+                        turn_state,
+                    } = preconnected;
+                    if let Some(turn_state) = turn_state {
+                        let _ = self.turn_state.set(turn_state);
+                    }
+                    self.connection = Some(connection);
                 }
-            }
+                _ => {
+                    warn!("startup websocket preconnect task failed");
+                }
+            };
         }
 
         let needs_new = match self.connection.as_ref() {
@@ -862,7 +814,9 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.client.clear_preconnect();
+            self.websocket_last_items.clear();
+            self.websocket_last_response_id = None;
+            self.websocket_last_response_id_rx = None;
             let turn_state = options
                 .turn_state
                 .clone()
@@ -883,33 +837,6 @@ impl ModelClientSession {
         self.connection.as_ref().ok_or(ApiError::Stream(
             "websocket connection is unavailable".to_string(),
         ))
-    }
-
-    /// Adopts the session-level preconnect slot for this turn.
-    ///
-    /// If a turn-local connection already exists, this intentionally does nothing to avoid
-    /// replacing an active connection mid-turn.
-    fn try_use_preconnected_websocket(&mut self) -> Option<PreconnectedWebSocket> {
-        if self.connection.is_some() {
-            return None;
-        }
-
-        self.client.take_preconnected_websocket()
-    }
-
-    /// Moves a preconnected socket into the turn-local connection slot.
-    ///
-    /// If the preconnect handshake captured sticky-routing turn state, this also seeds the
-    /// turn-local state lock so all later requests in the turn replay the same token.
-    fn adopt_preconnected_websocket(&mut self, preconnected: PreconnectedWebSocket) {
-        let PreconnectedWebSocket {
-            connection,
-            turn_state,
-        } = preconnected;
-        if let Some(turn_state) = turn_state {
-            let _ = self.turn_state.set(turn_state);
-        }
-        self.connection = Some(connection);
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
@@ -1004,7 +931,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
-    ) -> Result<ResponseStream> {
+    ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
 
@@ -1023,9 +950,8 @@ impl ModelClientSession {
                 turn_metadata_header,
                 compression,
             );
-            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
 
-            let connection = match self
+            match self
                 .websocket_connection(
                     otel_manager,
                     client_setup.api_provider,
@@ -1035,7 +961,12 @@ impl ModelClientSession {
                 )
                 .await
             {
-                Ok(connection) => connection,
+                Ok(_) => {}
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UPGRADE_REQUIRED =>
+                {
+                    return Ok(WebsocketStreamOutcome::FallbackToHttp);
+                }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
@@ -1043,15 +974,38 @@ impl ModelClientSession {
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
-            };
+            }
 
-            let stream_result = connection
+            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
+
+            let stream_result = self
+                .connection
+                .as_ref()
+                .ok_or_else(|| {
+                    map_api_error(ApiError::Stream(
+                        "websocket connection is unavailable".to_string(),
+                    ))
+                })?
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
             self.websocket_last_items = api_prompt.input.clone();
+            let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
+            self.websocket_last_response_id_rx = Some(last_response_id_receiver);
+            let mut last_response_id_sender = Some(last_response_id_sender);
+            let stream_result = stream_result.inspect(move |event| {
+                if let Ok(ResponseEvent::Completed { response_id, .. }) = event
+                    && !response_id.is_empty()
+                    && let Some(sender) = last_response_id_sender.take()
+                {
+                    let _ = sender.send(response_id.clone());
+                }
+            });
 
-            return Ok(map_response_stream(stream_result, otel_manager.clone()));
+            return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
+                stream_result,
+                otel_manager.clone(),
+            )));
         }
     }
 
@@ -1095,26 +1049,33 @@ impl ModelClientSession {
                     self.client.responses_websocket_enabled() && !self.client.disable_websockets();
 
                 if websocket_enabled {
-                    self.stream_responses_websocket(
-                        prompt,
-                        model_info,
-                        otel_manager,
-                        effort,
-                        summary,
-                        turn_metadata_header,
-                    )
-                    .await
-                } else {
-                    self.stream_responses_api(
-                        prompt,
-                        model_info,
-                        otel_manager,
-                        effort,
-                        summary,
-                        turn_metadata_header,
-                    )
-                    .await
+                    match self
+                        .stream_responses_websocket(
+                            prompt,
+                            model_info,
+                            otel_manager,
+                            effort,
+                            summary,
+                            turn_metadata_header,
+                        )
+                        .await?
+                    {
+                        WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
+                        WebsocketStreamOutcome::FallbackToHttp => {
+                            self.try_switch_fallback_transport(otel_manager);
+                        }
+                    }
                 }
+
+                self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    otel_manager,
+                    effort,
+                    summary,
+                    turn_metadata_header,
+                )
+                .await
             }
         }
     }
@@ -1124,10 +1085,6 @@ impl ModelClientSession {
     /// This is used after exhausting the provider retry budget, to force subsequent requests onto
     /// the HTTP transport. It also clears any warmed websocket preconnect state so future turns
     /// cannot accidentally adopt a stale socket after fallback has been activated.
-    ///
-    /// Startup preconnect handshakes are intentionally not counted against `stream_max_retries`.
-    /// See [`crate::client`] module docs ("Retry-Budget Tradeoff") for rationale and future
-    /// alternatives.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
     pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
@@ -1141,9 +1098,9 @@ impl ModelClientSession {
                 &[("from_wire_api", "responses_websocket")],
             );
 
+            self.client.set_preconnected_task(None);
             self.connection = None;
             self.websocket_last_items.clear();
-            self.client.clear_preconnect();
         }
         activated
     }

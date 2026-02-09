@@ -15,8 +15,8 @@ common --experimental_platform_in_output_dir
 common --noenable_runfiles
 
 common --enable_platform_specific_config
-# TODO(zbarsky): We need to untangle these libc constraints to get linux remote builds working.
-common:linux --host_platform=//:local
+common:linux --host_platform=//:local_linux
+common:windows --host_platform=//:local_windows
 common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
 common --@toolchains_llvm_bootstrapped//config:experimental_stub_libgcc_s
 
@@ -28,7 +28,14 @@ common:windows --@rules_rust//rust/settings:experimental_use_sh_toolchain_for_bo
 
 common --incompatible_strict_action_env
 # Not ideal, but We need to allow dotslash to be found
-common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+common:linux --test_env=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+common:macos --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+# Pass through some env vars Windows needs to use powershell?
+common:windows --test_env=PATH
+common:windows --test_env=SYSTEMROOT
+common:windows --test_env=COMSPEC
+common:windows --test_env=WINDIR
 
 common --test_output=errors
 common --bes_results_url=https://app.buildbuddy.io/invocation/

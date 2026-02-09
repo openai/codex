@@ -127,6 +127,8 @@ pub enum Feature {
     Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Enable Responses API websocket v2 mode.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -413,6 +415,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: !cfg!(windows),
     },
     FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -424,17 +432,13 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Deprecated,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Experimental {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        },
-        default_enabled: false,
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
+    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
@@ -514,16 +518,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::Collab,
-        key: "collab",
-        stage: Stage::Experimental {
-            name: "Sub-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Apps,
         key: "apps",
         stage: Stage::Experimental {
@@ -566,6 +560,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

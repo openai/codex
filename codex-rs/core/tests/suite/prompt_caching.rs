@@ -97,7 +97,10 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
@@ -150,6 +153,11 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait",
+        "close_agent",
     ]);
     let body0 = req1.single_request().body_json();
 
