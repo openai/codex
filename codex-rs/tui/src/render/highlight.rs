@@ -46,7 +46,7 @@ pub(crate) fn set_theme_override(
 
 /// Check whether a theme name resolves to a bundled theme or a custom
 /// `.tmTheme` file.  Returns a user-facing warning when it does not.
-fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>) -> Option<String> {
+pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>) -> Option<String> {
     let name = name?;
     // Bundled themes always resolve.
     if parse_theme_name(name).is_some() {
