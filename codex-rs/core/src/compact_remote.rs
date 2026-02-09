@@ -107,14 +107,14 @@ async fn run_remote_compact_task_inner_impl(
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-            let compact_request_metrics = build_compact_request_metrics(
+            let compact_request_log_data = build_compact_request_log_data(
                 &turn_context.model_info.slug,
                 &prompt.input,
                 &prompt.base_instructions.text,
             );
             log_remote_compact_failure(
                 turn_context,
-                &compact_request_metrics,
+                &compact_request_log_data,
                 total_usage_breakdown,
                 &err,
             );
@@ -144,16 +144,16 @@ async fn run_remote_compact_task_inner_impl(
 }
 
 #[derive(Debug)]
-struct CompactRequestMetrics {
+struct CompactRequestLogData {
     failing_compaction_request_body_json: String,
     failing_compaction_request_model_visible_bytes: usize,
 }
 
-fn build_compact_request_metrics(
+fn build_compact_request_log_data(
     model: &str,
     input: &[ResponseItem],
     instructions: &str,
-) -> CompactRequestMetrics {
+) -> CompactRequestLogData {
     let payload = ApiCompactionInput {
         model,
         input,
@@ -169,7 +169,7 @@ fn build_compact_request_metrics(
         Err(err) => format!("{{\"compact_request_serialization_error\":\"{err}\"}}"),
     };
 
-    CompactRequestMetrics {
+    CompactRequestLogData {
         failing_compaction_request_body_json,
         failing_compaction_request_model_visible_bytes,
     }
@@ -186,13 +186,13 @@ fn compact_error_status_code(err: &CodexErr) -> Option<u16> {
 
 fn log_remote_compact_failure(
     turn_context: &TurnContext,
-    metrics: &CompactRequestMetrics,
+    log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
     err: &CodexErr,
 ) {
     trace!(
         turn_id = %turn_context.sub_id,
-        failing_compaction_request_body_json = %metrics.failing_compaction_request_body_json,
+        failing_compaction_request_body_json = %log_data.failing_compaction_request_body_json,
         "remote compaction request payload before failure"
     );
     error!(
@@ -203,7 +203,7 @@ fn log_remote_compact_failure(
         estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
         estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
         model_context_window_tokens = ?turn_context.model_context_window(),
-        failing_compaction_request_model_visible_bytes = metrics.failing_compaction_request_model_visible_bytes,
+        failing_compaction_request_model_visible_bytes = log_data.failing_compaction_request_model_visible_bytes,
         compact_error = %err,
         "remote compaction failed"
     );
