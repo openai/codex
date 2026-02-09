@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
+use crate::render::highlight::exceeds_highlight_limits;
 use crate::render::highlight::highlight_code_to_styled_spans;
 use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
@@ -266,10 +267,19 @@ fn render_change(
         FileChange::Update { unified_diff, .. } => {
             if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
                 let mut max_line_number = 0;
+                let mut total_diff_bytes: usize = 0;
+                let mut total_diff_lines: usize = 0;
                 for h in patch.hunks() {
                     let mut old_ln = h.old_range().start();
                     let mut new_ln = h.new_range().start();
                     for l in h.lines() {
+                        let text = match l {
+                            diffy::Line::Insert(t)
+                            | diffy::Line::Delete(t)
+                            | diffy::Line::Context(t) => t,
+                        };
+                        total_diff_bytes += text.len();
+                        total_diff_lines += 1;
                         match l {
                             diffy::Line::Insert(_) => {
                                 max_line_number = max_line_number.max(new_ln);
@@ -287,6 +297,16 @@ fn render_change(
                         }
                     }
                 }
+
+                // Skip per-line syntax highlighting when the patch is too
+                // large — avoids thousands of parser initializations that
+                // would stall rendering on big diffs.
+                let diff_lang = if exceeds_highlight_limits(total_diff_bytes, total_diff_lines) {
+                    None
+                } else {
+                    lang
+                };
+
                 let line_number_width = line_number_width(max_line_number);
                 let mut is_first_hunk = true;
                 for h in patch.hunks() {
@@ -302,7 +322,7 @@ fn render_change(
                     for l in h.lines() {
                         // Per-line highlighting for unified diffs.
                         let highlight_line = |s: &str| -> Option<Vec<RtSpan<'static>>> {
-                            let l = lang?;
+                            let l = diff_lang?;
                             let spans = highlight_code_to_styled_spans(s, l)?;
                             spans.into_iter().next()
                         };
@@ -1037,6 +1057,61 @@ mod tests {
         for chunk in &result {
             for span in chunk {
                 assert_eq!(span.style, style, "style should be preserved across wraps");
+            }
+        }
+    }
+
+    #[test]
+    fn large_update_diff_skips_highlighting() {
+        // Build a patch large enough to exceed MAX_HIGHLIGHT_LINES (10_000).
+        // Without the pre-check this would attempt 10k+ parser initializations.
+        let line_count = 10_500;
+        let original: String = (0..line_count).map(|i| format!("line {i}\n")).collect();
+        let modified: String = (0..line_count)
+            .map(|i| {
+                if i % 2 == 0 {
+                    format!("line {i} changed\n")
+                } else {
+                    format!("line {i}\n")
+                }
+            })
+            .collect();
+        let patch = diffy::create_patch(&original, &modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("huge.rs"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        // Should complete quickly (no per-line parser init). If guardrails
+        // are bypassed this would be extremely slow.
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+
+        // The diff rendered without timing out — the guardrails prevented
+        // thousands of per-line parser initializations.  Verify we actually
+        // got output (the patch is non-empty).
+        assert!(
+            lines.len() > 100,
+            "expected many output lines from large diff, got {}",
+            lines.len(),
+        );
+
+        // No span should contain an RGB foreground color (syntax themes
+        // produce RGB; plain diff styles only use named Color variants).
+        for line in &lines {
+            for span in &line.spans {
+                if let Some(ratatui::style::Color::Rgb(..)) = span.style.fg {
+                    panic!(
+                        "large diff should not have syntax-highlighted spans, \
+                         got RGB color in style {:?} for {:?}",
+                        span.style,
+                        span.content,
+                    );
+                }
             }
         }
     }

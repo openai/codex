@@ -220,6 +220,15 @@ const MAX_HIGHLIGHT_BYTES: usize = 512 * 1024;
 /// Skip highlighting for inputs with more than 10,000 lines.
 const MAX_HIGHLIGHT_LINES: usize = 10_000;
 
+/// Check whether an input exceeds the safe highlighting limits.
+///
+/// Callers that highlight content in a loop (e.g. per diff-line) should
+/// pre-check the aggregate size with this function and skip highlighting
+/// entirely when it returns `true`.
+pub(crate) fn exceeds_highlight_limits(total_bytes: usize, total_lines: usize) -> bool {
+    total_bytes > MAX_HIGHLIGHT_BYTES || total_lines > MAX_HIGHLIGHT_LINES
+}
+
 // -- Core highlighting --------------------------------------------------------
 
 /// Parse `code` using syntect for `lang` and return per-line styled spans.
@@ -247,8 +256,9 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
         let ranges = h.highlight_line(line, syntax_set()).ok()?;
         let mut spans: Vec<Span<'static>> = Vec::new();
         for (style, text) in ranges {
-            // Strip trailing newline since we handle line breaks ourselves.
-            let text = text.trim_end_matches('\n');
+            // Strip trailing line endings (LF and CR) since we handle line
+            // breaks ourselves.  CRLF inputs would otherwise leave a stray \r.
+            let text = text.trim_end_matches(['\n', '\r']);
             if text.is_empty() {
                 continue;
             }
@@ -375,6 +385,23 @@ mod tests {
         let script = "echo \"hello world\" && ls -la | grep foo";
         let lines = highlight_bash_to_lines(script);
         assert_eq!(reconstructed(&lines), script);
+    }
+
+    #[test]
+    fn highlight_crlf_strips_carriage_return() {
+        // Windows-style \r\n line endings must not leave a trailing \r in
+        // span text — that would propagate into rendered code blocks.
+        let code = "fn main() {\r\n    println!(\"hi\");\r\n}\r\n";
+        let lines = highlight_code_to_lines(code, "rust");
+        for (i, line) in lines.iter().enumerate() {
+            for span in &line.spans {
+                assert!(
+                    !span.content.contains('\r'),
+                    "line {i} span {:?} contains \\r",
+                    span.content,
+                );
+            }
+        }
     }
 
     #[test]
