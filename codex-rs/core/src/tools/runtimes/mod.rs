@@ -5,6 +5,7 @@ Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::exec::ExecExpiration;
+use crate::path_utils;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
@@ -65,7 +66,16 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    if snapshot.cwd != cwd {
+    if {
+        if let (Ok(snapshot_cwd), Ok(command_cwd)) = (
+            path_utils::normalize_for_path_comparison(snapshot.cwd.as_path()),
+            path_utils::normalize_for_path_comparison(cwd),
+        ) {
+            snapshot_cwd != command_cwd
+        } else {
+            snapshot.cwd != cwd
+        }
+    } {
         return command.to_vec();
     }
 
@@ -271,5 +281,31 @@ mod tests {
         let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &command_cwd);
 
         assert_eq!(rewritten, command);
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(
+            ShellType::Zsh,
+            "/bin/zsh",
+            snapshot_path,
+            dir.path().to_path_buf(),
+        );
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+        let command_cwd = dir.path().join(".");
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &command_cwd);
+
+        assert_eq!(rewritten[0], "/bin/zsh");
+        assert_eq!(rewritten[1], "-c");
+        assert!(rewritten[2].contains("if . '"));
+        assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
     }
 }

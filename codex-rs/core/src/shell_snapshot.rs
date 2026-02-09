@@ -41,19 +41,55 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         shell: &mut Shell,
         otel_manager: OtelManager,
-    ) {
+    ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
 
-        let snapshot_shell = shell.clone();
-        let snapshot_session_id = session_id;
-        let snapshot_span = info_span!("shell_snapshot", thread_id = %snapshot_session_id);
+        Self::spawn_snapshot_task(
+            codex_home,
+            session_id,
+            session_cwd,
+            shell.clone(),
+            shell_snapshot_tx.clone(),
+            otel_manager,
+        );
+
+        shell_snapshot_tx
+    }
+
+    pub fn refresh_snapshot(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        otel_manager: OtelManager,
+    ) {
+        Self::spawn_snapshot_task(
+            codex_home,
+            session_id,
+            session_cwd,
+            shell,
+            shell_snapshot_tx,
+            otel_manager,
+        );
+    }
+
+    fn spawn_snapshot_task(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        snapshot_shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        otel_manager: OtelManager,
+    ) {
+        let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
                 let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
                 let snapshot = ShellSnapshot::try_new(
                     &codex_home,
-                    snapshot_session_id,
+                    session_id,
                     session_cwd.as_path(),
                     &snapshot_shell,
                 )
