@@ -152,7 +152,7 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> Option<ModelInfo> {
-        let mut best = None;
+        let mut best: Option<ModelInfo> = None;
         for candidate in self.get_remote_models(config).await {
             if !model.starts_with(&candidate.slug) {
                 continue;
