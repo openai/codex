@@ -166,7 +166,7 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(policy, network);
+                let allow_proxy_network = allow_network_for_proxy(network);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
                     policy,

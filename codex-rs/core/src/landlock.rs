@@ -36,7 +36,7 @@ where
         sandbox_policy,
         sandbox_policy_cwd,
         use_bwrap_sandbox,
-        allow_network_for_proxy(sandbox_policy, network),
+        allow_network_for_proxy(network),
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {
@@ -52,10 +52,7 @@ where
     .await
 }
 
-pub(crate) fn allow_network_for_proxy(
-    _sandbox_policy: &SandboxPolicy,
-    _network: Option<&NetworkProxy>,
-) -> bool {
+pub(crate) fn allow_network_for_proxy(_network: Option<&NetworkProxy>) -> bool {
     // Proxy environment variables are advisory only. In restricted policies we
     // keep network sandboxing fail-closed unless we have explicit proxy-only
     // enforcement in the sandbox runtime.
@@ -146,9 +143,6 @@ mod tests {
 
     #[test]
     fn proxy_network_does_not_bypass_restricted_network_policy() {
-        assert_eq!(
-            allow_network_for_proxy(&SandboxPolicy::ReadOnly, None),
-            false
-        );
+        assert_eq!(allow_network_for_proxy(None), false);
     }
 }
