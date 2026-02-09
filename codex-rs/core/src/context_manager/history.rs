@@ -255,21 +255,6 @@ impl ContextManager {
         &self.items[start..]
     }
 
-    fn get_items_after_last_model_generated_tokens(&self) -> i64 {
-        self.items_after_last_model_generated_item()
-            .iter()
-            .fold(0i64, |acc, item| {
-                acc.saturating_add(estimate_item_token_count(item))
-            })
-    }
-
-    fn get_items_after_last_model_generated_bytes(&self) -> usize {
-        self.items_after_last_model_generated_item()
-            .iter()
-            .map(estimate_response_item_model_visible_bytes)
-            .fold(0usize, usize::saturating_add)
-    }
-
     /// When true, the server already accounted for past reasoning tokens and
     /// the client should not re-estimate them.
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
@@ -278,8 +263,12 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
-        let items_after_last_model_generated_tokens =
-            self.get_items_after_last_model_generated_tokens();
+        let items_after_last_model_generated_tokens = self
+            .items_after_last_model_generated_item()
+            .iter()
+            .fold(0i64, |acc, item| {
+                acc.saturating_add(estimate_item_token_count(item))
+            });
         if server_reasoning_included {
             last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
@@ -295,6 +284,7 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.clone())
             .unwrap_or_default();
+        let items_after_last_model_generated = self.items_after_last_model_generated_item();
 
         TotalTokenUsageBreakdown {
             last_api_response_total_tokens: last_usage.total_tokens,
@@ -305,12 +295,19 @@ impl ContextManager {
                 .fold(0i64, |acc, bytes| {
                     acc.saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX))
                 }),
-            estimated_tokens_of_items_added_since_last_successful_api_response: self
-                .get_items_after_last_model_generated_tokens(),
-            estimated_bytes_of_items_added_since_last_successful_api_response: i64::try_from(
-                self.get_items_after_last_model_generated_bytes(),
-            )
-            .unwrap_or(i64::MAX),
+            estimated_tokens_of_items_added_since_last_successful_api_response:
+                items_after_last_model_generated
+                    .iter()
+                    .fold(0i64, |acc, item| {
+                        acc.saturating_add(estimate_item_token_count(item))
+                    }),
+            estimated_bytes_of_items_added_since_last_successful_api_response:
+                items_after_last_model_generated
+                    .iter()
+                    .map(estimate_response_item_model_visible_bytes)
+                    .fold(0i64, |acc, bytes| {
+                        acc.saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX))
+                    }),
         }
     }
 
