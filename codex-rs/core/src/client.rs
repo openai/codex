@@ -12,19 +12,9 @@
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
 //! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Prewarm is intentionally handshake-only: it may warm a socket and capture sticky-routing
-//! state, but the first `response.create` payload is still sent only when a turn starts.
-//!
-//! Startup prewarm is owned by turn-scoped callers (for example, a pre-created regular task). When
-//! a warmed [`ModelClientSession`] is available, turn execution can reuse it; otherwise the turn
-//! lazily opens a websocket on first stream call.
-//!
-//! ## Retry-Budget Tradeoff
-//!
-//! Startup prewarm is treated as the first websocket connection attempt for the first turn. If
-//! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
-//! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
-//! budget slot before any turn payload is sent.
+//! Turn-scoped callers can optionally prewarm the websocket request state by sending a deferred
+//! `response.create` (with empty input). When prewarmed this way, the first model request sends
+//! `response.append` with the actual input items.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -167,7 +157,10 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
+    /// `None` means there is no previous websocket request in this turn.
+    /// `Some` means there was a previous request and the next request may append
+    /// if its inputs have this vector as a prefix.
+    websocket_last_items: Option<Vec<ResponseItem>>,
     websocket_last_response_id: Option<String>,
     websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
     /// Turn state for sticky routing.
@@ -231,7 +224,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             connection: None,
-            websocket_last_items: Vec::new(),
+            websocket_last_items: None,
             websocket_last_response_id: None,
             websocket_last_response_id_rx: None,
             turn_state: Arc::new(OnceLock::new()),
@@ -525,10 +518,10 @@ impl ModelClientSession {
         // Checks whether the current request input is an incremental append to the previous request.
         // If items in the new request contain all the items from the previous request we build
         // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
+        let previous_items = self.websocket_last_items.as_ref()?;
+        let previous_len = previous_items.len();
+        let can_append =
+            input_items.starts_with(previous_items) && previous_len < input_items.len();
         if can_append {
             Some(input_items[previous_len..].to_vec())
         } else {
@@ -566,6 +559,7 @@ impl ModelClientSession {
         options: &ApiResponsesOptions,
         input: Vec<ResponseItem>,
         previous_response_id: Option<String>,
+        defer: Option<bool>,
     ) -> ResponsesWsRequest {
         let ApiResponsesOptions {
             reasoning,
@@ -581,6 +575,7 @@ impl ModelClientSession {
             model: model_slug.to_string(),
             instructions: api_prompt.instructions.clone(),
             previous_response_id,
+            defer,
             input,
             tools: api_prompt.tools.clone(),
             tool_choice: "auto".to_string(),
@@ -605,6 +600,16 @@ impl ModelClientSession {
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
         let incremental_items = self.get_incremental_items(&api_prompt.input);
         if let Some(append_items) = incremental_items {
+            if self
+                .websocket_last_items
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+            {
+                return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+                    input: append_items,
+                });
+            }
+
             if responses_websockets_v2_enabled
                 && let Some(previous_response_id) = self.websocket_previous_response_id()
             {
@@ -614,6 +619,7 @@ impl ModelClientSession {
                     options,
                     append_items,
                     Some(previous_response_id),
+                    None,
                 );
             }
 
@@ -630,42 +636,136 @@ impl ModelClientSession {
             options,
             api_prompt.input.clone(),
             None,
+            None,
         )
     }
 
-    /// Opportunistically warms a websocket for this turn-scoped client session.
-    ///
-    /// This performs only connection setup; it never sends prompt payloads.
+    async fn prewarm_websocket_deferred_response(
+        &mut self,
+        model_slug: &str,
+        api_prompt: &ApiPrompt,
+        options: &ApiResponsesOptions,
+    ) -> std::result::Result<(), ApiError> {
+        let request = self.prepare_websocket_create_request(
+            model_slug,
+            api_prompt,
+            options,
+            Vec::new(),
+            None,
+            Some(true),
+        );
+        self.connection
+            .as_ref()
+            .ok_or(ApiError::Stream(
+                "websocket connection is unavailable".to_string(),
+            ))?
+            .prewarm_deferred_create(request)
+            .await?;
+        self.websocket_last_items = Some(Vec::new());
+        Ok(())
+    }
+
+    /// Prewarms the turn-scoped websocket request state by sending a deferred
+    /// `response.create` (empty input), so the next model request can use
+    /// `response.append` with actual items.
     pub async fn prewarm_websocket(
         &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
         otel_manager: &OtelManager,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
             return Ok(());
         }
-        if self.connection.is_some() {
+        if self.websocket_last_items.is_some() {
             return Ok(());
         }
 
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
-            ApiError::Stream(format!(
-                "failed to build websocket prewarm client setup: {err}"
-            ))
+        let auth_manager = self.client.state.auth_manager.clone();
+        let api_prompt = Self::build_responses_request(prompt).map_err(|err| {
+            ApiError::Stream(format!("failed to build websocket prewarm prompt: {err}"))
         })?;
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(super::auth::AuthManager::unauthorized_recovery);
 
-        let connection = self
-            .client
-            .connect_websocket(
-                otel_manager,
-                client_setup.api_provider,
-                client_setup.api_auth,
-                Some(Arc::clone(&self.turn_state)),
+        loop {
+            let client_setup = self.client.current_client_setup().await.map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to build websocket prewarm client setup: {err}"
+                ))
+            })?;
+            let compression = self.responses_request_compression(client_setup.auth.as_ref());
+            let options = self.build_responses_options(
+                prompt,
+                model_info,
+                effort,
+                summary,
                 turn_metadata_header,
-            )
-            .await?;
-        self.connection = Some(connection);
-        Ok(())
+                compression,
+            );
+
+            match self
+                .websocket_connection(
+                    otel_manager,
+                    client_setup.api_provider,
+                    client_setup.api_auth,
+                    turn_metadata_header,
+                    &options,
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UPGRADE_REQUIRED =>
+                {
+                    self.try_switch_fallback_transport(otel_manager);
+                    return Ok(());
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery)
+                        .await
+                        .map_err(|err| {
+                            ApiError::Stream(format!(
+                                "websocket prewarm auth recovery failed: {err}"
+                            ))
+                        })?;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+
+            match self
+                .prewarm_websocket_deferred_response(&model_info.slug, &api_prompt, &options)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UPGRADE_REQUIRED =>
+                {
+                    self.try_switch_fallback_transport(otel_manager);
+                    return Ok(());
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == StatusCode::UNAUTHORIZED => {
+                    handle_unauthorized(unauthorized_transport, &mut auth_recovery)
+                        .await
+                        .map_err(|err| {
+                            ApiError::Stream(format!(
+                                "websocket prewarm auth recovery failed: {err}"
+                            ))
+                        })?;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     /// Returns a websocket connection for this turn.
@@ -683,7 +783,7 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.websocket_last_items.clear();
+            self.websocket_last_items = None;
             self.websocket_last_response_id = None;
             self.websocket_last_response_id_rx = None;
             let turn_state = options
@@ -858,7 +958,7 @@ impl ModelClientSession {
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
-            self.websocket_last_items = api_prompt.input.clone();
+            self.websocket_last_items = Some(api_prompt.input.clone());
             let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
             self.websocket_last_response_id_rx = Some(last_response_id_receiver);
             let mut last_response_id_sender = Some(last_response_id_sender);
@@ -967,7 +1067,7 @@ impl ModelClientSession {
             );
 
             self.connection = None;
-            self.websocket_last_items.clear();
+            self.websocket_last_items = None;
         }
         activated
     }

@@ -127,6 +127,24 @@ impl ResponsesWebsocketConnection {
 
         Ok(ResponseStream { rx_event })
     }
+
+    pub async fn prewarm_deferred_create(
+        &self,
+        request: ResponsesWsRequest,
+    ) -> Result<(), ApiError> {
+        let mut stream = self.stream_request(request).await?;
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(ResponseEvent::Completed { .. }) => return Ok(()),
+                Ok(_) => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(ApiError::Stream(
+            "stream closed before response.completed".to_string(),
+        ))
+    }
 }
 
 pub struct ResponsesWebsocketClient<A: AuthProvider> {

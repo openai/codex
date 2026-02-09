@@ -14,6 +14,7 @@ use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
+use crate::api_bridge::map_api_error;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -1083,17 +1084,7 @@ impl Session {
             ),
         };
 
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.clone()),
-            None,
-        )
-        .boxed();
-        let startup_regular_task = RegularTask::with_startup_prewarm(
-            services.model_client.clone(),
-            services.otel_manager.clone(),
-            turn_metadata_header,
-        );
-        state.set_startup_regular_task(startup_regular_task);
+        state.set_startup_regular_task(RegularTask);
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -4150,6 +4141,69 @@ async fn run_sampling_request(
 
     let mut retries = 0;
     loop {
+        if let Err(err) = client_session
+            .prewarm_websocket(
+                &prompt,
+                &turn_context.model_info,
+                turn_context.reasoning_effort,
+                turn_context.reasoning_summary,
+                &turn_context.otel_manager,
+                turn_metadata_header,
+            )
+            .await
+        {
+            let err = map_api_error(err);
+            match err {
+                CodexErr::ContextWindowExceeded => {
+                    sess.set_total_tokens_full(&turn_context).await;
+                    return Err(CodexErr::ContextWindowExceeded);
+                }
+                CodexErr::UsageLimitReached(e) => {
+                    if let Some(rate_limits) = e.rate_limits.clone() {
+                        sess.update_rate_limits(&turn_context, rate_limits).await;
+                    }
+                    return Err(CodexErr::UsageLimitReached(e));
+                }
+                _ => {}
+            }
+
+            if !err.is_retryable() {
+                return Err(err);
+            }
+
+            let max_retries = turn_context.provider.stream_max_retries();
+            if retries >= max_retries
+                && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
+            {
+                sess.send_event(
+                    &turn_context,
+                    EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Falling back from WebSockets to HTTPS transport. {err:#}"
+                        ),
+                    }),
+                )
+                .await;
+                retries = 0;
+            } else if retries < max_retries {
+                retries += 1;
+                let delay = backoff(retries);
+                warn!(
+                    "websocket prewarm failed - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
+                );
+                sess.notify_stream_error(
+                    &turn_context,
+                    format!("Reconnecting... {retries}/{max_retries}"),
+                    err,
+                )
+                .await;
+                tokio::time::sleep(delay).await;
+            } else {
+                return Err(err);
+            }
+            continue;
+        }
+
         let err = match try_run_sampling_request(
             Arc::clone(&router),
             Arc::clone(&sess),

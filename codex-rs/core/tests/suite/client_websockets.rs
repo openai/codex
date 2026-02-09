@@ -95,23 +95,41 @@ async fn responses_websocket_streams_request() {
 async fn responses_websocket_preconnect_reuses_connection() {
     skip_if_no_network!();
 
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-warm-1"),
+            ev_completed("resp-warm-1"),
+        ],
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+    ]])
     .await;
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
-        .prewarm_websocket(&harness.otel_manager, None)
+        .prewarm_websocket(
+            &prompt,
+            &harness.model_info,
+            harness.effort,
+            harness.summary,
+            &harness.otel_manager,
+            None,
+        )
         .await
         .expect("websocket prewarm failed");
-    let prompt = prompt_with_input(vec![message_item("hello")]);
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(first["defer"], json!(true));
+    assert_eq!(first["input"], json!([]));
+    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(second["input"], serde_json::to_value(prompt.input).unwrap());
 
     server.shutdown().await;
 }
@@ -120,19 +138,29 @@ async fn responses_websocket_preconnect_reuses_connection() {
 async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     skip_if_no_network!();
 
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-warm-1"),
+            ev_completed("resp-warm-1"),
+        ],
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+    ]])
     .await;
 
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
-        .prewarm_websocket(&harness.otel_manager, None)
+        .prewarm_websocket(
+            &prompt,
+            &harness.model_info,
+            harness.effort,
+            harness.summary,
+            &harness.otel_manager,
+            None,
+        )
         .await
         .expect("websocket prewarm failed");
-    let prompt = prompt_with_input(vec![message_item("hello")]);
     let mut stream = client_session
         .stream(
             &prompt,
@@ -152,7 +180,15 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     }
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let first = connection.first().expect("missing request").body_json();
+    let second = connection.get(1).expect("missing request").body_json();
+    assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(first["defer"], json!(true));
+    assert_eq!(first["input"], json!([]));
+    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(second["input"], serde_json::to_value(prompt.input).unwrap());
 
     server.shutdown().await;
 }

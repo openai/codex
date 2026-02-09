@@ -174,6 +174,8 @@ pub struct ResponseCreateWsRequest {
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer: Option<bool>,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<Value>,
     pub tool_choice: String,

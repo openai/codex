@@ -23,6 +23,10 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     let call_id = "shell-command-call";
     let server = start_websocket_server(vec![vec![
         vec![
+            ev_response_created("resp-warm-1"),
+            ev_completed("resp-warm-1"),
+        ],
+        vec![
             ev_response_created("resp-1"),
             ev_shell_command_call(call_id, "echo websocket"),
             ev_done(),
@@ -41,7 +45,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     test.submit_turn("run the echo command").await?;
 
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
+    assert_eq!(connection.len(), 3);
 
     let first = connection
         .first()
@@ -51,11 +55,18 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         .get(1)
         .expect("missing second request")
         .body_json();
+    let third = connection
+        .get(2)
+        .expect("missing third request")
+        .body_json();
 
     assert_eq!(first["type"].as_str(), Some("response.create"));
+    assert_eq!(first["defer"], Value::Bool(true));
+    assert_eq!(first["input"], Value::Array(vec![]));
     assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(third["type"].as_str(), Some("response.append"));
 
-    let append_items = second
+    let append_items = third
         .get("input")
         .and_then(Value::as_array)
         .expect("response.append input array");
@@ -75,40 +86,44 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_preconnect_happens_on_session_start() -> Result<()> {
+async fn websocket_prewarm_happens_on_first_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![vec![vec![
-        ev_response_created("resp-1"),
-        ev_completed("resp-1"),
-    ]]])
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-warm-1"),
+            ev_completed("resp-warm-1"),
+        ],
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+    ]])
     .await;
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
 
-    assert!(
-        server.wait_for_handshakes(1, Duration::from_secs(2)).await,
-        "expected websocket preconnect handshake during session startup"
-    );
-
     test.submit_turn("hello").await?;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    assert_eq!(server.single_connection().len(), 2);
 
     server.shutdown().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_first_turn_waits_for_inflight_preconnect() -> Result<()> {
+async fn websocket_first_turn_waits_for_inflight_connect() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
-        requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+        requests: vec![
+            vec![
+                ev_response_created("resp-warm-1"),
+                ev_completed("resp-warm-1"),
+            ],
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        ],
         response_headers: Vec::new(),
-        // Delay handshake so submit_turn() observes startup preconnect as in-flight.
+        // Delay handshake so submit_turn() observes websocket connect as in-flight.
         accept_delay: Some(Duration::from_millis(150)),
     }])
     .await;
@@ -118,7 +133,7 @@ async fn websocket_first_turn_waits_for_inflight_preconnect() -> Result<()> {
     test.submit_turn("hello").await?;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(server.single_connection().len(), 1);
+    assert_eq!(server.single_connection().len(), 2);
 
     server.shutdown().await;
     Ok(())
@@ -130,6 +145,10 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
 
     let call_id = "shell-command-call";
     let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-warm-1"),
+            ev_completed("resp-warm-1"),
+        ],
         vec![
             ev_response_created("resp-1"),
             ev_shell_command_call(call_id, "echo websocket"),
@@ -151,7 +170,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     test.submit_turn("run the echo command").await?;
 
     let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
+    assert_eq!(connection.len(), 3);
 
     let first = connection
         .first()
@@ -161,12 +180,19 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
         .get(1)
         .expect("missing second request")
         .body_json();
+    let third = connection
+        .get(2)
+        .expect("missing third request")
+        .body_json();
 
     assert_eq!(first["type"].as_str(), Some("response.create"));
-    assert_eq!(second["type"].as_str(), Some("response.create"));
-    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
+    assert_eq!(first["defer"], Value::Bool(true));
+    assert_eq!(first["input"], Value::Array(vec![]));
+    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(third["type"].as_str(), Some("response.create"));
+    assert_eq!(third["previous_response_id"].as_str(), Some("resp-1"));
 
-    let create_items = second
+    let create_items = third
         .get("input")
         .and_then(Value::as_array)
         .expect("response.create input array");
