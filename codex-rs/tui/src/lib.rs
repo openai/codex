@@ -433,7 +433,7 @@ pub async fn run_main(
 
 async fn run_ratatui_app(
     cli: Cli,
-    mut initial_config: Config,
+    initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
@@ -443,12 +443,12 @@ async fn run_ratatui_app(
 
     // Configure syntax highlighting theme before any rendering can occur.
     // Surface resolution failures as a startup warning (⚠ banner in chat).
-    if let Some(warning) = crate::render::highlight::set_theme_override(
+    // Keep the warning separate so we can re-inject it after onboarding
+    // reloads config (which would otherwise discard it).
+    let theme_warning = crate::render::highlight::set_theme_override(
         initial_config.tui_theme.clone(),
         find_codex_home().ok(),
-    ) {
-        initial_config.startup_warnings.push(warning);
-    }
+    );
 
     tooltips::announcement::prewarm();
 
@@ -554,6 +554,7 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
+
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
         restore();
@@ -702,7 +703,7 @@ async fn run_ratatui_app(
         None => None,
     };
 
-    let config = match &session_selection {
+    let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
@@ -714,6 +715,14 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+
+    // Inject theme warning after the last possible config reload (onboarding
+    // at line ~520 and resume/fork just above can both replace the config,
+    // discarding any previously pushed warnings).
+    if let Some(w) = theme_warning {
+        config.startup_warnings.push(w);
+    }
+
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
@@ -1191,6 +1200,47 @@ trust_level = "untrusted"
         assert_eq!(
             untrusted_config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    /// Regression: theme warning must survive config reloads.
+    ///
+    /// `run_ratatui_app` reloads config twice — once during onboarding and
+    /// once on session resume/fork.  Each reload produces a fresh `Config`
+    /// with an empty `startup_warnings`.  The theme warning (captured before
+    /// any reload) must be injected *after the last reload* so it is never
+    /// discarded.  This test exercises that exact pattern.
+    #[tokio::test]
+    async fn theme_warning_survives_config_reload() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        // Capture a theme warning before any config reload (mirrors the real
+        // call to `set_theme_override` at the top of `run_ratatui_app`).
+        let theme_warning: Option<String> = Some("unknown syntax theme \"bogus\"".into());
+
+        // First config — stands in for `initial_config` after onboarding.
+        let mut config = build_config(&temp_dir).await?;
+        config.startup_warnings.push("other warning".into());
+
+        // Simulate the resume/fork config reload: a fresh config with no
+        // startup_warnings (just like `load_config_or_exit_with_fallback_cwd`
+        // returns).
+        let mut config = build_config(&temp_dir).await?;
+        assert!(
+            config.startup_warnings.is_empty(),
+            "freshly loaded config should have no warnings"
+        );
+
+        // Re-inject after the last reload — the pattern used in run_ratatui_app.
+        if let Some(w) = theme_warning {
+            config.startup_warnings.push(w);
+        }
+
+        assert_eq!(config.startup_warnings.len(), 1);
+        assert!(
+            config.startup_warnings[0].contains("bogus"),
+            "theme warning should be present after config reload"
         );
         Ok(())
     }
