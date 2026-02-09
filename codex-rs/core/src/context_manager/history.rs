@@ -238,7 +238,6 @@ impl ContextManager {
 
     // These are local items added after the most recent model-emitted item.
     // They are not reflected in `last_token_usage.total_tokens`.
-    // If no model item has been emitted yet, treat the delta as empty.
     fn items_after_last_model_generated_item(&self) -> &[ResponseItem] {
         let start = self
             .items
