@@ -581,6 +581,8 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
 /// Render a list of rows using the provided ScrollState, with shared styling
 /// and behavior for selection popups.
+/// Returns the number of terminal lines actually rendered (including the
+/// single-line empty placeholder when shown).
 fn render_rows_inner(
     area: Rect,
     buf: &mut Buffer,
@@ -589,17 +591,18 @@ fn render_rows_inner(
     max_results: usize,
     empty_message: &str,
     col_width_mode: ColumnWidthMode,
-) {
+) -> u16 {
     if rows_all.is_empty() {
         if area.height > 0 {
             Line::from(empty_message.dim().italic()).render(area, buf);
         }
-        return;
+        // Count the placeholder line only when there is vertical space to draw it.
+        return u16::from(area.height > 0);
     }
 
     let max_items = max_results.min(rows_all.len());
     if max_items == 0 {
-        return;
+        return 0;
     }
     let desc_measure_items = max_items.min(area.height.max(1) as usize);
 
@@ -626,6 +629,7 @@ fn render_rows_inner(
     // Render items, wrapping descriptions and aligning wrapped lines under the
     // shared description column. Stop when we run out of vertical space.
     let mut cur_y = area.y;
+    let mut rendered_lines: u16 = 0;
     for (i, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
         if cur_y >= area.y + area.height {
             break;
@@ -653,8 +657,11 @@ fn render_rows_inner(
                 buf,
             );
             cur_y = cur_y.saturating_add(1);
+            rendered_lines = rendered_lines.saturating_add(1);
         }
     }
+
+    rendered_lines
 }
 
 /// Render a list of rows using the provided ScrollState, with shared styling
@@ -664,6 +671,7 @@ fn render_rows_inner(
 ///
 /// This function should be paired with [`measure_rows_height`] when reserving
 /// space; pairing it with a different measurement mode can cause clipping.
+/// Returns the number of terminal lines actually rendered.
 pub(crate) fn render_rows(
     area: Rect,
     buf: &mut Buffer,
@@ -671,7 +679,7 @@ pub(crate) fn render_rows(
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
-) {
+) -> u16 {
     render_rows_inner(
         area,
         buf,
@@ -680,7 +688,7 @@ pub(crate) fn render_rows(
         max_results,
         empty_message,
         ColumnWidthMode::AutoVisible,
-    );
+    )
 }
 
 /// Render a list of rows using the provided ScrollState, with shared styling
@@ -691,6 +699,7 @@ pub(crate) fn render_rows(
 /// This function should be paired with
 /// [`measure_rows_height_stable_col_widths`] so reserved and rendered heights
 /// stay in sync.
+/// Returns the number of terminal lines actually rendered.
 pub(crate) fn render_rows_stable_col_widths(
     area: Rect,
     buf: &mut Buffer,
@@ -698,7 +707,7 @@ pub(crate) fn render_rows_stable_col_widths(
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
-) {
+) -> u16 {
     render_rows_inner(
         area,
         buf,
@@ -707,7 +716,7 @@ pub(crate) fn render_rows_stable_col_widths(
         max_results,
         empty_message,
         ColumnWidthMode::AutoAllRows,
-    );
+    )
 }
 
 /// Render a list of rows using the provided ScrollState and explicit
@@ -715,6 +724,7 @@ pub(crate) fn render_rows_stable_col_widths(
 ///
 /// This is the low-level entry point for callers that need to thread a mode
 /// through higher-level configuration.
+/// Returns the number of terminal lines actually rendered.
 pub(crate) fn render_rows_with_col_width_mode(
     area: Rect,
     buf: &mut Buffer,
@@ -723,7 +733,7 @@ pub(crate) fn render_rows_with_col_width_mode(
     max_results: usize,
     empty_message: &str,
     col_width_mode: ColumnWidthMode,
-) {
+) -> u16 {
     render_rows_inner(
         area,
         buf,
@@ -732,13 +742,14 @@ pub(crate) fn render_rows_with_col_width_mode(
         max_results,
         empty_message,
         col_width_mode,
-    );
+    )
 }
 
 /// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
 ///
 /// This path always uses viewport-local width alignment and is best for dense
 /// list UIs where multi-line descriptions would add too much vertical churn.
+/// Returns the number of terminal lines actually rendered.
 pub(crate) fn render_rows_single_line(
     area: Rect,
     buf: &mut Buffer,
@@ -746,12 +757,13 @@ pub(crate) fn render_rows_single_line(
     state: &ScrollState,
     max_results: usize,
     empty_message: &str,
-) {
+) -> u16 {
     if rows_all.is_empty() {
         if area.height > 0 {
             Line::from(empty_message.dim().italic()).render(area, buf);
         }
-        return;
+        // Count the placeholder line only when there is vertical space to draw it.
+        return u16::from(area.height > 0);
     }
 
     let visible_items = max_results
@@ -779,6 +791,7 @@ pub(crate) fn render_rows_single_line(
     );
 
     let mut cur_y = area.y;
+    let mut rendered_lines: u16 = 0;
     for (i, row) in rows_all
         .iter()
         .enumerate()
@@ -812,7 +825,10 @@ pub(crate) fn render_rows_single_line(
             buf,
         );
         cur_y = cur_y.saturating_add(1);
+        rendered_lines = rendered_lines.saturating_add(1);
     }
+
+    rendered_lines
 }
 
 /// Compute the number of terminal rows required to render up to `max_results`

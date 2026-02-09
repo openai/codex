@@ -306,6 +306,9 @@ impl RequestUserInputOverlay {
 
         // Build rows with selection markers for the shared selection renderer.
         let option_rows = self.option_rows();
+        let options_hidden = self.has_options()
+            && sections.options_area.height > 0
+            && self.options_required_height(content_area.width) > sections.options_area.height;
 
         if self.has_options() {
             let mut options_state = self
@@ -316,7 +319,7 @@ impl RequestUserInputOverlay {
                 // Ensure the selected option is visible in the scroll window.
                 options_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
-                render_rows(
+                render_rows_bottom_aligned(
                     sections.options_area,
                     buf,
                     &option_rows,
@@ -344,9 +347,6 @@ impl RequestUserInputOverlay {
         if footer_area.height == 0 {
             return;
         }
-        let options_hidden = self.has_options()
-            && sections.options_area.height > 0
-            && self.options_required_height(content_area.width) > sections.options_area.height;
         let option_tip = if options_hidden {
             let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
             let total = self.options_len();
@@ -429,6 +429,48 @@ fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
+}
+
+/// Render rows into `area`, bottom-aligning the visible rows when fewer than
+/// `area.height` lines are produced.
+///
+/// This keeps footer spacing stable by anchoring the options block to the
+/// bottom of its allocated region.
+fn render_rows_bottom_aligned(
+    area: Rect,
+    buf: &mut Buffer,
+    rows: &[crate::bottom_pane::selection_popup_common::GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let scratch_area = Rect::new(0, 0, area.width, area.height);
+    let mut scratch = Buffer::empty(scratch_area);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            scratch[(x, y)] = buf[(area.x + x, area.y + y)].clone();
+        }
+    }
+    let rendered_height = render_rows(
+        scratch_area,
+        &mut scratch,
+        rows,
+        state,
+        max_results,
+        empty_message,
+    );
+
+    let visible_height = rendered_height.min(area.height);
+    let y_offset = area.height.saturating_sub(visible_height);
+    for y in 0..visible_height {
+        for x in 0..area.width {
+            buf[(area.x + x, area.y + y_offset + y)] = scratch[(x, y)].clone();
+        }
+    }
 }
 
 /// Truncate a styled line to `max_width`, preferring a word boundary, and append an ellipsis.
