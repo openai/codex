@@ -441,15 +441,6 @@ async fn run_ratatui_app(
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
-    // Configure syntax highlighting theme before any rendering can occur.
-    // Surface resolution failures as a startup warning (⚠ banner in chat).
-    // Keep the warning separate so we can re-inject it after onboarding
-    // reloads config (which would otherwise discard it).
-    let theme_warning = crate::render::highlight::set_theme_override(
-        initial_config.tui_theme.clone(),
-        find_codex_home().ok(),
-    );
-
     tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -716,10 +707,13 @@ async fn run_ratatui_app(
         _ => config,
     };
 
-    // Inject theme warning after the last possible config reload (onboarding
-    // at line ~520 and resume/fork just above can both replace the config,
-    // discarding any previously pushed warnings).
-    if let Some(w) = theme_warning {
+    // Configure syntax highlighting theme from the final config — onboarding
+    // and resume/fork can both reload config with a different tui_theme, so
+    // this must happen after the last possible reload.
+    if let Some(w) = crate::render::highlight::set_theme_override(
+        config.tui_theme.clone(),
+        find_codex_home().ok(),
+    ) {
         config.startup_warnings.push(w);
     }
 
@@ -1204,43 +1198,48 @@ trust_level = "untrusted"
         Ok(())
     }
 
-    /// Regression: theme warning must survive config reloads.
+    /// Regression: theme must be configured from the *final* config.
     ///
-    /// `run_ratatui_app` reloads config twice — once during onboarding and
-    /// once on session resume/fork.  Each reload produces a fresh `Config`
-    /// with an empty `startup_warnings`.  The theme warning (captured before
-    /// any reload) must be injected *after the last reload* so it is never
-    /// discarded.  This test exercises that exact pattern.
+    /// `run_ratatui_app` can reload config during onboarding and again
+    /// during session resume/fork.  The syntax theme override (stored in
+    /// a `OnceLock`) must use the final config's `tui_theme`, not the
+    /// initial one — otherwise users resuming a thread in a project with
+    /// a different theme get the wrong highlighting.
+    ///
+    /// We verify the invariant indirectly: `validate_theme_name` (the
+    /// pure validation core of `set_theme_override`) must be called with
+    /// the *final* config's theme, and its warning must land in the
+    /// final config's `startup_warnings`.
     #[tokio::test]
-    async fn theme_warning_survives_config_reload() -> std::io::Result<()> {
+    async fn theme_warning_uses_final_config() -> std::io::Result<()> {
+        use crate::render::highlight::validate_theme_name;
+
         let temp_dir = TempDir::new()?;
 
-        // Capture a theme warning before any config reload (mirrors the real
-        // call to `set_theme_override` at the top of `run_ratatui_app`).
-        let theme_warning: Option<String> = Some("unknown syntax theme \"bogus\"".into());
+        // initial_config has a valid theme — no warning.
+        let initial_config = build_config(&temp_dir).await?;
+        assert!(initial_config.tui_theme.is_none());
 
-        // First config — stands in for `initial_config` after onboarding.
+        // Simulate resume/fork reload: the final config has an invalid theme.
         let mut config = build_config(&temp_dir).await?;
-        config.startup_warnings.push("other warning".into());
+        config.tui_theme = Some("bogus-theme".into());
 
-        // Simulate the resume/fork config reload: a fresh config with no
-        // startup_warnings (just like `load_config_or_exit_with_fallback_cwd`
-        // returns).
-        let mut config = build_config(&temp_dir).await?;
-        assert!(
-            config.startup_warnings.is_empty(),
-            "freshly loaded config should have no warnings"
-        );
-
-        // Re-inject after the last reload — the pattern used in run_ratatui_app.
-        if let Some(w) = theme_warning {
+        // Theme override must use the final config (not initial_config).
+        // This mirrors the real call site in run_ratatui_app.
+        if let Some(w) =
+            validate_theme_name(config.tui_theme.as_deref(), Some(temp_dir.path()))
+        {
             config.startup_warnings.push(w);
         }
 
-        assert_eq!(config.startup_warnings.len(), 1);
+        assert_eq!(
+            config.startup_warnings.len(),
+            1,
+            "warning from final config's invalid theme should be present"
+        );
         assert!(
-            config.startup_warnings[0].contains("bogus"),
-            "theme warning should be present after config reload"
+            config.startup_warnings[0].contains("bogus-theme"),
+            "warning should reference the final config's theme name"
         );
         Ok(())
     }
