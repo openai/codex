@@ -35,7 +35,7 @@ where
         sandbox_policy,
         sandbox_policy_cwd,
         use_bwrap_sandbox,
-        !sandbox_policy.has_full_network_access() && has_proxy_env_vars(&env),
+        allow_network_for_proxy(sandbox_policy, &env),
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {
@@ -49,6 +49,13 @@ where
         env,
     })
     .await
+}
+
+pub(crate) fn allow_network_for_proxy(
+    sandbox_policy: &SandboxPolicy,
+    env: &HashMap<String, String>,
+) -> bool {
+    !sandbox_policy.has_full_network_access() && has_proxy_env_vars(env)
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.

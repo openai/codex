@@ -11,6 +11,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
+use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
@@ -22,7 +23,6 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_protocol::config_types::WindowsSandboxLevel;
 pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
@@ -160,14 +160,13 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_network_for_proxy =
-                    !policy.has_full_network_access() && has_proxy_env_vars(&env);
+                let allow_proxy_network = allow_network_for_proxy(policy, &env);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
                     policy,
                     sandbox_policy_cwd,
                     use_linux_sandbox_bwrap,
-                    allow_network_for_proxy,
+                    allow_proxy_network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
@@ -206,12 +205,6 @@ impl SandboxManager {
     pub fn denied(&self, sandbox: SandboxType, out: &ExecToolCallOutput) -> bool {
         crate::exec::is_likely_sandbox_denied(sandbox, out)
     }
-}
-
-fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
-    PROXY_URL_ENV_KEYS
-        .iter()
-        .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
 }
 
 pub async fn execute_env(
