@@ -237,7 +237,7 @@ ORDER BY position ASC
     ) -> anyhow::Result<Option<ThreadMemory>> {
         let row = sqlx::query(
             r#"
-SELECT thread_id, trace_summary, memory_summary, updated_at
+SELECT thread_id, trace_summary AS raw_memory, memory_summary, updated_at
 FROM thread_memory
 WHERE thread_id = ?
             "#,
@@ -512,7 +512,7 @@ ON CONFLICT(id) DO UPDATE SET
     pub async fn upsert_thread_memory(
         &self,
         thread_id: ThreadId,
-        trace_summary: &str,
+        raw_memory: &str,
         memory_summary: &str,
     ) -> anyhow::Result<ThreadMemory> {
         if self.get_thread(thread_id).await?.is_none() {
@@ -538,7 +538,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
             "#,
         )
         .bind(thread_id.to_string())
-        .bind(trace_summary)
+        .bind(raw_memory)
         .bind(memory_summary)
         .bind(updated_at)
         .execute(self.pool.as_ref())
@@ -563,7 +563,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
             r#"
 SELECT
     m.thread_id,
-    m.trace_summary,
+    m.trace_summary AS raw_memory,
     m.memory_summary,
     m.updated_at
 FROM thread_memory AS m
@@ -1203,7 +1203,7 @@ mod tests {
             .await
             .expect("upsert memory");
         assert_eq!(inserted.thread_id, thread_id);
-        assert_eq!(inserted.trace_summary, "trace one");
+        assert_eq!(inserted.raw_memory, "trace one");
         assert_eq!(inserted.memory_summary, "memory one");
 
         let updated = runtime
@@ -1211,7 +1211,7 @@ mod tests {
             .await
             .expect("update memory");
         assert_eq!(updated.thread_id, thread_id);
-        assert_eq!(updated.trace_summary, "trace two");
+        assert_eq!(updated.raw_memory, "trace two");
         assert_eq!(updated.memory_summary, "memory two");
         assert!(
             updated.updated_at >= inserted.updated_at,
@@ -1270,7 +1270,7 @@ mod tests {
             .expect("list cwd a memories");
         assert_eq!(cwd_a_memories.len(), 2);
         assert_eq!(cwd_a_memories[0].thread_id, t1);
-        assert_eq!(cwd_a_memories[0].trace_summary, "trace-1b");
+        assert_eq!(cwd_a_memories[0].raw_memory, "trace-1b");
         assert_eq!(cwd_a_memories[0].memory_summary, "memory-1b");
         assert_eq!(cwd_a_memories[1].thread_id, t2);
         assert!(cwd_a_memories[0].updated_at >= first.updated_at);

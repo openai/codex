@@ -11,7 +11,7 @@ pub(crate) struct RolloutCandidate {
     pub(crate) rollout_path: PathBuf,
     /// Thread working directory used for per-project memory bucketing.
     pub(crate) cwd: PathBuf,
-    /// Best-effort thread title used to build readable trace filenames.
+    /// Best-effort thread title used to build readable memory filenames.
     pub(crate) title: String,
     /// Last observed thread update timestamp (RFC3339), if available.
     pub(crate) updated_at: Option<String>,
@@ -20,9 +20,9 @@ pub(crate) struct RolloutCandidate {
 /// Parsed stage-1 model output payload.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct StageOneOutput {
-    /// Detailed markdown trace summary for a single rollout.
-    #[serde(rename = "traceMemory")]
-    pub(crate) trace_memory: String,
+    /// Detailed markdown raw memory for a single rollout.
+    #[serde(rename = "rawMemory", alias = "traceMemory")]
+    pub(crate) raw_memory: String,
     /// Compact summary line used for routing and indexing.
     pub(crate) summary: String,
 }

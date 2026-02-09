@@ -1,8 +1,8 @@
-## Trace Summary Writing (Single Rollout, Single Output)
+## Raw Memory Writing (Single Rollout, Single Output)
 You are given one rollout and must produce exactly one JSON object.
 
 Return exactly one JSON object with this schema:
-- traceMemory: a detailed markdown trace summary for this rollout only.
+- rawMemory: a detailed markdown raw memory for this rollout only.
 - summary: a concise summary suitable for shared memory aggregation.
 
 Input contract:
@@ -20,7 +20,7 @@ Global writing rules:
 - Do not include markdown fences around the JSON object.
 - Output only the JSON object and nothing else.
 
-Outcome triage guidance for `Outcome:` labels in `traceMemory`:
+Outcome triage guidance for `Outcome:` labels in `rawMemory`:
 - Use `success` for explicit user approval or clear verification evidence.
 - Use `partial` when there is meaningful progress but incomplete or unverified completion.
 - Use `fail` for explicit dissatisfaction/rejection or hard failure.
@@ -28,10 +28,10 @@ Outcome triage guidance for `Outcome:` labels in `traceMemory`:
 - If the user switched topics without explicit evaluation, usually use `uncertain`.
 - If only assistant claims success without user confirmation or verification, use `uncertain`.
 
-`traceMemory` structure requirements:
+`rawMemory` structure requirements:
 - Start with `# <one-sentence summary>`.
 - Include:
-  - `Trace context: ...`
+  - `Memory context: ...`
   - `User preferences: ...` (or exactly `User preferences: none observed`)
   - One or more tightly scoped `## Task: <name>` sections.
 - For each task section include:

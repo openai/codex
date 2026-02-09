@@ -70,7 +70,7 @@ impl Default for StageOneResponseItemKinds {
     }
 }
 
-/// Controls which rollout item kinds are retained for stage-1 trace extraction.
+/// Controls which rollout item kinds are retained for stage-1 memory extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StageOneRolloutFilter {
     /// Keep `RolloutItem::ResponseItem` entries.
@@ -100,7 +100,7 @@ impl Default for StageOneRolloutFilter {
     }
 }
 
-/// Extracts stage-1 trace items from rollout JSONL entries.
+/// Extracts stage-1 memory items from rollout JSONL entries.
 ///
 /// `RolloutItem::Compacted` entries are converted to assistant messages so the
 /// model sees the same response-item shape as normal transcript content.
@@ -138,13 +138,13 @@ pub(crate) fn filter_rollout_response_items(
     out
 }
 
-/// Serializes filtered stage-1 trace items for prompt inclusion.
+/// Serializes filtered stage-1 memory items for prompt inclusion.
 pub(crate) fn serialize_filtered_rollout_response_items(
     items: &[RolloutItem],
     filter: StageOneRolloutFilter,
 ) -> Result<String> {
     let filtered = filter_rollout_response_items(items, filter);
     serde_json::to_string(&filtered).map_err(|err| {
-        CodexErr::InvalidRequest(format!("failed to serialize rollout trace: {err}"))
+        CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
     })
 }

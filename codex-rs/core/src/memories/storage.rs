@@ -6,50 +6,50 @@ use std::path::PathBuf;
 use tracing::warn;
 
 use super::LEGACY_CONSOLIDATED_FILENAME;
-use super::MAX_TRACES_PER_CWD;
+use super::MAX_RAW_MEMORIES_PER_CWD;
 use super::MEMORY_REGISTRY_FILENAME;
 use super::SKILLS_SUBDIR;
 use super::ensure_layout;
 use super::memory_summary_file;
-use super::trace_summaries_dir;
+use super::raw_memories_dir;
 use super::types::RolloutCandidate;
 
-/// Writes (or replaces) the per-thread markdown trace summary on disk.
+/// Writes (or replaces) the per-thread markdown raw memory on disk.
 ///
 /// This also removes older files for the same thread id to keep one canonical
-/// trace summary file per thread.
-pub(crate) async fn write_trace_memory(
+/// raw memory file per thread.
+pub(crate) async fn write_raw_memory(
     root: &Path,
     candidate: &RolloutCandidate,
-    trace_memory: &str,
+    raw_memory: &str,
 ) -> std::io::Result<PathBuf> {
-    let slug = build_trace_slug(&candidate.title);
+    let slug = build_memory_slug(&candidate.title);
     let filename = format!("{}_{}.md", candidate.thread_id, slug);
-    let path = trace_summaries_dir(root).join(filename);
+    let path = raw_memories_dir(root).join(filename);
 
-    remove_outdated_thread_trace_summaries(root, &candidate.thread_id.to_string(), &path).await?;
+    remove_outdated_thread_raw_memories(root, &candidate.thread_id.to_string(), &path).await?;
 
     let mut body = String::new();
     writeln!(body, "thread_id: {}", candidate.thread_id)
-        .map_err(|err| std::io::Error::other(format!("format trace memory: {err}")))?;
+        .map_err(|err| std::io::Error::other(format!("format raw memory: {err}")))?;
     writeln!(body, "cwd: {}", candidate.cwd.display())
-        .map_err(|err| std::io::Error::other(format!("format trace memory: {err}")))?;
+        .map_err(|err| std::io::Error::other(format!("format raw memory: {err}")))?;
     writeln!(body, "rollout_path: {}", candidate.rollout_path.display())
-        .map_err(|err| std::io::Error::other(format!("format trace memory: {err}")))?;
+        .map_err(|err| std::io::Error::other(format!("format raw memory: {err}")))?;
     if let Some(updated_at) = candidate.updated_at.as_deref() {
         writeln!(body, "updated_at: {updated_at}")
-            .map_err(|err| std::io::Error::other(format!("format trace memory: {err}")))?;
+            .map_err(|err| std::io::Error::other(format!("format raw memory: {err}")))?;
     }
-    writeln!(body).map_err(|err| std::io::Error::other(format!("format trace memory: {err}")))?;
-    body.push_str(trace_memory.trim());
+    writeln!(body).map_err(|err| std::io::Error::other(format!("format raw memory: {err}")))?;
+    body.push_str(raw_memory.trim());
     body.push('\n');
 
     tokio::fs::write(&path, body).await?;
     Ok(path)
 }
 
-/// Prunes stale trace files and rebuilds the routing summary for recent traces.
-pub(crate) async fn prune_to_recent_traces_and_rebuild_summary(
+/// Prunes stale raw memory files and rebuilds the routing summary for recent memories.
+pub(crate) async fn prune_to_recent_memories_and_rebuild_summary(
     root: &Path,
     memories: &[ThreadMemory],
 ) -> std::io::Result<()> {
@@ -57,17 +57,17 @@ pub(crate) async fn prune_to_recent_traces_and_rebuild_summary(
 
     let keep = memories
         .iter()
-        .take(MAX_TRACES_PER_CWD)
+        .take(MAX_RAW_MEMORIES_PER_CWD)
         .map(|memory| memory.thread_id.to_string())
         .collect::<BTreeSet<_>>();
 
-    prune_trace_summaries(root, &keep).await?;
+    prune_raw_memories(root, &keep).await?;
     rebuild_memory_summary(root, memories).await
 }
 
 /// Clears consolidation outputs so a fresh consolidation run can regenerate them.
 ///
-/// Phase-1 artifacts (`trace_summaries/` and `memory_summary.md`) are preserved.
+/// Phase-1 artifacts (`raw_memories/` and `memory_summary.md`) are preserved.
 pub(crate) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<()> {
     for file_name in [MEMORY_REGISTRY_FILENAME, LEGACY_CONSOLIDATED_FILENAME] {
         let path = root.join(file_name);
@@ -98,22 +98,22 @@ async fn rebuild_memory_summary(root: &Path, memories: &[ThreadMemory]) -> std::
     let mut body = String::from("# Memory Summary\n\n");
 
     if memories.is_empty() {
-        body.push_str("No memory traces yet.\n");
+        body.push_str("No raw memories yet.\n");
         return tokio::fs::write(memory_summary_file(root), body).await;
     }
 
-    body.push_str("Map of concise summaries to trace IDs (latest first):\n\n");
-    for memory in memories.iter().take(MAX_TRACES_PER_CWD) {
+    body.push_str("Map of concise summaries to thread IDs (latest first):\n\n");
+    for memory in memories.iter().take(MAX_RAW_MEMORIES_PER_CWD) {
         let summary = compact_summary_for_index(&memory.memory_summary);
-        writeln!(body, "- {summary} (trace: `{}`)", memory.thread_id)
+        writeln!(body, "- {summary} (thread: `{}`)", memory.thread_id)
             .map_err(|err| std::io::Error::other(format!("format memory summary: {err}")))?;
     }
 
     tokio::fs::write(memory_summary_file(root), body).await
 }
 
-async fn prune_trace_summaries(root: &Path, keep: &BTreeSet<String>) -> std::io::Result<()> {
-    let dir_path = trace_summaries_dir(root);
+async fn prune_raw_memories(root: &Path, keep: &BTreeSet<String>) -> std::io::Result<()> {
+    let dir_path = raw_memories_dir(root);
     let mut dir = match tokio::fs::read_dir(&dir_path).await {
         Ok(dir) => dir,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -125,15 +125,15 @@ async fn prune_trace_summaries(root: &Path, keep: &BTreeSet<String>) -> std::io:
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(trace_id) = extract_trace_id_from_summary_filename(file_name) else {
+        let Some(thread_id) = extract_thread_id_from_summary_filename(file_name) else {
             continue;
         };
-        if !keep.contains(trace_id)
+        if !keep.contains(thread_id)
             && let Err(err) = tokio::fs::remove_file(&path).await
             && err.kind() != std::io::ErrorKind::NotFound
         {
             warn!(
-                "failed pruning outdated trace summary {}: {err}",
+                "failed pruning outdated raw memory {}: {err}",
                 path.display()
             );
         }
@@ -142,12 +142,12 @@ async fn prune_trace_summaries(root: &Path, keep: &BTreeSet<String>) -> std::io:
     Ok(())
 }
 
-async fn remove_outdated_thread_trace_summaries(
+async fn remove_outdated_thread_raw_memories(
     root: &Path,
     thread_id: &str,
     keep_path: &Path,
 ) -> std::io::Result<()> {
-    let dir_path = trace_summaries_dir(root);
+    let dir_path = raw_memories_dir(root);
     let mut dir = match tokio::fs::read_dir(&dir_path).await {
         Ok(dir) => dir,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -162,7 +162,7 @@ async fn remove_outdated_thread_trace_summaries(
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(existing_thread_id) = extract_trace_id_from_summary_filename(file_name) else {
+        let Some(existing_thread_id) = extract_thread_id_from_summary_filename(file_name) else {
             continue;
         };
         if existing_thread_id == thread_id
@@ -170,7 +170,7 @@ async fn remove_outdated_thread_trace_summaries(
             && err.kind() != std::io::ErrorKind::NotFound
         {
             warn!(
-                "failed removing outdated trace summary {}: {err}",
+                "failed removing outdated raw memory {}: {err}",
                 path.display()
             );
         }
@@ -179,7 +179,7 @@ async fn remove_outdated_thread_trace_summaries(
     Ok(())
 }
 
-fn build_trace_slug(value: &str) -> String {
+fn build_memory_slug(value: &str) -> String {
     let mut slug = String::new();
     let mut last_was_sep = false;
 
@@ -196,7 +196,7 @@ fn build_trace_slug(value: &str) -> String {
 
     let slug = slug.trim_matches('_').to_string();
     if slug.is_empty() {
-        "trace".to_string()
+        "memory".to_string()
     } else {
         slug.chars().take(64).collect()
     }
@@ -206,12 +206,12 @@ fn compact_summary_for_index(summary: &str) -> String {
     summary.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn extract_trace_id_from_summary_filename(file_name: &str) -> Option<&str> {
+fn extract_thread_id_from_summary_filename(file_name: &str) -> Option<&str> {
     let stem = file_name.strip_suffix(".md")?;
-    let (trace_id, _) = stem.split_once('_')?;
-    if trace_id.is_empty() {
+    let (thread_id, _) = stem.split_once('_')?;
+    if thread_id.is_empty() {
         None
     } else {
-        Some(trace_id)
+        Some(thread_id)
     }
 }

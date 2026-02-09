@@ -1,6 +1,6 @@
 use crate::auth::AuthProvider;
-use crate::common::MemoryTraceSummarizeInput;
-use crate::common::MemoryTraceSummaryOutput;
+use crate::common::MemorySummarizeInput;
+use crate::common::MemorySummarizeOutput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -33,37 +33,35 @@ impl<T: HttpTransport, A: AuthProvider> MemoriesClient<T, A> {
         "memories/trace_summarize"
     }
 
-    pub async fn trace_summarize(
+    pub async fn summarize(
         &self,
         body: serde_json::Value,
         extra_headers: HeaderMap,
-    ) -> Result<Vec<MemoryTraceSummaryOutput>, ApiError> {
+    ) -> Result<Vec<MemorySummarizeOutput>, ApiError> {
         let resp = self
             .session
             .execute(Method::POST, Self::path(), extra_headers, Some(body))
             .await?;
-        let parsed: TraceSummarizeResponse =
+        let parsed: SummarizeResponse =
             serde_json::from_slice(&resp.body).map_err(|e| ApiError::Stream(e.to_string()))?;
         Ok(parsed.output)
     }
 
-    pub async fn trace_summarize_input(
+    pub async fn summarize_input(
         &self,
-        input: &MemoryTraceSummarizeInput,
+        input: &MemorySummarizeInput,
         extra_headers: HeaderMap,
-    ) -> Result<Vec<MemoryTraceSummaryOutput>, ApiError> {
+    ) -> Result<Vec<MemorySummarizeOutput>, ApiError> {
         let body = to_value(input).map_err(|e| {
-            ApiError::Stream(format!(
-                "failed to encode memory trace summarize input: {e}"
-            ))
+            ApiError::Stream(format!("failed to encode memory summarize input: {e}"))
         })?;
-        self.trace_summarize(body, extra_headers).await
+        self.summarize(body, extra_headers).await
     }
 }
 
 #[derive(Debug, Deserialize)]
-struct TraceSummarizeResponse {
-    output: Vec<MemoryTraceSummaryOutput>,
+struct SummarizeResponse {
+    output: Vec<MemorySummarizeOutput>,
 }
 
 #[cfg(test)]
@@ -99,7 +97,7 @@ mod tests {
     }
 
     #[test]
-    fn path_is_memories_trace_summarize() {
+    fn path_is_memories_trace_summarize_for_wire_compatibility() {
         assert_eq!(
             MemoriesClient::<DummyTransport, DummyAuth>::path(),
             "memories/trace_summarize"
