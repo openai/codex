@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -1382,9 +1383,9 @@ impl Session {
 
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
-        previous_cwd: &PathBuf,
-        next_cwd: &PathBuf,
-        codex_home: &PathBuf,
+        previous_cwd: &Path,
+        next_cwd: &Path,
+        codex_home: &Path,
     ) {
         if previous_cwd == next_cwd {
             return;
@@ -1395,9 +1396,9 @@ impl Session {
         }
 
         ShellSnapshot::refresh_snapshot(
-            codex_home.clone(),
+            codex_home.to_path_buf(),
             self.conversation_id,
-            next_cwd.clone(),
+            next_cwd.to_path_buf(),
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.otel_manager.clone(),
