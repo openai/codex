@@ -225,7 +225,7 @@ pub(crate) async fn execute_exec_env(
     let ExecEnv {
         command,
         cwd,
-        env,
+        mut env,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -233,6 +233,10 @@ pub(crate) async fn execute_exec_env(
         justification,
         arg0,
     } = env;
+
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
 
     let params = ExecParams {
         command,
