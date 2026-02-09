@@ -26,6 +26,7 @@ use tracing::info_span;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellSnapshot {
     pub path: PathBuf,
+    pub cwd: PathBuf,
 }
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -37,22 +38,63 @@ impl ShellSnapshot {
     pub fn start_snapshotting(
         codex_home: PathBuf,
         session_id: ThreadId,
+        session_cwd: PathBuf,
         shell: &mut Shell,
         otel_manager: OtelManager,
-    ) {
+    ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
 
-        let snapshot_shell = shell.clone();
-        let snapshot_session_id = session_id;
-        let snapshot_span = info_span!("shell_snapshot", thread_id = %snapshot_session_id);
+        Self::spawn_snapshot_task(
+            codex_home,
+            session_id,
+            session_cwd,
+            shell.clone(),
+            shell_snapshot_tx.clone(),
+            otel_manager,
+        );
+
+        shell_snapshot_tx
+    }
+
+    pub fn refresh_snapshot(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        otel_manager: OtelManager,
+    ) {
+        Self::spawn_snapshot_task(
+            codex_home,
+            session_id,
+            session_cwd,
+            shell,
+            shell_snapshot_tx,
+            otel_manager,
+        );
+    }
+
+    fn spawn_snapshot_task(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        snapshot_shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        otel_manager: OtelManager,
+    ) {
+        let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
                 let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
-                let snapshot =
-                    ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
-                        .await
-                        .map(Arc::new);
+                let snapshot = ShellSnapshot::try_new(
+                    &codex_home,
+                    session_id,
+                    session_cwd.as_path(),
+                    &snapshot_shell,
+                )
+                .await
+                .map(Arc::new);
                 let success = if snapshot.is_some() { "true" } else { "false" };
                 let _ = timer.map(|timer| timer.record(&[("success", success)]));
                 otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
@@ -62,7 +104,12 @@ impl ShellSnapshot {
         );
     }
 
-    async fn try_new(codex_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
+    async fn try_new(
+        codex_home: &Path,
+        session_id: ThreadId,
+        session_cwd: &Path,
+        shell: &Shell,
+    ) -> Option<Self> {
         // File to store the snapshot
         let extension = match shell.shell_type {
             ShellType::PowerShell => "ps1",
@@ -82,22 +129,26 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        let snapshot = match write_shell_snapshot(shell.shell_type.clone(), &path).await {
-            Ok(path) => {
-                tracing::info!("Shell snapshot successfully created: {}", path.display());
-                Some(Self { path })
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to create shell snapshot for {}: {err:?}",
-                    shell.name()
-                );
-                None
-            }
-        };
+        let snapshot =
+            match write_shell_snapshot(shell.shell_type.clone(), &path, session_cwd).await {
+                Ok(path) => {
+                    tracing::info!("Shell snapshot successfully created: {}", path.display());
+                    Some(Self {
+                        path,
+                        cwd: session_cwd.to_path_buf(),
+                    })
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to create shell snapshot for {}: {err:?}",
+                        shell.name()
+                    );
+                    None
+                }
+            };
 
         if let Some(snapshot) = snapshot.as_ref()
-            && let Err(err) = validate_snapshot(shell, &snapshot.path).await
+            && let Err(err) = validate_snapshot(shell, &snapshot.path, session_cwd).await
         {
             tracing::error!("Shell snapshot validation failed: {err:?}");
             return None;
@@ -118,14 +169,18 @@ impl Drop for ShellSnapshot {
     }
 }
 
-async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
+async fn write_shell_snapshot(
+    shell_type: ShellType,
+    output_path: &Path,
+    cwd: &Path,
+) -> Result<PathBuf> {
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
     let shell = get_shell(shell_type.clone(), None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
-    let raw_snapshot = capture_snapshot(&shell).await?;
+    let raw_snapshot = capture_snapshot(&shell, cwd).await?;
     let snapshot = strip_snapshot_preamble(&raw_snapshot)?;
 
     if let Some(parent) = output_path.parent() {
@@ -143,13 +198,13 @@ async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Resu
     Ok(output_path.to_path_buf())
 }
 
-async fn capture_snapshot(shell: &Shell) -> Result<String> {
+async fn capture_snapshot(shell: &Shell, cwd: &Path) -> Result<String> {
     let shell_type = shell.shell_type.clone();
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script()).await,
-        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script()).await,
-        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script()).await,
-        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
+        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script(), cwd).await,
+        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script(), cwd).await,
+        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
+        ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
 }
@@ -163,16 +218,16 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
     Ok(snapshot[start..].to_string())
 }
 
-async fn validate_snapshot(shell: &Shell, snapshot_path: &Path) -> Result<()> {
+async fn validate_snapshot(shell: &Shell, snapshot_path: &Path, cwd: &Path) -> Result<()> {
     let snapshot_path_display = snapshot_path.display();
     let script = format!("set -e; . \"{snapshot_path_display}\"");
-    run_script_with_timeout(shell, &script, SNAPSHOT_TIMEOUT, false)
+    run_script_with_timeout(shell, &script, SNAPSHOT_TIMEOUT, false, cwd)
         .await
         .map(|_| ())
 }
 
-async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
-    run_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, true).await
+async fn run_shell_script(shell: &Shell, script: &str, cwd: &Path) -> Result<String> {
+    run_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, true, cwd).await
 }
 
 async fn run_script_with_timeout(
@@ -180,6 +235,7 @@ async fn run_script_with_timeout(
     script: &str,
     snapshot_timeout: Duration,
     use_login_shell: bool,
+    cwd: &Path,
 ) -> Result<String> {
     let args = shell.derive_exec_args(script, use_login_shell);
     let shell_name = shell.name();
@@ -189,6 +245,7 @@ async fn run_script_with_timeout(
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
     handler.stdin(Stdio::null());
+    handler.current_dir(cwd);
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {
@@ -550,7 +607,7 @@ mod tests {
     async fn get_snapshot(shell_type: ShellType) -> Result<String> {
         let dir = tempdir()?;
         let path = dir.path().join("snapshot.sh");
-        write_shell_snapshot(shell_type, &path).await?;
+        write_shell_snapshot(shell_type, &path, dir.path()).await?;
         let content = fs::read_to_string(&path).await?;
         Ok(content)
     }
@@ -602,11 +659,12 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), &shell)
+        let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), dir.path(), &shell)
             .await
             .expect("snapshot should be created");
         let path = snapshot.path.clone();
         assert!(path.exists());
+        assert_eq!(snapshot.cwd, dir.path().to_path_buf());
 
         drop(snapshot);
 
@@ -635,9 +693,10 @@ mod tests {
             "HOME=\"{home_display}\"; export HOME; {}",
             bash_snapshot_script()
         );
-        let output = run_script_with_timeout(&shell, &script, Duration::from_millis(500), true)
-            .await
-            .context("run snapshot command")?;
+        let output =
+            run_script_with_timeout(&shell, &script, Duration::from_millis(500), true, home)
+                .await
+                .context("run snapshot command")?;
 
         assert!(
             output.contains("# Snapshot file"),
@@ -665,9 +724,10 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true)
-            .await
-            .expect_err("snapshot shell should time out");
+        let err =
+            run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, dir.path())
+                .await
+                .expect_err("snapshot shell should time out");
         assert!(
             err.to_string().contains("timed out"),
             "expected timeout error, got {err:?}"

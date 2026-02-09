@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -88,6 +89,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -239,7 +241,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use tokio::sync::watch;
 
 mod memory_startup;
 
@@ -1040,14 +1041,19 @@ impl Session {
 
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
-        if config.features.enabled(Feature::ShellSnapshot) {
+        let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
             ShellSnapshot::start_snapshotting(
                 config.codex_home.clone(),
                 conversation_id,
+                session_configuration.cwd.clone(),
                 &mut default_shell,
                 otel_manager.clone(),
-            );
-        }
+            )
+        } else {
+            let (tx, rx) = watch::channel(None);
+            default_shell.shell_snapshot = rx;
+            tx
+        };
         let thread_name =
             match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
             {
@@ -1071,6 +1077,7 @@ impl Session {
             hooks: Hooks::new(config.as_ref()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
+            shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -1418,6 +1425,30 @@ impl Session {
         state.pending_resume_previous_model.take()
     }
 
+    fn maybe_refresh_shell_snapshot_for_cwd(
+        &self,
+        previous_cwd: &Path,
+        next_cwd: &Path,
+        codex_home: &Path,
+    ) {
+        if previous_cwd == next_cwd {
+            return;
+        }
+
+        if !self.features.enabled(Feature::ShellSnapshot) {
+            return;
+        }
+
+        ShellSnapshot::refresh_snapshot(
+            codex_home.to_path_buf(),
+            self.conversation_id,
+            next_cwd.to_path_buf(),
+            self.services.user_shell.as_ref().clone(),
+            self.services.shell_snapshot_tx.clone(),
+            self.services.otel_manager.clone(),
+        );
+    }
+
     pub(crate) async fn update_settings(
         &self,
         updates: SessionSettingsUpdate,
@@ -1426,7 +1457,14 @@ impl Session {
 
         match state.session_configuration.apply(&updates) {
             Ok(updated) => {
+                let previous_cwd = state.session_configuration.cwd.clone();
+                let next_cwd = updated.cwd.clone();
+                let codex_home = updated.codex_home.clone();
                 state.session_configuration = updated;
+                drop(state);
+
+                self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &codex_home);
+
                 Ok(())
             }
             Err(err) => {
@@ -1441,14 +1479,16 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (session_configuration, sandbox_policy_changed) = {
+        let (session_configuration, sandbox_policy_changed, previous_cwd, codex_home) = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
+                    let previous_cwd = state.session_configuration.cwd.clone();
                     let sandbox_policy_changed =
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
+                    let codex_home = next.codex_home.clone();
                     state.session_configuration = next.clone();
-                    (next, sandbox_policy_changed)
+                    (next, sandbox_policy_changed, previous_cwd, codex_home)
                 }
                 Err(err) => {
                     drop(state);
@@ -1464,6 +1504,12 @@ impl Session {
                 }
             }
         };
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &session_configuration.cwd,
+            &codex_home,
+        );
 
         Ok(self
             .new_turn_from_configuration(
@@ -6136,6 +6182,7 @@ mod tests {
             hooks: Hooks::new(&config),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
+            shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: auth_manager.clone(),
@@ -6268,6 +6315,7 @@ mod tests {
             hooks: Hooks::new(&config),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
+            shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
