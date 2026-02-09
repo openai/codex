@@ -1,3 +1,4 @@
+mod context_discoverable;
 mod history;
 mod normalize;
 

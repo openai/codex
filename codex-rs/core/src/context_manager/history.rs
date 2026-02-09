@@ -1,4 +1,5 @@
 use crate::codex::TurnContext;
+use crate::context_manager::context_discoverable::ContextDiscoverable;
 use crate::context_manager::normalize;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
@@ -6,14 +7,10 @@ use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
-use crate::truncate::truncate_function_output_items_with_policy;
-use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -293,50 +290,21 @@ impl ContextManager {
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
-            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
-                call_id,
-                output,
-            }) => {
-                let body = match &output.body {
-                    FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
-                        truncate_text(content, policy_with_serialization_budget),
-                    ),
-                    FunctionCallOutputBody::ContentItems(items) => {
-                        FunctionCallOutputBody::ContentItems(
-                            truncate_function_output_items_with_policy(
-                                items,
-                                policy_with_serialization_budget,
-                            ),
-                        )
-                    }
-                };
-                ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        body,
-                        success: output.success,
-                    },
-                })
-            }
-            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
-                call_id,
-                output,
-            }) => {
-                let truncated = truncate_text(output, policy_with_serialization_budget);
-                ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncated,
-                })
-            }
-            ResponseItem::Message(codex_protocol::models::Message { .. })
-            | ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. })
-            | ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall { .. })
-            | ResponseItem::FunctionCall(codex_protocol::models::FunctionCall { .. })
-            | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. })
-            | ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall { .. })
-            | ResponseItem::Compaction(codex_protocol::models::Compaction { .. })
-            | ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+            ResponseItem::Message(_)
+            | ResponseItem::Reasoning(_)
+            | ResponseItem::LocalShellCall(_)
+            | ResponseItem::FunctionCall(_)
+            | ResponseItem::CustomToolCall(_)
+            | ResponseItem::WebSearchCall(_)
+            | ResponseItem::Compaction(_)
+            | ResponseItem::GhostSnapshot(_)
             | ResponseItem::Other => item.clone(),
+            ResponseItem::FunctionCallOutput(item) => {
+                item.discoverable_history_item(policy_with_serialization_budget)
+            }
+            ResponseItem::CustomToolCallOutput(item) => {
+                item.discoverable_history_item(policy_with_serialization_budget)
+            }
         }
     }
 }
