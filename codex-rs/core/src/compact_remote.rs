@@ -13,7 +13,6 @@ use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
-use codex_api::CompactionInput as ApiCompactionInput;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
@@ -21,7 +20,6 @@ use codex_protocol::models::ResponseItem;
 use futures::TryFutureExt;
 use tracing::error;
 use tracing::info;
-use tracing::trace;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -107,11 +105,8 @@ async fn run_remote_compact_task_inner_impl(
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
-            let compact_request_log_data = build_compact_request_log_data(
-                &turn_context.model_info.slug,
-                &prompt.input,
-                &prompt.base_instructions.text,
-            );
+            let compact_request_log_data =
+                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
             log_remote_compact_failure(
                 turn_context,
                 &compact_request_log_data,
@@ -145,32 +140,19 @@ async fn run_remote_compact_task_inner_impl(
 
 #[derive(Debug)]
 struct CompactRequestLogData {
-    failing_compaction_request_body_json: String,
     failing_compaction_request_model_visible_bytes: usize,
 }
 
 fn build_compact_request_log_data(
-    model: &str,
     input: &[ResponseItem],
     instructions: &str,
 ) -> CompactRequestLogData {
-    let payload = ApiCompactionInput {
-        model,
-        input,
-        instructions,
-    };
     let failing_compaction_request_model_visible_bytes =
         input.iter().fold(instructions.len(), |acc, item| {
             acc.saturating_add(estimate_response_item_model_visible_bytes(item))
         });
 
-    let failing_compaction_request_body_json = match serde_json::to_vec(&payload) {
-        Ok(payload_bytes) => String::from_utf8_lossy(&payload_bytes).into_owned(),
-        Err(err) => format!("{{\"compact_request_serialization_error\":\"{err}\"}}"),
-    };
-
     CompactRequestLogData {
-        failing_compaction_request_body_json,
         failing_compaction_request_model_visible_bytes,
     }
 }
@@ -190,11 +172,6 @@ fn log_remote_compact_failure(
     total_usage_breakdown: TotalTokenUsageBreakdown,
     err: &CodexErr,
 ) {
-    trace!(
-        turn_id = %turn_context.sub_id,
-        failing_compaction_request_body_json = %log_data.failing_compaction_request_body_json,
-        "remote compaction request payload before failure"
-    );
     error!(
         turn_id = %turn_context.sub_id,
         compact_error_status = ?compact_error_status_code(err),
