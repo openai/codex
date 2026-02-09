@@ -396,12 +396,12 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     if let Some(resume_cmd) =
         codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
     {
-        let command = if color_enabled {
-            resume_cmd.cyan().to_string()
+        let hint = if color_enabled {
+            format!("{} (or {})", resume_cmd.cyan(), "--last".blue())
         } else {
-            resume_cmd
+            format!("{resume_cmd} (or --last)")
         };
-        lines.push(format!("To continue this session, run {command}"));
+        lines.push(format!("To continue this session, run {hint}"));
     }
 
     lines
@@ -1153,7 +1153,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000 (or --last)"
                     .to_string(),
             ]
         );
@@ -1165,6 +1165,7 @@ mod tests {
         let lines = format_exit_messages(exit_info, true);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("\u{1b}[36m"));
+        assert!(lines[1].contains("\u{1b}[34m"));
     }
 
     #[test]
@@ -1178,7 +1179,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume my-thread".to_string(),
+                "To continue this session, run codex resume my-thread (or --last)".to_string(),
             ]
         );
     }

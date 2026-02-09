@@ -159,6 +159,17 @@ fn session_summary(
     })
 }
 
+fn resume_hint_line(command: String) -> Line<'static> {
+    vec![
+        "To continue this session, run ".into(),
+        command.cyan(),
+        " (or ".into(),
+        "--last".blue(),
+        ")".into(),
+    ]
+    .into()
+}
+
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
     response
         .skills
@@ -1338,8 +1349,7 @@ impl App {
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
-                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                        lines.push(spans.into());
+                        lines.push(resume_hint_line(command));
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
@@ -1416,11 +1426,7 @@ impl App {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
                                     if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
+                                        lines.push(resume_hint_line(command));
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
@@ -1476,11 +1482,7 @@ impl App {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
                                     if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
+                                        lines.push(resume_hint_line(command));
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
