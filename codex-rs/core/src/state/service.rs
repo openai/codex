@@ -14,6 +14,8 @@ use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyHandle;
 use codex_otel::OtelManager;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -38,6 +40,8 @@ pub(crate) struct SessionServices {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
+    pub(crate) network_proxy: Option<NetworkProxy>,
+    pub(crate) _network_proxy_handle: Option<NetworkProxyHandle>,
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
