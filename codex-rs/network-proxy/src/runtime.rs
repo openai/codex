@@ -7,8 +7,10 @@ use crate::policy::normalize_host;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
+use crate::state::NetworkProxyConstraintError;
 use crate::state::NetworkProxyConstraints;
-use crate::state::build_default_config_state_and_reloader;
+#[cfg(test)]
+use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
 use anyhow::Context;
 use anyhow::Result;
@@ -105,17 +107,17 @@ impl BlockedRequest {
 }
 
 #[derive(Clone)]
-pub(crate) struct ConfigState {
-    pub(crate) config: NetworkProxyConfig,
-    pub(crate) allow_set: GlobSet,
-    pub(crate) deny_set: GlobSet,
-    pub(crate) constraints: NetworkProxyConstraints,
-    pub(crate) cfg_path: PathBuf,
-    pub(crate) blocked: VecDeque<BlockedRequest>,
+pub struct ConfigState {
+    pub config: NetworkProxyConfig,
+    pub allow_set: GlobSet,
+    pub deny_set: GlobSet,
+    pub constraints: NetworkProxyConstraints,
+    pub cfg_path: PathBuf,
+    pub blocked: VecDeque<BlockedRequest>,
 }
 
 #[async_trait]
-pub(crate) trait ConfigReloader: Send + Sync {
+pub trait ConfigReloader: Send + Sync {
     /// Return a freshly loaded state if a reload is needed; otherwise, return `None`.
     async fn maybe_reload(&self) -> Result<Option<ConfigState>>;
 
@@ -146,12 +148,7 @@ impl Clone for NetworkProxyState {
 }
 
 impl NetworkProxyState {
-    pub async fn new() -> Result<Self> {
-        let (cfg_state, reloader) = build_default_config_state_and_reloader().await?;
-        Ok(Self::with_reloader(cfg_state, Arc::new(reloader)))
-    }
-
-    pub(crate) fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+    pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
@@ -362,6 +359,7 @@ impl NetworkProxyState {
             };
 
             validate_policy_against_constraints(&candidate, &constraints)
+                .map_err(NetworkProxyConstraintError::into_anyhow)
                 .context("network.mode constrained by managed config")?;
 
             let mut guard = self.state.write().await;
@@ -495,18 +493,12 @@ pub(crate) fn network_proxy_state_for_policy(
     network.enabled = true;
     network.mode = NetworkMode::Full;
     let config = NetworkProxyConfig { network };
-
-    let allow_set = crate::policy::compile_globset(&config.network.allowed_domains).unwrap();
-    let deny_set = crate::policy::compile_globset(&config.network.denied_domains).unwrap();
-
-    let state = ConfigState {
+    let state = build_config_state(
         config,
-        allow_set,
-        deny_set,
-        constraints: NetworkProxyConstraints::default(),
-        cfg_path: PathBuf::from("/nonexistent/config.toml"),
-        blocked: VecDeque::new(),
-    };
+        NetworkProxyConstraints::default(),
+        PathBuf::from("/nonexistent/config.toml"),
+    )
+    .unwrap();
 
     NetworkProxyState::with_reloader(state, Arc::new(NoopReloader))
 }
