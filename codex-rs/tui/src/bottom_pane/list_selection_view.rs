@@ -631,7 +631,7 @@ impl Renderable for ListSelectionView {
                     "no matches",
                     ColumnWidthMode::Fixed,
                 ),
-            }
+            };
         }
 
         if footer_area.height > 0 {
