@@ -266,7 +266,7 @@ impl ContextManager {
         self.items_after_last_model_generated_item()
             .iter()
             .fold(0usize, |acc, item| {
-                acc.saturating_add(estimate_item_token_approximation_bytes(item))
+                acc.saturating_add(estimate_item_model_visible_bytes(item))
             })
     }
 
@@ -389,12 +389,12 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     i64::try_from(approx_tokens_from_byte_count(
-        estimate_item_token_approximation_bytes(item),
+        estimate_item_model_visible_bytes(item),
     ))
     .unwrap_or(i64::MAX)
 }
 
-fn estimate_item_token_approximation_bytes(item: &ResponseItem) -> usize {
+fn estimate_item_model_visible_bytes(item: &ResponseItem) -> usize {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
