@@ -20,19 +20,19 @@ pub(crate) const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidati
 pub(crate) const MAX_ROLLOUTS_PER_STARTUP: usize = 8;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.
 pub(crate) const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
-/// Maximum number of recent traces retained per working directory.
-pub(crate) const MAX_TRACES_PER_CWD: usize = 10;
+/// Maximum number of recent raw memories retained per working directory.
+pub(crate) const MAX_RAW_MEMORIES_PER_CWD: usize = 10;
 /// Lease duration (seconds) for per-cwd consolidation locks.
 pub(crate) const CONSOLIDATION_LOCK_LEASE_SECONDS: i64 = 600;
 
 const MEMORY_SUBDIR: &str = "memory";
-const TRACE_SUMMARIES_SUBDIR: &str = "trace_summaries";
+const RAW_MEMORIES_SUBDIR: &str = "raw_memories";
 const MEMORY_SUMMARY_FILENAME: &str = "memory_summary.md";
 const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
 const LEGACY_CONSOLIDATED_FILENAME: &str = "consolidated.md";
 const SKILLS_SUBDIR: &str = "skills";
 
-pub(crate) use phase_one::TRACE_MEMORY_PROMPT;
+pub(crate) use phase_one::RAW_MEMORY_PROMPT;
 pub(crate) use phase_one::parse_stage_one_output;
 pub(crate) use phase_one::stage_one_output_schema;
 pub(crate) use prompts::build_consolidation_prompt;
@@ -42,9 +42,9 @@ pub(crate) use rollout::StageOneResponseItemKinds;
 pub(crate) use rollout::StageOneRolloutFilter;
 pub(crate) use rollout::serialize_filtered_rollout_response_items;
 pub(crate) use selection::select_rollout_candidates_from_db;
-pub(crate) use storage::prune_to_recent_traces_and_rebuild_summary;
+pub(crate) use storage::prune_to_recent_memories_and_rebuild_summary;
 pub(crate) use storage::wipe_consolidation_outputs;
-pub(crate) use storage::write_trace_memory;
+pub(crate) use storage::write_raw_memory;
 pub(crate) use types::RolloutCandidate;
 
 /// Returns the on-disk memory root directory for a given working directory.
@@ -56,8 +56,8 @@ pub(crate) fn memory_root_for_cwd(codex_home: &Path, cwd: &Path) -> PathBuf {
     codex_home.join("memories").join(bucket).join(MEMORY_SUBDIR)
 }
 
-fn trace_summaries_dir(root: &Path) -> PathBuf {
-    root.join(TRACE_SUMMARIES_SUBDIR)
+fn raw_memories_dir(root: &Path) -> PathBuf {
+    root.join(RAW_MEMORIES_SUBDIR)
 }
 
 fn memory_summary_file(root: &Path) -> PathBuf {
@@ -66,7 +66,7 @@ fn memory_summary_file(root: &Path) -> PathBuf {
 
 /// Ensures the phase-1 memory directory layout exists for the given root.
 pub(crate) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(trace_summaries_dir(root)).await
+    tokio::fs::create_dir_all(raw_memories_dir(root)).await
 }
 
 fn memory_bucket_for_cwd(cwd: &Path) -> String {

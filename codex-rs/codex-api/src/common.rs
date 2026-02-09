@@ -38,30 +38,32 @@ pub struct CompactionInput<'a> {
     pub instructions: &'a str,
 }
 
-/// Canonical input payload for the memory trace summarize endpoint.
+/// Canonical input payload for the memory summarize endpoint.
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTraceSummarizeInput {
+pub struct MemorySummarizeInput {
     pub model: String,
-    pub traces: Vec<MemoryTrace>,
+    #[serde(rename = "traces")]
+    pub raw_memories: Vec<RawMemory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTrace {
+pub struct RawMemory {
     pub id: String,
-    pub metadata: MemoryTraceMetadata,
+    pub metadata: RawMemoryMetadata,
     pub items: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTraceMetadata {
+pub struct RawMemoryMetadata {
     pub source_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct MemoryTraceSummaryOutput {
-    pub trace_summary: String,
+pub struct MemorySummarizeOutput {
+    #[serde(rename = "trace_summary", alias = "raw_memory")]
+    pub raw_memory: String,
     pub memory_summary: String,
 }
 

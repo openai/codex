@@ -4,10 +4,10 @@ use super::ensure_layout;
 use super::memory_root_for_cwd;
 use super::memory_summary_file;
 use super::parse_stage_one_output;
-use super::prune_to_recent_traces_and_rebuild_summary;
+use super::prune_to_recent_memories_and_rebuild_summary;
+use super::raw_memories_dir;
 use super::select_rollout_candidates_from_db;
 use super::serialize_filtered_rollout_response_items;
-use super::trace_summaries_dir;
 use super::wipe_consolidation_outputs;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -99,9 +99,9 @@ fn memory_root_encoding_avoids_component_collisions() {
 
 #[test]
 fn parse_stage_one_output_accepts_fenced_json() {
-    let raw = "```json\n{\"traceMemory\":\"abc\",\"summary\":\"short\"}\n```";
+    let raw = "```json\n{\"rawMemory\":\"abc\",\"summary\":\"short\"}\n```";
     let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert!(parsed.trace_memory.contains("abc"));
+    assert!(parsed.raw_memory.contains("abc"));
     assert_eq!(parsed.summary, "short");
 }
 
@@ -249,7 +249,7 @@ fn select_rollout_candidates_uses_db_memory_recency() {
 
     let memories = vec![ThreadMemory {
         thread_id: fresh_thread_id,
-        trace_summary: "trace".to_string(),
+        raw_memory: "raw memory".to_string(),
         memory_summary: "memory".to_string(),
         updated_at: Utc.timestamp_opt(450, 0).single().expect("timestamp"),
     }];
@@ -267,15 +267,15 @@ fn select_rollout_candidates_uses_db_memory_recency() {
 }
 
 #[tokio::test]
-async fn prune_and_rebuild_summary_keeps_latest_traces_only() {
+async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
 
     let keep_id = ThreadId::default().to_string();
     let drop_id = ThreadId::default().to_string();
-    let keep_path = trace_summaries_dir(&root).join(format!("{keep_id}_keep.md"));
-    let drop_path = trace_summaries_dir(&root).join(format!("{drop_id}_drop.md"));
+    let keep_path = raw_memories_dir(&root).join(format!("{keep_id}_keep.md"));
+    let drop_path = raw_memories_dir(&root).join(format!("{drop_id}_drop.md"));
     tokio::fs::write(&keep_path, "keep")
         .await
         .expect("write keep");
@@ -285,12 +285,12 @@ async fn prune_and_rebuild_summary_keeps_latest_traces_only() {
 
     let memories = vec![ThreadMemory {
         thread_id: ThreadId::try_from(keep_id.clone()).expect("thread id"),
-        trace_summary: "trace".to_string(),
+        raw_memory: "raw memory".to_string(),
         memory_summary: "short summary".to_string(),
         updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
     }];
 
-    prune_to_recent_traces_and_rebuild_summary(&root, &memories)
+    prune_to_recent_memories_and_rebuild_summary(&root, &memories)
         .await
         .expect("prune and rebuild");
 

@@ -38,10 +38,10 @@ use crate::auth::UnauthorizedRecovery;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
-use codex_api::MemoryTrace as ApiMemoryTrace;
-use codex_api::MemoryTraceSummarizeInput as ApiMemoryTraceSummarizeInput;
-use codex_api::MemoryTraceSummaryOutput as ApiMemoryTraceSummaryOutput;
+use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
+use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::Prompt as ApiPrompt;
+use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
@@ -275,20 +275,20 @@ impl ModelClient {
             .map_err(map_api_error)
     }
 
-    /// Builds memory summaries for each provided normalized trace.
+    /// Builds memory summaries for each provided normalized raw memory.
     ///
     /// This is a unary call (no streaming) to `/v1/memories/trace_summarize`.
     ///
     /// The model selection, reasoning effort, and telemetry context are passed explicitly to keep
     /// `ModelClient` session-scoped.
-    pub async fn summarize_memory_traces(
+    pub async fn summarize_memories(
         &self,
-        traces: Vec<ApiMemoryTrace>,
+        raw_memories: Vec<ApiRawMemory>,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         otel_manager: &OtelManager,
-    ) -> Result<Vec<ApiMemoryTraceSummaryOutput>> {
-        if traces.is_empty() {
+    ) -> Result<Vec<ApiMemorySummarizeOutput>> {
+        if raw_memories.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -299,9 +299,9 @@ impl ModelClient {
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let payload = ApiMemoryTraceSummarizeInput {
+        let payload = ApiMemorySummarizeInput {
             model: model_info.slug.clone(),
-            traces,
+            raw_memories,
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
@@ -309,7 +309,7 @@ impl ModelClient {
         };
 
         client
-            .trace_summarize_input(&payload, self.build_subagent_headers())
+            .summarize_input(&payload, self.build_subagent_headers())
             .await
             .map_err(map_api_error)
     }

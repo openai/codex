@@ -7,10 +7,10 @@ use serde_json::json;
 
 use super::types::StageOneOutput;
 
-/// System prompt for stage-1 trace memory extraction.
-pub(crate) const TRACE_MEMORY_PROMPT: &str =
+/// System prompt for stage-1 raw memory extraction.
+pub(crate) const RAW_MEMORY_PROMPT: &str =
     include_str!("../../templates/memories/stage_one_system.md");
-const MAX_STAGE_ONE_TRACE_MEMORY_CHARS: usize = 300_000;
+const MAX_STAGE_ONE_RAW_MEMORY_CHARS: usize = 300_000;
 const MAX_STAGE_ONE_SUMMARY_CHARS: usize = 1_200;
 
 static OPENAI_KEY_REGEX: Lazy<Regex> = Lazy::new(|| compile_regex(r"sk-[A-Za-z0-9]{20,}"));
@@ -26,10 +26,10 @@ pub(crate) fn stage_one_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "traceMemory": { "type": "string" },
+            "rawMemory": { "type": "string" },
             "summary": { "type": "string" }
         },
-        "required": ["traceMemory", "summary"],
+        "required": ["rawMemory", "summary"],
         "additionalProperties": false
     })
 }
@@ -121,12 +121,12 @@ fn suffix_at_char_boundary(input: &str, max_bytes: usize) -> &str {
 }
 
 fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutput> {
-    output.trace_memory = output.trace_memory.trim().to_string();
+    output.raw_memory = output.raw_memory.trim().to_string();
     output.summary = output.summary.trim().to_string();
 
-    if output.trace_memory.is_empty() {
+    if output.raw_memory.is_empty() {
         return Err(CodexErr::InvalidRequest(
-            "stage-1 memory output missing traceMemory".to_string(),
+            "stage-1 memory output missing rawMemory".to_string(),
         ));
     }
     if output.summary.is_empty() {
@@ -135,14 +135,14 @@ fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutp
         ));
     }
 
-    output.trace_memory = normalize_trace_memory_structure(&redact_secrets(&output.trace_memory));
+    output.raw_memory = normalize_raw_memory_structure(&redact_secrets(&output.raw_memory));
     output.summary = redact_secrets(&compact_whitespace(&output.summary));
 
-    if output.trace_memory.len() > MAX_STAGE_ONE_TRACE_MEMORY_CHARS {
-        output.trace_memory = truncate_text_for_storage(
-            &output.trace_memory,
-            MAX_STAGE_ONE_TRACE_MEMORY_CHARS,
-            "\n\n[... TRACE MEMORY TRUNCATED ...]\n\n",
+    if output.raw_memory.len() > MAX_STAGE_ONE_RAW_MEMORY_CHARS {
+        output.raw_memory = truncate_text_for_storage(
+            &output.raw_memory,
+            MAX_STAGE_ONE_RAW_MEMORY_CHARS,
+            "\n\n[... RAW MEMORY TRUNCATED ...]\n\n",
         );
     }
 
@@ -171,14 +171,14 @@ fn redact_secrets(input: &str) -> String {
         .to_string()
 }
 
-fn normalize_trace_memory_structure(input: &str) -> String {
-    if has_trace_memory_structure(input) {
+fn normalize_raw_memory_structure(input: &str) -> String {
+    if has_raw_memory_structure(input) {
         return input.to_string();
     }
 
     format!(
-        "# Trace Summary\n\
-Trace context: extracted from rollout (normalized fallback structure).\n\
+        "# Raw Memory\n\
+Memory context: extracted from rollout (normalized fallback structure).\n\
 User preferences: none observed\n\n\
 ## Task: Extracted Memory\n\
 Outcome: uncertain\n\
@@ -189,16 +189,16 @@ Things that did not work / things that can be improved:\n\
 Reusable knowledge:\n\
 - Re-validate critical claims against the current rollout.\n\
 Pointers and references (annotate why each item matters):\n\
-- Raw trace notes included below.\n\n\
-### Raw trace notes\n\
+- Raw memory notes included below.\n\n\
+### Raw memory notes\n\
 {input}\n"
     )
 }
 
-fn has_trace_memory_structure(input: &str) -> bool {
+fn has_raw_memory_structure(input: &str) -> bool {
     let trimmed = input.trim();
     trimmed.starts_with('#')
-        && trimmed.contains("Trace context:")
+        && (trimmed.contains("Memory context:") || trimmed.contains("Trace context:"))
         && trimmed.contains("User preferences:")
         && trimmed.contains("## Task:")
         && trimmed.contains("Outcome:")
@@ -232,22 +232,22 @@ mod tests {
     #[test]
     fn normalize_stage_one_output_redacts_and_compacts_summary() {
         let output = StageOneOutput {
-            trace_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
+            raw_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
             summary: "password = mysecret123456\n\nsmall".to_string(),
         };
 
         let normalized = normalize_stage_one_output(output).expect("normalized");
 
-        assert!(normalized.trace_memory.contains("[REDACTED_SECRET]"));
+        assert!(normalized.raw_memory.contains("[REDACTED_SECRET]"));
         assert!(!normalized.summary.contains("mysecret123456"));
         assert_eq!(normalized.summary, "password = [REDACTED_SECRET] small");
     }
 
     #[test]
-    fn normalize_trace_memory_structure_wraps_unstructured_content() {
-        let normalized = normalize_trace_memory_structure("loose notes only");
-        assert!(normalized.starts_with("# Trace Summary"));
-        assert!(normalized.contains("Trace context:"));
+    fn normalize_raw_memory_structure_wraps_unstructured_content() {
+        let normalized = normalize_raw_memory_structure("loose notes only");
+        assert!(normalized.starts_with("# Raw Memory"));
+        assert!(normalized.contains("Memory context:"));
         assert!(normalized.contains("## Task:"));
         assert!(normalized.contains("Outcome: uncertain"));
         assert!(normalized.contains("loose notes only"));

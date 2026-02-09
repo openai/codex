@@ -335,13 +335,13 @@ pub async fn get_thread_memory(
 pub async fn upsert_thread_memory(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
-    trace_summary: &str,
+    raw_memory: &str,
     memory_summary: &str,
     stage: &str,
 ) -> Option<codex_state::ThreadMemory> {
     let ctx = context?;
     match ctx
-        .upsert_thread_memory(thread_id, trace_summary, memory_summary)
+        .upsert_thread_memory(thread_id, raw_memory, memory_summary)
         .await
     {
         Ok(memory) => Some(memory),

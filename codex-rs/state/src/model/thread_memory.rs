@@ -9,7 +9,7 @@ use sqlx::sqlite::SqliteRow;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMemory {
     pub thread_id: ThreadId,
-    pub trace_summary: String,
+    pub raw_memory: String,
     pub memory_summary: String,
     pub updated_at: DateTime<Utc>,
 }
@@ -17,7 +17,7 @@ pub struct ThreadMemory {
 #[derive(Debug)]
 pub(crate) struct ThreadMemoryRow {
     thread_id: String,
-    trace_summary: String,
+    raw_memory: String,
     memory_summary: String,
     updated_at: i64,
 }
@@ -26,7 +26,7 @@ impl ThreadMemoryRow {
     pub(crate) fn try_from_row(row: &SqliteRow) -> Result<Self> {
         Ok(Self {
             thread_id: row.try_get("thread_id")?,
-            trace_summary: row.try_get("trace_summary")?,
+            raw_memory: row.try_get("raw_memory")?,
             memory_summary: row.try_get("memory_summary")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -39,7 +39,7 @@ impl TryFrom<ThreadMemoryRow> for ThreadMemory {
     fn try_from(row: ThreadMemoryRow) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             thread_id: ThreadId::try_from(row.thread_id)?,
-            trace_summary: row.trace_summary,
+            raw_memory: row.raw_memory,
             memory_summary: row.memory_summary,
             updated_at: epoch_seconds_to_datetime(row.updated_at)?,
         })
