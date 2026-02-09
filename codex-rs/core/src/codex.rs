@@ -170,6 +170,7 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::McpServerRefreshConfig;
+use crate::protocol::NetworkApprovalContext;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
@@ -2092,6 +2093,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
+        network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
         // Add the tx_approve callback to the map before sending the request.
@@ -2118,6 +2120,7 @@ impl Session {
             command,
             cwd,
             reason,
+            network_approval_context,
             proposed_execpolicy_amendment,
             parsed_cmd,
         });

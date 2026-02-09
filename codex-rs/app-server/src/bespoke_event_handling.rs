@@ -205,6 +205,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            network_approval_context: _,
         }) => match api_version {
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {

@@ -110,6 +110,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         command,
                         cwd,
                         reason,
+                        ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),

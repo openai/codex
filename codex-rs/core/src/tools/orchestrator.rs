@@ -20,12 +20,17 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use serde::Deserialize;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
 }
+
+const NETWORK_POLICY_DECISION_PREFIX: &str = "CODEX_NETWORK_POLICY_DECISION ";
 
 impl ToolOrchestrator {
     pub fn new() -> Self {
@@ -70,6 +75,7 @@ impl ToolOrchestrator {
                     turn: turn_ctx,
                     call_id: &tool_ctx.call_id,
                     retry_reason: reason,
+                    network_approval_context: None,
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
 
@@ -139,12 +145,16 @@ impl ToolOrchestrator {
 
                 // Ask for approval before retrying with the escalated sandbox.
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
-                    let reason_msg = build_denial_reason_from_output(output.as_ref());
+                    let retry_details = build_denial_reason_from_output(
+                        output.as_ref(),
+                        should_prompt_for_network_approval(turn_ctx),
+                    );
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
-                        retry_reason: Some(reason_msg),
+                        retry_reason: Some(retry_details.reason),
+                        network_approval_context: retry_details.network_approval_context,
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
@@ -179,8 +189,153 @@ impl ToolOrchestrator {
     }
 }
 
-fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
-    // Keep approval reason terse and stable for UX/tests, but accept the
-    // output so we can evolve heuristics later without touching call sites.
-    "command failed; retry without sandbox?".to_string()
+#[derive(Debug)]
+struct RetryApprovalDetails {
+    reason: String,
+    network_approval_context: Option<NetworkApprovalContext>,
+}
+
+fn build_denial_reason_from_output(
+    output: &ExecToolCallOutput,
+    network_prompting_enabled: bool,
+) -> RetryApprovalDetails {
+    let network_approval_context = if network_prompting_enabled {
+        extract_network_approval_context(output)
+    } else {
+        None
+    };
+    let reason = if let Some(network_approval_context) = network_approval_context.as_ref() {
+        format!(
+            "Network access to \"{}\" is blocked by policy.",
+            network_approval_context.host
+        )
+    } else {
+        // Keep approval reason terse and stable for UX/tests, but accept the
+        // output so we can evolve heuristics later without touching call sites.
+        "command failed; retry without sandbox?".to_string()
+    };
+    RetryApprovalDetails {
+        reason,
+        network_approval_context,
+    }
+}
+
+fn should_prompt_for_network_approval(turn_ctx: &crate::codex::TurnContext) -> bool {
+    matches!(
+        turn_ctx
+            .config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled),
+        Some(true)
+    )
+}
+
+fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<NetworkApprovalContext> {
+    [
+        output.stderr.text.as_str(),
+        output.stdout.text.as_str(),
+        output.aggregated_output.text.as_str(),
+    ]
+    .into_iter()
+    .find_map(extract_network_approval_context_from_text)
+}
+
+fn extract_network_approval_context_from_text(text: &str) -> Option<NetworkApprovalContext> {
+    text.lines()
+        .find_map(|line| line.strip_prefix(NETWORK_POLICY_DECISION_PREFIX))
+        .and_then(|payload| serde_json::from_str::<NetworkPolicyDecisionPayload>(payload).ok())
+        .and_then(|payload| {
+            if payload.decision != "ask" || payload.source != "decider" {
+                return None;
+            }
+
+            let protocol = match payload.protocol.as_str() {
+                "http" => NetworkApprovalProtocol::Http,
+                "https" | "https_connect" => NetworkApprovalProtocol::Https,
+                _ => return None,
+            };
+
+            let host = payload.host.trim();
+            if host.is_empty() {
+                return None;
+            }
+
+            Some(NetworkApprovalContext {
+                host: host.to_string(),
+                protocol,
+            })
+        })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkPolicyDecisionPayload {
+    decision: String,
+    source: String,
+    protocol: String,
+    host: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exec::StreamOutput;
+    use pretty_assertions::assert_eq;
+
+    fn output_with_stderr(stderr: &str) -> ExecToolCallOutput {
+        ExecToolCallOutput {
+            stderr: StreamOutput::new(stderr.to_string()),
+            ..ExecToolCallOutput::default()
+        }
+    }
+
+    #[test]
+    fn build_denial_reason_extracts_network_context_when_enabled() {
+        let output = output_with_stderr(
+            "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nblocked",
+        );
+
+        let details = build_denial_reason_from_output(&output, true);
+
+        assert_eq!(
+            details.network_approval_context,
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
+        );
+        assert_eq!(
+            details.reason,
+            "Network access to \"example.com\" is blocked by policy."
+        );
+    }
+
+    #[test]
+    fn build_denial_reason_skips_network_context_when_disabled() {
+        let output = output_with_stderr(
+            "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nblocked",
+        );
+
+        let details = build_denial_reason_from_output(&output, false);
+
+        assert_eq!(details.network_approval_context, None);
+        assert_eq!(details.reason, "command failed; retry without sandbox?");
+    }
+
+    #[test]
+    fn extract_network_approval_context_ignores_non_ask_payloads() {
+        let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"deny\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
+
+        assert_eq!(extract_network_approval_context_from_text(text), None);
+    }
+
+    #[test]
+    fn extract_network_approval_context_ignores_non_decider_payloads() {
+        let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"baseline_policy\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
+
+        assert_eq!(extract_network_approval_context_from_text(text), None);
+    }
 }
