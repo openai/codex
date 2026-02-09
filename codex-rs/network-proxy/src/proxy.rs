@@ -322,7 +322,6 @@ fn apply_proxy_env_overrides(
     if socks_enabled {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
-        env.insert("RSYNC_PROXY".to_string(), socks_addr.to_string());
         #[cfg(target_os = "macos")]
         {
             // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
@@ -600,7 +599,7 @@ mod tests {
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
-        assert_eq!(env.get("RSYNC_PROXY"), Some(&"127.0.0.1:8081".to_string()));
+        assert_eq!(env.get("RSYNC_PROXY"), None);
         assert_eq!(env.get("GRPC_PROXY"), None);
         #[cfg(target_os = "macos")]
         assert_eq!(
