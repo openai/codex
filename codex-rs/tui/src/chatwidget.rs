@@ -865,10 +865,9 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
-    /// Sets the currently rendered footer status-line value and schedules a redraw.
+    /// Sets the currently rendered footer status-line value.
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);
-        self.request_redraw();
     }
 
     /// Recomputes footer status-line content from config and current runtime state.

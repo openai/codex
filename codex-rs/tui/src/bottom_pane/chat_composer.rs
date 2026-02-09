@@ -3141,12 +3141,20 @@ impl ChatComposer {
         }
     }
 
-    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.status_line_value == status_line {
+            return false;
+        }
         self.status_line_value = status_line;
+        true
     }
 
-    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
+        if self.status_line_enabled == enabled {
+            return false;
+        }
         self.status_line_enabled = enabled;
+        true
     }
 }
 
