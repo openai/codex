@@ -166,19 +166,22 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     )?;
     write_models_cache(codex_home.path())?;
 
-    let id_token = encode_id_token(
+    let access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-embedded"),
     )?;
-    let access_token = "access-embedded".to_string();
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(id_token.clone(), access_token)
+        .send_chatgpt_auth_tokens_login_request(
+            access_token,
+            "org-embedded".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -236,7 +239,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     )?;
     write_models_cache(codex_home.path())?;
 
-    let id_token = encode_id_token(
+    let access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
@@ -247,7 +250,11 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(id_token, "access-embedded".to_string())
+        .send_chatgpt_auth_tokens_login_request(
+            access_token,
+            "org-embedded".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -300,7 +307,8 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
 async fn respond_to_refresh_request(
     mcp: &mut McpProcess,
     access_token: &str,
-    id_token: &str,
+    chatgpt_account_id: &str,
+    chatgpt_plan_type: Option<&str>,
 ) -> Result<()> {
     let refresh_req: ServerRequest = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -313,7 +321,8 @@ async fn respond_to_refresh_request(
     assert_eq!(params.reason, ChatgptAuthTokensRefreshReason::Unauthorized);
     let response = ChatgptAuthTokensRefreshResponse {
         access_token: access_token.to_string(),
-        id_token: id_token.to_string(),
+        chatgpt_account_id: chatgpt_account_id.to_string(),
+        chatgpt_plan_type: chatgpt_plan_type.map(str::to_string),
     };
     mcp.send_response(request_id, serde_json::to_value(response)?)
         .await?;
@@ -349,28 +358,27 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     )
     .await;
 
-    let initial_id_token = encode_id_token(
+    let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-initial"),
     )?;
-    let refreshed_id_token = encode_id_token(
+    let refreshed_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-refreshed"),
     )?;
-    let initial_access_token = "access-initial".to_string();
-    let refreshed_access_token = "access-refreshed".to_string();
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
-            initial_id_token.clone(),
             initial_access_token.clone(),
+            "org-initial".to_string(),
+            Some("pro".to_string()),
         )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
@@ -409,7 +417,13 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    respond_to_refresh_request(&mut mcp, &refreshed_access_token, &refreshed_id_token).await?;
+    respond_to_refresh_request(
+        &mut mcp,
+        &refreshed_access_token,
+        "org-refreshed",
+        Some("pro"),
+    )
+    .await?;
     let _turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
@@ -456,7 +470,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
 
-    let initial_id_token = encode_id_token(
+    let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
@@ -467,7 +481,11 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(initial_id_token, "access-initial".to_string())
+        .send_chatgpt_auth_tokens_login_request(
+            initial_access_token,
+            "org-initial".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -568,13 +586,13 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
 
-    let initial_id_token = encode_id_token(
+    let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
             .chatgpt_account_id("org-expected"),
     )?;
-    let refreshed_id_token = encode_id_token(
+    let refreshed_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
             .plan_type("pro")
@@ -585,7 +603,11 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(initial_id_token, "access-initial".to_string())
+        .send_chatgpt_auth_tokens_login_request(
+            initial_access_token,
+            "org-expected".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -636,8 +658,9 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(ChatgptAuthTokensRefreshResponse {
-            access_token: "access-refreshed".to_string(),
-            id_token: refreshed_id_token,
+            access_token: refreshed_access_token,
+            chatgpt_account_id: "org-other".to_string(),
+            chatgpt_plan_type: Some("pro".to_string()),
         })?,
     )
     .await?;
@@ -664,8 +687,8 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
 }
 
 #[tokio::test]
-// Refresh returns a malformed id_token; turn fails.
-async fn external_auth_refresh_invalid_id_token_fails_turn() -> Result<()> {
+// Refresh returns a malformed access token; turn fails.
+async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
     create_config_toml(
@@ -684,7 +707,7 @@ async fn external_auth_refresh_invalid_id_token_fails_turn() -> Result<()> {
     let _responses_mock =
         responses::mount_response_sequence(&mock_server, vec![unauthorized]).await;
 
-    let initial_id_token = encode_id_token(
+    let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
@@ -695,7 +718,11 @@ async fn external_auth_refresh_invalid_id_token_fails_turn() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(initial_id_token, "access-initial".to_string())
+        .send_chatgpt_auth_tokens_login_request(
+            initial_access_token,
+            "org-initial".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -746,8 +773,9 @@ async fn external_auth_refresh_invalid_id_token_fails_turn() -> Result<()> {
     mcp.send_response(
         request_id,
         serde_json::to_value(ChatgptAuthTokensRefreshResponse {
-            access_token: "access-refreshed".to_string(),
-            id_token: "not-a-jwt".to_string(),
+            access_token: "not-a-jwt".to_string(),
+            chatgpt_account_id: "org-initial".to_string(),
+            chatgpt_plan_type: Some("pro".to_string()),
         })?,
     )
     .await?;
@@ -967,7 +995,7 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
         bail!("unexpected login response: {login:?}");
     };
 
-    let id_token = encode_id_token(
+    let access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
@@ -976,7 +1004,11 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
     // Set an external auth token instead of completing the ChatGPT login flow.
     // This should cancel the active login attempt.
     let set_id = mcp
-        .send_chatgpt_auth_tokens_login_request(id_token, "access-embedded".to_string())
+        .send_chatgpt_auth_tokens_login_request(
+            access_token,
+            "org-embedded".to_string(),
+            Some("pro".to_string()),
+        )
         .await?;
     let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,

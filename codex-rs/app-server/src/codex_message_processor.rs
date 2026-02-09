@@ -203,7 +203,6 @@ use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::open_if_present;
-use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -789,11 +788,17 @@ impl CodexMessageProcessor {
                 self.login_chatgpt_v2(request_id).await;
             }
             LoginAccountParams::ChatgptAuthTokens {
-                id_token,
                 access_token,
+                chatgpt_account_id,
+                chatgpt_plan_type,
             } => {
-                self.login_chatgpt_auth_tokens(request_id, id_token, access_token)
-                    .await;
+                self.login_chatgpt_auth_tokens(
+                    request_id,
+                    access_token,
+                    chatgpt_account_id,
+                    chatgpt_plan_type,
+                )
+                .await;
             }
         }
     }
@@ -1224,8 +1229,9 @@ impl CodexMessageProcessor {
     async fn login_chatgpt_auth_tokens(
         &mut self,
         request_id: ConnectionRequestId,
-        id_token: String,
         access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
     ) {
         if matches!(
             self.config.forced_login_method,
@@ -1249,27 +1255,13 @@ impl CodexMessageProcessor {
             }
         }
 
-        let id_token_info = match parse_id_token(&id_token) {
-            Ok(info) => info,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid id token: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
         if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && id_token_info.chatgpt_account_id.as_deref() != Some(expected_workspace)
+            && chatgpt_account_id != expected_workspace
         {
-            let account_id = id_token_info.chatgpt_account_id;
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
-                    "External auth must use workspace {expected_workspace}, but received {account_id:?}."
+                    "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
                 ),
                 data: None,
             };
@@ -1277,9 +1269,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if let Err(err) =
-            login_with_chatgpt_auth_tokens(&self.config.codex_home, &id_token, &access_token)
-        {
+        if let Err(err) = login_with_chatgpt_auth_tokens(
+            &self.config.codex_home,
+            &access_token,
+            &chatgpt_account_id,
+            chatgpt_plan_type.as_deref(),
+        ) {
             let error = JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to set external auth: {err}"),
