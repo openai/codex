@@ -1044,7 +1044,11 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(
+            session_configuration.clone(),
+            conversation_id.to_string(),
+            config.codex_home.clone(),
+        );
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -2029,7 +2033,10 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new();
+        let mut history = ContextManager::new(
+            Arc::new(self.conversation_id.to_string()),
+            Arc::new(turn_context.config.codex_home.clone()),
+        );
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -5483,6 +5490,7 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
+        let conversation_id = ThreadId::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
@@ -5517,7 +5525,11 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(
+            session_configuration,
+            conversation_id.to_string(),
+            config.codex_home.clone(),
+        );
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -5566,6 +5578,7 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
+        let conversation_id = ThreadId::default();
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
@@ -5600,7 +5613,11 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
 
-        let mut state = SessionState::new(session_configuration);
+        let mut state = SessionState::new(
+            session_configuration,
+            conversation_id.to_string(),
+            config.codex_home.clone(),
+        );
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -5885,7 +5902,11 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(
+            session_configuration.clone(),
+            conversation_id.to_string(),
+            config.codex_home.clone(),
+        );
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
@@ -6017,7 +6038,11 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let mut state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(
+            session_configuration.clone(),
+            conversation_id.to_string(),
+            config.codex_home.clone(),
+        );
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
@@ -6516,7 +6541,10 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ContextManager::new();
+        let mut live_history = ContextManager::new(
+            Arc::new(session.conversation_id.to_string()),
+            Arc::new(turn_context.config.codex_home.clone()),
+        );
 
         let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {

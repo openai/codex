@@ -12,8 +12,13 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tempfile::tempdir;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -31,7 +36,10 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
-    let mut h = ContextManager::new();
+    let mut h = ContextManager::new(
+        Arc::new("test-thread".to_string()),
+        Arc::new(PathBuf::from("/tmp/test-codex-home")),
+    );
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
     h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
@@ -60,6 +68,24 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     })
+}
+
+fn set_context_window_and_usage(
+    history: &mut ContextManager,
+    context_window: i64,
+    total_usage: i64,
+) {
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage {
+            total_tokens: total_usage,
+            ..TokenUsage::default()
+        },
+        last_token_usage: TokenUsage {
+            total_tokens: total_usage,
+            ..TokenUsage::default()
+        },
+        model_context_window: Some(context_window),
+    }));
 }
 
 fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
@@ -110,7 +136,10 @@ fn approx_token_count_for_text(text: &str) -> i64 {
 
 #[test]
 fn filters_non_api_messages() {
-    let mut h = ContextManager::default();
+    let mut h = ContextManager::new(
+        Arc::new("test-thread".to_string()),
+        Arc::new(PathBuf::from("/tmp/test-codex-home")),
+    );
     let policy = TruncationPolicy::Tokens(10_000);
     // System message is not API messages; Other is ignored.
     let system = ResponseItem::Message(codex_protocol::models::Message {
@@ -590,7 +619,10 @@ fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::new(
+        Arc::new("test-thread".to_string()),
+        Arc::new(PathBuf::from("/tmp/test-codex-home")),
+    );
     // Any reasonably small token budget works; the test only cares that
     // truncation happens and the marker is present.
     let policy = TruncationPolicy::Tokens(1_000);
@@ -629,7 +661,10 @@ fn record_items_truncates_function_call_output_content() {
 
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::new(
+        Arc::new("test-thread".to_string()),
+        Arc::new(PathBuf::from("/tmp/test-codex-home")),
+    );
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -662,7 +697,10 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let mut history = ContextManager::new();
+    let mut history = ContextManager::new(
+        Arc::new("test-thread".to_string()),
+        Arc::new(PathBuf::from("/tmp/test-codex-home")),
+    );
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
@@ -687,6 +725,119 @@ fn record_items_respects_custom_token_limit() {
             .text_content()
             .is_some_and(|content| content.contains("tokens truncated"))
     );
+}
+
+#[test]
+fn record_items_with_discoverability_offloads_large_user_message() {
+    let codex_home = tempdir().expect("create tempdir");
+    let mut history = ContextManager::new(
+        Arc::new("thread-1".to_string()),
+        Arc::new(codex_home.path().to_path_buf()),
+    );
+    let policy = TruncationPolicy::Tokens(10_000);
+    let large_text = "large user prompt ".repeat(200);
+    let item = user_input_text_msg(&large_text);
+    set_context_window_and_usage(&mut history, 1, 1);
+
+    history.record_items([&item], policy);
+
+    assert_eq!(history.raw_items().len(), 1);
+    let stored = &history.raw_items()[0];
+    let ResponseItem::Message(message) = stored else {
+        panic!("expected message item, got {stored:?}");
+    };
+    let [ContentItem::InputText { text }] = message.content.as_slice() else {
+        panic!("expected a single discoverable pointer text, got {message:?}");
+    };
+    assert!(text.starts_with("User message was too large. Read it from <"));
+    let path = text
+        .split('<')
+        .nth(1)
+        .and_then(|s| s.split('>').next())
+        .expect("discoverable path enclosed in angle brackets");
+    assert!(path.contains("/discovarable_items/thread-1/user_message/"));
+    let persisted = std::fs::read_to_string(path).expect("discoverable file exists");
+    assert_eq!(persisted, large_text);
+}
+
+#[test]
+fn record_items_with_discoverability_keeps_small_user_message_in_history() {
+    let codex_home = tempdir().expect("create tempdir");
+    let mut history = ContextManager::new(
+        Arc::new("thread-2".to_string()),
+        Arc::new(codex_home.path().to_path_buf()),
+    );
+    let policy = TruncationPolicy::Tokens(10_000);
+    let item = user_input_text_msg("small prompt");
+    set_context_window_and_usage(&mut history, 10_000, 0);
+
+    history.record_items([&item], policy);
+
+    assert_eq!(history.raw_items(), vec![item]);
+}
+
+#[test]
+fn record_items_with_discoverability_does_not_change_non_user_messages() {
+    let codex_home = tempdir().expect("create tempdir");
+    let mut history = ContextManager::new(
+        Arc::new("thread-3".to_string()),
+        Arc::new(codex_home.path().to_path_buf()),
+    );
+    let policy = TruncationPolicy::Tokens(10_000);
+    let item = assistant_msg(&"assistant reply ".repeat(300));
+    set_context_window_and_usage(&mut history, 1, 1);
+
+    history.record_items([&item], policy);
+
+    assert_eq!(history.raw_items(), vec![item]);
+}
+
+#[test]
+fn record_items_with_discoverability_ignores_image_only_user_messages() {
+    let codex_home = tempdir().expect("create tempdir");
+    let mut history = ContextManager::new(
+        Arc::new("thread-4".to_string()),
+        Arc::new(codex_home.path().to_path_buf()),
+    );
+    let policy = TruncationPolicy::Tokens(10_000);
+    let item = ResponseItem::Message(codex_protocol::models::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+    set_context_window_and_usage(&mut history, 1, 1);
+
+    history.record_items([&item], policy);
+
+    assert_eq!(history.raw_items(), vec![item]);
+}
+
+#[test]
+fn record_items_with_discoverability_offloads_once_above_ninety_five_percent_window() {
+    let codex_home = tempdir().expect("create tempdir");
+    let mut history = ContextManager::new(
+        Arc::new("thread-95".to_string()),
+        Arc::new(codex_home.path().to_path_buf()),
+    );
+    let policy = TruncationPolicy::Tokens(10_000);
+    let text = "near context threshold ".repeat(100);
+    let item = user_input_text_msg(&text);
+    set_context_window_and_usage(&mut history, 1_000, 900);
+
+    history.record_items([&item], policy);
+
+    let stored = &history.raw_items()[0];
+    let ResponseItem::Message(message) = stored else {
+        panic!("expected message item, got {stored:?}");
+    };
+    let [ContentItem::InputText { text }] = message.content.as_slice() else {
+        panic!("expected discoverable pointer text, got {message:?}");
+    };
+    assert!(text.starts_with("User message was too large. Read it from <"));
 }
 
 fn assert_truncated_message_matches(message: &str, line: &str, expected_removed: usize) {

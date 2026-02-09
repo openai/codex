@@ -15,20 +15,26 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Transcript of thread history
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    thread_id: Arc<String>,
+    codex_home: Arc<PathBuf>,
 }
 
 impl ContextManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(thread_id: Arc<String>, codex_home: Arc<PathBuf>) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            thread_id,
+            codex_home,
         }
     }
 
@@ -288,10 +294,18 @@ impl ContextManager {
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+        let used_tokens = self
+            .token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens)
+            .unwrap_or(0);
+        let context_window = self
+            .token_info
+            .as_ref()
+            .and_then(|info| info.model_context_window);
         let policy_with_serialization_budget = policy * 1.2;
         match item {
-            ResponseItem::Message(_)
-            | ResponseItem::Reasoning(_)
+            ResponseItem::Reasoning(_)
             | ResponseItem::LocalShellCall(_)
             | ResponseItem::FunctionCall(_)
             | ResponseItem::CustomToolCall(_)
@@ -299,12 +313,27 @@ impl ContextManager {
             | ResponseItem::Compaction(_)
             | ResponseItem::GhostSnapshot(_)
             | ResponseItem::Other => item.clone(),
-            ResponseItem::FunctionCallOutput(item) => {
-                item.discoverable_history_item(policy_with_serialization_budget)
-            }
-            ResponseItem::CustomToolCallOutput(item) => {
-                item.discoverable_history_item(policy_with_serialization_budget)
-            }
+            ResponseItem::FunctionCallOutput(item) => item.discoverable_history_item(
+                policy_with_serialization_budget,
+                Some(self.codex_home.as_path()),
+                Some(self.thread_id.as_str()),
+                context_window,
+                used_tokens,
+            ),
+            ResponseItem::CustomToolCallOutput(item) => item.discoverable_history_item(
+                policy_with_serialization_budget,
+                Some(self.codex_home.as_path()),
+                Some(self.thread_id.as_str()),
+                context_window,
+                used_tokens,
+            ),
+            ResponseItem::Message(item) => item.discoverable_history_item(
+                policy_with_serialization_budget,
+                Some(self.codex_home.as_path()),
+                Some(self.thread_id.as_str()),
+                context_window,
+                used_tokens,
+            ),
         }
     }
 }

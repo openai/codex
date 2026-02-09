@@ -3,6 +3,8 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -30,8 +32,12 @@ pub(crate) struct SessionState {
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
-        let history = ContextManager::new();
+    pub(crate) fn new(
+        session_configuration: SessionConfiguration,
+        thread_id: String,
+        codex_home: PathBuf,
+    ) -> Self {
+        let history = ContextManager::new(Arc::new(thread_id), Arc::new(codex_home));
         Self {
             session_configuration,
             history,
