@@ -306,9 +306,6 @@ impl RequestUserInputOverlay {
 
         // Build rows with selection markers for the shared selection renderer.
         let option_rows = self.option_rows();
-        let options_hidden = self.has_options()
-            && sections.options_area.height > 0
-            && self.options_required_height(content_area.width) > sections.options_area.height;
 
         if self.has_options() {
             let mut options_state = self
@@ -347,6 +344,9 @@ impl RequestUserInputOverlay {
         if footer_area.height == 0 {
             return;
         }
+        let options_hidden = self.has_options()
+            && sections.options_area.height > 0
+            && self.options_required_height(content_area.width) > sections.options_area.height;
         let option_tip = if options_hidden {
             let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
             let total = self.options_len();
