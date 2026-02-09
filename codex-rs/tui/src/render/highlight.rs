@@ -8,10 +8,10 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::highlighting::Style as SyntectStyle;
 use syntect::highlighting::Theme;
-use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxReference;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
+use two_face::theme::EmbeddedThemeName;
 
 // -- Global singletons -------------------------------------------------------
 
@@ -19,13 +19,18 @@ static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME: OnceLock<Theme> = OnceLock::new();
 
 fn syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
 }
 
 fn theme() -> &'static Theme {
     THEME.get_or_init(|| {
-        let ts = ThemeSet::load_defaults();
-        ts.themes["base16-ocean.dark"].clone()
+        let ts = two_face::theme::extra();
+        // Pick light or dark theme based on terminal background color.
+        let name = match crate::terminal_palette::default_bg() {
+            Some(bg) if crate::color::is_light(bg) => EmbeddedThemeName::CatppuccinLatte,
+            _ => EmbeddedThemeName::CatppuccinMocha,
+        };
+        ts.get(name).clone()
     })
 }
 
@@ -77,9 +82,7 @@ fn convert_style(syn_style: SyntectStyle) -> Style {
     if syn_style.font_style.contains(FontStyle::BOLD) {
         rt_style.add_modifier |= Modifier::BOLD;
     }
-    if syn_style.font_style.contains(FontStyle::ITALIC) {
-        rt_style.add_modifier |= Modifier::ITALIC;
-    }
+    // Intentionally skip italic — many terminals render it poorly or not at all.
     if syn_style.font_style.contains(FontStyle::UNDERLINE) {
         rt_style.add_modifier |= Modifier::UNDERLINED;
     }
@@ -313,7 +316,8 @@ mod tests {
         // Background is intentionally skipped.
         assert_eq!(rt.bg, None);
         assert!(rt.add_modifier.contains(Modifier::BOLD));
-        assert!(rt.add_modifier.contains(Modifier::ITALIC));
+        // Italic is intentionally suppressed.
+        assert!(!rt.add_modifier.contains(Modifier::ITALIC));
         assert!(!rt.add_modifier.contains(Modifier::UNDERLINED));
     }
 
@@ -385,12 +389,10 @@ mod tests {
 
     #[test]
     fn find_syntax_resolves_all_canonical_languages() {
-        // Every canonical name that normalize_lang produces AND that syntect's
-        // default syntax set supports must resolve.  Note: syntect's defaults
-        // do NOT include TypeScript, TSX, Kotlin, Swift, or Zig, so those are
-        // intentionally omitted here (they gracefully fall back to plain text).
         let canonical = [
             "javascript",
+            "typescript",
+            "tsx",
             "python",
             "ruby",
             "rust",
@@ -399,31 +401,25 @@ mod tests {
             "cpp",
             "yaml",
             "bash",
+            "kotlin",
             "markdown",
             "sql",
             "lua",
+            "zig",
+            "swift",
             "java",
         ];
         for lang in canonical {
             assert!(
                 find_syntax(lang).is_some(),
-                "find_syntax({lang:?}) returned None — syntect cannot resolve this canonical name"
+                "find_syntax({lang:?}) returned None"
             );
         }
-        // Also verify common raw extensions resolve.
-        let extensions = ["rs", "py", "js", "rb", "go", "sh", "md", "yml"];
+        let extensions = ["rs", "py", "js", "ts", "rb", "go", "sh", "md", "yml"];
         for ext in extensions {
             assert!(
                 find_syntax(ext).is_some(),
-                "find_syntax({ext:?}) returned None — extension lookup failed"
-            );
-        }
-        // Unsupported languages should return None (graceful fallback).
-        let unsupported = ["typescript", "tsx", "kotlin", "swift", "zig"];
-        for lang in unsupported {
-            assert!(
-                find_syntax(lang).is_none(),
-                "find_syntax({lang:?}) unexpectedly returned Some — update test if syntect added support"
+                "find_syntax({ext:?}) returned None"
             );
         }
     }
