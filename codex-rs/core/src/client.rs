@@ -82,7 +82,6 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::debug;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -239,78 +238,6 @@ impl ModelClient {
         }
     }
 
-    /// Spawns a best-effort task that warms a websocket for the first turn.
-    ///
-    /// This call performs only connection setup; it never sends prompt payloads.
-    ///
-    /// A timeout when computing turn metadata is treated the same as "no metadata" so startup
-    /// cannot block indefinitely on optional preconnect context.
-    pub fn pre_establish_connection(&self, otel_manager: OtelManager, cwd: PathBuf) {
-        if !self.responses_websocket_enabled() || self.disable_websockets() {
-            return;
-        }
-
-        let model_client = self.clone();
-        let handle = tokio::spawn(async move {
-            let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-                build_turn_metadata_header(cwd.as_path(), None),
-                None,
-            )
-            .await;
-            let _ = model_client
-                .preconnect(&otel_manager, turn_metadata_header.as_deref())
-                .await;
-        });
-        self.store_preconnect_task(handle);
-    }
-
-    /// Opportunistically pre-establishes a Responses WebSocket connection for this session.
-    ///
-    /// This method is best-effort: it returns `false` on any setup/connect failure and the caller
-    /// should continue normally. A successful preconnect reduces first-turn latency but never sends
-    /// an initial prompt; the first `response.create` is still sent only when a turn starts.
-    ///
-    /// The preconnected slot is single-consumer and single-use: the next `ModelClientSession` may
-    /// adopt it once, after which later turns either keep using that same turn-local connection or
-    /// create a new one.
-    pub async fn preconnect(
-        &self,
-        otel_manager: &OtelManager,
-        turn_metadata_header: Option<&str>,
-    ) -> bool {
-        if !self.responses_websocket_enabled() || self.disable_websockets() {
-            return false;
-        }
-
-        let client_setup = match self.current_client_setup().await {
-            Ok(client_setup) => client_setup,
-            Err(err) => {
-                warn!("failed to build websocket preconnect client setup: {err}");
-                return false;
-            }
-        };
-        let turn_state = Arc::new(OnceLock::new());
-
-        match self
-            .connect_websocket(
-                otel_manager,
-                client_setup.api_provider,
-                client_setup.api_auth,
-                Some(Arc::clone(&turn_state)),
-                turn_metadata_header,
-            )
-            .await
-        {
-            Ok(connection) => {
-                self.store_preconnected_websocket(connection, turn_state.get().cloned());
-                true
-            }
-            Err(err) => {
-                debug!("websocket preconnect failed: {err}");
-                false
-            }
-        }
-    }
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of
