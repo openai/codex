@@ -9,6 +9,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -52,12 +53,19 @@ pub(crate) enum ColumnWidthMode {
     Fixed,
 }
 
+// Fixed split used by explicitly fixed column mode: 30% label, 70%
+// description.
 const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
 const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
+// Auto-width modes can otherwise allocate almost all width to the label
+// column; cap it at 70% so descriptions remain readable.
 const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
 const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
 
+// For wrapped two-column rows (request_user_input options), clamp the label
+// column to at most half the width so long labels do not squeeze descriptions
+// into a narrow strip.
 const WRAPPED_BALANCED_COL_NUMERATOR: usize = 1;
 const WRAPPED_BALANCED_COL_DENOMINATOR: usize = 2;
 
@@ -111,6 +119,21 @@ fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
+}
+
+fn line_to_owned(line: Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .into_iter()
+            .map(|span| Span {
+                style: span.style,
+                content: Cow::Owned(span.content.into_owned()),
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
@@ -273,6 +296,8 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
 }
 
 fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
+    // This path intentionally targets plain option rows that opt into wrapped
+    // labels. Styled/fuzzy-matched rows keep the legacy combined-line path.
     row.wrap_indent.is_some()
         && row.description.is_some()
         && row.disabled_reason.is_none()
@@ -342,6 +367,49 @@ fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> 
     }
 
     out
+}
+
+fn wrap_standard_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+    use crate::wrapping::RtOptions;
+    use crate::wrapping::word_wrap_line;
+
+    let full_line = build_full_line(row, desc_col);
+    let continuation_indent = wrap_indent(row, desc_col, width);
+    let options = RtOptions::new(width.max(1) as usize)
+        .initial_indent(Line::from(""))
+        .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
+    word_wrap_line(&full_line, options)
+        .into_iter()
+        .map(line_to_owned)
+        .collect()
+}
+
+fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+    if should_wrap_name_in_column(row) {
+        let wrapped = wrap_two_column_row(row, desc_col, width);
+        if !wrapped.is_empty() {
+            return wrapped;
+        }
+    }
+
+    wrap_standard_row(row, desc_col, width)
+}
+
+fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
+    if selected {
+        for line in lines.iter_mut() {
+            line.spans.iter_mut().for_each(|span| {
+                span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+    }
+    if is_disabled {
+        for line in lines.iter_mut() {
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
+        }
+    }
 }
 
 /// Build the full display line for a row with the description padded to start
@@ -485,63 +553,12 @@ fn render_rows_inner(
             break;
         }
 
-        if should_wrap_name_in_column(row) {
-            let mut wrapped = wrap_two_column_row(row, desc_col, area.width);
-            if Some(i) == state.selected_idx && !row.is_disabled {
-                wrapped.iter_mut().for_each(|line| {
-                    line.spans.iter_mut().for_each(|span| {
-                        span.style = Style::default().fg(Color::Cyan).bold();
-                    });
-                });
-            }
-            if row.is_disabled {
-                wrapped.iter_mut().for_each(|line| {
-                    line.spans.iter_mut().for_each(|span| {
-                        span.style = span.style.dim();
-                    });
-                });
-            }
-
-            for line in wrapped {
-                if cur_y >= area.y + area.height {
-                    break;
-                }
-                line.render(
-                    Rect {
-                        x: area.x,
-                        y: cur_y,
-                        width: area.width,
-                        height: 1,
-                    },
-                    buf,
-                );
-                cur_y = cur_y.saturating_add(1);
-            }
-            continue;
-        }
-
-        let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx && !row.is_disabled {
-            // Match previous behavior: cyan + bold for the selected row.
-            // Reset the style first to avoid inheriting dim from keyboard shortcuts.
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
-            });
-        }
-        if row.is_disabled {
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
-            });
-        }
-
-        // Wrap with subsequent indent aligned to the description column.
-        use crate::wrapping::RtOptions;
-        use crate::wrapping::word_wrap_line;
-        let continuation_indent = wrap_indent(row, desc_col, area.width);
-        let options = RtOptions::new(area.width as usize)
-            .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-        let wrapped = word_wrap_line(&full_line, options);
+        let mut wrapped = wrap_row_lines(row, desc_col, area.width);
+        apply_row_state_style(
+            &mut wrapped,
+            Some(i) == state.selected_idx && !row.is_disabled,
+            row.is_disabled,
+        );
 
         // Render the wrapped lines.
         for line in wrapped {
@@ -808,8 +825,6 @@ fn measure_rows_height_inner(
         col_width_mode,
     );
 
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_line;
     let mut total: u16 = 0;
     for row in rows_all
         .iter()
@@ -818,16 +833,7 @@ fn measure_rows_height_inner(
         .take(visible_items)
         .map(|(_, r)| r)
     {
-        let wrapped_lines = if should_wrap_name_in_column(row) {
-            wrap_two_column_row(row, desc_col, content_width).len()
-        } else {
-            let full_line = build_full_line(row, desc_col);
-            let continuation_indent = wrap_indent(row, desc_col, content_width);
-            let opts = RtOptions::new(content_width as usize)
-                .initial_indent(Line::from(""))
-                .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-            word_wrap_line(&full_line, opts).len()
-        };
+        let wrapped_lines = wrap_row_lines(row, desc_col, content_width).len();
         total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
