@@ -62,13 +62,6 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
-fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
-        output: FunctionCallOutputPayload::from_text(content.to_string()),
-    }
-}
-
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
