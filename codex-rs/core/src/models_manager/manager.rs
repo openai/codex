@@ -152,22 +152,21 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> Option<ModelInfo> {
-        self.get_remote_models(config)
-            .await
-            .into_iter()
-            .fold(None, |best, candidate| {
-                if model.starts_with(&candidate.slug) {
-                    let is_better_match = if let Some(current) = best.as_ref() {
-                        candidate.slug.len() > current.slug.len()
-                    } else {
-                        true
-                    };
-                    if is_better_match {
-                        return Some(candidate);
-                    }
-                }
-                best
-            })
+        let mut best = None;
+        for candidate in self.get_remote_models(config).await {
+            if !model.starts_with(&candidate.slug) {
+                continue;
+            }
+            let is_better_match = if let Some(current) = best.as_ref() {
+                candidate.slug.len() > current.slug.len()
+            } else {
+                true
+            };
+            if is_better_match {
+                best = Some(candidate);
+            }
+        }
+        best
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
