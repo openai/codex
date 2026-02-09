@@ -70,7 +70,7 @@ struct Dependencies {
 
 #[derive(Debug, Deserialize)]
 struct Policy {
-    #[serde(default)]
+    #[serde(default = "default_allow_implicit_invocation")]
     allow_implicit_invocation: bool,
 }
 
@@ -80,6 +80,10 @@ impl Default for Policy {
             allow_implicit_invocation: true,
         }
     }
+}
+
+fn default_allow_implicit_invocation() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1265,6 +1269,31 @@ policy:
         assert_eq!(outcome.skills.len(), 1);
         assert!(!outcome.skills[0].policy.allow_implicit_invocation);
         assert!(outcome.enabled_skills().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_skill_policy_defaults_to_allow_implicit_invocation() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "policy-empty", "from json");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
+policy: {}
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        assert!(outcome.skills[0].policy.allow_implicit_invocation);
     }
 
     #[tokio::test]
