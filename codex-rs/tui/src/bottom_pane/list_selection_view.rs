@@ -36,6 +36,12 @@ use unicode_width::UnicodeWidthStr;
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+/// Callback type for when the selection changes (navigation, filter, number-key).
+pub type OnSelectionChangedCallback = Option<Box<dyn Fn(usize, &AppEventSender) + Send + Sync>>;
+
+/// Callback type for when the selection popup is dismissed without accepting (e.g. via Esc or Ctrl+C).
+pub type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
+
 /// One row in a [`ListSelectionView`] selection list.
 ///
 /// This is the source-of-truth model for row state before filtering and
@@ -79,6 +85,17 @@ pub(crate) struct SelectionViewParams {
     pub col_width_mode: ColumnWidthMode,
     pub header: Box<dyn Renderable>,
     pub initial_selected_idx: Option<usize>,
+
+    /// Rich content rendered below the list items, inside the bordered menu
+    /// surface. Used by the theme picker to show a syntax-highlighted preview.
+    pub footer_content: Box<dyn Renderable>,
+
+    /// Called when the highlighted item changes (navigation, filter, number-key).
+    /// Receives the *actual* item index, not the filtered/visible index.
+    pub on_selection_changed: OnSelectionChangedCallback,
+
+    /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
+    pub on_cancel: OnCancelCallback,
 }
 
 impl Default for SelectionViewParams {
@@ -95,6 +112,9 @@ impl Default for SelectionViewParams {
             col_width_mode: ColumnWidthMode::AutoVisible,
             header: Box::new(()),
             initial_selected_idx: None,
+            footer_content: Box::new(()),
+            on_selection_changed: None,
+            on_cancel: None,
         }
     }
 }
@@ -120,6 +140,13 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
+    footer_content: Box<dyn Renderable>,
+
+    /// Called when the highlighted item changes (navigation, filter, number-key).
+    on_selection_changed: OnSelectionChangedCallback,
+
+    /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
+    on_cancel: OnCancelCallback,
 }
 
 impl ListSelectionView {
@@ -161,6 +188,9 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
+            footer_content: params.footer_content,
+            on_selection_changed: params.on_selection_changed,
+            on_cancel: params.on_cancel,
         };
         s.apply_filter();
         s
@@ -278,6 +308,7 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
+        self.fire_selection_changed();
     }
 
     fn move_down(&mut self) {
@@ -286,6 +317,18 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
+        self.fire_selection_changed();
+    }
+
+    fn fire_selection_changed(&self) {
+        if let Some(cb) = &self.on_selection_changed
+            && let Some(actual) = self
+                .state
+                .selected_idx
+                .and_then(|vis| self.filtered_indices.get(vis).copied())
+        {
+            cb(actual, &self.app_event_tx);
+        }
     }
 
     fn accept(&mut self) {
@@ -469,6 +512,9 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if let Some(cb) = &self.on_cancel {
+            cb(&self.app_event_tx);
+        }
         self.complete = true;
         CancellationEvent::Handled
     }
@@ -507,6 +553,14 @@ impl Renderable for ListSelectionView {
         height = height.saturating_add(rows_height + 3);
         if self.is_searchable {
             height = height.saturating_add(1);
+        }
+        // Footer content (e.g. theme preview) rendered below the list.
+        // A 1-row gap keeps the picker bg as a visual separator.
+        let footer_content_height = self
+            .footer_content
+            .desired_height(width.saturating_sub(4));
+        if footer_content_height > 0 {
+            height = height.saturating_add(1 + footer_content_height);
         }
         if let Some(note) = &self.footer_note {
             let note_width = width.saturating_sub(2);
@@ -565,11 +619,17 @@ impl Renderable for ListSelectionView {
                 ColumnWidthMode::Fixed,
             ),
         };
-        let [header_area, _, search_area, list_area] = Layout::vertical([
+        let footer_content_height = self
+            .footer_content
+            .desired_height(outer_content_area.width.saturating_sub(4));
+        let footer_gap = if footer_content_height > 0 { 1 } else { 0 };
+        let [header_area, _, search_area, list_area, _, footer_content_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
             Constraint::Length(rows_height),
+            Constraint::Length(footer_gap),
+            Constraint::Length(footer_content_height),
         ])
         .areas(content_area);
 
@@ -632,6 +692,27 @@ impl Renderable for ListSelectionView {
                     ColumnWidthMode::Fixed,
                 ),
             };
+        }
+
+        // Render footer content (e.g. theme preview). Clear the menu surface
+        // background from the footer content area through the bottom inset so
+        // the preview appears on the terminal's own background without a
+        // trailing picker-bg row.
+        if footer_content_area.height > 0 {
+            let clear_height = (outer_content_area.y + outer_content_area.height)
+                .saturating_sub(footer_content_area.y);
+            let clear_area = Rect::new(
+                outer_content_area.x,
+                footer_content_area.y,
+                outer_content_area.width,
+                clear_height,
+            );
+            for y in clear_area.y..clear_area.y + clear_area.height {
+                for x in clear_area.x..clear_area.x + clear_area.width {
+                    buf[(x, y)].set_style(ratatui::style::Style::reset());
+                }
+            }
+            self.footer_content.render(footer_content_area, buf);
         }
 
         if footer_area.height > 0 {
