@@ -5,6 +5,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -147,7 +148,7 @@ async fn run_remote_compact_task_inner_impl(
 #[derive(Debug)]
 struct CompactRequestMetrics {
     failing_compaction_request_body_json: String,
-    failing_compaction_request_body_bytes: usize,
+    failing_compaction_request_model_visible_bytes: usize,
 }
 
 fn build_compact_request_metrics(
@@ -160,21 +161,19 @@ fn build_compact_request_metrics(
         input,
         instructions,
     };
-    let (failing_compaction_request_body_json, failing_compaction_request_body_bytes) =
-        match serde_json::to_vec(&payload) {
-            Ok(payload_bytes) => (
-                String::from_utf8_lossy(&payload_bytes).into_owned(),
-                payload_bytes.len(),
-            ),
-            Err(err) => (
-                format!("{{\"compact_request_serialization_error\":\"{err}\"}}"),
-                0,
-            ),
-        };
+    let failing_compaction_request_model_visible_bytes =
+        input.iter().fold(instructions.len(), |acc, item| {
+            acc.saturating_add(estimate_response_item_model_visible_bytes(item))
+        });
+
+    let failing_compaction_request_body_json = match serde_json::to_vec(&payload) {
+        Ok(payload_bytes) => String::from_utf8_lossy(&payload_bytes).into_owned(),
+        Err(err) => format!("{{\"compact_request_serialization_error\":\"{err}\"}}"),
+    };
 
     CompactRequestMetrics {
         failing_compaction_request_body_json,
-        failing_compaction_request_body_bytes,
+        failing_compaction_request_model_visible_bytes,
     }
 }
 
@@ -205,7 +204,7 @@ fn log_remote_compact_failure(
         estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
         estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
         model_context_window_tokens = ?turn_context.model_context_window(),
-        failing_compaction_request_body_bytes = metrics.failing_compaction_request_body_bytes,
+        failing_compaction_request_model_visible_bytes = metrics.failing_compaction_request_model_visible_bytes,
         compact_error = %err,
         "remote compaction failed"
     );
