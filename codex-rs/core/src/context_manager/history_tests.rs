@@ -19,7 +19,7 @@ const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 
 fn assistant_msg(text: &str) -> ResponseItem {
-    ResponseItem::Message {
+    ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
@@ -27,7 +27,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
-    }
+    })
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
@@ -39,7 +39,7 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
 }
 
 fn user_msg(text: &str) -> ResponseItem {
-    ResponseItem::Message {
+    ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::OutputText {
@@ -47,11 +47,11 @@ fn user_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
-    }
+    })
 }
 
 fn user_input_text_msg(text: &str) -> ResponseItem {
-    ResponseItem::Message {
+    ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -59,25 +59,25 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
-    }
+    })
 }
 
 fn function_call_output(call_id: &str, content: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
+    ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload::from_text(content.to_string()),
-    }
+    })
 }
 
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
-    ResponseItem::CustomToolCallOutput {
+    ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
         call_id: call_id.to_string(),
         output: output.to_string(),
-    }
+    })
 }
 
 fn reasoning_msg(text: &str) -> ResponseItem {
-    ResponseItem::Reasoning {
+    ResponseItem::Reasoning(codex_protocol::models::Reasoning {
         id: String::new(),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".to_string(),
@@ -86,18 +86,18 @@ fn reasoning_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }]),
         encrypted_content: None,
-    }
+    })
 }
 
 fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
-    ResponseItem::Reasoning {
+    ResponseItem::Reasoning(codex_protocol::models::Reasoning {
         id: String::new(),
         summary: vec![ReasoningItemReasoningSummary::SummaryText {
             text: "summary".to_string(),
         }],
         content: None,
         encrypted_content: Some("a".repeat(len)),
-    }
+    })
 }
 
 fn truncate_exec_output(content: &str) -> String {
@@ -113,7 +113,7 @@ fn filters_non_api_messages() {
     let mut h = ContextManager::default();
     let policy = TruncationPolicy::Tokens(10_000);
     // System message is not API messages; Other is ignored.
-    let system = ResponseItem::Message {
+    let system = ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "system".to_string(),
         content: vec![ContentItem::OutputText {
@@ -121,7 +121,7 @@ fn filters_non_api_messages() {
         }],
         end_turn: None,
         phase: None,
-    };
+    });
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
 
@@ -134,7 +134,7 @@ fn filters_non_api_messages() {
     assert_eq!(
         items,
         vec![
-            ResponseItem::Reasoning {
+            ResponseItem::Reasoning(codex_protocol::models::Reasoning {
                 id: String::new(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {
                     text: "summary".to_string(),
@@ -143,8 +143,8 @@ fn filters_non_api_messages() {
                     text: "thinking...".to_string(),
                 }]),
                 encrypted_content: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -152,8 +152,8 @@ fn filters_non_api_messages() {
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -161,7 +161,7 @@ fn filters_non_api_messages() {
                 }],
                 end_turn: None,
                 phase: None,
-            }
+            })
         ]
     );
 }
@@ -210,12 +210,14 @@ fn trailing_codex_generated_tokens_stop_at_first_non_generated_item() {
 
 #[test]
 fn trailing_codex_generated_tokens_exclude_function_call_tail() {
-    let history = create_history_with_items(vec![ResponseItem::FunctionCall {
-        id: None,
-        name: "not-generated".to_string(),
-        arguments: "{}".to_string(),
-        call_id: "call-tail".to_string(),
-    }]);
+    let history = create_history_with_items(vec![ResponseItem::FunctionCall(
+        codex_protocol::models::FunctionCall {
+            id: None,
+            name: "not-generated".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-tail".to_string(),
+        },
+    )]);
 
     assert_eq!(history.get_trailing_codex_generated_items_tokens(), 0);
 }
@@ -247,9 +249,11 @@ fn total_token_usage_includes_only_trailing_codex_generated_items() {
 
 #[test]
 fn get_history_for_prompt_drops_ghost_commits() {
-    let items = vec![ResponseItem::GhostSnapshot {
-        ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
-    }];
+    let items = vec![ResponseItem::GhostSnapshot(
+        codex_protocol::models::GhostSnapshot {
+            ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+        },
+    )];
     let history = create_history_with_items(items);
     let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
@@ -280,16 +284,16 @@ fn estimate_token_count_with_base_instructions_uses_provided_text() {
 #[test]
 fn remove_first_item_removes_matching_output_for_function_call() {
     let items = vec![
-        ResponseItem::FunctionCall {
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
             id: None,
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
-        },
-        ResponseItem::FunctionCallOutput {
+        }),
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -299,16 +303,16 @@ fn remove_first_item_removes_matching_output_for_function_call() {
 #[test]
 fn remove_first_item_removes_matching_call_for_output() {
     let items = vec![
-        ResponseItem::FunctionCallOutput {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "call-2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
-        ResponseItem::FunctionCall {
+        }),
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
             id: None,
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -319,16 +323,16 @@ fn remove_first_item_removes_matching_call_for_output() {
 fn remove_last_item_removes_matching_call_for_output() {
     let items = vec![
         user_msg("before tool call"),
-        ResponseItem::FunctionCall {
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
             id: None,
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
-        },
-        ResponseItem::FunctionCallOutput {
+        }),
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "call-delete-last".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
 
@@ -340,7 +344,7 @@ fn remove_last_item_removes_matching_call_for_output() {
 fn replace_last_turn_images_replaces_tool_output_images() {
     let items = vec![
         user_input_text_msg("hi"),
-        ResponseItem::FunctionCallOutput {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::ContentItems(vec![
@@ -350,7 +354,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 ]),
                 success: Some(true),
             },
-        },
+        }),
     ];
     let mut history = create_history_with_items(items);
 
@@ -360,7 +364,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
         history.raw_items(),
         vec![
             user_input_text_msg("hi"),
-            ResponseItem::FunctionCallOutput {
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload {
                     body: FunctionCallOutputBody::ContentItems(vec![
@@ -370,14 +374,14 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                     ]),
                     success: Some(true),
                 },
-            },
+            }),
         ]
     );
 }
 
 #[test]
 fn replace_last_turn_images_does_not_touch_user_images() {
-    let items = vec![ResponseItem::Message {
+    let items = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
@@ -385,7 +389,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
     let mut history = create_history_with_items(items.clone());
 
     assert!(!history.replace_last_turn_images("Invalid image"));
@@ -395,7 +399,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
 #[test]
 fn remove_first_item_handles_local_shell_pair() {
     let items = vec![
-        ResponseItem::LocalShellCall {
+        ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
             id: None,
             call_id: Some("call-3".to_string()),
             status: LocalShellStatus::Completed,
@@ -406,11 +410,11 @@ fn remove_first_item_handles_local_shell_pair() {
                 env: None,
                 user: None,
             }),
-        },
-        ResponseItem::FunctionCallOutput {
+        }),
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "call-3".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -541,17 +545,17 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 #[test]
 fn remove_first_item_handles_custom_tool_pair() {
     let items = vec![
-        ResponseItem::CustomToolCall {
+        ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
             id: None,
             status: None,
             call_id: "tool-1".to_string(),
             name: "my_tool".to_string(),
             input: "{}".to_string(),
-        },
-        ResponseItem::CustomToolCallOutput {
+        }),
+        ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
             output: "ok".to_string(),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
     h.remove_first_item();
@@ -561,7 +565,7 @@ fn remove_first_item_handles_custom_tool_pair() {
 #[test]
 fn normalization_retains_local_shell_outputs() {
     let items = vec![
-        ResponseItem::LocalShellCall {
+        ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
             id: None,
             call_id: Some("shell-1".to_string()),
             status: LocalShellStatus::Completed,
@@ -572,11 +576,11 @@ fn normalization_retains_local_shell_outputs() {
                 env: None,
                 user: None,
             }),
-        },
-        ResponseItem::FunctionCallOutput {
+        }),
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "shell-1".to_string(),
             output: FunctionCallOutputPayload::from_text("Total output lines: 1\n\nok".to_string()),
-        },
+        }),
     ];
 
     let history = create_history_with_items(items.clone());
@@ -592,19 +596,22 @@ fn record_items_truncates_function_call_output_content() {
     let policy = TruncationPolicy::Tokens(1_000);
     let long_line = "a very long line to trigger truncation\n";
     let long_output = long_line.repeat(2_500);
-    let item = ResponseItem::FunctionCallOutput {
+    let item = ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
         call_id: "call-100".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text(long_output.clone()),
             success: Some(true),
         },
-    };
+    });
 
     history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
-        ResponseItem::FunctionCallOutput { output, .. } => {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+            output,
+            ..
+        }) => {
             let content = output.text_content().unwrap_or_default();
             assert_ne!(content, long_output);
             assert!(
@@ -626,16 +633,19 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
-    let item = ResponseItem::CustomToolCallOutput {
+    let item = ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
         call_id: "tool-200".to_string(),
         output: long_output.clone(),
-    };
+    });
 
     history.record_items([&item], policy);
 
     assert_eq!(history.items.len(), 1);
     match &history.items[0] {
-        ResponseItem::CustomToolCallOutput { output, .. } => {
+        ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+            output,
+            ..
+        }) => {
             assert_ne!(output, &long_output);
             assert!(
                 output.contains("tokens truncated"),
@@ -655,18 +665,21 @@ fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
-    let item = ResponseItem::FunctionCallOutput {
+    let item = ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
         call_id: "call-custom-limit".to_string(),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text(long_output),
             success: Some(true),
         },
-    };
+    });
 
     history.record_items([&item], policy);
 
     let stored = match &history.items[0] {
-        ResponseItem::FunctionCallOutput { output, .. } => output,
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+            output,
+            ..
+        }) => output,
         other => panic!("unexpected history item: {other:?}"),
     };
     assert!(
@@ -774,12 +787,14 @@ fn format_exec_output_prefers_line_marker_when_both_limits_exceeded() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_function_call() {
-    let items = vec![ResponseItem::FunctionCall {
-        id: None,
-        name: "do_it".to_string(),
-        arguments: "{}".to_string(),
-        call_id: "call-x".to_string(),
-    }];
+    let items = vec![ResponseItem::FunctionCall(
+        codex_protocol::models::FunctionCall {
+            id: None,
+            name: "do_it".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-x".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -787,16 +802,16 @@ fn normalize_adds_missing_output_for_function_call() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ResponseItem::FunctionCall {
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
-            },
-            ResponseItem::FunctionCallOutput {
+            }),
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-            },
+            }),
         ]
     );
 }
@@ -804,13 +819,15 @@ fn normalize_adds_missing_output_for_function_call() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_custom_tool_call() {
-    let items = vec![ResponseItem::CustomToolCall {
-        id: None,
-        status: None,
-        call_id: "tool-x".to_string(),
-        name: "custom".to_string(),
-        input: "{}".to_string(),
-    }];
+    let items = vec![ResponseItem::CustomToolCall(
+        codex_protocol::models::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "tool-x".to_string(),
+            name: "custom".to_string(),
+            input: "{}".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -818,17 +835,17 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ResponseItem::CustomToolCall {
+            ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
                 id: None,
                 status: None,
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
                 input: "{}".to_string(),
-            },
-            ResponseItem::CustomToolCallOutput {
+            }),
+            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
                 output: "aborted".to_string(),
-            },
+            }),
         ]
     );
 }
@@ -836,18 +853,20 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_adds_missing_output_for_local_shell_call_with_id() {
-    let items = vec![ResponseItem::LocalShellCall {
-        id: None,
-        call_id: Some("shell-1".to_string()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string(), "hi".to_string()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    }];
+    let items = vec![ResponseItem::LocalShellCall(
+        codex_protocol::models::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hi".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -855,7 +874,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ResponseItem::LocalShellCall {
+            ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
                 id: None,
                 call_id: Some("shell-1".to_string()),
                 status: LocalShellStatus::Completed,
@@ -866,11 +885,11 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
                     env: None,
                     user: None,
                 }),
-            },
-            ResponseItem::FunctionCallOutput {
+            }),
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "shell-1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-            },
+            }),
         ]
     );
 }
@@ -878,10 +897,12 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_function_call_output() {
-    let items = vec![ResponseItem::FunctionCallOutput {
-        call_id: "orphan-1".to_string(),
-        output: FunctionCallOutputPayload::from_text("ok".to_string()),
-    }];
+    let items = vec![ResponseItem::FunctionCallOutput(
+        codex_protocol::models::FunctionCallOutput {
+            call_id: "orphan-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -892,10 +913,12 @@ fn normalize_removes_orphan_function_call_output() {
 #[cfg(not(debug_assertions))]
 #[test]
 fn normalize_removes_orphan_custom_tool_call_output() {
-    let items = vec![ResponseItem::CustomToolCallOutput {
-        call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
-    }];
+    let items = vec![ResponseItem::CustomToolCallOutput(
+        codex_protocol::models::CustomToolCallOutput {
+            call_id: "orphan-2".to_string(),
+            output: "ok".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
 
     h.normalize_history();
@@ -908,27 +931,27 @@ fn normalize_removes_orphan_custom_tool_call_output() {
 fn normalize_mixed_inserts_and_removals() {
     let items = vec![
         // Will get an inserted output
-        ResponseItem::FunctionCall {
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
             id: None,
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
-        },
+        }),
         // Orphan output that should be removed
-        ResponseItem::FunctionCallOutput {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
+        }),
         // Will get an inserted custom tool output
-        ResponseItem::CustomToolCall {
+        ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
             id: None,
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
-        },
+        }),
         // Local shell call also gets an inserted function call output
-        ResponseItem::LocalShellCall {
+        ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
             id: None,
             call_id: Some("s1".to_string()),
             status: LocalShellStatus::Completed,
@@ -939,7 +962,7 @@ fn normalize_mixed_inserts_and_removals() {
                 env: None,
                 user: None,
             }),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
 
@@ -948,28 +971,28 @@ fn normalize_mixed_inserts_and_removals() {
     assert_eq!(
         h.raw_items(),
         vec![
-            ResponseItem::FunctionCall {
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 id: None,
                 name: "f1".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
-            },
-            ResponseItem::FunctionCallOutput {
+            }),
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "c1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-            },
-            ResponseItem::CustomToolCall {
+            }),
+            ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
                 id: None,
                 status: None,
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
                 input: "{}".to_string(),
-            },
-            ResponseItem::CustomToolCallOutput {
+            }),
+            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
                 call_id: "t1".to_string(),
                 output: "aborted".to_string(),
-            },
-            ResponseItem::LocalShellCall {
+            }),
+            ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
                 id: None,
                 call_id: Some("s1".to_string()),
                 status: LocalShellStatus::Completed,
@@ -980,38 +1003,40 @@ fn normalize_mixed_inserts_and_removals() {
                     env: None,
                     user: None,
                 }),
-            },
-            ResponseItem::FunctionCallOutput {
+            }),
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "s1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-            },
+            }),
         ]
     );
 }
 
 #[test]
 fn normalize_adds_missing_output_for_function_call_inserts_output() {
-    let items = vec![ResponseItem::FunctionCall {
-        id: None,
-        name: "do_it".to_string(),
-        arguments: "{}".to_string(),
-        call_id: "call-x".to_string(),
-    }];
+    let items = vec![ResponseItem::FunctionCall(
+        codex_protocol::models::FunctionCall {
+            id: None,
+            name: "do_it".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-x".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
     assert_eq!(
         h.raw_items(),
         vec![
-            ResponseItem::FunctionCall {
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
-            },
-            ResponseItem::FunctionCallOutput {
+            }),
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-            },
+            }),
         ]
     );
 }
@@ -1020,13 +1045,15 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
 #[test]
 #[should_panic]
 fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
-    let items = vec![ResponseItem::CustomToolCall {
-        id: None,
-        status: None,
-        call_id: "tool-x".to_string(),
-        name: "custom".to_string(),
-        input: "{}".to_string(),
-    }];
+    let items = vec![ResponseItem::CustomToolCall(
+        codex_protocol::models::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "tool-x".to_string(),
+            name: "custom".to_string(),
+            input: "{}".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1035,18 +1062,20 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
 #[test]
 #[should_panic]
 fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() {
-    let items = vec![ResponseItem::LocalShellCall {
-        id: None,
-        call_id: Some("shell-1".to_string()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".to_string(), "hi".to_string()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    }];
+    let items = vec![ResponseItem::LocalShellCall(
+        codex_protocol::models::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hi".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1055,10 +1084,12 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
 #[test]
 #[should_panic]
 fn normalize_removes_orphan_function_call_output_panics_in_debug() {
-    let items = vec![ResponseItem::FunctionCallOutput {
-        call_id: "orphan-1".to_string(),
-        output: FunctionCallOutputPayload::from_text("ok".to_string()),
-    }];
+    let items = vec![ResponseItem::FunctionCallOutput(
+        codex_protocol::models::FunctionCallOutput {
+            call_id: "orphan-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1067,10 +1098,12 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 #[test]
 #[should_panic]
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
-    let items = vec![ResponseItem::CustomToolCallOutput {
-        call_id: "orphan-2".to_string(),
-        output: "ok".to_string(),
-    }];
+    let items = vec![ResponseItem::CustomToolCallOutput(
+        codex_protocol::models::CustomToolCallOutput {
+            call_id: "orphan-2".to_string(),
+            output: "ok".to_string(),
+        },
+    )];
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
@@ -1080,24 +1113,24 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
 #[should_panic]
 fn normalize_mixed_inserts_and_removals_panics_in_debug() {
     let items = vec![
-        ResponseItem::FunctionCall {
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
             id: None,
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
-        },
-        ResponseItem::FunctionCallOutput {
+        }),
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
-        ResponseItem::CustomToolCall {
+        }),
+        ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
             id: None,
             status: None,
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
-        },
-        ResponseItem::LocalShellCall {
+        }),
+        ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
             id: None,
             call_id: Some("s1".to_string()),
             status: LocalShellStatus::Completed,
@@ -1108,7 +1141,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
                 env: None,
                 user: None,
             }),
-        },
+        }),
     ];
     let mut h = create_history_with_items(items);
     h.normalize_history();

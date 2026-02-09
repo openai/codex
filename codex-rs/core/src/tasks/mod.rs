@@ -270,7 +270,7 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted {
-            let marker = ResponseItem::Message {
+            let marker = ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -280,7 +280,7 @@ impl Session {
                 }],
                 end_turn: None,
                 phase: None,
-            };
+            });
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])

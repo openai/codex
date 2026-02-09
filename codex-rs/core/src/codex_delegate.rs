@@ -493,13 +493,13 @@ mod tests {
             .send(Event {
                 id: "evt".to_string(),
                 msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-                    item: ResponseItem::CustomToolCall {
+                    item: ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
                         id: None,
                         status: None,
                         call_id: "call-1".to_string(),
                         name: "tool".to_string(),
                         input: "{}".to_string(),
-                    },
+                    }),
                 }),
             })
             .await

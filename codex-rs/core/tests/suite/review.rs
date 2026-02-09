@@ -130,7 +130,12 @@ async fn review_op_emits_lifecycle_and_review_output() {
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item {
+        if let RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message {
+            role,
+            content,
+            ..
+        })) = rl.item
+        {
             if role == "user" {
                 for c in content {
                     if let ContentItem::InputText { text } = c {
@@ -523,7 +528,7 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
 
         // Prior user message (enveloped response_item)
-        let user = codex_protocol::models::ResponseItem::Message {
+        let user = codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![codex_protocol::models::ContentItem::InputText {
@@ -531,7 +536,7 @@ async fn review_input_isolated_from_parent_history() {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
             "timestamp": "2024-01-01T00:00:01.000Z",
@@ -543,15 +548,16 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
 
         // Prior assistant message (enveloped response_item)
-        let assistant = codex_protocol::models::ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![codex_protocol::models::ContentItem::OutputText {
-                text: "parent: assistant reply".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        };
+        let assistant =
+            codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: "parent: assistant reply".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            });
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({
             "timestamp": "2024-01-01T00:00:02.000Z",
@@ -636,7 +642,11 @@ async fn review_input_isolated_from_parent_history() {
         }
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
+        if let RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message {
+            role,
+            content,
+            ..
+        })) = rl.item
             && role == "user"
         {
             for c in content {

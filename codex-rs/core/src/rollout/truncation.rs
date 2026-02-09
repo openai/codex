@@ -11,7 +11,7 @@ use codex_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
 ///
-/// A user message boundary is a `RolloutItem::ResponseItem(ResponseItem::Message { .. })`
+/// A user message boundary is a `RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message { .. }))`
 /// whose parsed turn item is `TurnItem::UserMessage`.
 ///
 /// Rollouts can contain `ThreadRolledBack` markers. Those markers indicate that the
@@ -21,11 +21,12 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     let mut user_positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         match item {
-            RolloutItem::ResponseItem(item @ ResponseItem::Message { .. })
-                if matches!(
-                    event_mapping::parse_turn_item(item),
-                    Some(TurnItem::UserMessage(_))
-                ) =>
+            RolloutItem::ResponseItem(
+                item @ ResponseItem::Message(codex_protocol::models::Message { .. }),
+            ) if matches!(
+                event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            ) =>
             {
                 user_positions.push(idx);
             }
@@ -79,7 +80,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::OutputText {
@@ -87,11 +88,11 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 
     fn assistant_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -99,7 +100,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 
     #[test]
@@ -110,20 +111,20 @@ mod tests {
             assistant_msg("a2"),
             user_msg("u2"),
             assistant_msg("a3"),
-            ResponseItem::Reasoning {
+            ResponseItem::Reasoning(codex_protocol::models::Reasoning {
                 id: "r1".to_string(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {
                     text: "s".to_string(),
                 }],
                 content: None,
                 encrypted_content: None,
-            },
-            ResponseItem::FunctionCall {
+            }),
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 id: None,
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
-            },
+            }),
             assistant_msg("a4"),
         ];
 

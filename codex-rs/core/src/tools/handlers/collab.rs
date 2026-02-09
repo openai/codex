@@ -1150,15 +1150,17 @@ mod tests {
         let thread = manager
             .resume_thread_with_history(
                 config,
-                InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "materialized".to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                })]),
+                InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message(
+                    codex_protocol::models::Message {
+                        id: None,
+                        role: "user".to_string(),
+                        content: vec![ContentItem::InputText {
+                            text: "materialized".to_string(),
+                        }],
+                        end_turn: None,
+                        phase: None,
+                    },
+                ))]),
                 AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
             )
             .await

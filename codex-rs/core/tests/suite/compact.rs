@@ -1444,7 +1444,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let remote_summary = "REMOTE_COMPACT_SUMMARY";
 
     let compacted_history = vec![
-        codex_protocol::models::ResponseItem::Message {
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -1452,10 +1452,10 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             }],
             end_turn: None,
             phase: None,
-        },
-        codex_protocol::models::ResponseItem::Compaction {
+        }),
+        codex_protocol::models::ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
@@ -2266,7 +2266,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     .await;
 
     let compacted_history = vec![
-        codex_protocol::models::ResponseItem::Message {
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -2274,10 +2274,10 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             }],
             end_turn: None,
             phase: None,
-        },
-        codex_protocol::models::ResponseItem::Compaction {
+        }),
+        codex_protocol::models::ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
@@ -2386,7 +2386,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
     mount_response_sequence(&server, responses).await;
 
     let compacted_history = vec![
-        codex_protocol::models::ResponseItem::Message {
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![codex_protocol::models::ContentItem::OutputText {
@@ -2394,10 +2394,10 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
             }],
             end_turn: None,
             phase: None,
-        },
-        codex_protocol::models::ResponseItem::Compaction {
+        }),
+        codex_protocol::models::ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;

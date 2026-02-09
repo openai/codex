@@ -165,9 +165,9 @@ pub(crate) async fn handle_non_tool_response_item(
     debug!(?item, "Output item");
 
     match item {
-        ResponseItem::Message { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { .. })
+        | ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. })
+        | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. }) => {
             let mut turn_item = parse_turn_item(item)?;
             if plan_mode && let TurnItem::AgentMessage(agent_message) = &mut turn_item {
                 let combined = agent_message
@@ -183,7 +183,10 @@ pub(crate) async fn handle_non_tool_response_item(
             }
             Some(turn_item)
         }
-        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput { .. })
+        | ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+            ..
+        }) => {
             debug!("unexpected tool output from stream");
             None
         }
@@ -195,7 +198,7 @@ pub(crate) fn last_assistant_message_from_item(
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<String> {
-    if let ResponseItem::Message { role, content, .. } = item
+    if let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) = item
         && role == "assistant"
     {
         let combined = content
@@ -220,18 +223,18 @@ pub(crate) fn last_assistant_message_from_item(
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            Some(ResponseItem::FunctionCallOutput {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => Some(
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: output.clone(),
-            })
-        }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ResponseItem::CustomToolCallOutput {
+            }),
+        ),
+        ResponseInputItem::CustomToolCallOutput { call_id, output } => Some(
+            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 output: output.clone(),
-            })
-        }
+            }),
+        ),
         ResponseInputItem::McpToolCallOutput { call_id, result } => {
             let output = match result {
                 Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
@@ -240,10 +243,12 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                     success: Some(false),
                 },
             };
-            Some(ResponseItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output,
-            })
+            Some(ResponseItem::FunctionCallOutput(
+                codex_protocol::models::FunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output,
+                },
+            ))
         }
         _ => None,
     }

@@ -187,15 +187,16 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: user message (should be delivered)
-    let prior_user = codex_protocol::models::ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![codex_protocol::models::ContentItem::InputText {
-            text: "resumed user message".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    };
+    let prior_user =
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![codex_protocol::models::ContentItem::InputText {
+                text: "resumed user message".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
     let prior_user_json = serde_json::to_value(&prior_user).unwrap();
     writeln!(
         f,
@@ -209,15 +210,16 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: system message (excluded from API history)
-    let prior_system = codex_protocol::models::ResponseItem::Message {
-        id: None,
-        role: "system".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
-            text: "resumed system instruction".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    };
+    let prior_system =
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
+            id: None,
+            role: "system".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "resumed system instruction".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        });
     let prior_system_json = serde_json::to_value(&prior_system).unwrap();
     writeln!(
         f,
@@ -231,15 +233,16 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     .unwrap();
 
     // Prior item: assistant message
-    let prior_item = codex_protocol::models::ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![codex_protocol::models::ContentItem::OutputText {
-            text: "resumed assistant message".to_string(),
-        }],
-        end_turn: None,
-        phase: Some(MessagePhase::Commentary),
-    };
+    let prior_item =
+        codex_protocol::models::ResponseItem::Message(codex_protocol::models::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "resumed assistant message".to_string(),
+            }],
+            end_turn: None,
+            phase: Some(MessagePhase::Commentary),
+        });
     let prior_item_json = serde_json::to_value(&prior_item).unwrap();
     writeln!(
         f,
@@ -1280,66 +1283,82 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
-    prompt.input.push(ResponseItem::Reasoning {
-        id: "reasoning-id".into(),
-        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-            text: "summary".into(),
-        }],
-        content: Some(vec![ReasoningItemContent::ReasoningText {
-            text: "content".into(),
-        }]),
-        encrypted_content: None,
-    });
-    prompt.input.push(ResponseItem::Message {
-        id: Some("message-id".into()),
-        role: "assistant".into(),
-        content: vec![ContentItem::OutputText {
-            text: "message".into(),
-        }],
-        end_turn: None,
-        phase: None,
-    });
-    prompt.input.push(ResponseItem::WebSearchCall {
-        id: Some("web-search-id".into()),
-        status: Some("completed".into()),
-        action: Some(WebSearchAction::Search {
-            query: Some("weather".into()),
-            queries: None,
-        }),
-    });
-    prompt.input.push(ResponseItem::FunctionCall {
-        id: Some("function-id".into()),
-        name: "do_thing".into(),
-        arguments: "{}".into(),
-        call_id: "function-call-id".into(),
-    });
-    prompt.input.push(ResponseItem::FunctionCallOutput {
-        call_id: "function-call-id".into(),
-        output: FunctionCallOutputPayload::from_text("ok".into()),
-    });
-    prompt.input.push(ResponseItem::LocalShellCall {
-        id: Some("local-shell-id".into()),
-        call_id: Some("local-shell-call-id".into()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".into(), "hello".into()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-    });
-    prompt.input.push(ResponseItem::CustomToolCall {
-        id: Some("custom-tool-id".into()),
-        status: Some("completed".into()),
-        call_id: "custom-tool-call-id".into(),
-        name: "custom_tool".into(),
-        input: "{}".into(),
-    });
-    prompt.input.push(ResponseItem::CustomToolCallOutput {
-        call_id: "custom-tool-call-id".into(),
-        output: "ok".into(),
-    });
+    prompt
+        .input
+        .push(ResponseItem::Reasoning(codex_protocol::models::Reasoning {
+            id: "reasoning-id".into(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".into(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: "content".into(),
+            }]),
+            encrypted_content: None,
+        }));
+    prompt
+        .input
+        .push(ResponseItem::Message(codex_protocol::models::Message {
+            id: Some("message-id".into()),
+            role: "assistant".into(),
+            content: vec![ContentItem::OutputText {
+                text: "message".into(),
+            }],
+            end_turn: None,
+            phase: None,
+        }));
+    prompt.input.push(ResponseItem::WebSearchCall(
+        codex_protocol::models::WebSearchCall {
+            id: Some("web-search-id".into()),
+            status: Some("completed".into()),
+            action: Some(WebSearchAction::Search {
+                query: Some("weather".into()),
+                queries: None,
+            }),
+        },
+    ));
+    prompt.input.push(ResponseItem::FunctionCall(
+        codex_protocol::models::FunctionCall {
+            id: Some("function-id".into()),
+            name: "do_thing".into(),
+            arguments: "{}".into(),
+            call_id: "function-call-id".into(),
+        },
+    ));
+    prompt.input.push(ResponseItem::FunctionCallOutput(
+        codex_protocol::models::FunctionCallOutput {
+            call_id: "function-call-id".into(),
+            output: FunctionCallOutputPayload::from_text("ok".into()),
+        },
+    ));
+    prompt.input.push(ResponseItem::LocalShellCall(
+        codex_protocol::models::LocalShellCall {
+            id: Some("local-shell-id".into()),
+            call_id: Some("local-shell-call-id".into()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".into(), "hello".into()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+        },
+    ));
+    prompt.input.push(ResponseItem::CustomToolCall(
+        codex_protocol::models::CustomToolCall {
+            id: Some("custom-tool-id".into()),
+            status: Some("completed".into()),
+            call_id: "custom-tool-call-id".into(),
+            name: "custom_tool".into(),
+            input: "{}".into(),
+        },
+    ));
+    prompt.input.push(ResponseItem::CustomToolCallOutput(
+        codex_protocol::models::CustomToolCallOutput {
+            call_id: "custom-tool-call-id".into(),
+            output: "ok".into(),
+        },
+    ));
 
     let mut stream = client_session
         .stream(&prompt, &model_info, &otel_manager, effort, summary, None)

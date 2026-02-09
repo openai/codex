@@ -392,7 +392,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
     let history_text = "Hello from history";
-    let history = vec![ResponseItem::Message {
+    let history = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -400,7 +400,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
 
     // Resume with explicit history and override the model.
     let resume_id = mcp

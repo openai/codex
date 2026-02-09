@@ -125,7 +125,7 @@ impl EnvironmentContext {
 
 impl From<EnvironmentContext> for ResponseItem {
     fn from(ec: EnvironmentContext) -> Self {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -133,7 +133,7 @@ impl From<EnvironmentContext> for ResponseItem {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 }
 

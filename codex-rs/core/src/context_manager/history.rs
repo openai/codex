@@ -60,7 +60,10 @@ impl ContextManager {
     {
         for item in items {
             let item_ref = item.deref();
-            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
+            let is_ghost_snapshot = matches!(
+                item_ref,
+                ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+            );
             if !is_api_message(item_ref) && !is_ghost_snapshot {
                 continue;
             }
@@ -74,8 +77,12 @@ impl ContextManager {
     /// normalization and drop un-suited items.
     pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.items
-            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items.retain(|item| {
+            !matches!(
+                item,
+                ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+            )
+        });
         self.items
     }
 
@@ -138,14 +145,17 @@ impl ContextManager {
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
         let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ResponseItem::FunctionCallOutput { .. })
-                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+            matches!(item, ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput { .. }))
+                || matches!(item, ResponseItem::Message(codex_protocol::models::Message { role, .. }) if role == "user")
         }) else {
             return false;
         };
 
         match &mut self.items[index] {
-            ResponseItem::FunctionCallOutput { output, .. } => {
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+                output,
+                ..
+            }) => {
                 let Some(content_items) = output.content_items_mut() else {
                     return false;
                 };
@@ -161,7 +171,11 @@ impl ContextManager {
                 }
                 replaced
             }
-            ResponseItem::Message { role, .. } if role == "user" => false,
+            ResponseItem::Message(codex_protocol::models::Message { role, .. })
+                if role == "user" =>
+            {
+                false
+            }
             _ => false,
         }
     }
@@ -214,7 +228,7 @@ impl ContextManager {
         let Some(last_user_index) = self
             .items
             .iter()
-            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+            .rposition(|item| matches!(item, ResponseItem::Message(codex_protocol::models::Message { role, .. }) if role == "user"))
         else {
             return 0;
         };
@@ -225,10 +239,10 @@ impl ContextManager {
             .filter(|item| {
                 matches!(
                     item,
-                    ResponseItem::Reasoning {
+                    ResponseItem::Reasoning(codex_protocol::models::Reasoning {
                         encrypted_content: Some(_),
                         ..
-                    }
+                    })
                 )
             })
             .fold(0i64, |acc, item| {
@@ -279,7 +293,10 @@ impl ContextManager {
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+                call_id,
+                output,
+            }) => {
                 let body = match &output.body {
                     FunctionCallOutputBody::Text(content) => FunctionCallOutputBody::Text(
                         truncate_text(content, policy_with_serialization_budget),
@@ -293,29 +310,32 @@ impl ContextManager {
                         )
                     }
                 };
-                ResponseItem::FunctionCallOutput {
+                ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
                         body,
                         success: output.success,
                     },
-                }
+                })
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
+            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+                call_id,
+                output,
+            }) => {
                 let truncated = truncate_text(output, policy_with_serialization_budget);
-                ResponseItem::CustomToolCallOutput {
+                ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
                     call_id: call_id.clone(),
                     output: truncated,
-                }
+                })
             }
-            ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::GhostSnapshot { .. }
+            ResponseItem::Message(codex_protocol::models::Message { .. })
+            | ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. })
+            | ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall { .. })
+            | ResponseItem::FunctionCall(codex_protocol::models::FunctionCall { .. })
+            | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. })
+            | ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall { .. })
+            | ResponseItem::Compaction(codex_protocol::models::Compaction { .. })
+            | ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
             | ResponseItem::Other => item.clone(),
         }
     }
@@ -325,16 +345,20 @@ impl ContextManager {
 /// tool calls, tool outputs, shell calls, and web-search calls).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
-        ResponseItem::Message { role, .. } => role.as_str() != "system",
-        ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::Compaction { .. } => true,
-        ResponseItem::GhostSnapshot { .. } => false,
+        ResponseItem::Message(codex_protocol::models::Message { role, .. }) => {
+            role.as_str() != "system"
+        }
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput { .. })
+        | ResponseItem::FunctionCall(codex_protocol::models::FunctionCall { .. })
+        | ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall { .. })
+        | ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+            ..
+        })
+        | ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall { .. })
+        | ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. })
+        | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. })
+        | ResponseItem::Compaction(codex_protocol::models::Compaction { .. }) => true,
+        ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. }) => false,
         ResponseItem::Other => false,
     }
 }
@@ -349,14 +373,14 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
     match item {
-        ResponseItem::GhostSnapshot { .. } => 0,
-        ResponseItem::Reasoning {
+        ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. }) => 0,
+        ResponseItem::Reasoning(codex_protocol::models::Reasoning {
             encrypted_content: Some(content),
             ..
-        }
-        | ResponseItem::Compaction {
+        })
+        | ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: content,
-        } => {
+        }) => {
             let reasoning_bytes = estimate_reasoning_length(content.len());
             i64::try_from(approx_tokens_from_byte_count(reasoning_bytes)).unwrap_or(i64::MAX)
         }
@@ -370,12 +394,15 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
     matches!(
         item,
-        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
-    ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput { .. })
+            | ResponseItem::CustomToolCallOutput(
+                codex_protocol::models::CustomToolCallOutput { .. }
+            )
+    ) || matches!(item, ResponseItem::Message(codex_protocol::models::Message { role, .. }) if role == "developer")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
-    let ResponseItem::Message { role, content, .. } = item else {
+    let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) = item else {
         return false;
     };
 

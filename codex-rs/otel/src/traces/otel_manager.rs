@@ -102,13 +102,21 @@ impl OtelManager {
         match event {
             ResponseEvent::OutputItemDone(item) => {
                 handle_responses_span.record("from", "output_item_done");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
+                    name,
+                    ..
+                }) = &item
+                {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 handle_responses_span.record("from", "output_item_added");
-                if let ResponseItem::FunctionCall { name, .. } = &item {
+                if let ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
+                    name,
+                    ..
+                }) = &item
+                {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
@@ -755,16 +763,34 @@ impl OtelManager {
 
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
-            ResponseItem::Message { role, .. } => format!("message_from_{role}"),
-            ResponseItem::Reasoning { .. } => "reasoning".into(),
-            ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
-            ResponseItem::FunctionCall { .. } => "function_call".into(),
-            ResponseItem::FunctionCallOutput { .. } => "function_call_output".into(),
-            ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
-            ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
-            ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
-            ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
-            ResponseItem::Compaction { .. } => "compaction".into(),
+            ResponseItem::Message(codex_protocol::models::Message { role, .. }) => {
+                format!("message_from_{role}")
+            }
+            ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. }) => "reasoning".into(),
+            ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall { .. }) => {
+                "local_shell_call".into()
+            }
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall { .. }) => {
+                "function_call".into()
+            }
+            ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+                ..
+            }) => "function_call_output".into(),
+            ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall { .. }) => {
+                "custom_tool_call".into()
+            }
+            ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+                ..
+            }) => "custom_tool_call_output".into(),
+            ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. }) => {
+                "web_search_call".into()
+            }
+            ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. }) => {
+                "ghost_snapshot".into()
+            }
+            ResponseItem::Compaction(codex_protocol::models::Compaction { .. }) => {
+                "compaction".into()
+            }
             ResponseItem::Other => "other".into(),
         }
     }

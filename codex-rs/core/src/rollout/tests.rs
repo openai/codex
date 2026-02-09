@@ -1141,15 +1141,17 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
     for idx in 0..total_messages {
         let response_line = RolloutLine {
             timestamp: format!("{ts}-{idx:02}"),
-            item: RolloutItem::ResponseItem(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("reply-{idx}"),
-                }],
-                end_turn: None,
-                phase: None,
-            }),
+            item: RolloutItem::ResponseItem(ResponseItem::Message(
+                codex_protocol::models::Message {
+                    id: None,
+                    role: "assistant".into(),
+                    content: vec![ContentItem::OutputText {
+                        text: format!("reply-{idx}"),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            )),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
     }

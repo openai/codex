@@ -2083,7 +2083,7 @@ impl Session {
         self.services
             .otel_manager
             .counter("codex.model_warning", 1, &[]);
-        let item = ResponseItem::Message {
+        let item = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -2091,7 +2091,7 @@ impl Session {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
 
         self.record_conversation_items(ctx, &[item]).await;
     }
@@ -4475,7 +4475,7 @@ async fn maybe_complete_plan_item_from_message(
     state: &mut PlanModeStreamState,
     item: &ResponseItem,
 ) {
-    if let ResponseItem::Message { role, content, .. } = item
+    if let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) = item
         && role == "assistant"
     {
         let mut text = String::new();
@@ -4568,7 +4568,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     previously_active_item: Option<&TurnItem>,
     last_agent_message: &mut Option<String>,
 ) -> bool {
-    if let ResponseItem::Message { role, .. } = item
+    if let ResponseItem::Message(codex_protocol::models::Message { role, .. }) = item
         && role == "assistant"
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
@@ -4912,7 +4912,7 @@ async fn try_run_sampling_request(
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     responses.iter().rev().find_map(|item| {
-        if let ResponseItem::Message { role, content, .. } = item {
+        if let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) = item {
             if role == "assistant" {
                 content.iter().rev().find_map(|ci| {
                     if let ContentItem::OutputText { text } = ci {
@@ -4994,7 +4994,7 @@ mod tests {
     }
 
     fn user_message(text: &str) -> ResponseItem {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5002,7 +5002,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 
     fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -5136,7 +5136,7 @@ mod tests {
     #[tokio::test]
     async fn reconstruct_history_uses_replacement_history_verbatim() {
         let (session, turn_context) = make_session_and_context().await;
-        let summary_item = ResponseItem::Message {
+        let summary_item = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5144,10 +5144,10 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         let replacement_history = vec![
             summary_item.clone(),
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -5155,7 +5155,7 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         let rollout_items = vec![RolloutItem::Compacted(CompactedItem {
             message: String::new(),
@@ -5352,7 +5352,7 @@ mod tests {
             .await;
 
         let turn_1 = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -5360,8 +5360,8 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -5369,12 +5369,12 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         let turn_2 = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -5382,8 +5382,8 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -5391,7 +5391,7 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         sess.record_into_history(&turn_2, tc.as_ref()).await;
 
@@ -5416,7 +5416,7 @@ mod tests {
         sess.record_into_history(&initial_context, tc.as_ref())
             .await;
 
-        let turn_1 = vec![ResponseItem::Message {
+        let turn_1 = vec![ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -5424,7 +5424,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }];
+        })];
         sess.record_into_history(&turn_1, tc.as_ref()).await;
 
         handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
@@ -6144,7 +6144,7 @@ mod tests {
         let last = history_items.last().expect("warning recorded");
 
         match last {
-            ResponseItem::Message { role, content, .. } => {
+            ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
                 assert_eq!(role, "user");
                 assert_eq!(
                     content,
@@ -6282,7 +6282,7 @@ mod tests {
         sess.on_task_finished(Arc::clone(&tc), None).await;
 
         let history = sess.clone_history().await;
-        let expected = ResponseItem::Message {
+        let expected = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -6290,7 +6290,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         assert!(
             history.raw_items().iter().any(|item| item == &expected),
             "expected pending input to be persisted into history on turn completion"
@@ -6438,7 +6438,10 @@ mod tests {
         // recorded in history for the model.
         assert!(
             history.raw_items().iter().any(|item| {
-                let ResponseItem::Message { role, content, .. } = item else {
+                let ResponseItem::Message(codex_protocol::models::Message {
+                    role, content, ..
+                }) = item
+                else {
                     return false;
                 };
                 if role != "user" {
@@ -6477,13 +6480,13 @@ mod tests {
             ),
             turn_context.dynamic_tools.as_slice(),
         );
-        let item = ResponseItem::CustomToolCall {
+        let item = ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
             id: None,
             status: None,
             call_id: "call-1".to_string(),
             name: "shell".to_string(),
             input: "{}".to_string(),
-        };
+        });
 
         let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
             .await
@@ -6521,7 +6524,7 @@ mod tests {
         }
         live_history.record_items(initial_context.iter(), turn_context.truncation_policy);
 
-        let user1 = ResponseItem::Message {
+        let user1 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -6529,11 +6532,11 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&user1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
 
-        let assistant1 = ResponseItem::Message {
+        let assistant1 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -6541,7 +6544,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&assistant1), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
@@ -6559,7 +6562,7 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user2 = ResponseItem::Message {
+        let user2 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -6567,11 +6570,11 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&user2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
 
-        let assistant2 = ResponseItem::Message {
+        let assistant2 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -6579,7 +6582,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&assistant2), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
@@ -6597,7 +6600,7 @@ mod tests {
             replacement_history: None,
         }));
 
-        let user3 = ResponseItem::Message {
+        let user3 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -6605,11 +6608,11 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&user3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(user3));
 
-        let assistant3 = ResponseItem::Message {
+        let assistant3 = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -6617,7 +6620,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
         live_history.record_items(std::iter::once(&assistant3), turn_context.truncation_policy);
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 

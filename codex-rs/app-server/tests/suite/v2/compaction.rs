@@ -123,7 +123,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let responses_log = responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -131,10 +131,10 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         &server,

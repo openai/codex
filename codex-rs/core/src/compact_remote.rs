@@ -77,7 +77,12 @@ async fn run_remote_compact_task_inner_impl(
     let ghost_snapshots: Vec<ResponseItem> = history
         .raw_items()
         .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .filter(|item| {
+            matches!(
+                item,
+                ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+            )
+        })
         .cloned()
         .collect();
 

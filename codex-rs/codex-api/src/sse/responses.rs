@@ -531,16 +531,16 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message {
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message(codex_protocol::models::Message {
                 role,
                 phase: Some(MessagePhase::Commentary),
                 ..
-            })) if role == "assistant"
+            }))) if role == "assistant"
         );
 
         assert_matches!(
             &events[1],
-            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message { role, .. }))
+            Ok(ResponseEvent::OutputItemDone(ResponseItem::Message(codex_protocol::models::Message { role, .. })))
                 if role == "assistant"
         );
 

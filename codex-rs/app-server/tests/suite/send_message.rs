@@ -445,7 +445,10 @@ async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId)
         // Ghost snapshots are produced concurrently and may arrive before the model reply.
         let event: RawResponseItemEvent =
             serde_json::from_value(msg_value).expect("deserialize raw response item");
-        if !matches!(event.item, ResponseItem::GhostSnapshot { .. }) {
+        if !matches!(
+            event.item,
+            ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+        ) {
             return event.item;
         }
     }
@@ -453,7 +456,7 @@ async fn read_raw_response_item(mcp: &mut McpProcess, conversation_id: ThreadId)
 
 fn assert_instructions_message(item: &ResponseItem) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             let is_instructions = texts
@@ -470,7 +473,7 @@ fn assert_instructions_message(item: &ResponseItem) {
 
 fn assert_permissions_message(item: &ResponseItem) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
             let expected = DeveloperInstructions::from_policy(
@@ -493,7 +496,7 @@ fn assert_permissions_message(item: &ResponseItem) {
 
 fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "developer");
             let texts = content_texts(content);
             assert_eq!(
@@ -508,7 +511,7 @@ fn assert_developer_message(item: &ResponseItem, expected_text: &str) {
 
 fn assert_environment_message(item: &ResponseItem) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             assert!(
@@ -524,7 +527,7 @@ fn assert_environment_message(item: &ResponseItem) {
 
 fn assert_user_message(item: &ResponseItem, expected_text: &str) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "user");
             let texts = content_texts(content);
             assert_eq!(texts, vec![expected_text]);
@@ -535,7 +538,7 @@ fn assert_user_message(item: &ResponseItem, expected_text: &str) {
 
 fn assert_assistant_message(item: &ResponseItem, expected_text: &str) {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) => {
             assert_eq!(role, "assistant");
             let texts = content_texts(content);
             assert_eq!(texts, vec![expected_text]);

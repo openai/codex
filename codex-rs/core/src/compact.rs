@@ -192,7 +192,12 @@ async fn run_compact_task_inner(
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
-        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .filter(|item| {
+            matches!(
+                item,
+                ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+            )
+        })
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
@@ -293,11 +298,17 @@ pub(crate) fn process_compacted_history(
 /// summary messages because they parse as `TurnItem::UserMessage`.
 fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { role, .. } if role == "developer" => false,
-        ResponseItem::Message { role, .. } if role == "user" => matches!(
-            crate::event_mapping::parse_turn_item(item),
-            Some(TurnItem::UserMessage(_))
-        ),
+        ResponseItem::Message(codex_protocol::models::Message { role, .. })
+            if role == "developer" =>
+        {
+            false
+        }
+        ResponseItem::Message(codex_protocol::models::Message { role, .. }) if role == "user" => {
+            matches!(
+                crate::event_mapping::parse_turn_item(item),
+                Some(TurnItem::UserMessage(_))
+            )
+        }
         _ => true,
     }
 }
@@ -342,7 +353,7 @@ fn build_compacted_history_with_limit(
     }
 
     for message in &selected_messages {
-        history.push(ResponseItem::Message {
+        history.push(ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -350,7 +361,7 @@ fn build_compacted_history_with_limit(
             }],
             end_turn: None,
             phase: None,
-        });
+        }));
     }
 
     let summary_text = if summary_text.is_empty() {
@@ -359,13 +370,13 @@ fn build_compacted_history_with_limit(
         summary_text.to_string()
     };
 
-    history.push(ResponseItem::Message {
+    history.push(ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
         end_turn: None,
         phase: None,
-    });
+    }));
 
     history
 }
@@ -456,7 +467,7 @@ mod tests {
     #[test]
     fn collect_user_messages_extracts_user_text_only() {
         let items = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: Some("assistant".to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -464,8 +475,8 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: Some("user".to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -473,7 +484,7 @@ mod tests {
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
             ResponseItem::Other,
         ];
 
@@ -485,7 +496,7 @@ mod tests {
     #[test]
     fn collect_user_messages_filters_session_prefix_entries() {
         let items = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -498,8 +509,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -507,8 +518,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -516,7 +527,7 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
 
         let collected = collect_user_messages(&items);
@@ -541,12 +552,13 @@ do things
         let truncated_message = &history[0];
         let summary_message = &history[1];
 
-        let truncated_text = match truncated_message {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content).unwrap_or_default()
-            }
-            other => panic!("unexpected item in history: {other:?}"),
-        };
+        let truncated_text =
+            match truncated_message {
+                ResponseItem::Message(codex_protocol::models::Message {
+                    role, content, ..
+                }) if role == "user" => content_items_to_text(content).unwrap_or_default(),
+                other => panic!("unexpected item in history: {other:?}"),
+            };
 
         assert!(
             truncated_text.contains("tokens truncated"),
@@ -557,12 +569,13 @@ do things
             "truncated user message should not include the full oversized user text"
         );
 
-        let summary_text = match summary_message {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content).unwrap_or_default()
-            }
-            other => panic!("unexpected item in history: {other:?}"),
-        };
+        let summary_text =
+            match summary_message {
+                ResponseItem::Message(codex_protocol::models::Message {
+                    role, content, ..
+                }) if role == "user" => content_items_to_text(content).unwrap_or_default(),
+                other => panic!("unexpected item in history: {other:?}"),
+            };
         assert_eq!(summary_text, "SUMMARY");
     }
 
@@ -579,19 +592,20 @@ do things
         );
 
         let last = history.last().expect("history should have a summary entry");
-        let summary = match last {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                content_items_to_text(content).unwrap_or_default()
-            }
-            other => panic!("expected summary message, found {other:?}"),
-        };
+        let summary =
+            match last {
+                ResponseItem::Message(codex_protocol::models::Message {
+                    role, content, ..
+                }) if role == "user" => content_items_to_text(content).unwrap_or_default(),
+                other => panic!("expected summary message, found {other:?}"),
+            };
         assert_eq!(summary, summary_text);
     }
 
     #[test]
     fn process_compacted_history_replaces_developer_messages() {
         let compacted_history = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -599,8 +613,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -608,8 +622,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -617,10 +631,10 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         let initial_context = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -628,8 +642,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -641,8 +655,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -650,12 +664,12 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
 
         let refreshed = process_compacted_history(compacted_history, &initial_context);
         let expected = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -663,8 +677,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -676,8 +690,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -685,8 +699,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -694,14 +708,14 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         assert_eq!(refreshed, expected);
     }
 
     #[test]
     fn process_compacted_history_reinjects_full_initial_context() {
-        let compacted_history = vec![ResponseItem::Message {
+        let compacted_history = vec![ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -709,9 +723,9 @@ do things
             }],
             end_turn: None,
             phase: None,
-        }];
+        })];
         let initial_context = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -719,8 +733,8 @@ do things
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -733,8 +747,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -746,8 +760,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -759,12 +773,12 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
 
         let refreshed = process_compacted_history(compacted_history, &initial_context);
         let expected = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -772,8 +786,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -786,8 +800,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -799,8 +813,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -812,8 +826,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -821,7 +835,7 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         assert_eq!(refreshed, expected);
     }
@@ -829,7 +843,7 @@ keep me updated
     #[test]
     fn process_compacted_history_drops_non_user_content_messages() {
         let compacted_history = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -842,8 +856,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -855,8 +869,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -868,8 +882,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -877,8 +891,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -886,9 +900,9 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
-        let initial_context = vec![ResponseItem::Message {
+        let initial_context = vec![ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -896,11 +910,11 @@ keep me updated
             }],
             end_turn: None,
             phase: None,
-        }];
+        })];
 
         let refreshed = process_compacted_history(compacted_history, &initial_context);
         let expected = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -908,8 +922,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -917,7 +931,7 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         assert_eq!(refreshed, expected);
     }
@@ -925,7 +939,7 @@ keep me updated
     #[test]
     fn process_compacted_history_inserts_context_before_last_real_user_message_only() {
         let compacted_history = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -933,8 +947,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -942,8 +956,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -951,9 +965,9 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
-        let initial_context = vec![ResponseItem::Message {
+        let initial_context = vec![ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -961,11 +975,11 @@ keep me updated
             }],
             end_turn: None,
             phase: None,
-        }];
+        })];
 
         let refreshed = process_compacted_history(compacted_history, &initial_context);
         let expected = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -973,8 +987,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -982,8 +996,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
@@ -991,8 +1005,8 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -1000,7 +1014,7 @@ keep me updated
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
         assert_eq!(refreshed, expected);
     }

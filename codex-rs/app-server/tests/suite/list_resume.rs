@@ -301,7 +301,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
 
     // Resuming with explicit history should succeed even without a stored rollout.
     let fork_history_text = "Hello from history";
-    let history = vec![ResponseItem::Message {
+    let history = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -309,7 +309,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
     let resume_with_history_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {
             path: None,

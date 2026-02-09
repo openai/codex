@@ -1720,7 +1720,7 @@ pub struct CompactedItem {
 
 impl From<CompactedItem> for ResponseItem {
     fn from(value: CompactedItem) -> Self {
-        ResponseItem::Message {
+        ResponseItem::Message(crate::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -1728,7 +1728,7 @@ impl From<CompactedItem> for ResponseItem {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 }
 

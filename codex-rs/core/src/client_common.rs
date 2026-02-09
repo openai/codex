@@ -68,35 +68,45 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
     let mut shell_call_ids: HashSet<String> = HashSet::new();
 
     items.iter_mut().for_each(|item| match item {
-        ResponseItem::LocalShellCall { call_id, id, .. } => {
+        ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
+            call_id,
+            id,
+            ..
+        }) => {
             if let Some(identifier) = call_id.clone().or_else(|| id.clone()) {
                 shell_call_ids.insert(identifier);
             }
         }
-        ResponseItem::CustomToolCall {
+        ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
             id: _,
             status: _,
             call_id,
             name,
             input: _,
-        } => {
+        }) => {
             if name == "apply_patch" {
                 shell_call_ids.insert(call_id.clone());
             }
         }
-        ResponseItem::CustomToolCallOutput { call_id, output } => {
+        ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+            call_id,
+            output,
+        }) => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = parse_structured_shell_output(output)
             {
                 *output = structured
             }
         }
-        ResponseItem::FunctionCall { name, call_id, .. }
-            if is_shell_tool_name(name) || name == "apply_patch" =>
-        {
+        ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
+            name, call_id, ..
+        }) if is_shell_tool_name(name) || name == "apply_patch" => {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput {
+            call_id,
+            output,
+        }) => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = output
                     .text_content()

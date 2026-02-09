@@ -61,7 +61,7 @@ fn rollout_developer_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
+        if let RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message { role, content, .. })) =
             rollout.item
             && role == "developer"
         {
@@ -86,7 +86,7 @@ fn rollout_environment_texts(text: &str) -> Vec<String> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
+        if let RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message { role, content, .. })) =
             rollout.item
             && role == "user"
         {

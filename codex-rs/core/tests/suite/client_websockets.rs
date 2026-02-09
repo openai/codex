@@ -622,13 +622,13 @@ async fn responses_websocket_v2_sets_openai_beta_header() {
 }
 
 fn message_item(text: &str) -> ResponseItem {
-    ResponseItem::Message {
+    ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
         end_turn: None,
         phase: None,
-    }
+    })
 }
 
 fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {

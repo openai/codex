@@ -95,13 +95,13 @@ fn parse_agent_message(
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
     match item {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             role,
             content,
             id,
             phase,
             ..
-        } => match role.as_str() {
+        }) => match role.as_str() {
             "user" => parse_user_message(content).map(TurnItem::UserMessage),
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
@@ -111,12 +111,12 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             "system" => None,
             _ => None,
         },
-        ResponseItem::Reasoning {
+        ResponseItem::Reasoning(codex_protocol::models::Reasoning {
             id,
             summary,
             content,
             ..
-        } => {
+        }) => {
             let summary_text = summary
                 .iter()
                 .map(|entry| match entry {
@@ -138,7 +138,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 raw_content,
             }))
         }
-        ResponseItem::WebSearchCall { id, action, .. } => {
+        ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
+            id, action, ..
+        }) => {
             let (action, query) = match action {
                 Some(action) => (action.clone(), web_search_action_detail(action)),
                 None => (WebSearchAction::Other, String::new()),
@@ -172,7 +174,7 @@ mod tests {
         let img1 = "https://example.com/one.png".to_string();
         let img2 = "https://example.com/two.jpg".to_string();
 
-        let item = ResponseItem::Message {
+        let item = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -188,7 +190,7 @@ mod tests {
             ],
             end_turn: None,
             phase: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 
@@ -214,7 +216,7 @@ mod tests {
         let label = codex_protocol::models::local_image_open_tag_text(1);
         let user_text = "Please review this image.".to_string();
 
-        let item = ResponseItem::Message {
+        let item = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -231,7 +233,7 @@ mod tests {
             ],
             end_turn: None,
             phase: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 
@@ -256,7 +258,7 @@ mod tests {
         let label = codex_protocol::models::image_open_tag_text();
         let user_text = "Please review this image.".to_string();
 
-        let item = ResponseItem::Message {
+        let item = ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![
@@ -273,7 +275,7 @@ mod tests {
             ],
             end_turn: None,
             phase: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 
@@ -295,7 +297,7 @@ mod tests {
     #[test]
     fn skips_user_instructions_and_env() {
         let items = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -303,8 +305,8 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -312,8 +314,8 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -321,8 +323,8 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -331,8 +333,8 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
@@ -340,7 +342,7 @@ mod tests {
                 }],
                 end_turn: None,
             phase: None,
-            },
+            }),
         ];
 
         for item in items {
@@ -351,7 +353,7 @@ mod tests {
 
     #[test]
     fn parses_agent_message() {
-        let item = ResponseItem::Message {
+        let item = ResponseItem::Message(codex_protocol::models::Message {
             id: Some("msg-1".to_string()),
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -359,7 +361,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected agent message turn item");
 
@@ -376,7 +378,7 @@ mod tests {
 
     #[test]
     fn parses_reasoning_summary_and_raw_content() {
-        let item = ResponseItem::Reasoning {
+        let item = ResponseItem::Reasoning(codex_protocol::models::Reasoning {
             id: "reasoning_1".to_string(),
             summary: vec![
                 ReasoningItemReasoningSummary::SummaryText {
@@ -390,7 +392,7 @@ mod tests {
                 text: "raw details".to_string(),
             }]),
             encrypted_content: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
 
@@ -408,7 +410,7 @@ mod tests {
 
     #[test]
     fn parses_reasoning_including_raw_content() {
-        let item = ResponseItem::Reasoning {
+        let item = ResponseItem::Reasoning(codex_protocol::models::Reasoning {
             id: "reasoning_2".to_string(),
             summary: vec![ReasoningItemReasoningSummary::SummaryText {
                 text: "Summarized step".to_string(),
@@ -422,7 +424,7 @@ mod tests {
                 },
             ]),
             encrypted_content: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
 
@@ -440,14 +442,14 @@ mod tests {
 
     #[test]
     fn parses_web_search_call() {
-        let item = ResponseItem::WebSearchCall {
+        let item = ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
             id: Some("ws_1".to_string()),
             status: Some("completed".to_string()),
             action: Some(WebSearchAction::Search {
                 query: Some("weather".to_string()),
                 queries: None,
             }),
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
 
@@ -469,13 +471,13 @@ mod tests {
 
     #[test]
     fn parses_web_search_open_page_call() {
-        let item = ResponseItem::WebSearchCall {
+        let item = ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
             id: Some("ws_open".to_string()),
             status: Some("completed".to_string()),
             action: Some(WebSearchAction::OpenPage {
                 url: Some("https://example.com".to_string()),
             }),
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
 
@@ -496,14 +498,14 @@ mod tests {
 
     #[test]
     fn parses_web_search_find_in_page_call() {
-        let item = ResponseItem::WebSearchCall {
+        let item = ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
             id: Some("ws_find".to_string()),
             status: Some("completed".to_string()),
             action: Some(WebSearchAction::FindInPage {
                 url: Some("https://example.com".to_string()),
                 pattern: Some("needle".to_string()),
             }),
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
 
@@ -525,11 +527,11 @@ mod tests {
 
     #[test]
     fn parses_partial_web_search_call_without_action_as_other() {
-        let item = ResponseItem::WebSearchCall {
+        let item = ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
             id: Some("ws_partial".to_string()),
             status: Some("in_progress".to_string()),
             action: None,
-        };
+        });
 
         let turn_item = parse_turn_item(&item).expect("expected web search turn item");
         match turn_item {

@@ -65,7 +65,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -73,10 +73,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -184,7 +184,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -192,10 +192,10 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -783,7 +783,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -791,10 +791,10 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -881,7 +881,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -889,11 +889,11 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
-        ResponseItem::Message {
+        }),
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -901,7 +901,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             }],
             end_turn: None,
             phase: None,
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         harness.server(),
@@ -946,7 +946,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             let has_compacted_user_summary = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Message { role, content, .. }
+                    ResponseItem::Message(codex_protocol::models::Message { role, content, .. })
                         if role == "user"
                             && content.iter().any(|part| matches!(
                                 part,
@@ -957,14 +957,14 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             let has_compaction_item = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Compaction { encrypted_content }
+                    ResponseItem::Compaction(codex_protocol::models::Compaction { encrypted_content })
                         if encrypted_content == "ENCRYPTED_COMPACTION_SUMMARY"
                 )
             });
             let has_compacted_assistant_note = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Message { role, content, .. }
+                    ResponseItem::Message(codex_protocol::models::Message { role, content, .. })
                         if role == "assistant"
                             && content.iter().any(|part| matches!(
                                 part,
@@ -975,7 +975,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             let has_permissions_developer_message = replacement_history.iter().any(|item| {
                 matches!(
                     item,
-                    ResponseItem::Message { role, content, .. }
+                    ResponseItem::Message(codex_protocol::models::Message { role, content, .. })
                         if role == "developer"
                             && content.iter().any(|part| matches!(
                                 part,
@@ -1041,7 +1041,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -1049,8 +1049,8 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Message {
+        }),
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -1058,10 +1058,10 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         &server,
@@ -1182,7 +1182,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -1190,8 +1190,8 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Message {
+        }),
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -1199,10 +1199,10 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             }],
             end_turn: None,
             phase: None,
-        },
-        ResponseItem::Compaction {
+        }),
+        ResponseItem::Compaction(codex_protocol::models::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-        },
+        }),
     ];
     let compact_mock = responses::mount_compact_json_once(
         &server,

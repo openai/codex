@@ -101,7 +101,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
+    prompt.input = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText {
@@ -109,7 +109,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
 
     let mut stream = client_session
         .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
@@ -205,7 +205,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
+    prompt.input = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText {
@@ -213,7 +213,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
 
     let mut stream = client_session
         .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
@@ -308,7 +308,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
-    prompt.input = vec![ResponseItem::Message {
+    prompt.input = vec![ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText {
@@ -316,7 +316,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         }],
         end_turn: None,
         phase: None,
-    }];
+    })];
 
     let mut stream = client_session
         .stream(&prompt, &model_info, &otel_manager, effort, summary, None)

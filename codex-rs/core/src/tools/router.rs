@@ -65,12 +65,12 @@ impl ToolRouter {
         item: ResponseItem,
     ) -> Result<Option<ToolCall>, FunctionCallError> {
         match item {
-            ResponseItem::FunctionCall {
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 name,
                 arguments,
                 call_id,
                 ..
-            } => {
+            }) => {
                 if let Some((server, tool)) = session.parse_mcp_tool_name(&name).await {
                     Ok(Some(ToolCall {
                         tool_name: name,
@@ -89,22 +89,22 @@ impl ToolRouter {
                     }))
                 }
             }
-            ResponseItem::CustomToolCall {
+            ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
                 name,
                 input,
                 call_id,
                 ..
-            } => Ok(Some(ToolCall {
+            }) => Ok(Some(ToolCall {
                 tool_name: name,
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
-            ResponseItem::LocalShellCall {
+            ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
                 id,
                 call_id,
                 action,
                 ..
-            } => {
+            }) => {
                 let call_id = call_id
                     .or(id)
                     .ok_or(FunctionCallError::MissingLocalShellCallId)?;

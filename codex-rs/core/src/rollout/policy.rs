@@ -19,16 +19,18 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
 #[inline]
 pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::FunctionCall { .. }
-        | ResponseItem::FunctionCallOutput { .. }
-        | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::Message(codex_protocol::models::Message { .. })
+        | ResponseItem::Reasoning(codex_protocol::models::Reasoning { .. })
+        | ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall { .. })
+        | ResponseItem::FunctionCall(codex_protocol::models::FunctionCall { .. })
+        | ResponseItem::FunctionCallOutput(codex_protocol::models::FunctionCallOutput { .. })
+        | ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall { .. })
+        | ResponseItem::CustomToolCallOutput(codex_protocol::models::CustomToolCallOutput {
+            ..
+        })
+        | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall { .. })
+        | ResponseItem::GhostSnapshot(codex_protocol::models::GhostSnapshot { .. })
+        | ResponseItem::Compaction(codex_protocol::models::Compaction { .. }) => true,
         ResponseItem::Other => false,
     }
 }

@@ -231,13 +231,13 @@ pub(crate) async fn exit_review_mode(
     session
         .record_conversation_items(
             &ctx,
-            &[ResponseItem::Message {
+            &[ResponseItem::Message(codex_protocol::models::Message {
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 end_turn: None,
                 phase: None,
-            }],
+            })],
         )
         .await;
 
@@ -250,7 +250,7 @@ pub(crate) async fn exit_review_mode(
     session
         .record_response_item_and_emit_turn_item(
             ctx.as_ref(),
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: Some(REVIEW_ASSISTANT_MESSAGE_ID.to_string()),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -258,7 +258,7 @@ pub(crate) async fn exit_review_mode(
                 }],
                 end_turn: None,
                 phase: None,
-            },
+            }),
         )
         .await;
 

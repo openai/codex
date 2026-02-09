@@ -35,8 +35,11 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
             Ok(rollout) => rollout,
             Err(_) => continue,
         };
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
-            &rollout.item
+        if let RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message {
+            role,
+            content,
+            ..
+        })) = &rollout.item
             && role == "user"
             && content
                 .iter()
@@ -51,10 +54,12 @@ fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
 
 fn extract_image_url(item: &ResponseItem) -> Option<String> {
     match item {
-        ResponseItem::Message { content, .. } => content.iter().find_map(|span| match span {
-            ContentItem::InputImage { image_url } => Some(image_url.clone()),
-            _ => None,
-        }),
+        ResponseItem::Message(codex_protocol::models::Message { content, .. }) => {
+            content.iter().find_map(|span| match span {
+                ContentItem::InputImage { image_url } => Some(image_url.clone()),
+                _ => None,
+            })
+        }
         _ => None,
     }
 }
@@ -142,7 +147,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         .expect("expected user message with input image in rollout");
 
     let image_url = extract_image_url(&actual).expect("expected image url in rollout");
-    let expected = ResponseItem::Message {
+    let expected = ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -159,7 +164,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         ],
         end_turn: None,
         phase: None,
-    };
+    });
 
     assert_eq!(actual, expected);
 
@@ -224,7 +229,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         .expect("expected user message with input image in rollout");
 
     let image_url = extract_image_url(&actual).expect("expected image url in rollout");
-    let expected = ResponseItem::Message {
+    let expected = ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -241,7 +246,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         ],
         end_turn: None,
         phase: None,
-    };
+    });
 
     assert_eq!(actual, expected);
 

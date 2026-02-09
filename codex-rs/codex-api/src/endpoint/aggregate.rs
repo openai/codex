@@ -36,12 +36,15 @@ impl Stream for AggregatedStream {
                 Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item)))) => {
                     let is_assistant_message = matches!(
                         &item,
-                        ResponseItem::Message { role, .. } if role == "assistant"
+                        ResponseItem::Message(codex_protocol::models::Message { role, .. }) if role == "assistant"
                     );
 
                     if is_assistant_message {
                         if this.cumulative.is_empty()
-                            && let ResponseItem::Message { content, .. } = &item
+                            && let ResponseItem::Message(codex_protocol::models::Message {
+                                content,
+                                ..
+                            }) = &item
                             && let Some(text) = content.iter().find_map(|c| match c {
                                 ContentItem::OutputText { text } => Some(text),
                                 _ => None,
@@ -70,29 +73,31 @@ impl Stream for AggregatedStream {
                     let mut emitted_any = false;
 
                     if !this.cumulative_reasoning.is_empty() {
-                        let aggregated_reasoning = ResponseItem::Reasoning {
-                            id: String::new(),
-                            summary: Vec::new(),
-                            content: Some(vec![ReasoningItemContent::ReasoningText {
-                                text: std::mem::take(&mut this.cumulative_reasoning),
-                            }]),
-                            encrypted_content: None,
-                        };
+                        let aggregated_reasoning =
+                            ResponseItem::Reasoning(codex_protocol::models::Reasoning {
+                                id: String::new(),
+                                summary: Vec::new(),
+                                content: Some(vec![ReasoningItemContent::ReasoningText {
+                                    text: std::mem::take(&mut this.cumulative_reasoning),
+                                }]),
+                                encrypted_content: None,
+                            });
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
                         emitted_any = true;
                     }
 
                     if !this.cumulative.is_empty() {
-                        let aggregated_message = ResponseItem::Message {
-                            id: None,
-                            role: "assistant".to_string(),
-                            content: vec![ContentItem::OutputText {
-                                text: std::mem::take(&mut this.cumulative),
-                            }],
-                            end_turn: None,
-                            phase: None,
-                        };
+                        let aggregated_message =
+                            ResponseItem::Message(codex_protocol::models::Message {
+                                id: None,
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText {
+                                    text: std::mem::take(&mut this.cumulative),
+                                }],
+                                end_turn: None,
+                                phase: None,
+                            });
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_message));
                         emitted_any = true;

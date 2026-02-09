@@ -137,15 +137,16 @@ mod tests {
     #[test]
     fn response_item_user_messages_do_not_set_title_or_first_user_message() {
         let mut metadata = metadata_for_test();
-        let item = RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hello from response item".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        });
+        let item =
+            RolloutItem::ResponseItem(ResponseItem::Message(codex_protocol::models::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hello from response item".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }));
 
         apply_rollout_item(&mut metadata, &item, "test-provider");
 

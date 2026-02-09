@@ -530,7 +530,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::OutputText {
@@ -538,10 +538,10 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
     fn assistant_msg(text: &str) -> ResponseItem {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
@@ -549,7 +549,7 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 
     #[test]
@@ -560,20 +560,20 @@ mod tests {
             assistant_msg("a2"),
             user_msg("u2"),
             assistant_msg("a3"),
-            ResponseItem::Reasoning {
+            ResponseItem::Reasoning(codex_protocol::models::Reasoning {
                 id: "r1".to_string(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {
                     text: "s".to_string(),
                 }],
                 content: None,
                 encrypted_content: None,
-            },
-            ResponseItem::FunctionCall {
+            }),
+            ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
                 id: None,
                 call_id: "c1".to_string(),
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
-            },
+            }),
             assistant_msg("a4"),
         ];
 

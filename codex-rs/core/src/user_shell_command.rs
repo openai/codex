@@ -56,7 +56,7 @@ pub fn user_shell_command_record_item(
     exec_output: &ExecToolCallOutput,
     turn_context: &TurnContext,
 ) -> ResponseItem {
-    ResponseItem::Message {
+    ResponseItem::Message(codex_protocol::models::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -64,7 +64,7 @@ pub fn user_shell_command_record_item(
         }],
         end_turn: None,
         phase: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -94,7 +94,7 @@ mod tests {
         };
         let (_, turn_context) = make_session_and_context().await;
         let item = user_shell_command_record_item("echo hi", &exec_output, &turn_context);
-        let ResponseItem::Message { content, .. } = item else {
+        let ResponseItem::Message(codex_protocol::models::Message { content, .. }) = item else {
             panic!("expected message");
         };
         let [ContentItem::InputText { text }] = content.as_slice() else {

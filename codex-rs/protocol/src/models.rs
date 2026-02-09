@@ -89,81 +89,124 @@ pub enum MessagePhase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct Message {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: Option<String>,
+    pub role: String,
+    pub content: Vec<ContentItem>,
+    // Do not use directly, no available consistently across all providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub end_turn: Option<bool>,
+    // Optional output-message phase (for example: "commentary", "final_answer").
+    // Availability varies by provider/model, so downstream consumers must
+    // preserve fallback behavior when this is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub phase: Option<MessagePhase>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct Reasoning {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: String,
+    pub summary: Vec<ReasoningItemReasoningSummary>,
+    #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
+    #[ts(optional)]
+    pub content: Option<Vec<ReasoningItemContent>>,
+    pub encrypted_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct LocalShellCall {
+    /// Legacy id field retained for compatibility with older payloads.
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: Option<String>,
+    /// Set when using the Responses API.
+    pub call_id: Option<String>,
+    pub status: LocalShellStatus,
+    pub action: LocalShellAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct FunctionCall {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: Option<String>,
+    // The Responses API returns the function call arguments as a *string* that contains
+    // JSON, not as an already‑parsed object. We keep it as a raw string here and let
+    // Session::handle_function_call parse it into a Value.
+    pub name: String,
+    pub arguments: String,
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct FunctionCallOutput {
+    pub call_id: String,
+    pub output: FunctionCallOutputPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct CustomToolCall {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    pub call_id: String,
+    pub name: String,
+    pub input: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct CustomToolCallOutput {
+    pub call_id: String,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct WebSearchCall {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action: Option<WebSearchAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct GhostSnapshot {
+    pub ghost_commit: GhostCommit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+pub struct Compaction {
+    pub encrypted_content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
-    Message {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        role: String,
-        content: Vec<ContentItem>,
-        // Do not use directly, no available consistently across all providers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        end_turn: Option<bool>,
-        // Optional output-message phase (for example: "commentary", "final_answer").
-        // Availability varies by provider/model, so downstream consumers must
-        // preserve fallback behavior when this is absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        phase: Option<MessagePhase>,
-    },
-    Reasoning {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: String,
-        summary: Vec<ReasoningItemReasoningSummary>,
-        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
-        #[ts(optional)]
-        content: Option<Vec<ReasoningItemContent>>,
-        encrypted_content: Option<String>,
-    },
-    LocalShellCall {
-        /// Legacy id field retained for compatibility with older payloads.
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        /// Set when using the Responses API.
-        call_id: Option<String>,
-        status: LocalShellStatus,
-        action: LocalShellAction,
-    },
-    FunctionCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        name: String,
-        // The Responses API returns the function call arguments as a *string* that contains
-        // JSON, not as an already‑parsed object. We keep it as a raw string here and let
-        // Session::handle_function_call parse it into a Value.
-        arguments: String,
-        call_id: String,
-    },
+    Message(Message),
+    Reasoning(Reasoning),
+    LocalShellCall(LocalShellCall),
+    FunctionCall(FunctionCall),
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
     //   - a plain string (`content`)
     //   - an array of structured content items (`content_items`)
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
-    FunctionCallOutput {
-        call_id: String,
-        output: FunctionCallOutputPayload,
-    },
-    CustomToolCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-
-        call_id: String,
-        name: String,
-        input: String,
-    },
-    CustomToolCallOutput {
-        call_id: String,
-        output: String,
-    },
+    FunctionCallOutput(FunctionCallOutput),
+    CustomToolCall(CustomToolCall),
+    CustomToolCallOutput(CustomToolCallOutput),
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
     // {
@@ -172,25 +215,11 @@ pub enum ResponseItem {
     //   "status":"completed",
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
-    WebSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        status: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        action: Option<WebSearchAction>,
-    },
+    WebSearchCall(WebSearchCall),
     // Generated by the harness but considered exactly as a model response.
-    GhostSnapshot {
-        ghost_commit: GhostCommit,
-    },
+    GhostSnapshot(GhostSnapshot),
     #[serde(alias = "compaction_summary")]
-    Compaction {
-        encrypted_content: String,
-    },
+    Compaction(Compaction),
     #[serde(other)]
     Other,
 }
@@ -459,7 +488,7 @@ fn render_command_prefix(prefix: &[String]) -> String {
 
 impl From<DeveloperInstructions> for ResponseItem {
     fn from(di: DeveloperInstructions) -> Self {
-        ResponseItem::Message {
+        ResponseItem::Message(Message {
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -467,7 +496,7 @@ impl From<DeveloperInstructions> for ResponseItem {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 }
 
@@ -619,15 +648,15 @@ pub fn local_image_content_items_with_label_number(
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
+            ResponseInputItem::Message { role, content } => Self::Message(Message {
                 role,
                 content,
                 id: None,
                 end_turn: None,
                 phase: None,
-            },
+            }),
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
+                Self::FunctionCallOutput(FunctionCallOutput { call_id, output })
             }
             ResponseInputItem::McpToolCallOutput { call_id, result } => {
                 let output = match result {
@@ -637,10 +666,10 @@ impl From<ResponseInputItem> for ResponseItem {
                         success: Some(false),
                     },
                 };
-                Self::FunctionCallOutput { call_id, output }
+                Self::FunctionCallOutput(FunctionCallOutput { call_id, output })
             }
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
+                Self::CustomToolCallOutput(CustomToolCallOutput { call_id, output })
             }
         }
     }
@@ -1462,9 +1491,9 @@ mod tests {
 
         assert_eq!(
             item,
-            ResponseItem::Compaction {
+            ResponseItem::Compaction(crate::models::Compaction {
                 encrypted_content: "abc".into(),
-            }
+            })
         );
         Ok(())
     }
@@ -1540,11 +1569,11 @@ mod tests {
         for (json_literal, expected_id, expected_action, expected_status, expect_roundtrip) in cases
         {
             let parsed: ResponseItem = serde_json::from_str(json_literal)?;
-            let expected = ResponseItem::WebSearchCall {
+            let expected = ResponseItem::WebSearchCall(crate::models::WebSearchCall {
                 id: expected_id.clone(),
                 status: expected_status.clone(),
                 action: expected_action.clone(),
-            };
+            });
             assert_eq!(parsed, expected);
 
             let serialized = serde_json::to_value(&parsed)?;

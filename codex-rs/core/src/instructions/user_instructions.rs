@@ -28,7 +28,7 @@ impl UserInstructions {
 
 impl From<UserInstructions> for ResponseItem {
     fn from(ui: UserInstructions) -> Self {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -40,7 +40,7 @@ impl From<UserInstructions> for ResponseItem {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 }
 
@@ -64,7 +64,7 @@ impl SkillInstructions {
 
 impl From<SkillInstructions> for ResponseItem {
     fn from(si: SkillInstructions) -> Self {
-        ResponseItem::Message {
+        ResponseItem::Message(codex_protocol::models::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -75,7 +75,7 @@ impl From<SkillInstructions> for ResponseItem {
             }],
             end_turn: None,
             phase: None,
-        }
+        })
     }
 }
 
@@ -92,7 +92,9 @@ mod tests {
         };
         let response_item: ResponseItem = user_instructions.into();
 
-        let ResponseItem::Message { role, content, .. } = response_item else {
+        let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) =
+            response_item
+        else {
             panic!("expected ResponseItem::Message");
         };
 
@@ -136,7 +138,9 @@ mod tests {
         };
         let response_item: ResponseItem = skill_instructions.into();
 
-        let ResponseItem::Message { role, content, .. } = response_item else {
+        let ResponseItem::Message(codex_protocol::models::Message { role, content, .. }) =
+            response_item
+        else {
             panic!("expected ResponseItem::Message");
         };
 

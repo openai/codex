@@ -169,12 +169,24 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
-        | ResponseItem::Message { id: Some(id), .. }
-        | ResponseItem::WebSearchCall { id: Some(id), .. }
-        | ResponseItem::FunctionCall { id: Some(id), .. }
-        | ResponseItem::LocalShellCall { id: Some(id), .. }
-        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
+        if let ResponseItem::Reasoning(codex_protocol::models::Reasoning { id, .. })
+        | ResponseItem::Message(codex_protocol::models::Message { id: Some(id), .. })
+        | ResponseItem::WebSearchCall(codex_protocol::models::WebSearchCall {
+            id: Some(id),
+            ..
+        })
+        | ResponseItem::FunctionCall(codex_protocol::models::FunctionCall {
+            id: Some(id),
+            ..
+        })
+        | ResponseItem::LocalShellCall(codex_protocol::models::LocalShellCall {
+            id: Some(id),
+            ..
+        })
+        | ResponseItem::CustomToolCall(codex_protocol::models::CustomToolCall {
+            id: Some(id),
+            ..
+        }) = item
         {
             if id.is_empty() {
                 continue;
@@ -217,20 +229,20 @@ mod tests {
     fn azure_default_store_attaches_ids_and_headers() {
         let provider = provider("azure", "https://example.openai.azure.com/v1");
         let input = vec![
-            ResponseItem::Message {
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: Some("m1".into()),
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
                 phase: None,
-            },
-            ResponseItem::Message {
+            }),
+            ResponseItem::Message(codex_protocol::models::Message {
                 id: None,
                 role: "assistant".into(),
                 content: Vec::new(),
                 end_turn: None,
                 phase: None,
-            },
+            }),
         ];
 
         let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
