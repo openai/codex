@@ -53,8 +53,7 @@ fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>) -> Option<
         return None;
     }
     // Check for a custom .tmTheme file on disk.
-    let has_custom_file = codex_home
-        .is_some_and(|home| custom_theme_path(name, home).is_file());
+    let has_custom_file = codex_home.is_some_and(|home| custom_theme_path(name, home).is_file());
     if has_custom_file {
         return None;
     }
@@ -284,7 +283,8 @@ pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'stati
         // Fallback: plain text, one Line per source line.
         // Use `lines()` instead of `split('\n')` to avoid a phantom trailing
         // empty element when the input ends with '\n' (as pulldown-cmark emits).
-        let mut result: Vec<Line<'static>> = code.lines().map(|l| Line::from(l.to_string())).collect();
+        let mut result: Vec<Line<'static>> =
+            code.lines().map(|l| Line::from(l.to_string())).collect();
         if result.is_empty() {
             result.push(Line::from(String::new()));
         }
@@ -578,14 +578,20 @@ mod tests {
         let known = [
             ("ansi", EmbeddedThemeName::Ansi),
             ("base16", EmbeddedThemeName::Base16),
-            ("base16-eighties-dark", EmbeddedThemeName::Base16EightiesDark),
+            (
+                "base16-eighties-dark",
+                EmbeddedThemeName::Base16EightiesDark,
+            ),
             ("base16-mocha-dark", EmbeddedThemeName::Base16MochaDark),
             ("base16-ocean-dark", EmbeddedThemeName::Base16OceanDark),
             ("base16-ocean-light", EmbeddedThemeName::Base16OceanLight),
             ("base16-256", EmbeddedThemeName::Base16_256),
             ("catppuccin-frappe", EmbeddedThemeName::CatppuccinFrappe),
             ("catppuccin-latte", EmbeddedThemeName::CatppuccinLatte),
-            ("catppuccin-macchiato", EmbeddedThemeName::CatppuccinMacchiato),
+            (
+                "catppuccin-macchiato",
+                EmbeddedThemeName::CatppuccinMacchiato,
+            ),
             ("catppuccin-mocha", EmbeddedThemeName::CatppuccinMocha),
             ("coldark-cold", EmbeddedThemeName::ColdarkCold),
             ("coldark-dark", EmbeddedThemeName::ColdarkDark),
@@ -597,9 +603,18 @@ mod tests {
             ("inspired-github", EmbeddedThemeName::InspiredGithub),
             ("1337", EmbeddedThemeName::Leet),
             ("monokai-extended", EmbeddedThemeName::MonokaiExtended),
-            ("monokai-extended-bright", EmbeddedThemeName::MonokaiExtendedBright),
-            ("monokai-extended-light", EmbeddedThemeName::MonokaiExtendedLight),
-            ("monokai-extended-origin", EmbeddedThemeName::MonokaiExtendedOrigin),
+            (
+                "monokai-extended-bright",
+                EmbeddedThemeName::MonokaiExtendedBright,
+            ),
+            (
+                "monokai-extended-light",
+                EmbeddedThemeName::MonokaiExtendedLight,
+            ),
+            (
+                "monokai-extended-origin",
+                EmbeddedThemeName::MonokaiExtendedOrigin,
+            ),
             ("nord", EmbeddedThemeName::Nord),
             ("one-half-dark", EmbeddedThemeName::OneHalfDark),
             ("one-half-light", EmbeddedThemeName::OneHalfLight),
@@ -672,7 +687,10 @@ mod tests {
         let warning = validate_theme_name(Some("my-fancy"), Some(dir.path()));
         assert!(warning.is_some(), "should warn when theme file is absent");
         let msg = warning.unwrap();
-        assert!(msg.contains("my-fancy"), "warning should mention the theme name");
+        assert!(
+            msg.contains("my-fancy"),
+            "warning should mention the theme name"
+        );
     }
 
     #[test]

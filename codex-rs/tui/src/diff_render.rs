@@ -1037,10 +1037,7 @@ mod tests {
             "span ending exactly at max_cols should flush before next span: {result:?}"
         );
         // First line should only contain the 'a' span.
-        let first_width: usize = result[0]
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum();
+        let first_width: usize = result[0].iter().map(|s| s.content.chars().count()).sum();
         assert!(
             first_width <= 4,
             "first line should be at most 4 cols wide, got {first_width}"
@@ -1108,8 +1105,7 @@ mod tests {
                     panic!(
                         "large diff should not have syntax-highlighted spans, \
                          got RGB color in style {:?} for {:?}",
-                        span.style,
-                        span.content,
+                        span.style, span.content,
                     );
                 }
             }
