@@ -140,8 +140,8 @@ pub struct Config {
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
 
-    /// Optionally specify the personality of the model
-    pub personality: Option<Personality>,
+    /// How the model should communicate
+    pub personality: Personality,
 
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
@@ -1618,11 +1618,7 @@ impl Config {
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
-            .or_else(|| {
-                features
-                    .enabled(Feature::Personality)
-                    .then_some(Personality::Pragmatic)
-            });
+            .unwrap_or_default();
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -4038,7 +4034,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
-                personality: Some(Personality::Pragmatic),
+                personality: Personality::Pragmatic,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
@@ -4127,7 +4123,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Personality::Pragmatic,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -4231,7 +4227,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Personality::Pragmatic,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -4321,7 +4317,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
-            personality: Some(Personality::Pragmatic),
+            personality: Personality::Pragmatic,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,

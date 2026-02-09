@@ -99,7 +99,7 @@ async fn run_compact_task_inner(
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.model_info.slug.clone(),
-        personality: turn_context.personality,
+        personality: Some(turn_context.personality),
         collaboration_mode: Some(collaboration_mode),
         effort: turn_context.reasoning_effort,
         summary: turn_context.reasoning_summary,
@@ -117,7 +117,6 @@ async fn run_compact_task_inner(
         let prompt = Prompt {
             input: turn_input,
             base_instructions: sess.get_base_instructions().await,
-            personality: turn_context.personality,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(

@@ -44,8 +44,7 @@ const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective so
 async fn personality_does_not_mutate_base_instructions_without_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::Personality);
-    config.personality = Some(Personality::Friendly);
+    config.personality = Personality::Friendly;
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
     assert_eq!(
@@ -58,8 +57,7 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
 async fn base_instructions_override_disables_personality_template() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::Personality);
-    config.personality = Some(Personality::Friendly);
+    config.personality = Personality::Friendly;
     config.base_instructions = Some("override instructions".to_string());
 
     let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
@@ -81,7 +79,6 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
 
@@ -127,8 +124,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
-            config.personality = Some(Personality::Friendly);
+            config.personality = Personality::Friendly;
         });
     let test = builder.build(&server).await?;
 
@@ -181,8 +177,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
-            config.personality = Some(Personality::None);
+            config.personality = Personality::None;
         });
     let test = builder.build(&server).await?;
 
@@ -242,7 +237,6 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
 
@@ -290,7 +284,6 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         .with_model("exp-codex-personality")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
 
@@ -386,8 +379,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
         .with_model("exp-codex-personality")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
-            config.personality = Some(Personality::Pragmatic);
+            config.personality = Personality::Pragmatic;
         });
     let test = builder.build(&server).await?;
 
@@ -464,111 +456,6 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.disable(Feature::Personality);
-    config.personality = Some(Personality::Friendly);
-
-    let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let resp_mock = mount_sse_sequence(
-        &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
-    )
-    .await;
-    let mut builder = test_codex()
-        .with_model("exp-codex-personality")
-        .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
-            config.features.disable(Feature::Personality);
-        });
-    let test = builder.build(&server).await?;
-
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: SandboxPolicy::ReadOnly,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
-        })
-        .await?;
-
-    test.codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: SandboxPolicy::ReadOnly,
-            model: test.session_configured.model.clone(),
-            effort: test.config.model_reasoning_effort,
-            summary: ReasoningSummary::Auto,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await?;
-
-    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2, "expected two requests");
-    let request = requests
-        .last()
-        .expect("expected personality update request");
-
-    let developer_texts = request.message_input_texts("developer");
-    let personality_text = developer_texts
-        .iter()
-        .find(|text| text.contains("<personality_spec>"));
-    assert!(
-        personality_text.is_none(),
-        "expected no personality preamble, got {personality_text:?}"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -629,9 +516,8 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
-            config.personality = Some(Personality::Friendly);
+            config.personality = Personality::Friendly;
         });
     let test = builder.build(&server).await?;
 
@@ -745,9 +631,8 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
-            config.personality = Some(Personality::Friendly);
+            config.personality = Personality::Friendly;
         });
     let test = builder.build(&server).await?;
 
@@ -860,7 +745,6 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
-            config.features.enable(Feature::Personality);
             config.model = Some("gpt-5.2-codex".to_string());
         });
     let test = builder.build(&server).await?;

@@ -80,6 +80,7 @@ pub enum WindowsSandboxLevel {
 
 #[derive(
     Debug,
+    Default,
     Serialize,
     Deserialize,
     Clone,
@@ -98,6 +99,7 @@ pub enum WindowsSandboxLevel {
 pub enum Personality {
     None,
     Friendly,
+    #[default]
     Pragmatic,
 }
 

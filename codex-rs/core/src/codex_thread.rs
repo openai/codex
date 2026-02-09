@@ -24,7 +24,7 @@ pub struct ThreadConfigSnapshot {
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
     pub reasoning_effort: Option<ReasoningEffort>,
-    pub personality: Option<Personality>,
+    pub personality: Personality,
     pub session_source: SessionSource,
 }
 

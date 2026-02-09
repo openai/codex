@@ -125,8 +125,6 @@ pub enum Feature {
     Steer,
     /// Enable collaboration modes (Plan, Default).
     CollaborationModes,
-    /// Enable personality selection in the TUI.
-    Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -560,12 +558,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Personality,
-        key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
     },
