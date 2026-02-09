@@ -724,7 +724,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         image_index += 1;
                         vec![
                             ContentItem::InputText {
-                                text: local_image_open_tag_text(image_index),
+                                text: image_open_tag_text(),
                             },
                             ContentItem::InputImage { image_url },
                             ContentItem::InputText {
@@ -1597,7 +1597,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 let expected = vec![
                     ContentItem::InputText {
-                        text: local_image_open_tag_text(1),
+                        text: image_open_tag_text(),
                     },
                     ContentItem::InputImage { image_url },
                     ContentItem::InputText {
@@ -1634,7 +1634,7 @@ mod tests {
                 assert_eq!(
                     content.first(),
                     Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(1),
+                        text: image_open_tag_text(),
                     })
                 );
                 assert_eq!(content.get(1), Some(&ContentItem::InputImage { image_url }));
