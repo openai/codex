@@ -197,12 +197,17 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(5);
+        let mut tags = Vec::with_capacity(6);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(
             &mut tags,
             "session_source",
             Some(self.metadata.session_source.as_str()),
+        )?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "originator",
+            Some(self.metadata.originator.as_str()),
         )?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
