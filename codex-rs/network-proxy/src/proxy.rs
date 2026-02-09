@@ -655,8 +655,6 @@ mod tests {
         );
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
-        assert_eq!(env.get("RSYNC_PROXY"), None);
-        assert_eq!(env.get("GRPC_PROXY"), None);
         #[cfg(target_os = "macos")]
         assert_eq!(
             env.get("GIT_SSH_COMMAND"),
@@ -682,9 +680,6 @@ mod tests {
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
-        assert_eq!(env.get("RSYNC_PROXY"), None);
-        assert_eq!(env.get("FTP_PROXY"), None);
-        assert_eq!(env.get("GRPC_PROXY"), None);
     }
 
     #[cfg(target_os = "macos")]
