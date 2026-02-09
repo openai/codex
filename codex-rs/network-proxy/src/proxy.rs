@@ -236,12 +236,10 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "HTTPS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
-    "GRPC_PROXY",
     "http_proxy",
     "https_proxy",
     "all_proxy",
     "ftp_proxy",
-    "grpc_proxy",
     "YARN_HTTP_PROXY",
     "YARN_HTTPS_PROXY",
     "npm_config_http_proxy",
@@ -257,14 +255,9 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "DOCKER_HTTPS_PROXY",
 ];
 
-pub const ALL_PROXY_ENV_KEYS: &[&str] = &[
-    "ALL_PROXY",
-    "all_proxy",
-    "FTP_PROXY",
-    "ftp_proxy",
-    "GRPC_PROXY",
-    "grpc_proxy",
-];
+pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
+
+const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
 
 pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "NO_PROXY",
@@ -275,7 +268,17 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "BUNDLE_NO_PROXY",
 ];
 
-pub const DEFAULT_NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1";
+pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
+    "localhost,127.0.0.1,::1,",
+    "*.local,.local,",
+    "169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+);
+
+fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
+    for key in keys {
+        env.insert((*key).to_string(), value.to_string());
+    }
+}
 
 fn apply_proxy_env_overrides(
     env: &mut HashMap<String, String>,
@@ -284,36 +287,49 @@ fn apply_proxy_env_overrides(
     socks_enabled: bool,
 ) {
     let http_proxy_url = format!("http://{http_addr}");
-    let all_proxy_url = if socks_enabled {
-        format!("socks5h://{socks_addr}")
-    } else {
-        http_proxy_url.clone()
-    };
+    let socks_proxy_url = format!("socks5h://{socks_addr}");
 
-    for key in PROXY_URL_ENV_KEYS {
-        env.insert((*key).to_string(), http_proxy_url.clone());
-    }
-    for key in ALL_PROXY_ENV_KEYS {
-        env.insert((*key).to_string(), all_proxy_url.clone());
-    }
-    for key in NO_PROXY_ENV_KEYS {
-        env.insert((*key).to_string(), DEFAULT_NO_PROXY_VALUE.to_string());
-    }
+    // HTTP-based clients are best served by explicit HTTP proxy URLs.
+    set_env_keys(
+        env,
+        &[
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "YARN_HTTP_PROXY",
+            "YARN_HTTPS_PROXY",
+            "npm_config_http_proxy",
+            "npm_config_https_proxy",
+            "npm_config_proxy",
+            "NPM_CONFIG_HTTP_PROXY",
+            "NPM_CONFIG_HTTPS_PROXY",
+            "NPM_CONFIG_PROXY",
+            "BUNDLE_HTTP_PROXY",
+            "BUNDLE_HTTPS_PROXY",
+            "PIP_PROXY",
+            "DOCKER_HTTP_PROXY",
+            "DOCKER_HTTPS_PROXY",
+        ],
+        &http_proxy_url,
+    );
+
+    // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
+    set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
 
-    env.insert("CLOUDSDK_PROXY_TYPE".to_string(), "https".to_string());
-    env.insert(
-        "CLOUDSDK_PROXY_ADDRESS".to_string(),
-        http_addr.ip().to_string(),
-    );
-    env.insert(
-        "CLOUDSDK_PROXY_PORT".to_string(),
-        http_addr.port().to_string(),
-    );
-
     if socks_enabled {
+        set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
+        set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
         env.insert("RSYNC_PROXY".to_string(), socks_addr.to_string());
+        #[cfg(target_os = "macos")]
+        env.insert(
+            "GIT_SSH_COMMAND".to_string(),
+            format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"),
+        );
+    } else {
+        set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
     }
 }
 
@@ -574,12 +590,23 @@ mod tests {
             Some(&"socks5h://127.0.0.1:8081".to_string())
         );
         assert_eq!(
+            env.get("FTP_PROXY"),
+            Some(&"socks5h://127.0.0.1:8081".to_string())
+        );
+        assert_eq!(
             env.get("NO_PROXY"),
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
-        assert_eq!(env.get("CLOUDSDK_PROXY_PORT"), Some(&"3128".to_string()));
         assert_eq!(env.get("RSYNC_PROXY"), Some(&"127.0.0.1:8081".to_string()));
+        assert_eq!(env.get("GRPC_PROXY"), None);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
     }
 
     #[test]
@@ -597,5 +624,7 @@ mod tests {
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(env.get("RSYNC_PROXY"), None);
+        assert_eq!(env.get("FTP_PROXY"), None);
+        assert_eq!(env.get("GRPC_PROXY"), None);
     }
 }
