@@ -91,8 +91,7 @@ toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tree-sitter-bash = { workspace = true }
-tree-sitter-highlight = { workspace = true }
+syntect = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
