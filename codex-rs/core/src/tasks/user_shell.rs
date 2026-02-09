@@ -160,9 +160,14 @@ pub(crate) async fn execute_user_shell_command(
     });
 
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
-        .or_cancel(&cancellation_token)
-        .await;
+    let exec_result = execute_exec_env(
+        exec_env,
+        &sandbox_policy,
+        turn_context.config.network.clone(),
+        stdout_stream,
+    )
+    .or_cancel(&cancellation_token)
+    .await;
 
     match exec_result {
         Err(CancelErr::Cancelled) => {

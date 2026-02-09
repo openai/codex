@@ -501,15 +501,16 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
-        let req = UnifiedExecToolRequest::new(
-            request.command.clone(),
+        let req = UnifiedExecToolRequest {
+            command: request.command.clone(),
             cwd,
             env,
-            request.tty,
-            request.sandbox_permissions,
-            request.justification.clone(),
+            network: context.turn.config.network.clone(),
+            tty: request.tty,
+            sandbox_permissions: request.sandbox_permissions,
+            justification: request.justification.clone(),
             exec_approval_requirement,
-        );
+        };
         let tool_ctx = ToolCtx {
             session: context.session.as_ref(),
             turn: context.turn.as_ref(),
