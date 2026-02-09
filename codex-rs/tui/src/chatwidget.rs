@@ -626,6 +626,8 @@ pub(crate) struct ChatWidget {
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
+    /// Raw markdown of the most recently completed agent response.
+    last_agent_markdown: Option<String>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1296,6 +1298,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.last_agent_markdown = None;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1359,6 +1362,10 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.request_redraw();
+        self.last_agent_markdown = last_agent_message
+            .as_ref()
+            .filter(|message| !message.is_empty())
+            .cloned();
 
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation();
@@ -2663,6 +2670,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_agent_markdown: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2828,6 +2836,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_agent_markdown: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2982,6 +2991,7 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
+            last_agent_markdown: None,
         };
 
         widget.prefetch_rate_limits();
@@ -3014,6 +3024,16 @@ impl ChatWidget {
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Alt+C - copy last agent response from the main view.
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.copy_last_agent_markdown();
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -4211,6 +4231,27 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
+        self.request_redraw();
+    }
+
+    /// Copy the last agent response (raw markdown) to the system clipboard.
+    pub(crate) fn copy_last_agent_markdown(&mut self) {
+        match &self.last_agent_markdown {
+            Some(markdown) if !markdown.is_empty() => {
+                match crate::clipboard_copy::copy_to_clipboard(markdown) {
+                    Ok(()) => self.add_to_history(history_cell::new_info_event(
+                        "Copied last message to clipboard".into(),
+                        None,
+                    )),
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
+                }
+            }
+            _ => self.add_to_history(history_cell::new_error_event(
+                "No agent response to copy".into(),
+            )),
+        }
         self.request_redraw();
     }
 

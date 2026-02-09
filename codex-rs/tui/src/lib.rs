@@ -61,6 +61,7 @@ mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
+mod clipboard_copy;
 mod clipboard_paste;
 mod collab;
 mod collaboration_modes;
