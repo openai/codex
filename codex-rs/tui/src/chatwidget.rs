@@ -649,6 +649,11 @@ pub(crate) struct ActiveCellTranscriptKey {
 pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
+    /// Remote image attachments represented as URLs (for example data URLs)
+    /// provided by app-server clients.
+    ///
+    /// Unlike `local_images`, these are not created by TUI image attach/paste
+    /// flows. The TUI can restore and remove them while editing/backtracking.
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,

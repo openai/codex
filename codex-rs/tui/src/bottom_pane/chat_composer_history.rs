@@ -17,7 +17,7 @@ pub(crate) struct HistoryEntry {
     pub(crate) text_elements: Vec<TextElement>,
     /// Local image paths captured alongside `text_elements`.
     pub(crate) local_image_paths: Vec<PathBuf>,
-    /// Remote image URLs captured alongside `local_image_paths`.
+    /// Remote image URLs restored with this draft.
     pub(crate) remote_image_urls: Vec<String>,
     /// Mention bindings for tool/app/skill references inside `text`.
     pub(crate) mention_bindings: Vec<MentionBinding>,
