@@ -19,6 +19,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use tracing::error;
 use tracing::info;
+use tracing::trace;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -192,7 +193,7 @@ fn log_remote_compact_failure(
     total_usage_breakdown: TotalTokenUsageBreakdown,
     err: &CodexErr,
 ) {
-    error!(
+    trace!(
         turn_id = %turn_context.sub_id,
         failing_compaction_request_body_json = %metrics.failing_compaction_request_body_json,
         "remote compaction request payload before failure"
