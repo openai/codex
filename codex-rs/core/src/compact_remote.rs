@@ -193,7 +193,6 @@ fn log_remote_compact_failure(
         turn_id = %turn_context.sub_id,
         compact_error_status = ?compact_error_status_code(err),
         last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
-        last_api_response_total_bytes_estimate = total_usage_breakdown.last_api_response_total_bytes_estimate,
         estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
         estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
         model_context_window_tokens = ?turn_context.model_context_window(),

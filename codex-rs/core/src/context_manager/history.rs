@@ -4,7 +4,6 @@ use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
@@ -31,7 +30,6 @@ pub(crate) struct ContextManager {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TotalTokenUsageBreakdown {
     pub last_api_response_total_tokens: i64,
-    pub last_api_response_total_bytes_estimate: usize,
     pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
     pub estimated_bytes_of_items_added_since_last_successful_api_response: usize,
 }
@@ -264,19 +262,16 @@ impl ContextManager {
             })
     }
 
-    fn get_trailing_codex_generated_items_bytes(&self) -> usize {
-        let mut total = 0usize;
-        for item in self.items.iter().rev() {
-            if !is_codex_generated_item(item) {
-                break;
-            }
-            total = total.saturating_add(
-                serde_json::to_vec(item)
-                    .map(|bytes| bytes.len())
-                    .unwrap_or_default(),
-            );
-        }
-        total
+    fn get_items_after_last_model_generated_bytes(&self) -> usize {
+        self.items_after_last_model_generated_item()
+            .iter()
+            .fold(0usize, |acc, item| {
+                acc.saturating_add(
+                    serde_json::to_vec(item)
+                        .map(|bytes| bytes.len())
+                        .unwrap_or_default(),
+                )
+            })
     }
 
     /// When true, the server already accounted for past reasoning tokens and
@@ -307,17 +302,10 @@ impl ContextManager {
 
         TotalTokenUsageBreakdown {
             last_api_response_total_tokens: last_usage.total_tokens,
-            last_api_response_total_bytes_estimate: if last_usage.total_tokens <= 0 {
-                0
-            } else {
-                usize::try_from(last_usage.total_tokens)
-                    .map(approx_bytes_for_tokens)
-                    .unwrap_or(usize::MAX)
-            },
             estimated_tokens_of_items_added_since_last_successful_api_response: self
-                .get_trailing_codex_generated_items_tokens(),
+                .get_items_after_last_model_generated_tokens(),
             estimated_bytes_of_items_added_since_last_successful_api_response: self
-                .get_trailing_codex_generated_items_bytes(),
+                .get_items_after_last_model_generated_bytes(),
         }
     }
 
