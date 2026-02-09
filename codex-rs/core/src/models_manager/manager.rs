@@ -175,7 +175,7 @@ impl ModelsManager {
         refresh_strategy: RefreshStrategy,
     ) -> CoreResult<()> {
         if !config.features.enabled(Feature::RemoteModels)
-            || self.auth_manager.auth_mode() == Some(AuthMode::ApiKey)
+            || self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
         {
             return Ok(());
         }
