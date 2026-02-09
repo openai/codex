@@ -20,24 +20,44 @@ use ratatui::layout::Size;
 /// - getting the cursor position
 pub struct VT100Backend {
     crossterm_backend: CrosstermBackend<vt100::Parser>,
+    write_log: Vec<u8>,
 }
 
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
+        Self::new_with_scrollback(width, height, 0)
+    }
+
+    /// Creates a new `TestBackend` with explicit scrollback length.
+    pub fn new_with_scrollback(width: u16, height: u16, scrollback_len: usize) -> Self {
         crossterm::style::force_color_output(true);
         Self {
-            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
+            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(
+                height,
+                width,
+                scrollback_len,
+            )),
+            write_log: Vec::new(),
         }
     }
 
     pub fn vt100(&self) -> &vt100::Parser {
         self.crossterm_backend.writer()
     }
+
+    pub fn vt100_mut(&mut self) -> &mut vt100::Parser {
+        self.crossterm_backend.writer_mut()
+    }
+
+    pub fn write_log(&self) -> &[u8] {
+        &self.write_log
+    }
 }
 
 impl Write for VT100Backend {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.write_log.extend_from_slice(buf);
         self.crossterm_backend.writer_mut().write(buf)
     }
 
@@ -72,7 +92,8 @@ impl Backend for VT100Backend {
     }
 
     fn get_cursor_position(&mut self) -> io::Result<Position> {
-        Ok(self.vt100().screen().cursor_position().into())
+        let (row, col) = self.vt100().screen().cursor_position();
+        Ok(Position::new(col, row))
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {

@@ -31,11 +31,26 @@ pub fn insert_history_lines<B>(
 where
     B: Backend + Write,
 {
+    let use_native_scrollback_history_mode = should_use_native_scrollback_history_mode();
+    insert_history_lines_with_mode(terminal, lines, use_native_scrollback_history_mode)
+}
+
+fn insert_history_lines_with_mode<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    use_native_scrollback_history_mode: bool,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
-    let last_cursor_pos = terminal.last_known_cursor_pos;
+    // Restore to the last explicit app cursor (composer/input), not the transient backend cursor.
+    let restore_cursor_pos = terminal
+        .last_explicit_cursor_pos
+        .unwrap_or(terminal.last_known_cursor_pos);
     let writer = terminal.backend_mut();
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
@@ -45,30 +60,99 @@ where
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
-        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
+        let available_bottom_gap = screen_size.height - area.bottom();
+        let scroll_amount = if use_native_scrollback_history_mode {
+            // In native scrollback mode, full-screen scroll insertion already advances history.
+            // Pre-shifting viewport metadata introduces blank rows between streamed chunks.
+            0
+        } else {
+            wrapped_lines.min(available_bottom_gap)
+        };
+        let old_top = area.top();
 
-        // Emit ANSI to scroll the lower region (from the top of the viewport to the bottom
-        // of the screen) downward by `scroll_amount` lines. We do this by:
-        //   1) Limiting the scroll region to [area.top()+1 .. screen_height] (1-based bounds)
-        //   2) Placing the cursor at the top margin of that region
-        //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
-        //   4) Resetting the scroll region back to full screen
-        let top_1based = area.top() + 1; // Convert 0-based row to 1-based for DECSTBM
-        queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
-        queue!(writer, MoveTo(0, area.top()))?;
-        for _ in 0..scroll_amount {
-            // Reverse Index (RI): ESC M
-            queue!(writer, Print("\x1bM"))?;
+        if !use_native_scrollback_history_mode {
+            // Emit ANSI to scroll the lower region (from the top of the viewport to the bottom
+            // of the screen) downward by `scroll_amount` lines. We do this by:
+            //   1) Limiting the scroll region to [area.top()+1 .. screen_height] (1-based bounds)
+            //   2) Placing the cursor at the top margin of that region
+            //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
+            //   4) Resetting the scroll region back to full screen
+            let top_1based = old_top + 1; // Convert 0-based row to 1-based for DECSTBM
+            queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
+            queue!(writer, MoveTo(0, old_top))?;
+            for _ in 0..scroll_amount {
+                // Reverse Index (RI): ESC M
+                queue!(writer, Print("\x1bM"))?;
+            }
+            queue!(writer, ResetScrollRegion)?;
         }
-        queue!(writer, ResetScrollRegion)?;
 
-        let cursor_top = area.top().saturating_sub(1);
-        area.y += scroll_amount;
-        should_update_area = true;
-        cursor_top
+        if scroll_amount > 0 {
+            area.y += scroll_amount;
+            should_update_area = true;
+        }
+
+        if use_native_scrollback_history_mode {
+            // In native scrollback mode we print history lines after a full-screen scroll.
+            // Anchor writes to one row above the viewport top so streamed lines remain contiguous
+            // across chunks without introducing artificial spacing.
+            area.top().saturating_sub(1)
+        } else {
+            old_top.saturating_sub(1)
+        }
     } else {
+        // If the viewport is not at the bottom of the screen, scroll it down to make room.
         area.top().saturating_sub(1)
     };
+
+    if use_native_scrollback_history_mode && area.top() > 0 {
+        if screen_size.height == 0 {
+            return Ok(());
+        }
+        queue!(writer, ResetScrollRegion)?;
+        for line in wrapped {
+            // Some terminals do not reliably preserve scrollback for lines scrolled out of DECSTBM
+            // regions. Force a natural full-screen scroll by emitting CRLF on the last row.
+            queue!(writer, MoveTo(0, screen_size.height.saturating_sub(1)))?;
+            queue!(writer, Print("\r\n"))?;
+            queue!(writer, MoveTo(0, cursor_top))?;
+            queue!(
+                writer,
+                SetColors(Colors::new(
+                    line.style
+                        .fg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset),
+                    line.style
+                        .bg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset)
+                ))
+            )?;
+            queue!(writer, Clear(ClearType::UntilNewLine))?;
+            let merged_spans: Vec<Span> = line
+                .spans
+                .iter()
+                .map(|s| Span {
+                    style: s.style.patch(line.style),
+                    content: s.content.clone(),
+                })
+                .collect();
+            write_spans(writer, merged_spans.iter())?;
+        }
+
+        queue!(writer, MoveTo(restore_cursor_pos.x, restore_cursor_pos.y))?;
+
+        let _ = writer;
+        if should_update_area {
+            terminal.set_viewport_area(area);
+        }
+        // Native mode insertion scrolls the whole screen, so invalidate the
+        // previous frame cache to force a full repaint on the next draw.
+        terminal.invalidate_previous_frame();
+
+        return Ok(());
+    }
 
     // Limit the scroll region to the lines from the top of the screen to the
     // top of the viewport. With this in place, when we add lines inside this
@@ -124,7 +208,7 @@ where
     queue!(writer, ResetScrollRegion)?;
 
     // Restore the cursor position to where it was before we started.
-    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+    queue!(writer, MoveTo(restore_cursor_pos.x, restore_cursor_pos.y))?;
 
     let _ = writer;
     if should_update_area {
@@ -132,6 +216,12 @@ where
     }
 
     Ok(())
+}
+
+fn should_use_native_scrollback_history_mode() -> bool {
+    // Enable this path for environments where lines scrolled out of DECSTBM regions may not be
+    // appended to global scrollback. Zellij is the currently known case.
+    std::env::var_os("ZELLIJ").is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,10 +375,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+    use ratatui::text::Text;
+    use ratatui::widgets::Paragraph;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -474,6 +568,545 @@ mod tests {
                 );
             }
             break 'rows;
+        }
+    }
+
+    fn insert_streamed_response_in_two_chunks(
+        term: &mut crate::custom_terminal::Terminal<VT100Backend>,
+        width: u16,
+        token: &str,
+        start: u16,
+        end: u16,
+    ) {
+        assert!(start <= end);
+
+        let first =
+            AgentMessageCell::new(vec![Line::from(format!("{token} line {start:02}"))], true);
+        let first_display = first.display_lines(width);
+        assert_eq!(
+            first_display.len(),
+            1,
+            "first streamed chunk should emit exactly one line",
+        );
+        assert!(
+            !first_display
+                .iter()
+                .any(crate::render::line_utils::is_blank_line_spaces_only),
+            "first streamed chunk display should not contain blank lines",
+        );
+        insert_history_lines_with_mode(term, first_display, true)
+            .expect("failed inserting first response chunk");
+
+        if start < end {
+            let rest_lines: Vec<Line<'static>> = ((start + 1)..=end)
+                .map(|n| Line::from(format!("{token} line {n:02}")))
+                .collect();
+            let rest = AgentMessageCell::new(rest_lines, false);
+            let rest_display = rest.display_lines(width);
+            assert_eq!(
+                rest_display.len(),
+                usize::from(end - start),
+                "continuation chunk should emit one line per numbered row",
+            );
+            assert!(
+                !rest_display
+                    .iter()
+                    .any(crate::render::line_utils::is_blank_line_spaces_only),
+                "continuation streamed chunk display should not contain blank lines",
+            );
+            insert_history_lines_with_mode(term, rest_display, true)
+                .expect("failed inserting continuation response chunk");
+        }
+    }
+
+    fn row_index_containing(rows: &[String], needle: &str) -> usize {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("could not find row containing {needle:?}"))
+    }
+
+    fn rows_contain(rows: &[String], needle: &str) -> bool {
+        rows.iter().any(|row| row.contains(needle))
+    }
+
+    mod native_scrollback_suite {
+        use super::*;
+
+        #[test]
+        fn native_scrollback_mode_keeps_viewport_metadata_stable_for_varied_inserts() {
+            let cases: [(&str, u16, u16, Rect, u16); 4] = [
+                // Deliberately leave rows below the viewport to mirror inline mode setups where
+                // the viewport can lag behind the screen bottom.
+                ("multiline", 32, 12, Rect::new(0, 6, 32, 3), 5),
+                // Bottom gap is 2 rows (viewport bottom=10, screen bottom=12).
+                ("large-multiline", 40, 12, Rect::new(0, 7, 40, 3), 6),
+                ("single-line", 40, 12, Rect::new(0, 7, 40, 3), 1),
+                // Bottom gap is 20 rows (viewport bottom=20, screen bottom=40).
+                ("single-line-large-gap", 80, 40, Rect::new(0, 10, 80, 10), 1),
+            ];
+
+            for (name, width, height, viewport, line_count) in cases {
+                let backend = VT100Backend::new(width, height);
+                let mut term =
+                    crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+                term.set_viewport_area(viewport);
+
+                let lines: Vec<Line<'static>> = (1..=line_count)
+                    .map(|i| Line::from(format!("{name} line {i:02}")))
+                    .collect();
+                insert_history_lines_with_mode(&mut term, lines, true)
+                    .expect("failed to insert history lines in native scrollback mode test");
+
+                assert_eq!(
+                    term.viewport_area, viewport,
+                    "expected native scrollback mode to leave viewport metadata unchanged for {name}",
+                );
+            }
+        }
+
+        #[test]
+        fn native_scrollback_mode_preserves_oldest_lines_when_history_overflows_viewport_region() {
+            fn run_case(use_native_scrollback_mode: bool) -> (Vec<String>, Vec<String>) {
+                let width: u16 = 77;
+                let height: u16 = 42;
+                let backend = VT100Backend::new_with_scrollback(width, height, 4096);
+                let mut term =
+                    crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
+                // Keep viewport above bottom so insertion must go through pre-viewport history
+                // region logic.
+                term.set_viewport_area(Rect::new(0, 20, width, 20));
+
+                let lines = AgentMessageCell::new(
+                    (1..=50)
+                        .map(|n| Line::from(format!("OVERFLOW_CASE line {n:02}")))
+                        .collect(),
+                    true,
+                )
+                .display_lines(width);
+
+                insert_history_lines_with_mode(&mut term, lines, use_native_scrollback_mode)
+                    .expect("insert");
+
+                // Capture oldest visible scrollback slice.
+                term.backend_mut()
+                    .vt100_mut()
+                    .screen_mut()
+                    .set_scrollback(4096);
+                let top_rows: Vec<String> =
+                    term.backend().vt100().screen().rows(0, width).collect();
+
+                // Capture live bottom slice.
+                term.backend_mut()
+                    .vt100_mut()
+                    .screen_mut()
+                    .set_scrollback(0);
+                let bottom_rows: Vec<String> =
+                    term.backend().vt100().screen().rows(0, width).collect();
+
+                (top_rows, bottom_rows)
+            }
+
+            let (without_newline_top, without_newline_bottom) = run_case(false);
+            let (with_newline_top, with_newline_bottom) = run_case(true);
+
+            assert!(
+                !rows_contain(&without_newline_top, "OVERFLOW_CASE line 01"),
+                "expected old DECSTBM-only path to drop earliest history under overflow"
+            );
+            assert!(
+                rows_contain(&with_newline_top, "OVERFLOW_CASE line 01"),
+                "expected native scrollback mode to preserve earliest history line under overflow"
+            );
+            assert!(
+                rows_contain(&without_newline_bottom, "OVERFLOW_CASE line 50"),
+                "expected old path to keep latest history at live bottom"
+            );
+            assert!(
+                rows_contain(&with_newline_bottom, "OVERFLOW_CASE line 50"),
+                "expected native scrollback mode to keep latest history at live bottom"
+            );
+        }
+
+        #[test]
+        fn single_line_chunk_uses_bottom_row_newline_scroll() {
+            let width: u16 = 77;
+            let height: u16 = 42;
+            let backend = VT100Backend::new(width, height);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 20, width, 20));
+
+            let first = AgentMessageCell::new(vec![Line::from("CMD_CASE line 01")], true);
+            insert_history_lines_with_mode(&mut term, first.display_lines(width), true)
+                .expect("insert");
+
+            let output = String::from_utf8_lossy(term.backend().write_log()).into_owned();
+            let bottom_move = format!("\x1b[{height};1H");
+            assert!(
+                output.contains(&bottom_move),
+                "single-line chunk should use bottom-row newline scroll path in native scrollback mode (missing {bottom_move:?} in output: {output:?})",
+            );
+            let output_bytes = output.as_bytes();
+            assert!(output_bytes.windows(2).any(|window| window == b"\r\n"));
+        }
+
+        #[test]
+        fn native_scrollback_mode_restores_cursor_to_previous_position() {
+            let width: u16 = 64;
+            let height: u16 = 24;
+            let backend = VT100Backend::new(width, height);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 10, width, 10));
+            term.set_cursor_position((4, 20)).expect("set cursor");
+
+            let lines = vec![
+                Line::from("line 01"),
+                Line::from("line 02"),
+                Line::from("line 03"),
+            ];
+            insert_history_lines_with_mode(&mut term, lines, true).expect("insert");
+
+            let output = String::from_utf8_lossy(term.backend().write_log()).into_owned();
+            let expected_restore = "\x1b[21;5H";
+            assert!(
+                output.contains(expected_restore),
+                "expected cursor restore to preserve previous position in native scrollback mode (missing {expected_restore:?} in output: {output:?})",
+            );
+        }
+
+        #[test]
+        fn native_scrollback_mode_restores_last_explicit_cursor_when_cursor_state_drifts() {
+            let width: u16 = 64;
+            let height: u16 = 24;
+            let backend = VT100Backend::new(width, height);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 10, width, 10));
+
+            // Seed explicit app cursor.
+            term.set_cursor_position((4, 20))
+                .expect("set initial cursor");
+
+            // Drift the backend cursor and cached metadata independently.
+            queue!(term.backend_mut(), MoveTo(11, 18)).expect("move backend cursor");
+            term.last_known_cursor_pos = ratatui::layout::Position { x: 1, y: 1 };
+            assert_eq!(term.last_explicit_cursor_pos, Some((4, 20).into()));
+
+            insert_history_lines_with_mode(&mut term, vec![Line::from("line 01")], true)
+                .expect("insert");
+
+            let restored = term.get_cursor_position().expect("get restored cursor");
+            assert_eq!(
+                restored,
+                ratatui::layout::Position { x: 4, y: 20 },
+                "expected native scrollback mode to restore the last explicit app cursor position",
+            );
+        }
+
+        #[test]
+        fn native_scrollback_mode_keeps_prompt_and_footer_on_bottom_rows_after_insert() {
+            let width: u16 = 64;
+            let height: u16 = 16;
+            let backend = VT100Backend::new_with_scrollback(width, height, 256);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 2, width, height.saturating_sub(2)));
+
+            let draw_layout = |term: &mut crate::custom_terminal::Terminal<VT100Backend>| {
+                term.draw(|frame| {
+                    let footer_row = frame.area().height.saturating_sub(1);
+                    let prompt_row = frame.area().height.saturating_sub(2);
+                    let rows: Vec<Line<'static>> = (0..frame.area().height)
+                        .map(|row| match row {
+                            r if r == prompt_row => {
+                                Line::from("› Summarize recent commits".to_string())
+                            }
+                            r if r == footer_row => {
+                                Line::from("? for shortcuts  100% context left".to_string())
+                            }
+                            _ => Line::from(format!("frame row {row:02}")),
+                        })
+                        .collect();
+                    let paragraph = Paragraph::new(Text::from(rows));
+                    frame.render_widget_ref(paragraph, frame.area());
+                })
+                .expect("draw");
+            };
+
+            draw_layout(&mut term);
+            insert_history_lines_with_mode(&mut term, vec![Line::from("history insert 01")], true)
+                .expect("insert");
+            // Render the same frame again to mirror app draws where bottom pane text
+            // is unchanged across history insertions.
+            draw_layout(&mut term);
+
+            term.backend_mut()
+                .vt100_mut()
+                .screen_mut()
+                .set_scrollback(0);
+            let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+            let prompt_row = usize::from(height.saturating_sub(2));
+            let footer_row = usize::from(height.saturating_sub(1));
+            assert!(
+                rows[prompt_row].contains("Summarize") && rows[prompt_row].contains("commits"),
+                "expected prompt row {prompt_row} to be repainted after native history insert, got {:?}",
+                rows[prompt_row],
+            );
+            assert!(
+                rows[footer_row].contains("shortcuts") && rows[footer_row].contains("context"),
+                "expected footer row {footer_row} to be repainted after native history insert, got {:?}",
+                rows[footer_row],
+            );
+        }
+    }
+
+    mod native_scrollback_spacing_suite {
+        use super::*;
+
+        #[test]
+        fn streamed_numbered_lines_remain_contiguous_across_chunks() {
+            let width: u16 = 120;
+            let height: u16 = 240;
+            let backend = VT100Backend::new(width, height);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
+            // Keep a gap below viewport so native scrollback mode has to exercise its
+            // viewport-shift path.
+            term.set_viewport_area(Rect::new(0, 200, width, 20));
+
+            // Raw assistant payloads in session logs have no blank lines between these numbers.
+            insert_streamed_response_in_two_chunks(&mut term, width, "SPACING_CASE", 1, 50);
+            insert_streamed_response_in_two_chunks(&mut term, width, "SPACING_CASE", 51, 60);
+            insert_streamed_response_in_two_chunks(&mut term, width, "SPACING_CASE", 61, 80);
+
+            let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+
+            for (lhs, rhs) in [(1_u16, 2_u16), (51_u16, 52_u16), (61_u16, 62_u16)] {
+                let left = row_index_containing(&rows, &format!("SPACING_CASE line {lhs:02}"));
+                let right = row_index_containing(&rows, &format!("SPACING_CASE line {rhs:02}"));
+                assert_eq!(
+                    right,
+                    left + 1,
+                    "expected contiguous rows for {lhs:02}->{rhs:02}, got row {left} then {right}",
+                );
+            }
+        }
+
+        #[test]
+        fn two_single_line_stream_inserts_stay_adjacent() {
+            let width: u16 = 120;
+            let height: u16 = 160;
+            let backend = VT100Backend::new(width, height);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 120, width, 20));
+
+            insert_history_lines_with_mode(&mut term, vec![Line::from("MINCASE line 01")], true)
+                .expect("first insert");
+            insert_history_lines_with_mode(&mut term, vec![Line::from("MINCASE line 02")], true)
+                .expect("second insert");
+
+            let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+            let r1 = row_index_containing(&rows, "MINCASE line 01");
+            let r2 = row_index_containing(&rows, "MINCASE line 02");
+            assert_eq!(
+                r2,
+                r1 + 1,
+                "expected contiguous rows for MINCASE line 01->02, got row {r1} then {r2}",
+            );
+        }
+
+        #[test]
+        fn single_large_insert_keeps_line_01_and_02_adjacent() {
+            let width: u16 = 77;
+            let height: u16 = 42;
+            let backend = VT100Backend::new_with_scrollback(width, height, 2048);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+
+            // Mirror live inline-mode layout where viewport can sit above the last rows.
+            term.set_viewport_area(Rect::new(0, 20, width, 20));
+
+            let lines = AgentMessageCell::new(
+                (1..=20)
+                    .map(|n| Line::from(format!("LIVE_BIG line {n:02}")))
+                    .collect(),
+                true,
+            )
+            .display_lines(width);
+
+            insert_history_lines_with_mode(&mut term, lines, true).expect("insert");
+
+            term.backend_mut()
+                .vt100_mut()
+                .screen_mut()
+                .set_scrollback(2048);
+            let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+            let r1 = row_index_containing(&rows, "LIVE_BIG line 01");
+            let r2 = row_index_containing(&rows, "LIVE_BIG line 02");
+            assert_eq!(
+                r2,
+                r1 + 1,
+                "expected contiguous rows for LIVE_BIG line 01->02, got row {r1} then {r2}",
+            );
+        }
+
+        #[test]
+        fn streamed_numbered_lines_remain_contiguous_with_interleaved_draws() {
+            let width: u16 = 77;
+            let height: u16 = 42;
+            let backend = VT100Backend::new_with_scrollback(width, height, 4096);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 20, width, 20));
+
+            let draw_frame = |term: &mut crate::custom_terminal::Terminal<VT100Backend>| {
+                term.draw(|frame| {
+                    // Render full viewport rows so we model the regular frame lifecycle.
+                    let filler = (0..frame.area().height)
+                        .map(|row| Line::from(format!("FRAME row {row:02}")))
+                        .collect::<Vec<_>>();
+                    let paragraph = Paragraph::new(Text::from(filler));
+                    frame.render_widget_ref(paragraph, frame.area());
+                })
+                .expect("draw");
+            };
+
+            let first = AgentMessageCell::new(vec![Line::from("DRAW_CASE line 01")], true);
+            insert_history_lines_with_mode(&mut term, first.display_lines(width), true)
+                .expect("01");
+            draw_frame(&mut term);
+
+            let mid = AgentMessageCell::new(
+                (2..=6)
+                    .map(|n| Line::from(format!("DRAW_CASE line {n:02}")))
+                    .collect(),
+                false,
+            );
+            insert_history_lines_with_mode(&mut term, mid.display_lines(width), true)
+                .expect("02-06");
+            draw_frame(&mut term);
+
+            let next = AgentMessageCell::new(vec![Line::from("DRAW_CASE line 07")], true);
+            insert_history_lines_with_mode(&mut term, next.display_lines(width), true).expect("07");
+            draw_frame(&mut term);
+
+            let next_tail = AgentMessageCell::new(
+                (8..=12)
+                    .map(|n| Line::from(format!("DRAW_CASE line {n:02}")))
+                    .collect(),
+                false,
+            );
+            insert_history_lines_with_mode(&mut term, next_tail.display_lines(width), true)
+                .expect("08-12");
+            draw_frame(&mut term);
+
+            let third = AgentMessageCell::new(vec![Line::from("DRAW_CASE line 13")], true);
+            insert_history_lines_with_mode(&mut term, third.display_lines(width), true)
+                .expect("13");
+            draw_frame(&mut term);
+
+            let third_tail = AgentMessageCell::new(
+                (14..=18)
+                    .map(|n| Line::from(format!("DRAW_CASE line {n:02}")))
+                    .collect(),
+                false,
+            );
+            insert_history_lines_with_mode(&mut term, third_tail.display_lines(width), true)
+                .expect("14-18");
+
+            term.backend_mut()
+                .vt100_mut()
+                .screen_mut()
+                .set_scrollback(0);
+            let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+            for (lhs, rhs) in [(1_u16, 2_u16), (7_u16, 8_u16), (13_u16, 14_u16)] {
+                let left = row_index_containing(&rows, &format!("DRAW_CASE line {lhs:02}"));
+                let right = row_index_containing(&rows, &format!("DRAW_CASE line {rhs:02}"));
+                assert_eq!(
+                    right,
+                    left + 1,
+                    "expected contiguous rows for DRAW_CASE {lhs:02}->{rhs:02}, got row {left} then {right}",
+                );
+            }
+        }
+
+        #[test]
+        fn five_line_stream_keeps_line_01_and_02_adjacent_in_small_viewport() {
+            let width: u16 = 77;
+            let height: u16 = 42;
+            let backend = VT100Backend::new_with_scrollback(width, height, 4096);
+            let mut term =
+                crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+            term.set_viewport_area(Rect::new(0, 20, width, 20));
+
+            let draw_frame = |term: &mut crate::custom_terminal::Terminal<VT100Backend>| {
+                term.draw(|frame| {
+                    let filler = (0..frame.area().height)
+                        .map(|row| Line::from(format!("FRAME5 row {row:02}")))
+                        .collect::<Vec<_>>();
+                    let paragraph = Paragraph::new(Text::from(filler));
+                    frame.render_widget_ref(paragraph, frame.area());
+                })
+                .expect("draw");
+            };
+
+            // Prime scrollback/view state similarly to a long-running interactive session.
+            let warmup = AgentMessageCell::new(
+                (1..=120)
+                    .map(|n| Line::from(format!("WARMUP line {n:03}")))
+                    .collect(),
+                true,
+            );
+            insert_history_lines_with_mode(&mut term, warmup.display_lines(width), true)
+                .expect("warmup");
+            draw_frame(&mut term);
+
+            // Mirror the live pattern: first streamed chunk carries the initial bullet line,
+            // then continuation lines are inserted in the next chunk.
+            let first = AgentMessageCell::new(vec![Line::from("FIVE_CASE line 01")], true);
+            let rest = AgentMessageCell::new(
+                (2..=5)
+                    .map(|n| Line::from(format!("FIVE_CASE line {n:02}")))
+                    .collect(),
+                false,
+            );
+
+            insert_history_lines_with_mode(&mut term, first.display_lines(width), true)
+                .expect("01");
+            draw_frame(&mut term);
+            insert_history_lines_with_mode(&mut term, rest.display_lines(width), true)
+                .expect("02-05");
+
+            let mut found: Option<(usize, usize, usize)> = None;
+            for scrollback in 0..=4096 {
+                term.backend_mut()
+                    .vt100_mut()
+                    .screen_mut()
+                    .set_scrollback(scrollback);
+                let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+                if let Some(r1) = rows
+                    .iter()
+                    .position(|row| row.contains("FIVE_CASE line 01"))
+                    && let Some(r2) = rows
+                        .iter()
+                        .position(|row| row.contains("FIVE_CASE line 02"))
+                {
+                    found = Some((scrollback, r1, r2));
+                    break;
+                }
+            }
+            let Some((scrollback, r1, r2)) = found else {
+                panic!("could not find FIVE_CASE line 01/02 in any scrollback slice");
+            };
+            assert_eq!(
+                r2,
+                r1 + 1,
+                "expected contiguous rows for FIVE_CASE line 01->02, got row {r1} then {r2} at scrollback={scrollback}",
+            );
         }
     }
 

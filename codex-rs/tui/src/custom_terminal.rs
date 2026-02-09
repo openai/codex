@@ -121,6 +121,9 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
+    /// Last explicit cursor set by the app render path. This is stable even when the backend
+    /// cursor drifts during diff flushes or auxiliary ANSI writes.
+    pub last_explicit_cursor_pos: Option<Position>,
 }
 
 impl<B> Drop for Terminal<B>
@@ -156,6 +159,7 @@ where
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
+            last_explicit_cursor_pos: Some(cursor_pos),
         })
     }
 
@@ -365,7 +369,13 @@ where
         let position = position.into();
         self.backend.set_cursor_position(position)?;
         self.last_known_cursor_pos = position;
+        self.last_explicit_cursor_pos = Some(position);
         Ok(())
+    }
+
+    /// Mark previous frame contents stale so the next draw repaints the whole viewport.
+    pub(crate) fn invalidate_previous_frame(&mut self) {
+        self.previous_buffer_mut().reset();
     }
 
     /// Clear the terminal and force a full redraw on the next draw call.
