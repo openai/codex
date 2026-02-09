@@ -1,3 +1,4 @@
+use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -99,6 +100,8 @@ where
     pending_marker_line: bool,
     in_paragraph: bool,
     in_code_block: bool,
+    code_block_lang: Option<String>,
+    code_block_buffer: String,
     wrap_width: Option<usize>,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
@@ -124,6 +127,8 @@ where
             pending_marker_line: false,
             in_paragraph: false,
             in_code_block: false,
+            code_block_lang: None,
+            code_block_buffer: String::new(),
             wrap_width,
             current_line_content: None,
             current_initial_indent: Vec::new(),
@@ -278,6 +283,17 @@ where
             self.push_line(Line::default());
         }
         self.pending_marker_line = false;
+
+        // When inside a fenced code block with a known language, accumulate
+        // text into the buffer for batch highlighting in end_codeblock().
+        if self.in_code_block && self.code_block_lang.is_some() {
+            if !self.code_block_buffer.is_empty() {
+                self.code_block_buffer.push('\n');
+            }
+            self.code_block_buffer.push_str(&text);
+            return;
+        }
+
         if self.in_code_block && !self.needs_newline {
             let has_content = self
                 .current_line_content
@@ -394,12 +410,18 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
+
+        // Store the language for syntax highlighting; clear the buffer.
+        let lang = lang.filter(|l| !l.is_empty());
+        self.code_block_lang = lang;
+        self.code_block_buffer.clear();
+
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
             None,
@@ -409,6 +431,22 @@ where
     }
 
     fn end_codeblock(&mut self) {
+        // If we buffered code for a known language, syntax-highlight it now.
+        if let Some(lang) = self.code_block_lang.take() {
+            let code = std::mem::take(&mut self.code_block_buffer);
+            // Trim trailing newline to avoid a spurious empty line.
+            let code = code.trim_end_matches('\n');
+            if !code.is_empty() {
+                let highlighted = highlight_code_to_lines(code, &lang);
+                for hl_line in highlighted {
+                    self.push_line(Line::default());
+                    for span in hl_line.spans {
+                        self.push_span(span);
+                    }
+                }
+            }
+        }
+
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();
