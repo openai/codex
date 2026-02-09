@@ -14,6 +14,9 @@ use std::path::PathBuf;
 
 use unicode_width::UnicodeWidthChar;
 
+/// Display width of a tab character in columns.
+const TAB_WIDTH: usize = 4;
+
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
 use crate::render::highlight::exceeds_highlight_limits;
@@ -596,7 +599,8 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
             let mut chars_col = 0;
 
             for ch in remaining.chars() {
-                let w = ch.width().unwrap_or(0);
+                // Tabs have no Unicode width; treat them as TAB_WIDTH columns.
+                let w = ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 0 });
                 if col + chars_col + w > max_cols && byte_end > 0 {
                     // Adding this character would exceed the line width and we
                     // already have some content — break here.
@@ -618,7 +622,7 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
                 };
                 let ch_len = ch.len_utf8();
                 current_line.push(RtSpan::styled(remaining[..ch_len].to_string(), style));
-                col = ch.width().unwrap_or(1);
+                col = ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 1 });
                 remaining = &remaining[ch_len..];
                 continue;
             }
@@ -1056,6 +1060,19 @@ mod tests {
                 assert_eq!(span.style, style, "style should be preserved across wraps");
             }
         }
+    }
+
+    #[test]
+    fn wrap_styled_spans_tabs_have_visible_width() {
+        // A tab should count as TAB_WIDTH columns, not zero.
+        // With max_cols=8, a tab (4 cols) + "abcde" (5 cols) = 9 cols → must wrap.
+        let spans = vec![RtSpan::raw("\tabcde")];
+        let result = wrap_styled_spans(&spans, 8);
+        assert!(
+            result.len() >= 2,
+            "tab + 5 chars should exceed 8 cols and wrap, got {} line(s): {result:?}",
+            result.len()
+        );
     }
 
     #[test]
