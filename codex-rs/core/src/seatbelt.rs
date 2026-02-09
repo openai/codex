@@ -1,5 +1,6 @@
 #![cfg(target_os = "macos")]
 
+use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use url::Url;
 
 use crate::protocol::SandboxPolicy;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -34,15 +36,16 @@ pub async fn spawn_command_under_seatbelt(
     let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, &env);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-    spawn_child_async(
-        PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
+    spawn_child_async(SpawnChildRequest {
+        program: PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,
         arg0,
-        command_cwd,
+        cwd: command_cwd,
         sandbox_policy,
+        network: None,
         stdio_policy,
         env,
-    )
+    })
     .await
 }
 
@@ -99,11 +102,24 @@ fn has_proxy_env_vars(env: &HashMap<String, String>) -> bool {
         .any(|key| env.get(*key).is_some_and(|value| !value.trim().is_empty()))
 }
 
+fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
+    env.get(ALLOW_LOCAL_BINDING_ENV_KEY).is_some_and(|value| {
+        let trimmed = value.trim();
+        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+    })
+}
+
 fn dynamic_network_policy(sandbox_policy: &SandboxPolicy, env: &HashMap<String, String>) -> String {
     let proxy_ports = proxy_loopback_ports_from_env(env);
     if !proxy_ports.is_empty() {
         let mut policy =
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
+        if local_binding_enabled(env) {
+            policy.push_str("; allow localhost-only binding and loopback traffic\n");
+            policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+            policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+            policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+        }
         for port in proxy_ports {
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
@@ -244,6 +260,7 @@ fn macos_dir_params() -> Vec<(String, PathBuf)> {
 
 #[cfg(test)]
 mod tests {
+    use super::ALLOW_LOCAL_BINDING_ENV_KEY;
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::create_seatbelt_command_args;
     use super::macos_dir_params;
@@ -300,6 +317,51 @@ mod tests {
         assert!(
             !policy.contains("\n(allow network-outbound)\n"),
             "policy should not include blanket outbound allowance when proxy ports are present:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
+            "policy should not allow loopback binding unless explicitly enabled:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
+            "policy should not allow loopback inbound unless explicitly enabled:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        let command = vec!["/bin/echo".to_string(), "ok".to_string()];
+
+        let mut env = HashMap::new();
+        env.insert(
+            "HTTP_PROXY".to_string(),
+            "http://127.0.0.1:43128".to_string(),
+        );
+        env.insert(ALLOW_LOCAL_BINDING_ENV_KEY.to_string(), "1".to_string());
+
+        let args = create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, &env);
+        let policy = args
+            .get(1)
+            .expect("seatbelt args should include policy at index 1");
+
+        assert!(
+            policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
+            "policy should allow loopback binding when explicitly enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
+            "policy should allow loopback inbound when explicitly enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-outbound (remote ip \"localhost:*\"))"),
+            "policy should allow loopback outbound when explicitly enabled:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should keep proxy-routed behavior without blanket outbound allowance:\n{policy}"
         );
     }
 

@@ -177,6 +177,7 @@ impl NetworkProxyBuilder {
             http_addr,
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
+            allow_local_binding: current_cfg.network.allow_local_binding,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -204,6 +205,7 @@ pub struct NetworkProxy {
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
+    allow_local_binding: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -225,6 +227,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
+            && self.allow_local_binding == other.allow_local_binding
             && self.admin_addr == other.admin_addr
     }
 }
@@ -256,6 +259,7 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 ];
 
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
+pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
 
@@ -285,9 +289,18 @@ fn apply_proxy_env_overrides(
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
+    allow_local_binding: bool,
 ) {
     let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
+    env.insert(
+        ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
+        if allow_local_binding {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        },
+    );
 
     // HTTP-based clients are best served by explicit HTTP proxy URLs.
     set_env_keys(
@@ -342,7 +355,13 @@ impl NetworkProxy {
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
-        apply_proxy_env_overrides(env, self.http_addr, self.socks_addr, self.socks_enabled);
+        apply_proxy_env_overrides(
+            env,
+            self.http_addr,
+            self.socks_addr,
+            self.socks_enabled,
+            self.allow_local_binding,
+        );
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -576,6 +595,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
+            false,
         );
 
         assert_eq!(
@@ -598,6 +618,7 @@ mod tests {
             env.get("NO_PROXY"),
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
+        assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
         assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
         assert_eq!(env.get("RSYNC_PROXY"), None);
         assert_eq!(env.get("GRPC_PROXY"), None);
@@ -618,12 +639,14 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
+            true,
         );
 
         assert_eq!(
             env.get("ALL_PROXY"),
             Some(&"http://127.0.0.1:3128".to_string())
         );
+        assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
         assert_eq!(env.get("RSYNC_PROXY"), None);
         assert_eq!(env.get("FTP_PROXY"), None);
         assert_eq!(env.get("GRPC_PROXY"), None);
@@ -642,6 +665,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
+            false,
         );
 
         assert_eq!(

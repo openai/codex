@@ -158,10 +158,15 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
+        let mut env = req.env.clone();
+        if let Some(network) = req.network.as_ref() {
+            network.apply_to_env(&mut env);
+        }
+
         let spec = build_command_spec(
             &command,
             &req.cwd,
-            &req.env,
+            &env,
             req.timeout_ms.into(),
             req.sandbox_permissions,
             req.justification.clone(),

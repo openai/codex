@@ -1,4 +1,5 @@
 use crate::protocol::SandboxPolicy;
+use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
@@ -37,15 +38,16 @@ where
         !sandbox_policy.has_full_network_access() && has_proxy_env_vars(&env),
     );
     let arg0 = Some("codex-linux-sandbox");
-    spawn_child_async(
-        codex_linux_sandbox_exe.as_ref().to_path_buf(),
+    spawn_child_async(SpawnChildRequest {
+        program: codex_linux_sandbox_exe.as_ref().to_path_buf(),
         args,
         arg0,
-        command_cwd,
+        cwd: command_cwd,
         sandbox_policy,
+        network: None,
         stdio_policy,
         env,
-    )
+    })
     .await
 }
 

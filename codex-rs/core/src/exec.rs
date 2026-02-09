@@ -29,6 +29,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecEnv;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
+use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
@@ -225,7 +226,7 @@ pub(crate) async fn execute_exec_env(
     let ExecEnv {
         command,
         cwd,
-        mut env,
+        env,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -233,10 +234,6 @@ pub(crate) async fn execute_exec_env(
         justification,
         arg0,
     } = env;
-
-    if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
-    }
 
     let params = ExecParams {
         command,
@@ -694,7 +691,7 @@ async fn exec(
         command,
         cwd,
         env,
-        network: _,
+        network,
         arg0,
         expiration,
         windows_sandbox_level: _,
@@ -708,15 +705,16 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let child = spawn_child_async(
-        PathBuf::from(program),
-        args.into(),
-        arg0_ref,
+    let child = spawn_child_async(SpawnChildRequest {
+        program: PathBuf::from(program),
+        args: args.into(),
+        arg0: arg0_ref,
         cwd,
         sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
+        network: network.as_ref(),
+        stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
-    )
+    })
     .await?;
     consume_truncated_output(child, expiration, stdout_stream).await
 }
