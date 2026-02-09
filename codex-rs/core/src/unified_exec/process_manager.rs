@@ -10,7 +10,6 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -121,17 +120,14 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecResponse, UnifiedExecError> {
-        let workflow_started = Instant::now();
         let cwd = request
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
 
-        let open_session_started = Instant::now();
         let process = self
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
-        let open_session_ms = open_session_started.elapsed().as_millis();
 
         let process = match process {
             Ok(process) => Arc::new(process),
@@ -154,16 +150,13 @@ impl UnifiedExecProcessManager {
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.clone()),
         );
-        let begin_event_started = Instant::now();
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
-        let begin_event_ms = begin_event_started.elapsed().as_millis();
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
 
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
-        let collect_started = Instant::now();
         let start = Instant::now();
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
@@ -185,7 +178,6 @@ impl UnifiedExecProcessManager {
             deadline,
         )
         .await;
-        let collect_output_ms = collect_started.elapsed().as_millis();
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
@@ -194,13 +186,11 @@ impl UnifiedExecProcessManager {
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
-        let mut end_event_ms = 0u128;
         if has_exited {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
             let exit = exit_code.unwrap_or(-1);
-            let end_event_started = Instant::now();
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.turn),
@@ -214,7 +204,6 @@ impl UnifiedExecProcessManager {
                 wall_time,
             )
             .await;
-            end_event_ms = end_event_started.elapsed().as_millis();
 
             self.release_process_id(&request.process_id).await;
             process.check_for_sandbox_denial_with_text(&text).await?;
@@ -252,25 +241,6 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
         };
-
-        let total_ms = workflow_started.elapsed().as_millis();
-        let post_collect_ms = total_ms
-            .saturating_sub(open_session_ms)
-            .saturating_sub(begin_event_ms)
-            .saturating_sub(collect_output_ms)
-            .saturating_sub(end_event_ms);
-        error!(
-            call_id = %context.call_id,
-            process_id = %request.process_id,
-            open_session_ms,
-            begin_event_ms,
-            collect_output_ms,
-            end_event_ms,
-            post_collect_ms,
-            total_ms,
-            has_exited,
-            "unified_exec_latency"
-        );
 
         Ok(response)
     }
