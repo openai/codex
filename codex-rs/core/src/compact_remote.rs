@@ -159,9 +159,17 @@ fn build_compact_request_metrics(
         input,
         instructions,
     };
-    let failing_compaction_request_body_json = serde_json::to_string(&payload)
-        .unwrap_or_else(|err| format!("{{\"compact_request_serialization_error\":\"{err}\"}}"));
-    let failing_compaction_request_body_bytes = failing_compaction_request_body_json.len();
+    let (failing_compaction_request_body_json, failing_compaction_request_body_bytes) =
+        match serde_json::to_vec(&payload) {
+            Ok(payload_bytes) => (
+                String::from_utf8_lossy(&payload_bytes).into_owned(),
+                payload_bytes.len(),
+            ),
+            Err(err) => (
+                format!("{{\"compact_request_serialization_error\":\"{err}\"}}"),
+                0,
+            ),
+        };
 
     CompactRequestMetrics {
         failing_compaction_request_body_json,
