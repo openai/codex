@@ -30,6 +30,7 @@ pub(crate) struct ContextManager {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TotalTokenUsageBreakdown {
     pub last_api_response_total_tokens: i64,
+    pub all_history_items_model_visible_bytes: usize,
     pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
     pub estimated_bytes_of_items_added_since_last_successful_api_response: usize,
 }
@@ -270,6 +271,12 @@ impl ContextManager {
             })
     }
 
+    fn get_all_items_model_visible_bytes(&self) -> usize {
+        self.items.iter().fold(0usize, |acc, item| {
+            acc.saturating_add(estimate_response_item_model_visible_bytes(item))
+        })
+    }
+
     /// When true, the server already accounted for past reasoning tokens and
     /// the client should not re-estimate them.
     pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
@@ -298,6 +305,7 @@ impl ContextManager {
 
         TotalTokenUsageBreakdown {
             last_api_response_total_tokens: last_usage.total_tokens,
+            all_history_items_model_visible_bytes: self.get_all_items_model_visible_bytes(),
             estimated_tokens_of_items_added_since_last_successful_api_response: self
                 .get_items_after_last_model_generated_tokens(),
             estimated_bytes_of_items_added_since_last_successful_api_response: self
