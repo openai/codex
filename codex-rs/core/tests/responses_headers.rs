@@ -11,12 +11,10 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -114,16 +112,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            None,
-            config.sandbox_policy.get(),
-            WindowsSandboxLevel::from_config(config.as_ref()),
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -137,10 +126,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         request.header("x-openai-subagent").as_deref(),
         Some("review")
     );
-    assert!(
-        request.header("x-codex-sandbox").is_some(),
-        "missing x-codex-sandbox header"
-    );
+    assert_eq!(request.header("x-codex-sandbox"), None);
 }
 
 #[tokio::test]
@@ -231,16 +217,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            None,
-            config.sandbox_policy.get(),
-            WindowsSandboxLevel::from_config(config.as_ref()),
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -343,16 +320,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     }];
 
     let mut stream = client_session
-        .stream(
-            &prompt,
-            &model_info,
-            &otel_manager,
-            effort,
-            summary,
-            None,
-            config.sandbox_policy.get(),
-            WindowsSandboxLevel::from_config(config.as_ref()),
-        )
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -399,11 +367,17 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     test.submit_turn("hello")
         .await
         .expect("submit first turn prompt");
+    let initial_header = first_request
+        .single_request()
+        .header("x-codex-turn-metadata")
+        .expect("x-codex-turn-metadata header should be present");
+    let initial_parsed: serde_json::Value =
+        serde_json::from_str(&initial_header).expect("x-codex-turn-metadata should be valid JSON");
     assert_eq!(
-        first_request
-            .single_request()
-            .header("x-codex-turn-metadata"),
-        None
+        initial_parsed
+            .get("sandbox")
+            .and_then(serde_json::Value::as_str),
+        Some("none")
     );
 
     let git_config_global = cwd.join("empty-git-config");
@@ -456,37 +430,46 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .await
             .expect("submit post-git turn prompt");
 
-        let maybe_header = request_recorder
+        let header_value = request_recorder
             .single_request()
-            .header("x-codex-turn-metadata");
-        if let Some(header_value) = maybe_header {
-            let parsed: serde_json::Value = serde_json::from_str(&header_value)
-                .expect("x-codex-turn-metadata should be valid JSON");
-            let workspaces = parsed
-                .get("workspaces")
-                .and_then(serde_json::Value::as_object)
-                .expect("metadata should include workspaces");
-            let workspace = workspaces
-                .values()
-                .next()
-                .expect("metadata should include at least one workspace entry");
+            .header("x-codex-turn-metadata")
+            .expect("x-codex-turn-metadata header should be present");
+        let parsed: serde_json::Value = serde_json::from_str(&header_value)
+            .expect("x-codex-turn-metadata should be valid JSON");
+        let Some(workspaces) = parsed
+            .get("workspaces")
+            .and_then(serde_json::Value::as_object)
+        else {
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            continue;
+        };
+        let workspace = workspaces
+            .values()
+            .next()
+            .expect("metadata should include at least one workspace entry");
 
-            assert_eq!(
-                workspace
-                    .get("latest_git_commit_hash")
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_head.as_str())
-            );
-            assert_eq!(
-                workspace
-                    .get("associated_remote_urls")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|remotes| remotes.get("origin"))
-                    .and_then(serde_json::Value::as_str),
-                Some(expected_origin.as_str())
-            );
-            return;
-        }
+        assert_eq!(
+            parsed.get("sandbox").and_then(serde_json::Value::as_str),
+            Some("none")
+        );
+        assert_eq!(
+            workspace
+                .get("latest_git_commit_hash")
+                .and_then(serde_json::Value::as_str),
+            Some(expected_head.as_str())
+        );
+        assert_eq!(
+            workspace
+                .get("associated_remote_urls")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|remotes| remotes.get("origin"))
+                .and_then(serde_json::Value::as_str),
+            Some(expected_origin.as_str())
+        );
+        return;
 
         if tokio::time::Instant::now() >= deadline {
             break;
@@ -494,5 +477,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    panic!("x-codex-turn-metadata was never observed within 5s after git setup");
+    panic!(
+        "x-codex-turn-metadata with git workspace info was never observed within 5s after git setup"
+    );
 }

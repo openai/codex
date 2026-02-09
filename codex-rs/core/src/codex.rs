@@ -33,6 +33,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
+use crate::sandbox_tags::sandbox_tag;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -40,6 +41,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::build_turn_metadata_header;
+use crate::turn_metadata::include_sandbox_in_turn_metadata;
 use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -3912,7 +3914,13 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
+    let turn_metadata_header = include_sandbox_in_turn_metadata(
+        turn_context.resolve_turn_metadata_header().await,
+        sandbox_tag(
+            &turn_context.sandbox_policy,
+            turn_context.windows_sandbox_level,
+        ),
+    );
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
     let mut client_session =
@@ -4780,8 +4788,6 @@ async fn try_run_sampling_request(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             turn_metadata_header,
-            &turn_context.sandbox_policy,
-            turn_context.windows_sandbox_level,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

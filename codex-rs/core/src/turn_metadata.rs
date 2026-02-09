@@ -9,6 +9,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
@@ -43,17 +44,20 @@ where
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct TurnMetadataWorkspace {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     associated_remote_urls: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     latest_git_commit_hash: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct TurnMetadata {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sandbox: Option<String>,
 }
 
 pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
@@ -76,5 +80,21 @@ pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
             latest_git_commit_hash,
         },
     );
-    serde_json::to_string(&TurnMetadata { workspaces }).ok()
+    serde_json::to_string(&TurnMetadata {
+        workspaces,
+        sandbox: None,
+    })
+    .ok()
+}
+
+pub(crate) fn include_sandbox_in_turn_metadata(
+    turn_metadata_header: Option<String>,
+    sandbox: &str,
+) -> Option<String> {
+    let mut metadata = turn_metadata_header
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<TurnMetadata>(value).ok())
+        .unwrap_or_default();
+    metadata.sandbox = Some(sandbox.to_string());
+    serde_json::to_string(&metadata).ok()
 }
