@@ -520,23 +520,23 @@ impl ChatComposer {
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
         let mut textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
-        let remote_height = self
-            .remote_image_lines(textarea_rect.width)
+        let remote_images_height = self
+            .remote_images_lines(textarea_rect.width)
             .len()
             .try_into()
             .unwrap_or(u16::MAX)
             .min(textarea_rect.height.saturating_sub(1));
-        let remote_separator = u16::from(remote_height > 0);
-        let consumed = remote_height.saturating_add(remote_separator);
-        let remote_rect = Rect {
+        let remote_images_separator = u16::from(remote_images_height > 0);
+        let consumed = remote_images_height.saturating_add(remote_images_separator);
+        let remote_images_rect = Rect {
             x: textarea_rect.x,
             y: textarea_rect.y,
             width: textarea_rect.width,
-            height: remote_height,
+            height: remote_images_height,
         };
         textarea_rect.y = textarea_rect.y.saturating_add(consumed);
         textarea_rect.height = textarea_rect.height.saturating_sub(consumed);
-        [composer_rect, remote_rect, textarea_rect, popup_rect]
+        [composer_rect, remote_images_rect, textarea_rect, popup_rect]
     }
 
     fn footer_spacing(footer_hint_height: u16) -> u16 {
@@ -2419,7 +2419,7 @@ impl ChatComposer {
             .collect()
     }
 
-    fn remote_image_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn remote_images_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.remote_image_urls
             .iter()
             .enumerate()
@@ -3441,15 +3441,15 @@ impl Renderable for ChatComposer {
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         let inner_width = width.saturating_sub(COLS_WITH_MARGIN);
-        let remote_height: u16 = self
-            .remote_image_lines(inner_width)
+        let remote_images_height: u16 = self
+            .remote_images_lines(inner_width)
             .len()
             .try_into()
             .unwrap_or(u16::MAX);
-        let remote_separator = u16::from(remote_height > 0);
+        let remote_images_separator = u16::from(remote_images_height > 0);
         self.textarea.desired_height(inner_width)
-            + remote_height
-            + remote_separator
+            + remote_images_height
+            + remote_images_separator
             + 2
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
@@ -3466,7 +3466,8 @@ impl Renderable for ChatComposer {
 
 impl ChatComposer {
     pub(crate) fn render_with_mask(&self, area: Rect, buf: &mut Buffer, mask_char: Option<char>) {
-        let [composer_rect, remote_rect, textarea_rect, popup_rect] = self.layout_areas(area);
+        let [composer_rect, remote_images_rect, textarea_rect, popup_rect] =
+            self.layout_areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -3687,10 +3688,10 @@ impl ChatComposer {
         }
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
-        if !remote_rect.is_empty() {
-            Paragraph::new(self.remote_image_lines(remote_rect.width))
+        if !remote_images_rect.is_empty() {
+            Paragraph::new(self.remote_images_lines(remote_images_rect.width))
                 .style(style)
-                .render_ref(remote_rect, buf);
+                .render_ref(remote_images_rect, buf);
         }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
