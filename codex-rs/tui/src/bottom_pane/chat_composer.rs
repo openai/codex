@@ -294,6 +294,8 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
+    /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
+    /// can highlight and remove remote attachments from the composer UI.
     selected_remote_image_index: Option<usize>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
