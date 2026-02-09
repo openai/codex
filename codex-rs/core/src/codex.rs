@@ -1101,7 +1101,7 @@ impl Session {
         };
 
         let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.clone()),
+            build_turn_metadata_header(session_configuration.cwd.as_path(), None),
             None,
         )
         .boxed();
