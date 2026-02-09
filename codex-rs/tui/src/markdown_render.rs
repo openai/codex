@@ -434,10 +434,8 @@ where
         // If we buffered code for a known language, syntax-highlight it now.
         if let Some(lang) = self.code_block_lang.take() {
             let code = std::mem::take(&mut self.code_block_buffer);
-            // Trim trailing newline to avoid a spurious empty line.
-            let code = code.trim_end_matches('\n');
             if !code.is_empty() {
-                let highlighted = highlight_code_to_lines(code, &lang);
+                let highlighted = highlight_code_to_lines(&code, &lang);
                 for hl_line in highlighted {
                     self.push_line(Line::default());
                     for span in hl_line.spans {

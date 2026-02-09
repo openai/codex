@@ -1063,3 +1063,36 @@ fn nested_item_continuation_paragraph_is_indented() {
     ]);
     assert_eq!(text, expected);
 }
+
+#[test]
+fn code_block_preserves_trailing_blank_lines() {
+    // A fenced code block with an intentional trailing blank line must keep it.
+    let md = "```rust\nfn main() {}\n\n```\n";
+    let text = render_markdown_text(md);
+    let content: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    // Should have: "fn main() {}" then "" (the blank line).
+    // Filter only to content lines (skip leading/trailing empty from rendering).
+    assert!(
+        content.iter().any(|c| c == "fn main() {}"),
+        "expected code line, got {content:?}"
+    );
+    // The trailing blank line inside the fence should be preserved.
+    let code_start = content.iter().position(|c| c == "fn main() {}").unwrap();
+    assert!(
+        content.len() > code_start + 1,
+        "expected a line after 'fn main() {{}}' but content ends: {content:?}"
+    );
+    assert_eq!(
+        content[code_start + 1], "",
+        "trailing blank line inside code fence was lost: {content:?}"
+    );
+}
