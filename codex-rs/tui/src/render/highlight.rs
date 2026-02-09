@@ -17,15 +17,70 @@ use two_face::theme::EmbeddedThemeName;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME: OnceLock<Theme> = OnceLock::new();
+static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
 
 fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
 }
 
+/// Set the user-configured theme override before any highlighting occurs.
+/// Must be called at most once, before the first call to `theme()`.
+pub(crate) fn set_theme_override(name: Option<String>) {
+    let _ = THEME_OVERRIDE.set(name);
+}
+
+/// Map a kebab-case theme name to the corresponding `EmbeddedThemeName`.
+fn parse_theme_name(name: &str) -> Option<EmbeddedThemeName> {
+    match name {
+        "ansi" => Some(EmbeddedThemeName::Ansi),
+        "base16" => Some(EmbeddedThemeName::Base16),
+        "base16-eighties-dark" => Some(EmbeddedThemeName::Base16EightiesDark),
+        "base16-mocha-dark" => Some(EmbeddedThemeName::Base16MochaDark),
+        "base16-ocean-dark" => Some(EmbeddedThemeName::Base16OceanDark),
+        "base16-ocean-light" => Some(EmbeddedThemeName::Base16OceanLight),
+        "base16-256" => Some(EmbeddedThemeName::Base16_256),
+        "catppuccin-frappe" => Some(EmbeddedThemeName::CatppuccinFrappe),
+        "catppuccin-latte" => Some(EmbeddedThemeName::CatppuccinLatte),
+        "catppuccin-macchiato" => Some(EmbeddedThemeName::CatppuccinMacchiato),
+        "catppuccin-mocha" => Some(EmbeddedThemeName::CatppuccinMocha),
+        "coldark-cold" => Some(EmbeddedThemeName::ColdarkCold),
+        "coldark-dark" => Some(EmbeddedThemeName::ColdarkDark),
+        "dark-neon" => Some(EmbeddedThemeName::DarkNeon),
+        "dracula" => Some(EmbeddedThemeName::Dracula),
+        "github" => Some(EmbeddedThemeName::Github),
+        "gruvbox-dark" => Some(EmbeddedThemeName::GruvboxDark),
+        "gruvbox-light" => Some(EmbeddedThemeName::GruvboxLight),
+        "inspired-github" => Some(EmbeddedThemeName::InspiredGithub),
+        "1337" => Some(EmbeddedThemeName::Leet),
+        "monokai-extended" => Some(EmbeddedThemeName::MonokaiExtended),
+        "monokai-extended-bright" => Some(EmbeddedThemeName::MonokaiExtendedBright),
+        "monokai-extended-light" => Some(EmbeddedThemeName::MonokaiExtendedLight),
+        "monokai-extended-origin" => Some(EmbeddedThemeName::MonokaiExtendedOrigin),
+        "nord" => Some(EmbeddedThemeName::Nord),
+        "one-half-dark" => Some(EmbeddedThemeName::OneHalfDark),
+        "one-half-light" => Some(EmbeddedThemeName::OneHalfLight),
+        "solarized-dark" => Some(EmbeddedThemeName::SolarizedDark),
+        "solarized-light" => Some(EmbeddedThemeName::SolarizedLight),
+        "sublime-snazzy" => Some(EmbeddedThemeName::SublimeSnazzy),
+        "two-dark" => Some(EmbeddedThemeName::TwoDark),
+        "zenburn" => Some(EmbeddedThemeName::Zenburn),
+        _ => None,
+    }
+}
+
 fn theme() -> &'static Theme {
     THEME.get_or_init(|| {
         let ts = two_face::theme::extra();
-        // Pick light or dark theme based on terminal background color.
+
+        // Honor user-configured theme if valid.
+        if let Some(Some(name)) = THEME_OVERRIDE.get() {
+            if let Some(theme_name) = parse_theme_name(name) {
+                return ts.get(theme_name).clone();
+            }
+            tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
+        }
+
+        // Adaptive default: light or dark based on terminal background.
         let name = match crate::terminal_palette::default_bg() {
             Some(bg) if crate::color::is_light(bg) => EmbeddedThemeName::CatppuccinLatte,
             _ => EmbeddedThemeName::CatppuccinMocha,
@@ -55,9 +110,9 @@ fn convert_style(syn_style: SyntectStyle) -> Style {
         rt_style.add_modifier |= Modifier::BOLD;
     }
     // Intentionally skip italic — many terminals render it poorly or not at all.
-    if syn_style.font_style.contains(FontStyle::UNDERLINE) {
-        rt_style.add_modifier |= Modifier::UNDERLINED;
-    }
+    // Intentionally skip underline — themes like Dracula use underline on type
+    // scopes (entity.name.type, support.class) which produces distracting
+    // underlines on type/module names in terminal output.
 
     rt_style
 }
@@ -279,6 +334,36 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn convert_style_suppresses_underline() {
+        // Dracula (and other themes) set FontStyle::UNDERLINE on type scopes,
+        // producing distracting underlines on type names in terminal output.
+        // convert_style must suppress underline, just like it suppresses italic.
+        let syn = SyntectStyle {
+            foreground: syntect::highlighting::Color {
+                r: 100,
+                g: 200,
+                b: 150,
+                a: 255,
+            },
+            background: syntect::highlighting::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+            font_style: FontStyle::UNDERLINE,
+        };
+        let rt = convert_style(syn);
+        assert!(
+            !rt.add_modifier.contains(Modifier::UNDERLINED),
+            "convert_style should suppress UNDERLINE from themes — \
+             themes like Dracula use underline on type scopes which \
+             looks wrong in terminal output"
+        );
+    }
+
+    #[test]
     fn highlight_multiline_python() {
         let code = "def hello():\n    print(\"hi\")\n    return 42";
         let lines = highlight_code_to_lines(code, "python");
@@ -385,6 +470,120 @@ mod tests {
             assert!(
                 find_syntax(alias).is_some(),
                 "find_syntax({alias:?}) returned None — patched alias broken"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_theme_name_covers_all_variants() {
+        let known = [
+            ("ansi", EmbeddedThemeName::Ansi),
+            ("base16", EmbeddedThemeName::Base16),
+            ("base16-eighties-dark", EmbeddedThemeName::Base16EightiesDark),
+            ("base16-mocha-dark", EmbeddedThemeName::Base16MochaDark),
+            ("base16-ocean-dark", EmbeddedThemeName::Base16OceanDark),
+            ("base16-ocean-light", EmbeddedThemeName::Base16OceanLight),
+            ("base16-256", EmbeddedThemeName::Base16_256),
+            ("catppuccin-frappe", EmbeddedThemeName::CatppuccinFrappe),
+            ("catppuccin-latte", EmbeddedThemeName::CatppuccinLatte),
+            ("catppuccin-macchiato", EmbeddedThemeName::CatppuccinMacchiato),
+            ("catppuccin-mocha", EmbeddedThemeName::CatppuccinMocha),
+            ("coldark-cold", EmbeddedThemeName::ColdarkCold),
+            ("coldark-dark", EmbeddedThemeName::ColdarkDark),
+            ("dark-neon", EmbeddedThemeName::DarkNeon),
+            ("dracula", EmbeddedThemeName::Dracula),
+            ("github", EmbeddedThemeName::Github),
+            ("gruvbox-dark", EmbeddedThemeName::GruvboxDark),
+            ("gruvbox-light", EmbeddedThemeName::GruvboxLight),
+            ("inspired-github", EmbeddedThemeName::InspiredGithub),
+            ("1337", EmbeddedThemeName::Leet),
+            ("monokai-extended", EmbeddedThemeName::MonokaiExtended),
+            ("monokai-extended-bright", EmbeddedThemeName::MonokaiExtendedBright),
+            ("monokai-extended-light", EmbeddedThemeName::MonokaiExtendedLight),
+            ("monokai-extended-origin", EmbeddedThemeName::MonokaiExtendedOrigin),
+            ("nord", EmbeddedThemeName::Nord),
+            ("one-half-dark", EmbeddedThemeName::OneHalfDark),
+            ("one-half-light", EmbeddedThemeName::OneHalfLight),
+            ("solarized-dark", EmbeddedThemeName::SolarizedDark),
+            ("solarized-light", EmbeddedThemeName::SolarizedLight),
+            ("sublime-snazzy", EmbeddedThemeName::SublimeSnazzy),
+            ("two-dark", EmbeddedThemeName::TwoDark),
+            ("zenburn", EmbeddedThemeName::Zenburn),
+        ];
+        for (kebab, expected) in &known {
+            assert_eq!(
+                parse_theme_name(kebab),
+                Some(*expected),
+                "parse_theme_name({kebab:?}) did not return expected variant"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_theme_name_returns_none_for_unknown() {
+        assert_eq!(parse_theme_name("nonexistent-theme"), None);
+        assert_eq!(parse_theme_name(""), None);
+    }
+
+    #[test]
+    fn parse_theme_name_is_exhaustive() {
+        use two_face::theme::EmbeddedLazyThemeSet;
+
+        // Every variant in the embedded set must be reachable via parse_theme_name.
+        let all_variants = EmbeddedLazyThemeSet::theme_names();
+
+        // Guard: if two-face adds themes, this test forces us to update the mapping.
+        assert_eq!(
+            all_variants.len(),
+            32,
+            "two-face theme count changed — update parse_theme_name"
+        );
+
+        // Build the set of variants reachable through our kebab-case mapping.
+        let kebab_names = [
+            "ansi",
+            "base16",
+            "base16-eighties-dark",
+            "base16-mocha-dark",
+            "base16-ocean-dark",
+            "base16-ocean-light",
+            "base16-256",
+            "catppuccin-frappe",
+            "catppuccin-latte",
+            "catppuccin-macchiato",
+            "catppuccin-mocha",
+            "coldark-cold",
+            "coldark-dark",
+            "dark-neon",
+            "dracula",
+            "github",
+            "gruvbox-dark",
+            "gruvbox-light",
+            "inspired-github",
+            "1337",
+            "monokai-extended",
+            "monokai-extended-bright",
+            "monokai-extended-light",
+            "monokai-extended-origin",
+            "nord",
+            "one-half-dark",
+            "one-half-light",
+            "solarized-dark",
+            "solarized-light",
+            "sublime-snazzy",
+            "two-dark",
+            "zenburn",
+        ];
+        let mapped: Vec<EmbeddedThemeName> = kebab_names
+            .iter()
+            .map(|k| parse_theme_name(k).unwrap_or_else(|| panic!("unmapped kebab name: {k}")))
+            .collect();
+
+        // Every variant from two-face must appear in our mapped set.
+        for variant in all_variants {
+            assert!(
+                mapped.contains(variant),
+                "EmbeddedThemeName::{variant:?} has no kebab-case mapping in parse_theme_name"
             );
         }
     }
