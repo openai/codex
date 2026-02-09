@@ -2320,7 +2320,7 @@ impl App {
                         ) {
                             crate::render::highlight::set_syntax_theme(theme);
                         }
-                        self.config.tui_theme = Some(name);
+                        self.sync_tui_theme_selection(name);
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist theme selection");
@@ -2458,6 +2458,11 @@ impl App {
     fn on_update_personality(&mut self, personality: Personality) {
         self.config.personality = Some(personality);
         self.chat_widget.set_personality(personality);
+    }
+
+    fn sync_tui_theme_selection(&mut self, name: String) {
+        self.config.tui_theme = Some(name.clone());
+        self.chat_widget.set_tui_theme(Some(name));
     }
 
     fn personality_label(personality: Personality) -> &'static str {
@@ -3051,6 +3056,19 @@ mod tests {
         assert_eq!(
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_tui_theme_selection_updates_chat_widget_config_copy() {
+        let mut app = make_test_app().await;
+
+        app.sync_tui_theme_selection("dracula".to_string());
+
+        assert_eq!(app.config.tui_theme.as_deref(), Some("dracula"));
+        assert_eq!(
+            app.chat_widget.config_ref().tui_theme.as_deref(),
+            Some("dracula")
         );
     }
 

@@ -53,10 +53,19 @@ pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>)
     if parse_theme_name(name).is_some() {
         return None;
     }
-    // Check for a custom .tmTheme file on disk.
-    let has_custom_file = codex_home.is_some_and(|home| custom_theme_path(name, home).is_file());
-    if has_custom_file {
-        return None;
+    // Custom themes must parse successfully; an unreadable/invalid file should
+    // still surface a startup warning so users can diagnose configuration issues.
+    if let Some(home) = codex_home {
+        let custom_path = custom_theme_path(name, home);
+        if custom_path.is_file() {
+            if load_custom_theme(name, home).is_some() {
+                return None;
+            }
+            return Some(format!(
+                "Syntax theme \"{name}\" was found at ~/.codex/themes/{name}.tmTheme \
+                 but could not be parsed. Falling back to auto-detection."
+            ));
+        }
     }
     Some(format!(
         "Unknown syntax theme \"{name}\", falling back to auto-detection. \
@@ -167,10 +176,10 @@ pub(crate) fn current_theme_name() -> String {
         if parse_theme_name(name).is_some() {
             return name.clone();
         }
-        if let Some(Some(home)) = CODEX_HOME.get() {
-            if custom_theme_path(name, home).is_file() {
-                return name.clone();
-            }
+        if let Some(Some(home)) = CODEX_HOME.get()
+            && load_custom_theme(name, home).is_some()
+        {
+            return name.clone();
         }
     }
     // Adaptive default: light or dark based on terminal background.
@@ -444,6 +453,24 @@ pub(crate) fn highlight_code_to_styled_spans(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn write_minimal_tmtheme(path: &Path) {
+        // Minimal valid .tmTheme plist (enough for syntect to parse).
+        std::fs::write(
+            path,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>name</key><string>Test</string>
+<key>settings</key><array><dict>
+<key>settings</key><dict>
+<key>foreground</key><string>#FFFFFF</string>
+<key>background</key><string>#000000</string>
+</dict></dict></array>
+</dict></plist>"#,
+        )
+        .unwrap();
+    }
 
     /// Reconstruct plain text from highlighted Lines.
     fn reconstructed(lines: &[Line<'static>]) -> String {
@@ -793,21 +820,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let themes_dir = dir.path().join("themes");
         std::fs::create_dir(&themes_dir).unwrap();
-        // Minimal valid .tmTheme plist (enough for syntect to parse).
-        std::fs::write(
-            themes_dir.join("test-custom.tmTheme"),
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>name</key><string>Test</string>
-<key>settings</key><array><dict>
-<key>settings</key><dict>
-<key>foreground</key><string>#FFFFFF</string>
-<key>background</key><string>#000000</string>
-</dict></dict></array>
-</dict></plist>"#,
-        )
-        .unwrap();
+        write_minimal_tmtheme(&themes_dir.join("test-custom.tmTheme"));
         let theme = load_custom_theme("test-custom", dir.path());
         assert!(theme.is_some(), "should load .tmTheme from themes dir");
     }
@@ -843,14 +856,33 @@ mod tests {
     }
 
     #[test]
-    fn validate_theme_name_none_when_custom_file_exists() {
+    fn validate_theme_name_none_when_custom_file_is_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        write_minimal_tmtheme(&themes_dir.join("my-fancy.tmTheme"));
+        assert!(
+            validate_theme_name(Some("my-fancy"), Some(dir.path())).is_none(),
+            "should not warn when custom .tmTheme file parses successfully"
+        );
+    }
+
+    #[test]
+    fn validate_theme_name_warns_when_custom_file_is_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let themes_dir = dir.path().join("themes");
         std::fs::create_dir(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("my-fancy.tmTheme"), "placeholder").unwrap();
+        let warning = validate_theme_name(Some("my-fancy"), Some(dir.path()));
         assert!(
-            validate_theme_name(Some("my-fancy"), Some(dir.path())).is_none(),
-            "should not warn when custom .tmTheme file exists on disk"
+            warning.is_some(),
+            "should warn when custom .tmTheme exists but cannot be parsed"
+        );
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|msg| msg.contains("could not be parsed")),
+            "warning should explain that the theme file is invalid"
         );
     }
 
