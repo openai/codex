@@ -1540,7 +1540,11 @@ impl ChatComposer {
 
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
-        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
+        lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".jpeg")
+            || lower.ends_with(".gif")
+            || lower.ends_with(".webp")
     }
 
     fn trim_text_elements(
