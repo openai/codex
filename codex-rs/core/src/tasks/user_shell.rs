@@ -168,7 +168,7 @@ pub(crate) async fn execute_user_shell_command(
         exec_env,
         &sandbox_policy,
         stdout_stream,
-        turn_context.config.network.clone(),
+        turn_context.network.clone(),
     )
     .or_cancel(&cancellation_token)
     .await;

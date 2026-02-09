@@ -8,13 +8,13 @@ use std::net::SocketAddr;
 use tracing::warn;
 use url::Url;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkProxyConfig {
     #[serde(default)]
     pub network: NetworkProxySettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
