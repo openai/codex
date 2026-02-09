@@ -1528,7 +1528,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             }
             test.codex
                 .submit(Op::ExecApproval {
-                    id: "0".into(),
+                    id: approval.call_id,
                     decision: decision.clone(),
                 })
                 .await?;
@@ -1549,7 +1549,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             }
             test.codex
                 .submit(Op::PatchApproval {
-                    id: "0".into(),
+                    id: approval.call_id,
                     decision: decision.clone(),
                 })
                 .await?;
@@ -1624,10 +1624,10 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         sandbox_policy.clone(),
     )
     .await?;
-    let _ = expect_patch_approval(&test, call_id_1).await;
+    let approval = expect_patch_approval(&test, call_id_1).await;
     test.codex
         .submit(Op::PatchApproval {
-            id: "0".into(),
+            id: approval.call_id,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await?;
@@ -1746,7 +1746,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
 
     test.codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.call_id,
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
             },
