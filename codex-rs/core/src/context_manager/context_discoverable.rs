@@ -92,8 +92,7 @@ impl ContextDiscoverable for Message {
         };
 
         let estimated_tokens = i64::try_from(approx_token_count(&user_text)).unwrap_or(i64::MAX);
-        let offload_threshold = context_window_tokens.saturating_mul(95) / 100;
-        if current_usage_tokens.saturating_add(estimated_tokens) <= offload_threshold {
+        if current_usage_tokens.saturating_add(estimated_tokens) <= context_window_tokens {
             return ResponseItem::Message(self.clone());
         }
 

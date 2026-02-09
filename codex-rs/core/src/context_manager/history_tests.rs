@@ -39,6 +39,7 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let mut h = ContextManager::new(
         Arc::new("test-thread".to_string()),
         Arc::new(PathBuf::from("/tmp/test-codex-home")),
+        None,
     );
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
@@ -139,6 +140,7 @@ fn filters_non_api_messages() {
     let mut h = ContextManager::new(
         Arc::new("test-thread".to_string()),
         Arc::new(PathBuf::from("/tmp/test-codex-home")),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     // System message is not API messages; Other is ignored.
@@ -622,6 +624,7 @@ fn record_items_truncates_function_call_output_content() {
     let mut history = ContextManager::new(
         Arc::new("test-thread".to_string()),
         Arc::new(PathBuf::from("/tmp/test-codex-home")),
+        None,
     );
     // Any reasonably small token budget works; the test only cares that
     // truncation happens and the marker is present.
@@ -664,6 +667,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let mut history = ContextManager::new(
         Arc::new("test-thread".to_string()),
         Arc::new(PathBuf::from("/tmp/test-codex-home")),
+        None,
     );
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
@@ -700,6 +704,7 @@ fn record_items_respects_custom_token_limit() {
     let mut history = ContextManager::new(
         Arc::new("test-thread".to_string()),
         Arc::new(PathBuf::from("/tmp/test-codex-home")),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
@@ -733,6 +738,7 @@ fn record_items_with_discoverability_offloads_large_user_message() {
     let mut history = ContextManager::new(
         Arc::new("thread-1".to_string()),
         Arc::new(codex_home.path().to_path_buf()),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     let large_text = "large user prompt ".repeat(200);
@@ -766,6 +772,7 @@ fn record_items_with_discoverability_keeps_small_user_message_in_history() {
     let mut history = ContextManager::new(
         Arc::new("thread-2".to_string()),
         Arc::new(codex_home.path().to_path_buf()),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     let item = user_input_text_msg("small prompt");
@@ -782,6 +789,7 @@ fn record_items_with_discoverability_does_not_change_non_user_messages() {
     let mut history = ContextManager::new(
         Arc::new("thread-3".to_string()),
         Arc::new(codex_home.path().to_path_buf()),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     let item = assistant_msg(&"assistant reply ".repeat(300));
@@ -798,6 +806,7 @@ fn record_items_with_discoverability_ignores_image_only_user_messages() {
     let mut history = ContextManager::new(
         Arc::new("thread-4".to_string()),
         Arc::new(codex_home.path().to_path_buf()),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     let item = ResponseItem::Message(codex_protocol::models::Message {
@@ -822,6 +831,7 @@ fn record_items_with_discoverability_offloads_once_above_ninety_five_percent_win
     let mut history = ContextManager::new(
         Arc::new("thread-95".to_string()),
         Arc::new(codex_home.path().to_path_buf()),
+        None,
     );
     let policy = TruncationPolicy::Tokens(10_000);
     let text = "near context threshold ".repeat(100);

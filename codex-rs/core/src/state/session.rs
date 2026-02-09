@@ -36,8 +36,13 @@ impl SessionState {
         session_configuration: SessionConfiguration,
         thread_id: String,
         codex_home: PathBuf,
+        model_context_window: Option<i64>,
     ) -> Self {
-        let history = ContextManager::new(Arc::new(thread_id), Arc::new(codex_home));
+        let history = ContextManager::new(
+            Arc::new(thread_id),
+            Arc::new(codex_home),
+            model_context_window,
+        );
         Self {
             session_configuration,
             history,

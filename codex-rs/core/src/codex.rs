@@ -539,10 +539,7 @@ pub(crate) struct TurnContext {
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
-        let effective_context_window_percent = self.model_info.effective_context_window_percent;
-        self.model_info.context_window.map(|context_window| {
-            context_window.saturating_mul(effective_context_window_percent) / 100
-        })
+        effective_model_context_window(&self.model_info)
     }
 
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
@@ -682,6 +679,13 @@ impl SessionConfiguration {
         }
         Ok(next_configuration)
     }
+}
+
+fn effective_model_context_window(model_info: &ModelInfo) -> Option<i64> {
+    let effective_context_window_percent = model_info.effective_context_window_percent;
+    model_info
+        .context_window
+        .map(|context_window| context_window.saturating_mul(effective_context_window_percent) / 100)
 }
 
 #[derive(Default, Clone)]
@@ -1044,10 +1048,14 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
+        let model_info = models_manager
+            .get_model_info(session_configuration.collaboration_mode.model(), &config)
+            .await;
         let state = SessionState::new(
             session_configuration.clone(),
             conversation_id.to_string(),
             config.codex_home.clone(),
+            effective_model_context_window(&model_info),
         );
 
         let services = SessionServices {
@@ -2036,6 +2044,7 @@ impl Session {
         let mut history = ContextManager::new(
             Arc::new(self.conversation_id.to_string()),
             Arc::new(turn_context.config.codex_home.clone()),
+            turn_context.model_context_window(),
         );
         for item in rollout_items {
             match item {
@@ -5529,6 +5538,7 @@ mod tests {
             session_configuration,
             conversation_id.to_string(),
             config.codex_home.clone(),
+            effective_model_context_window(&model_info),
         );
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
@@ -5617,6 +5627,7 @@ mod tests {
             session_configuration,
             conversation_id.to_string(),
             config.codex_home.clone(),
+            effective_model_context_window(&model_info),
         );
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
@@ -5906,6 +5917,7 @@ mod tests {
             session_configuration.clone(),
             conversation_id.to_string(),
             config.codex_home.clone(),
+            effective_model_context_window(&model_info),
         );
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
@@ -6042,6 +6054,7 @@ mod tests {
             session_configuration.clone(),
             conversation_id.to_string(),
             config.codex_home.clone(),
+            effective_model_context_window(&model_info),
         );
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
@@ -6544,6 +6557,7 @@ mod tests {
         let mut live_history = ContextManager::new(
             Arc::new(session.conversation_id.to_string()),
             Arc::new(turn_context.config.codex_home.clone()),
+            turn_context.model_context_window(),
         );
 
         let initial_context = session.build_initial_context(turn_context).await;
