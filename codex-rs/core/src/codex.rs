@@ -1030,6 +1030,7 @@ impl Session {
             ShellSnapshot::start_snapshotting(
                 config.codex_home.clone(),
                 conversation_id,
+                session_configuration.cwd.clone(),
                 &mut default_shell,
                 otel_manager.clone(),
             );
