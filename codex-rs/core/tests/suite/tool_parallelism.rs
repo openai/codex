@@ -187,6 +187,8 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     .to_string();
     let shell_args = serde_json::to_string(&json!({
         "command": "sleep 0.3",
+        // Avoid user-specific shell startup cost in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     }))?;
 

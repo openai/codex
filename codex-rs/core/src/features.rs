@@ -87,6 +87,8 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
+    /// Allow the model to search MCP tools via BM25 before exposing them.
+    SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
@@ -433,10 +435,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Collab,
-        key: "collab",
-        stage: Stage::Stable,
-        default_enabled: true,
+        id: Feature::SearchTool,
+        key: "search_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
@@ -516,6 +518,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "enable_request_compression",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Experimental {
+            name: "Sub-agents",
+            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
+            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Apps,

@@ -4,6 +4,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
@@ -31,9 +32,9 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub supports_image_input: bool,
+    pub search_tool: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
-    pub memory_tools: bool,
     pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
 }
@@ -54,8 +55,8 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
-        let include_memory_tools = features.enabled(Feature::MemoryTool);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
+        let include_search_tool = features.enabled(Feature::SearchTool);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -87,9 +88,9 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             supports_image_input: model_info.input_modalities.contains(&InputModality::Image),
+            search_tool: include_search_tool,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
-            memory_tools: include_memory_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
@@ -663,28 +664,6 @@ fn create_request_user_input_tool() -> ToolSpec {
     })
 }
 
-fn create_get_memory_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
-        "memory_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Memory ID to fetch. Uses the thread ID as the memory identifier.".to_string(),
-            ),
-        },
-    )]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "get_memory".to_string(),
-        description: "Loads the full stored memory payload for a memory_id.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["memory_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -820,6 +799,36 @@ fn create_grep_files_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["pattern".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_search_tool_bm25_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::String {
+                description: Some("Search query for MCP tools.".to_string()),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some(format!(
+                    "Maximum number of tools to return (defaults to {SEARCH_TOOL_BM25_DEFAULT_LIMIT})."
+                )),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "search_tool_bm25".to_string(),
+        description: "Searches MCP tool metadata with BM25 and exposes matching tools for the next model call.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1279,7 +1288,6 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GetMemoryHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -1287,6 +1295,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
+    use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
@@ -1301,12 +1310,12 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let get_memory_handler = Arc::new(GetMemoryHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let search_tool_handler = Arc::new(SearchToolBm25Handler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1361,9 +1370,9 @@ pub(crate) fn build_specs(
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
-    if config.memory_tools {
-        builder.push_spec(create_get_memory_tool());
-        builder.register_handler("get_memory", get_memory_handler);
+    if config.search_tool {
+        builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(), true);
+        builder.register_handler("search_tool_bm25", search_tool_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -1666,11 +1675,6 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
-            create_spawn_agent_tool(),
-            create_send_input_tool(),
-            create_resume_agent_tool(),
-            create_wait_tool(),
-            create_close_agent_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1740,33 +1744,6 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
-    }
-
-    #[test]
-    fn get_memory_requires_memory_tool_feature() {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.disable(Feature::MemoryTool);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert!(
-            !tools.iter().any(|t| t.spec.name() == "get_memory"),
-            "get_memory should be disabled when memory_tool feature is off"
-        );
-
-        features.enable(Feature::MemoryTool);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert_contains_tool_names(&tools, &["get_memory"]);
     }
 
     fn assert_model_tools(
@@ -1865,11 +1842,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -1892,11 +1864,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -1921,11 +1888,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -1950,11 +1912,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -1976,11 +1933,6 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -2003,11 +1955,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -2029,11 +1976,6 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -2056,11 +1998,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -2107,11 +2044,6 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }
@@ -2135,11 +2067,6 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
-                "spawn_agent",
-                "send_input",
-                "resume_agent",
-                "wait",
-                "close_agent",
             ],
         );
     }

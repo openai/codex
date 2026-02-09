@@ -114,6 +114,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
+use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -138,6 +139,8 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
+use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_paths;
@@ -200,6 +203,7 @@ use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
+use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -502,6 +506,9 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
+const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
+    include_str!("../templates/search_tool/developer_instructions.md");
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -566,8 +573,8 @@ impl TurnContext {
 
     /// Resolves the per-turn metadata header under a shared timeout policy.
     ///
-    /// This uses the same timeout helper as websocket startup preconnect so both turn execution
-    /// and background preconnect observe identical "timeout means best-effort fallback" behavior.
+    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
+    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -579,7 +586,7 @@ impl TurnContext {
     /// Starts best-effort background computation of turn metadata.
     ///
     /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket preconnect are less likely to pay metadata construction latency on demand.
+    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -1044,7 +1051,7 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1082,6 +1089,18 @@ impl Session {
             ),
         };
 
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            build_turn_metadata_header(session_configuration.cwd.clone()),
+            None,
+        )
+        .boxed();
+        let startup_regular_task = RegularTask::with_startup_prewarm(
+            services.model_client.clone(),
+            services.otel_manager.clone(),
+            turn_metadata_header,
+        );
+        state.set_startup_regular_task(startup_regular_task);
+
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1093,18 +1112,6 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
-
-        // Warm a websocket in the background so the first turn can reuse it.
-        // This performs only connection setup; user input is still sent later via response.create
-        // when submit_turn() runs.
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.clone()),
-            None,
-        )
-        .boxed();
-        sess.services
-            .model_client
-            .pre_establish_connection(sess.services.otel_manager.clone(), turn_metadata_header);
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1230,12 +1237,20 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
+    pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
-    async fn get_estimated_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
+    pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+        let state = self.state.lock().await;
+        state.history.get_total_token_usage_breakdown()
+    }
+
+    pub(crate) async fn get_estimated_token_count(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Option<i64> {
         let state = self.state.lock().await;
         state.history.estimate_token_count(turn_context)
     }
@@ -1245,6 +1260,21 @@ impl Session {
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
         }
+    }
+
+    pub(crate) async fn merge_mcp_tool_selection(&self, tool_names: Vec<String>) -> Vec<String> {
+        let mut state = self.state.lock().await;
+        state.merge_mcp_tool_selection(tool_names)
+    }
+
+    pub(crate) async fn get_mcp_tool_selection(&self) -> Option<Vec<String>> {
+        let state = self.state.lock().await;
+        state.get_mcp_tool_selection()
+    }
+
+    pub(crate) async fn clear_mcp_tool_selection(&self) {
+        let mut state = self.state.lock().await;
+        state.clear_mcp_tool_selection();
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -1491,6 +1521,11 @@ impl Session {
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
         self.new_default_turn_with_sub_id(self.next_internal_sub_id())
             .await
+    }
+
+    pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
+        let mut state = self.state.lock().await;
+        state.take_startup_regular_task()
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
@@ -2166,6 +2201,11 @@ impl Session {
         );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
+        }
+        if turn_context.tools_config.search_tool {
+            items.push(
+                DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
+            );
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -2849,7 +2889,6 @@ mod handlers {
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
-    use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -2992,7 +3031,8 @@ mod handlers {
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
-            sess.spawn_task(Arc::clone(&current_context), items, RegularTask)
+            let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+            sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
             *previous_context = Some(current_context);
         }
@@ -3708,6 +3748,7 @@ pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
@@ -3825,7 +3866,8 @@ pub(crate) async fn run_turn(
     let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session = sess.services.model_client.new_session();
+    let mut client_session =
+        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -4102,6 +4144,7 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
+
     let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         Some(filter_connectors_for_input(
@@ -4113,9 +4156,25 @@ async fn run_sampling_request(
     } else {
         None
     };
-    if let Some(connectors) = connectors_for_tools.as_ref() {
+
+    if turn_context.config.features.enabled(Feature::SearchTool) {
+        let mut selected_mcp_tools =
+            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
+                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+            } else {
+                HashMap::new()
+            };
+
+        if let Some(connectors) = connectors_for_tools.as_ref() {
+            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
+            selected_mcp_tools.extend(apps_mcp_tools);
+        }
+
+        mcp_tools = selected_mcp_tools;
+    } else if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
+
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         Some(
@@ -4941,6 +5000,8 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
+#[cfg(test)]
+pub(crate) use tests::make_session_configuration_for_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4950,6 +5011,7 @@ mod tests {
     use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
+    use crate::mcp_connection_manager::ToolInfo;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
@@ -4989,6 +5051,8 @@ mod tests {
 
     use codex_protocol::mcp::CallToolResult as McpCallToolResult;
     use pretty_assertions::assert_eq;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Tool;
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
@@ -5022,6 +5086,30 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: true,
+        }
+    }
+
+    fn make_mcp_tool(
+        server_name: &str,
+        tool_name: &str,
+        connector_id: Option<&str>,
+        connector_name: Option<&str>,
+    ) -> ToolInfo {
+        ToolInfo {
+            server_name: server_name.to_string(),
+            tool_name: tool_name.to_string(),
+            tool: Tool {
+                name: tool_name.to_string().into(),
+                title: None,
+                description: Some(format!("Test tool: {tool_name}").into()),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: connector_id.map(str::to_string),
+            connector_name: connector_name.map(str::to_string),
         }
     }
 
@@ -5126,6 +5214,93 @@ mod tests {
         );
 
         assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
+        let selected_tool_names = vec![
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            "mcp__rmcp__echo".to_string(),
+        ];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let connectors = filter_connectors_for_input(
+            connectors,
+            &[user_message("run the selected tools")],
+            &[],
+            &HashMap::new(),
+        );
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        selected_mcp_tools.extend(apps_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
+        let selected_tool_names = vec!["mcp__rmcp__echo".to_string()];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let connectors = filter_connectors_for_input(
+            connectors,
+            &[user_message("use $calendar and then echo the response")],
+            &[],
+            &HashMap::new(),
+        );
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        selected_mcp_tools.extend(apps_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -5830,6 +6005,46 @@ mod tests {
             "test".to_string(),
             session_source,
         )
+    }
+
+    pub(crate) async fn make_session_configuration_for_tests() -> SessionConfiguration {
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = build_test_config(codex_home.path()).await;
+        let config = Arc::new(config);
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let reasoning_effort = config.model_reasoning_effort;
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+
+        SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.approval_policy.clone(),
+            sandbox_policy: config.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+        }
     }
 
     pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
