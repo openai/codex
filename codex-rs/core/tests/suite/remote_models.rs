@@ -56,6 +56,69 @@ use wiremock::MockServer;
 const REMOTE_MODEL_SLUG: &str = "codex-test";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let generic = test_remote_model_with_policy(
+        "gpt-5.3",
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    let specific = test_remote_model_with_policy(
+        "gpt-5.3-codex",
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    let specific = ModelInfo {
+        display_name: "GPT 5.3 Codex".to_string(),
+        base_instructions: "use specific prefix".to_string(),
+        ..specific
+    };
+    let generic = ModelInfo {
+        display_name: "GPT 5.3".to_string(),
+        base_instructions: "use generic prefix".to_string(),
+        ..generic
+    };
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![generic.clone(), specific.clone()],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
+
+    assert_eq!(model_info.slug, specific.slug);
+    assert_eq!(model_info.base_instructions, specific.base_instructions);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
