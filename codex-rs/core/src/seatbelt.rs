@@ -1,6 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
+use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
@@ -33,9 +34,11 @@ pub async fn spawn_command_under_seatbelt(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
     stdio_policy: StdioPolicy,
+    network: Option<&NetworkProxy>,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, &env);
+    let args =
+        create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, network, &env);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(SpawnChildRequest {
@@ -44,7 +47,7 @@ pub async fn spawn_command_under_seatbelt(
         arg0,
         cwd: command_cwd,
         sandbox_policy,
-        network: None,
+        network,
         stdio_policy,
         env,
     })
@@ -105,12 +108,30 @@ fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
     })
 }
 
-fn dynamic_network_policy(sandbox_policy: &SandboxPolicy, env: &HashMap<String, String>) -> String {
-    let proxy_ports = proxy_loopback_ports_from_env(env);
+fn proxy_env_from_network(network: &NetworkProxy) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    network.apply_to_env(&mut env);
+    env
+}
+
+fn dynamic_network_policy(
+    sandbox_policy: &SandboxPolicy,
+    network: Option<&NetworkProxy>,
+    env: &HashMap<String, String>,
+) -> String {
+    let proxy_env;
+    let policy_env = if let Some(network) = network {
+        proxy_env = proxy_env_from_network(network);
+        &proxy_env
+    } else {
+        env
+    };
+
+    let proxy_ports = proxy_loopback_ports_from_env(policy_env);
     if !proxy_ports.is_empty() {
         let mut policy =
             String::from("; allow outbound access only to configured loopback proxy endpoints\n");
-        if local_binding_enabled(env) {
+        if local_binding_enabled(policy_env) {
             policy.push_str("; allow localhost-only binding and loopback traffic\n");
             policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
@@ -124,7 +145,7 @@ fn dynamic_network_policy(sandbox_policy: &SandboxPolicy, env: &HashMap<String, 
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
     }
 
-    if has_proxy_url_env_vars(env) {
+    if has_proxy_url_env_vars(policy_env) {
         // Proxy configuration is present but we could not infer any valid loopback endpoints.
         // Fail closed to avoid silently widening network access in proxy-enforced sessions.
         return String::new();
@@ -144,6 +165,7 @@ pub(crate) fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
+    network: Option<&NetworkProxy>,
     env: &HashMap<String, String>,
 ) -> Vec<String> {
     let (file_write_policy, file_write_dir_params) = {
@@ -210,7 +232,7 @@ pub(crate) fn create_seatbelt_command_args(
     };
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
-    let network_policy = dynamic_network_policy(sandbox_policy, env);
+    let network_policy = dynamic_network_policy(sandbox_policy, network, env);
 
     let full_policy = format!(
         "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
@@ -297,7 +319,8 @@ mod tests {
             "socks5h://127.0.0.1:48081".to_string(),
         );
 
-        let args = create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, &env);
+        let args =
+            create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, None, &env);
         let policy = args
             .get(1)
             .expect("seatbelt args should include policy at index 1");
@@ -338,7 +361,8 @@ mod tests {
         );
         env.insert(ALLOW_LOCAL_BINDING_ENV_KEY.to_string(), "1".to_string());
 
-        let args = create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, &env);
+        let args =
+            create_seatbelt_command_args(command, &SandboxPolicy::ReadOnly, &cwd, None, &env);
         let policy = args
             .get(1)
             .expect("seatbelt args should include policy at index 1");
@@ -383,6 +407,7 @@ mod tests {
                 exclude_slash_tmp: false,
             },
             &cwd,
+            None,
             &env,
         );
         let policy = args
@@ -421,6 +446,7 @@ mod tests {
                 exclude_slash_tmp: false,
             },
             &cwd,
+            None,
             &env,
         );
         let policy = args
@@ -484,8 +510,13 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args =
-            create_seatbelt_command_args(shell_command.clone(), &policy, &cwd, &HashMap::new());
+        let args = create_seatbelt_command_args(
+            shell_command.clone(),
+            &policy,
+            &cwd,
+            None,
+            &HashMap::new(),
+        );
 
         // Build the expected policy text using a raw string for readability.
         // Note that the policy includes:
@@ -574,7 +605,7 @@ mod tests {
         .map(std::string::ToString::to_string)
         .collect();
         let write_hooks_file_args =
-            create_seatbelt_command_args(shell_command_git, &policy, &cwd, &HashMap::new());
+            create_seatbelt_command_args(shell_command_git, &policy, &cwd, None, &HashMap::new());
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_hooks_file_args)
             .current_dir(&cwd)
@@ -604,8 +635,13 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let write_allowed_file_args =
-            create_seatbelt_command_args(shell_command_allowed, &policy, &cwd, &HashMap::new());
+        let write_allowed_file_args = create_seatbelt_command_args(
+            shell_command_allowed,
+            &policy,
+            &cwd,
+            None,
+            &HashMap::new(),
+        );
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&write_allowed_file_args)
             .current_dir(&cwd)
@@ -665,7 +701,8 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let args = create_seatbelt_command_args(shell_command, &policy, &cwd, &HashMap::new());
+        let args =
+            create_seatbelt_command_args(shell_command, &policy, &cwd, None, &HashMap::new());
 
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&args)
@@ -695,8 +732,13 @@ mod tests {
         .iter()
         .map(std::string::ToString::to_string)
         .collect();
-        let gitdir_args =
-            create_seatbelt_command_args(shell_command_gitdir, &policy, &cwd, &HashMap::new());
+        let gitdir_args = create_seatbelt_command_args(
+            shell_command_gitdir,
+            &policy,
+            &cwd,
+            None,
+            &HashMap::new(),
+        );
         let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
             .args(&gitdir_args)
             .current_dir(&cwd)
@@ -756,6 +798,7 @@ mod tests {
             shell_command.clone(),
             &policy,
             vulnerable_root.as_path(),
+            None,
             &HashMap::new(),
         );
 

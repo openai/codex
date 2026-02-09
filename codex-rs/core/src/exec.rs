@@ -206,6 +206,7 @@ pub async fn process_exec_tool_call(
             spec,
             policy: sandbox_policy,
             sandbox: sandbox_type,
+            network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,

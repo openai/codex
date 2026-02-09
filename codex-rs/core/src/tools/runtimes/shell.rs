@@ -172,7 +172,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(spec)
+            .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(
             env,

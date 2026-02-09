@@ -27,6 +27,7 @@ async fn spawn_command_under_sandbox(
         sandbox_policy,
         sandbox_cwd,
         stdio_policy,
+        None,
         env,
     )
     .await
@@ -52,6 +53,7 @@ async fn spawn_command_under_sandbox(
         sandbox_cwd,
         false,
         stdio_policy,
+        None,
         env,
     )
     .await

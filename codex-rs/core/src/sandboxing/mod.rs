@@ -60,6 +60,7 @@ pub(crate) struct SandboxTransformRequest<'a> {
     pub spec: CommandSpec,
     pub policy: &'a SandboxPolicy,
     pub sandbox: SandboxType,
+    pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_linux_sandbox_bwrap: bool,
@@ -125,6 +126,7 @@ impl SandboxManager {
             mut spec,
             policy,
             sandbox,
+            network,
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
             use_linux_sandbox_bwrap,
@@ -148,8 +150,13 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-                let mut args =
-                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd, &env);
+                let mut args = create_seatbelt_command_args(
+                    command.clone(),
+                    policy,
+                    sandbox_policy_cwd,
+                    network,
+                    &env,
+                );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);
@@ -160,7 +167,7 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(policy, &env);
+                let allow_proxy_network = allow_network_for_proxy(policy, network);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
                     policy,

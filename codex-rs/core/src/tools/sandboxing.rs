@@ -12,6 +12,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -282,12 +283,14 @@ impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
         spec: CommandSpec,
+        network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
         self.manager
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
                 sandbox: self.sandbox,
+                network,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,

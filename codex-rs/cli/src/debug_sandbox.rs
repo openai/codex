@@ -225,6 +225,7 @@ async fn run_command_under_sandbox(
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
+                None,
                 env,
             )
             .await?
@@ -244,6 +245,7 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd.as_path(),
                 use_bwrap_sandbox,
                 stdio_policy,
+                None,
                 env,
             )
             .await?
