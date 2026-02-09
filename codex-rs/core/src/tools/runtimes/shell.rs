@@ -23,6 +23,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -33,6 +34,7 @@ pub struct ShellRequest {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub env: std::collections::HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -166,9 +168,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let env = attempt
             .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
-            .await
-            .map_err(ToolError::Codex)?;
+        let out = execute_env(
+            env,
+            attempt.policy,
+            req.network.clone(),
+            Self::stdout_stream(ctx),
+        )
+        .await
+        .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }
