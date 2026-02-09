@@ -426,6 +426,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Deprecated,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
     // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::ShellSnapshot,
@@ -514,16 +520,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "enable_request_compression",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Collab,
-        key: "collab",
-        stage: Stage::Experimental {
-            name: "Sub-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
-        },
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Apps,
