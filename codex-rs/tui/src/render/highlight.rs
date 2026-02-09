@@ -232,7 +232,8 @@ pub(crate) fn list_available_themes(codex_home: Option<&Path>) -> Vec<ThemeEntry
                 if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         let name = stem.to_string();
-                        if !entries.iter().any(|e| e.name == name) {
+                        let is_valid_theme = ThemeSet::get_theme(&path).is_ok();
+                        if is_valid_theme && !entries.iter().any(|e| e.name == name) {
                             entries.push(ThemeEntry {
                                 name,
                                 is_custom: true,
@@ -883,6 +884,30 @@ mod tests {
                 .as_deref()
                 .is_some_and(|msg| msg.contains("could not be parsed")),
             "warning should explain that the theme file is invalid"
+        );
+    }
+
+    #[test]
+    fn list_available_themes_excludes_invalid_custom_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        write_minimal_tmtheme(&themes_dir.join("valid-custom.tmTheme"));
+        std::fs::write(themes_dir.join("broken-custom.tmTheme"), "not a plist").unwrap();
+
+        let entries = list_available_themes(Some(dir.path()));
+
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.name == "valid-custom" && entry.is_custom),
+            "expected valid custom theme to be listed"
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.name == "broken-custom" && entry.is_custom),
+            "expected invalid custom theme to be excluded from list"
         );
     }
 

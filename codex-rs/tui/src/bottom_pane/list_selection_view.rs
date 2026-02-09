@@ -407,6 +407,9 @@ impl ListSelectionView {
                 self.complete = true;
             }
         } else if selected_item.is_none() {
+            if let Some(cb) = &self.on_cancel {
+                cb(&self.app_event_tx);
+            }
             self.complete = true;
         }
     }
@@ -1143,6 +1146,37 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+
+    #[test]
+    fn enter_with_no_matches_triggers_cancel_callback() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "Read Only".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                is_searchable: true,
+                on_cancel: Some(Box::new(|tx: &_| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })),
+                ..Default::default()
+            },
+            tx,
+        );
+        view.set_search_query("no-matches".to_string());
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert!(view.is_complete());
+        match rx.try_recv() {
+            Ok(AppEvent::OpenApprovalsPopup) => {}
+            Ok(other) => panic!("expected OpenApprovalsPopup cancel event, got {other:?}"),
+            Err(err) => panic!("expected cancel callback event, got {err}"),
+        }
     }
 
     #[test]

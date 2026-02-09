@@ -2323,6 +2323,7 @@ impl App {
                         self.sync_tui_theme_selection(name);
                     }
                     Err(err) => {
+                        self.restore_runtime_theme_from_config();
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.chat_widget
                             .add_error_message(format!("Failed to save theme: {err}"));
@@ -2463,6 +2464,27 @@ impl App {
     fn sync_tui_theme_selection(&mut self, name: String) {
         self.config.tui_theme = Some(name.clone());
         self.chat_widget.set_tui_theme(Some(name));
+    }
+
+    fn restore_runtime_theme_from_config(&self) {
+        if let Some(name) = self.config.tui_theme.as_deref()
+            && let Some(theme) =
+                crate::render::highlight::resolve_theme_by_name(name, Some(&self.config.codex_home))
+        {
+            crate::render::highlight::set_syntax_theme(theme);
+            return;
+        }
+
+        let auto_theme_name = match crate::terminal_palette::default_bg() {
+            Some(bg) if crate::color::is_light(bg) => "catppuccin-latte",
+            _ => "catppuccin-mocha",
+        };
+        if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
+            auto_theme_name,
+            Some(&self.config.codex_home),
+        ) {
+            crate::render::highlight::set_syntax_theme(theme);
+        }
     }
 
     fn personality_label(personality: Personality) -> &'static str {
