@@ -4,7 +4,10 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::context_manager::ContextManager;
+use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::estimate_response_item_model_visible_bytes;
 use crate::context_manager::is_codex_generated_item;
+use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
@@ -14,6 +17,8 @@ use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use futures::TryFutureExt;
+use tracing::error;
 use tracing::info;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
@@ -98,6 +103,18 @@ async fn run_remote_compact_task_inner_impl(
             &turn_context.model_info,
             &turn_context.otel_manager,
         )
+        .or_else(|err| async {
+            let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
+            let compact_request_log_data =
+                build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
+            log_remote_compact_failure(
+                turn_context,
+                &compact_request_log_data,
+                total_usage_breakdown,
+                &err,
+            );
+            Err(err)
+        })
         .await?;
     new_history = sess
         .process_compacted_history(turn_context, new_history)
@@ -119,6 +136,47 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+#[derive(Debug)]
+struct CompactRequestLogData {
+    failing_compaction_request_model_visible_bytes: i64,
+}
+
+fn build_compact_request_log_data(
+    input: &[ResponseItem],
+    instructions: &str,
+) -> CompactRequestLogData {
+    let failing_compaction_request_model_visible_bytes = input
+        .iter()
+        .map(estimate_response_item_model_visible_bytes)
+        .fold(
+            i64::try_from(instructions.len()).unwrap_or(i64::MAX),
+            i64::saturating_add,
+        );
+
+    CompactRequestLogData {
+        failing_compaction_request_model_visible_bytes,
+    }
+}
+
+fn log_remote_compact_failure(
+    turn_context: &TurnContext,
+    log_data: &CompactRequestLogData,
+    total_usage_breakdown: TotalTokenUsageBreakdown,
+    err: &CodexErr,
+) {
+    error!(
+        turn_id = %turn_context.sub_id,
+        last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
+        all_history_items_model_visible_bytes = total_usage_breakdown.all_history_items_model_visible_bytes,
+        estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
+        estimated_bytes_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_bytes_of_items_added_since_last_successful_api_response,
+        model_context_window_tokens = ?turn_context.model_context_window(),
+        failing_compaction_request_model_visible_bytes = log_data.failing_compaction_request_model_visible_bytes,
+        compact_error = %err,
+        "remote compaction failed"
+    );
 }
 
 fn trim_function_call_history_to_fit_context_window(
