@@ -102,19 +102,20 @@ pub(super) async fn run_memories_startup_pipeline(
         turn_context.resolve_turn_metadata_header().await,
     );
 
-    let touched_cwds = futures::stream::iter(candidates.into_iter())
-        .map(|candidate| {
-            let session = Arc::clone(session);
-            let config = Arc::clone(&config);
-            let stage_one_context = stage_one_context.clone();
-            async move {
-                process_memory_trace_candidate(session, config, candidate, stage_one_context).await
-            }
-        })
-        .buffer_unordered(memories::PHASE_ONE_CONCURRENCY_LIMIT)
-        .filter_map(futures::future::ready)
-        .collect::<HashSet<PathBuf>>()
-        .await;
+    let touched_cwds =
+        futures::stream::iter(candidates.into_iter())
+            .map(|candidate| {
+                let session = Arc::clone(session);
+                let config = Arc::clone(&config);
+                let stage_one_context = stage_one_context.clone();
+                async move {
+                    process_memory_candidate(session, config, candidate, stage_one_context).await
+                }
+            })
+            .buffer_unordered(memories::PHASE_ONE_CONCURRENCY_LIMIT)
+            .filter_map(futures::future::ready)
+            .collect::<HashSet<PathBuf>>()
+            .await;
     info!(
         "memory phase-1 extraction complete: {} cwd(s) touched",
         touched_cwds.len()
@@ -144,7 +145,7 @@ pub(super) async fn run_memories_startup_pipeline(
     Ok(())
 }
 
-async fn process_memory_trace_candidate(
+async fn process_memory_candidate(
     session: Arc<Session>,
     config: Arc<Config>,
     candidate: memories::RolloutCandidate,
@@ -207,7 +208,7 @@ async fn process_memory_trace_candidate(
         tools: Vec::new(),
         parallel_tool_calls: false,
         base_instructions: BaseInstructions {
-            text: memories::TRACE_MEMORY_PROMPT.to_string(),
+            text: memories::RAW_MEMORY_PROMPT.to_string(),
         },
         personality: None,
         output_schema: Some(memories::stage_one_output_schema()),
@@ -257,27 +258,24 @@ async fn process_memory_trace_candidate(
         }
     };
 
-    let trace_summary_path = match memories::write_trace_memory(
-        &memory_root,
-        &candidate,
-        &stage_one_output.trace_memory,
-    )
-    .await
-    {
-        Ok(path) => path,
-        Err(err) => {
-            warn!(
-                "failed to write trace summary for rollout {}: {err}",
-                candidate.rollout_path.display()
-            );
-            return None;
-        }
-    };
+    let raw_memory_path =
+        match memories::write_raw_memory(&memory_root, &candidate, &stage_one_output.raw_memory)
+            .await
+        {
+            Ok(path) => path,
+            Err(err) => {
+                warn!(
+                    "failed to write raw memory for rollout {}: {err}",
+                    candidate.rollout_path.display()
+                );
+                return None;
+            }
+        };
 
     if state_db::upsert_thread_memory(
         session.services.state_db.as_deref(),
         candidate.thread_id,
-        &stage_one_output.trace_memory,
+        &stage_one_output.raw_memory,
         &stage_one_output.summary,
         MEMORY_STARTUP_STAGE,
     )
@@ -287,23 +285,23 @@ async fn process_memory_trace_candidate(
         warn!(
             "failed to upsert thread memory for rollout {}; removing {}",
             candidate.rollout_path.display(),
-            trace_summary_path.display()
+            raw_memory_path.display()
         );
-        if let Err(err) = tokio::fs::remove_file(&trace_summary_path).await
+        if let Err(err) = tokio::fs::remove_file(&raw_memory_path).await
             && err.kind() != std::io::ErrorKind::NotFound
         {
             warn!(
-                "failed to remove orphaned trace summary {}: {err}",
-                trace_summary_path.display()
+                "failed to remove orphaned raw memory {}: {err}",
+                raw_memory_path.display()
             );
         }
         return None;
     }
     info!(
-        "memory phase-1 trace persisted: rollout={} cwd={} trace_path={}",
+        "memory phase-1 raw memory persisted: rollout={} cwd={} raw_memory_path={}",
         candidate.rollout_path.display(),
         candidate.cwd.display(),
-        trace_summary_path.display()
+        raw_memory_path.display()
     );
 
     Some(candidate.cwd)
@@ -341,7 +339,7 @@ async fn run_memory_consolidation_for_cwd(
     let Some(latest_memories) = state_db::get_last_n_thread_memories_for_cwd(
         session.services.state_db.as_deref(),
         &cwd,
-        memories::MAX_TRACES_PER_CWD,
+        memories::MAX_RAW_MEMORIES_PER_CWD,
         MEMORY_STARTUP_STAGE,
     )
     .await
@@ -362,7 +360,7 @@ async fn run_memory_consolidation_for_cwd(
 
     let memory_root = memories::memory_root_for_cwd(&config.codex_home, &cwd);
     if let Err(err) =
-        memories::prune_to_recent_traces_and_rebuild_summary(&memory_root, &latest_memories).await
+        memories::prune_to_recent_memories_and_rebuild_summary(&memory_root, &latest_memories).await
     {
         warn!(
             "failed to refresh phase-1 memory outputs for cwd {}: {err}",

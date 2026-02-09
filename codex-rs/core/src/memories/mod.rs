@@ -32,31 +32,19 @@ const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
 const LEGACY_CONSOLIDATED_FILENAME: &str = "consolidated.md";
 const SKILLS_SUBDIR: &str = "skills";
 
-#[allow(unused_imports)]
 pub(crate) use phase_one::RAW_MEMORY_PROMPT;
-#[allow(unused_imports)]
 pub(crate) use phase_one::parse_stage_one_output;
-#[allow(unused_imports)]
 pub(crate) use phase_one::stage_one_output_schema;
-#[allow(unused_imports)]
 pub(crate) use prompts::build_consolidation_prompt;
-#[allow(unused_imports)]
 pub(crate) use prompts::build_stage_one_input_message;
 #[cfg(test)]
 pub(crate) use rollout::StageOneResponseItemKinds;
-#[allow(unused_imports)]
 pub(crate) use rollout::StageOneRolloutFilter;
-#[allow(unused_imports)]
 pub(crate) use rollout::serialize_filtered_rollout_response_items;
-#[allow(unused_imports)]
 pub(crate) use selection::select_rollout_candidates_from_db;
-#[allow(unused_imports)]
 pub(crate) use storage::prune_to_recent_memories_and_rebuild_summary;
-#[allow(unused_imports)]
 pub(crate) use storage::wipe_consolidation_outputs;
-#[allow(unused_imports)]
 pub(crate) use storage::write_raw_memory;
-#[allow(unused_imports)]
 pub(crate) use types::RolloutCandidate;
 
 /// Returns the on-disk memory root directory for a given working directory.
