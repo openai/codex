@@ -157,15 +157,6 @@ fn build_compact_request_log_data(
     }
 }
 
-fn compact_error_status_code(err: &CodexErr) -> Option<u16> {
-    match err {
-        CodexErr::InvalidRequest(_) => Some(400),
-        CodexErr::UnexpectedStatus(status) => Some(status.status.as_u16()),
-        CodexErr::ContextWindowExceeded => Some(400),
-        _ => None,
-    }
-}
-
 fn log_remote_compact_failure(
     turn_context: &TurnContext,
     log_data: &CompactRequestLogData,
@@ -174,7 +165,12 @@ fn log_remote_compact_failure(
 ) {
     error!(
         turn_id = %turn_context.sub_id,
-        compact_error_status = ?compact_error_status_code(err),
+        compact_error_status = ?match err {
+            CodexErr::InvalidRequest(_) => Some(400),
+            CodexErr::UnexpectedStatus(status) => Some(status.status.as_u16()),
+            CodexErr::ContextWindowExceeded => Some(400),
+            _ => None,
+        },
         last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
         all_history_items_model_visible_bytes = total_usage_breakdown.all_history_items_model_visible_bytes,
         estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
