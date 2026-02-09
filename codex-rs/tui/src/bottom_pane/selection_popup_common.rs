@@ -9,7 +9,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
-use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -53,17 +52,12 @@ pub(crate) enum ColumnWidthMode {
     Fixed,
 }
 
-// Fraction for fixed mode's left (name) column width: 3/10 = 30%.
 const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
 const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
-// Upper bound fraction for auto modes' left (name) column width: 7/10 = 70%.
-// This keeps at least 30% available for the right (description) column.
 const AUTO_LEFT_COLUMN_MAX_NUMERATOR: usize = 7;
 const AUTO_LEFT_COLUMN_MAX_DENOMINATOR: usize = 10;
 
-// For oversized wrapped labels, use a balanced split so left/right columns
-// each get half of the row width.
 const WRAPPED_BALANCED_COL_NUMERATOR: usize = 1;
 const WRAPPED_BALANCED_COL_DENOMINATOR: usize = 2;
 
@@ -117,21 +111,6 @@ fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
-}
-
-fn line_to_owned(line: Line<'_>) -> Line<'static> {
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line
-            .spans
-            .into_iter()
-            .map(|span| Span {
-                style: span.style,
-                content: Cow::Owned(span.content.into_owned()),
-            })
-            .collect(),
-    }
 }
 
 pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
@@ -236,9 +215,6 @@ fn compute_desc_col(
     }
 
     let max_desc_col = content_width.saturating_sub(1) as usize;
-    // In auto modes, keep at least ~30% of width available for descriptions so
-    // very long names do not push wrapped descriptions into a near-vertical
-    // right-edge column.
     let max_auto_desc_col = max_desc_col.min(
         ((content_width as usize * AUTO_LEFT_COLUMN_MAX_NUMERATOR)
             / AUTO_LEFT_COLUMN_MAX_DENOMINATOR)
@@ -296,16 +272,96 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
     indent.min(max_indent)
 }
 
-fn combined_description_text(row: &GenericDisplayRow) -> Option<String> {
-    match (&row.description, &row.disabled_reason) {
+fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
+    row.wrap_indent.is_some()
+        && row.description.is_some()
+        && row.disabled_reason.is_none()
+        && row.match_indices.is_none()
+        && row.display_shortcut.is_none()
+        && row.category_tag.is_none()
+}
+
+fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
+    let Some(description) = row.description.as_deref() else {
+        return Vec::new();
+    };
+
+    let width = width.max(1);
+    let max_desc_col = width.saturating_sub(1) as usize;
+    if max_desc_col == 0 {
+        // No valid description column exists at this width; let callers fall
+        // back to single-line wrapping path.
+        return Vec::new();
+    }
+
+    let balanced_desc_col = ((width as usize * WRAPPED_BALANCED_COL_NUMERATOR)
+        / WRAPPED_BALANCED_COL_DENOMINATOR)
+        .clamp(1, max_desc_col);
+    let desc_col = desc_col.clamp(1, max_desc_col).min(balanced_desc_col);
+    let left_width = desc_col.saturating_sub(2).max(1);
+    let right_width = width.saturating_sub(desc_col as u16).max(1) as usize;
+    let name_wrap_indent = row
+        .wrap_indent
+        .unwrap_or(0)
+        .min(left_width.saturating_sub(1));
+
+    let name_subsequent_indent = " ".repeat(name_wrap_indent);
+    let name_options = textwrap::Options::new(left_width)
+        .initial_indent("")
+        .subsequent_indent(name_subsequent_indent.as_str());
+    let name_lines = textwrap::wrap(row.name.as_str(), name_options);
+
+    let desc_options = textwrap::Options::new(right_width).initial_indent("");
+    let desc_lines = textwrap::wrap(description, desc_options);
+
+    let rows = name_lines.len().max(desc_lines.len()).max(1);
+    let mut out = Vec::with_capacity(rows);
+    for idx in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(name) = name_lines.get(idx) {
+            spans.push(name.to_string().into());
+        }
+
+        if let Some(desc) = desc_lines.get(idx) {
+            let left_used = spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>();
+            let gap = if left_used == 0 {
+                desc_col
+            } else {
+                desc_col.saturating_sub(left_used).max(2)
+            };
+            if gap > 0 {
+                spans.push(" ".repeat(gap).into());
+            }
+            spans.push(desc.to_string().dim());
+        }
+
+        out.push(Line::from(spans));
+    }
+
+    out
+}
+
+/// Build the full display line for a row with the description padded to start
+/// at `desc_col`. Applies fuzzy-match bolding when indices are present and
+/// dims the description.
+fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
+    let combined_description = match (&row.description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
         (Some(desc), None) => Some(desc.clone()),
         (None, Some(reason)) => Some(format!("disabled: {reason}")),
         (None, None) => None,
-    }
-}
+    };
 
-fn build_name_spans(row: &GenericDisplayRow, name_limit: usize) -> Vec<Span<'static>> {
+    // Enforce single-line name: allow at most desc_col - 2 cells for name,
+    // reserving two spaces before the description column.
+    let name_limit = combined_description
+        .as_ref()
+        .map(|_| desc_col.saturating_sub(2))
+        .unwrap_or(usize::MAX);
+
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
     let mut used_width = 0usize;
     let mut truncated = false;
@@ -351,35 +407,6 @@ fn build_name_spans(row: &GenericDisplayRow, name_limit: usize) -> Vec<Span<'sta
         name_spans.push(" (disabled)".dim());
     }
 
-    name_spans
-}
-
-fn build_name_line(row: &GenericDisplayRow, name_limit: usize) -> Line<'static> {
-    let mut name_spans = build_name_spans(row, name_limit);
-    if let Some(display_shortcut) = row.display_shortcut {
-        name_spans.push(" (".into());
-        name_spans.push(display_shortcut.into());
-        name_spans.push(")".into());
-    }
-    Line::from(name_spans)
-}
-
-/// Build the full display line for a row with the description padded to start
-/// at `desc_col`. Applies fuzzy-match bolding when indices are present and
-/// dims the description.
-fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
-    let combined_description = combined_description_text(row);
-
-    // Enforce single-line names only when no explicit wrap indent is set.
-    // Callers that set `wrap_indent` can opt into wrapped names even when a
-    // description is present.
-    let name_limit = if combined_description.is_some() && row.wrap_indent.is_none() {
-        desc_col.saturating_sub(2)
-    } else {
-        usize::MAX
-    };
-
-    let name_spans = build_name_spans(row, name_limit);
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
     if let Some(display_shortcut) = row.display_shortcut {
@@ -388,11 +415,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         full_spans.push(")".into());
     }
     if let Some(desc) = combined_description.as_ref() {
-        let gap = if row.wrap_indent.is_some() {
-            desc_col.saturating_sub(this_name_width).max(2)
-        } else {
-            desc_col.saturating_sub(this_name_width)
-        };
+        let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
         }
@@ -403,128 +426,6 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         full_spans.push(tag.to_string().dim());
     }
     Line::from(full_spans)
-}
-
-fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
-    row.wrap_indent.is_some()
-        && (row.description.is_some() || row.disabled_reason.is_some())
-        && row.category_tag.is_none()
-}
-
-fn wrap_two_column_row(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_line;
-
-    let Some(combined_desc) = combined_description_text(row) else {
-        return Vec::new();
-    };
-
-    let width = width.max(1);
-    let max_desc_col = width.saturating_sub(1) as usize;
-    if max_desc_col == 0 {
-        // No valid description column exists at this width; let callers fall
-        // back to single-line wrapping path.
-        return Vec::new();
-    }
-    let balanced_desc_col = ((width as usize * WRAPPED_BALANCED_COL_NUMERATOR)
-        / WRAPPED_BALANCED_COL_DENOMINATOR)
-        .clamp(1, max_desc_col);
-    let desc_col = desc_col.clamp(1, max_desc_col).min(balanced_desc_col);
-    let left_width = desc_col.saturating_sub(2).max(1);
-    let right_width = width.saturating_sub(desc_col as u16).max(1) as usize;
-    let name_wrap_indent = row
-        .wrap_indent
-        .unwrap_or(0)
-        .min(left_width.saturating_sub(1));
-    let name_line = build_name_line(row, usize::MAX);
-
-    let name_lines = word_wrap_line(
-        &name_line,
-        RtOptions::new(left_width)
-            .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from(" ".repeat(name_wrap_indent))),
-    )
-    .into_iter()
-    .map(line_to_owned)
-    .collect::<Vec<_>>();
-
-    let desc_line = Line::from(combined_desc.dim());
-    let desc_lines = word_wrap_line(
-        &desc_line,
-        RtOptions::new(right_width)
-            .initial_indent(Line::from(""))
-            .subsequent_indent(Line::from("")),
-    )
-    .into_iter()
-    .map(line_to_owned)
-    .collect::<Vec<_>>();
-
-    let rows = name_lines.len().max(desc_lines.len()).max(1);
-    let mut out = Vec::with_capacity(rows);
-    for idx in 0..rows {
-        let mut spans = Vec::new();
-        if let Some(name) = name_lines.get(idx) {
-            spans.extend(name.spans.clone());
-        }
-
-        if let Some(desc) = desc_lines.get(idx) {
-            let left_used = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum::<usize>();
-            let gap = if left_used == 0 {
-                desc_col
-            } else {
-                desc_col.saturating_sub(left_used).max(2)
-            };
-            if gap > 0 {
-                spans.push(" ".repeat(gap).into());
-            }
-            spans.extend(desc.spans.clone());
-        }
-
-        out.push(Line::from(spans));
-    }
-    out
-}
-
-fn wrap_row_lines(row: &GenericDisplayRow, desc_col: usize, width: u16) -> Vec<Line<'static>> {
-    use crate::wrapping::RtOptions;
-    use crate::wrapping::word_wrap_line;
-
-    if should_wrap_name_in_column(row) {
-        let wrapped = wrap_two_column_row(row, desc_col, width);
-        if !wrapped.is_empty() {
-            return wrapped;
-        }
-    }
-
-    let full_line = build_full_line(row, desc_col);
-    let continuation_indent = wrap_indent(row, desc_col, width);
-    let options = RtOptions::new(width.max(1) as usize)
-        .initial_indent(Line::from(""))
-        .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
-    word_wrap_line(&full_line, options)
-        .into_iter()
-        .map(line_to_owned)
-        .collect()
-}
-
-fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
-    if selected {
-        for line in lines.iter_mut() {
-            line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
-            });
-        }
-    }
-    if is_disabled {
-        for line in lines.iter_mut() {
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
-            });
-        }
-    }
 }
 
 /// Render a list of rows using the provided ScrollState, with shared styling
@@ -584,12 +485,63 @@ fn render_rows_inner(
             break;
         }
 
-        let mut wrapped = wrap_row_lines(row, desc_col, area.width);
-        apply_row_state_style(
-            &mut wrapped,
-            Some(i) == state.selected_idx && !row.is_disabled,
-            row.is_disabled,
-        );
+        if should_wrap_name_in_column(row) {
+            let mut wrapped = wrap_two_column_row(row, desc_col, area.width);
+            if Some(i) == state.selected_idx && !row.is_disabled {
+                wrapped.iter_mut().for_each(|line| {
+                    line.spans.iter_mut().for_each(|span| {
+                        span.style = Style::default().fg(Color::Cyan).bold();
+                    });
+                });
+            }
+            if row.is_disabled {
+                wrapped.iter_mut().for_each(|line| {
+                    line.spans.iter_mut().for_each(|span| {
+                        span.style = span.style.dim();
+                    });
+                });
+            }
+
+            for line in wrapped {
+                if cur_y >= area.y + area.height {
+                    break;
+                }
+                line.render(
+                    Rect {
+                        x: area.x,
+                        y: cur_y,
+                        width: area.width,
+                        height: 1,
+                    },
+                    buf,
+                );
+                cur_y = cur_y.saturating_add(1);
+            }
+            continue;
+        }
+
+        let mut full_line = build_full_line(row, desc_col);
+        if Some(i) == state.selected_idx && !row.is_disabled {
+            // Match previous behavior: cyan + bold for the selected row.
+            // Reset the style first to avoid inheriting dim from keyboard shortcuts.
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+        if row.is_disabled {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
+            });
+        }
+
+        // Wrap with subsequent indent aligned to the description column.
+        use crate::wrapping::RtOptions;
+        use crate::wrapping::word_wrap_line;
+        let continuation_indent = wrap_indent(row, desc_col, area.width);
+        let options = RtOptions::new(area.width as usize)
+            .initial_indent(Line::from(""))
+            .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
+        let wrapped = word_wrap_line(&full_line, options);
 
         // Render the wrapped lines.
         for line in wrapped {
@@ -856,6 +808,8 @@ fn measure_rows_height_inner(
         col_width_mode,
     );
 
+    use crate::wrapping::RtOptions;
+    use crate::wrapping::word_wrap_line;
     let mut total: u16 = 0;
     for row in rows_all
         .iter()
@@ -864,7 +818,16 @@ fn measure_rows_height_inner(
         .take(visible_items)
         .map(|(_, r)| r)
     {
-        let wrapped_lines = wrap_row_lines(row, desc_col, content_width).len();
+        let wrapped_lines = if should_wrap_name_in_column(row) {
+            wrap_two_column_row(row, desc_col, content_width).len()
+        } else {
+            let full_line = build_full_line(row, desc_col);
+            let continuation_indent = wrap_indent(row, desc_col, content_width);
+            let opts = RtOptions::new(content_width as usize)
+                .initial_indent(Line::from(""))
+                .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
+            word_wrap_line(&full_line, opts).len()
+        };
         total = total.saturating_add(wrapped_lines as u16);
     }
     total.max(1)
@@ -886,8 +849,5 @@ mod tests {
 
         let two_col = wrap_two_column_row(&row, 0, 1);
         assert_eq!(two_col.len(), 0);
-
-        let fallback = wrap_row_lines(&row, 0, 1);
-        assert_eq!(fallback.is_empty(), false);
     }
 }
