@@ -155,7 +155,6 @@ impl SandboxManager {
                     policy,
                     sandbox_policy_cwd,
                     network,
-                    &env,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
