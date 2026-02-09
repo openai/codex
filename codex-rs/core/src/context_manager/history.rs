@@ -292,9 +292,8 @@ impl ContextManager {
                 .items
                 .iter()
                 .map(estimate_response_item_model_visible_bytes)
-                .fold(0i64, |acc, bytes| {
-                    acc.saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX))
-                }),
+                .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
+                .fold(0i64, i64::saturating_add),
             estimated_tokens_of_items_added_since_last_successful_api_response:
                 items_after_last_model_generated
                     .iter()
@@ -304,9 +303,8 @@ impl ContextManager {
                 items_after_last_model_generated
                     .iter()
                     .map(estimate_response_item_model_visible_bytes)
-                    .fold(0i64, |acc, bytes| {
-                        acc.saturating_add(i64::try_from(bytes).unwrap_or(i64::MAX))
-                    }),
+                    .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX))
+                    .fold(0i64, i64::saturating_add),
         }
     }
 
