@@ -101,10 +101,6 @@ impl SessionState {
             .get_total_token_usage(server_reasoning_included)
     }
 
-    pub(crate) fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
-        self.history.get_total_token_usage_breakdown()
-    }
-
     pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
         self.server_reasoning_included = included;
     }

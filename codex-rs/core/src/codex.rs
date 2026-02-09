@@ -1238,7 +1238,7 @@ impl Session {
 
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
         let state = self.state.lock().await;
-        state.get_total_token_usage_breakdown()
+        state.history.get_total_token_usage_breakdown()
     }
 
     pub(crate) async fn get_estimated_token_count(
