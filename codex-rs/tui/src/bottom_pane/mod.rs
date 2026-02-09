@@ -520,17 +520,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_pending_non_editable_image_urls(&mut self, urls: Vec<String>) {
-        self.composer.set_pending_non_editable_image_urls(urls);
+    pub(crate) fn set_pending_remote_image_urls(&mut self, urls: Vec<String>) {
+        self.composer.set_pending_remote_image_urls(urls);
         self.request_redraw();
     }
 
-    pub(crate) fn pending_non_editable_image_urls(&self) -> Vec<String> {
-        self.composer.pending_non_editable_image_urls()
+    pub(crate) fn pending_remote_image_urls(&self) -> Vec<String> {
+        self.composer.pending_remote_image_urls()
     }
 
-    pub(crate) fn take_pending_non_editable_image_urls(&mut self) -> Vec<String> {
-        let urls = self.composer.take_pending_non_editable_image_urls();
+    pub(crate) fn take_pending_remote_image_urls(&mut self) -> Vec<String> {
+        let urls = self.composer.take_pending_remote_image_urls();
         self.request_redraw();
         urls
     }
@@ -1345,7 +1345,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_pending_non_editable_image_urls(vec![
+        pane.set_pending_remote_image_urls(vec![
             "https://example.com/one.png".to_string(),
             "data:image/png;base64,aGVsbG8=".to_string(),
         ]);

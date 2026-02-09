@@ -21,7 +21,7 @@
 //! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
 //!
 //! - Persistent cross-session history (text-only; no element ranges or attachments).
-//! - Local in-session history (full text + text elements + local image paths).
+//! - Local in-session history (full text + text elements + local/remote image attachments).
 //!
 //! When recalling a local entry, the composer rehydrates text elements and image attachments.
 //! When recalling a persistent entry, only the text is restored.
@@ -293,7 +293,7 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
-    pending_non_editable_image_urls: Vec<String>,
+    pending_remote_image_urls: Vec<String>,
     selected_remote_image_index: Option<usize>,
     footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
@@ -394,7 +394,7 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
-            pending_non_editable_image_urls: Vec::new(),
+            pending_remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             footer_flash: None,
             context_window_percent: None,
@@ -549,7 +549,7 @@ impl ChatComposer {
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
             && self.attached_images.is_empty()
-            && self.pending_non_editable_image_urls.is_empty()
+            && self.pending_remote_image_urls.is_empty()
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -771,19 +771,19 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
-    pub(crate) fn set_pending_non_editable_image_urls(&mut self, urls: Vec<String>) {
-        self.pending_non_editable_image_urls = urls;
+    pub(crate) fn set_pending_remote_image_urls(&mut self, urls: Vec<String>) {
+        self.pending_remote_image_urls = urls;
         self.selected_remote_image_index = None;
         self.relabel_attached_images_and_update_placeholders();
         self.sync_popups();
     }
 
-    pub(crate) fn pending_non_editable_image_urls(&self) -> Vec<String> {
-        self.pending_non_editable_image_urls.clone()
+    pub(crate) fn pending_remote_image_urls(&self) -> Vec<String> {
+        self.pending_remote_image_urls.clone()
     }
 
-    pub(crate) fn take_pending_non_editable_image_urls(&mut self) -> Vec<String> {
-        let urls = std::mem::take(&mut self.pending_non_editable_image_urls);
+    pub(crate) fn take_pending_remote_image_urls(&mut self) -> Vec<String> {
+        let urls = std::mem::take(&mut self.pending_remote_image_urls);
         self.selected_remote_image_index = None;
         self.relabel_attached_images_and_update_placeholders();
         self.sync_popups();
@@ -909,9 +909,10 @@ impl ChatComposer {
             .map(|img| img.path.clone())
             .collect();
         let pending_pastes = std::mem::take(&mut self.pending_pastes);
+        let pending_remote_image_urls = self.pending_remote_image_urls.clone();
         let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
-        self.pending_non_editable_image_urls.clear();
+        self.pending_remote_image_urls.clear();
         self.selected_remote_image_index = None;
         self.history.reset_navigation();
         self.history.record_local_submission(HistoryEntry {
@@ -920,6 +921,7 @@ impl ChatComposer {
             local_image_paths,
             mention_bindings,
             pending_pastes,
+            pending_remote_image_urls,
         });
         Some(previous)
     }
@@ -943,7 +945,9 @@ impl ChatComposer {
             local_image_paths,
             mention_bindings,
             pending_pastes,
+            pending_remote_image_urls,
         } = entry;
+        self.set_pending_remote_image_urls(pending_remote_image_urls);
         self.set_text_content_with_mention_bindings(
             text,
             text_elements,
@@ -998,8 +1002,7 @@ impl ChatComposer {
 
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
-        let image_number =
-            self.pending_non_editable_image_urls.len() + self.attached_images.len() + 1;
+        let image_number = self.pending_remote_image_urls.len() + self.attached_images.len() + 1;
         let placeholder = local_image_label_text(image_number);
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
@@ -2157,12 +2160,16 @@ impl ChatComposer {
         self.prune_attached_images_for_submission(&text, &text_elements);
         if text.is_empty()
             && self.attached_images.is_empty()
-            && self.pending_non_editable_image_urls.is_empty()
+            && self.pending_remote_image_urls.is_empty()
         {
             return None;
         }
         self.recent_submission_mention_bindings = original_mention_bindings.clone();
-        if record_history && (!text.is_empty() || !self.attached_images.is_empty()) {
+        if record_history
+            && (!text.is_empty()
+                || !self.attached_images.is_empty()
+                || !self.pending_remote_image_urls.is_empty())
+        {
             let local_image_paths = self
                 .attached_images
                 .iter()
@@ -2174,6 +2181,7 @@ impl ChatComposer {
                 local_image_paths,
                 mention_bindings: original_mention_bindings,
                 pending_pastes: Vec::new(),
+                pending_remote_image_urls: self.pending_remote_image_urls.clone(),
             });
         }
         self.pending_pastes.clear();
@@ -2413,7 +2421,7 @@ impl ChatComposer {
     }
 
     fn remote_image_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.pending_non_editable_image_urls
+        self.pending_remote_image_urls
             .iter()
             .enumerate()
             .map(|(idx, _)| {
@@ -2432,15 +2440,15 @@ impl ChatComposer {
     }
 
     fn remove_selected_remote_image(&mut self, selected_index: usize) {
-        if selected_index >= self.pending_non_editable_image_urls.len() {
+        if selected_index >= self.pending_remote_image_urls.len() {
             self.clear_remote_image_selection();
             return;
         }
-        self.pending_non_editable_image_urls.remove(selected_index);
-        self.selected_remote_image_index = if self.pending_non_editable_image_urls.is_empty() {
+        self.pending_remote_image_urls.remove(selected_index);
+        self.selected_remote_image_index = if self.pending_remote_image_urls.is_empty() {
             None
         } else {
-            Some(selected_index.min(self.pending_non_editable_image_urls.len() - 1))
+            Some(selected_index.min(self.pending_remote_image_urls.len() - 1))
         };
         self.relabel_attached_images_and_update_placeholders();
         self.sync_popups();
@@ -2450,7 +2458,7 @@ impl ChatComposer {
         &mut self,
         key_event: &KeyEvent,
     ) -> Option<(InputResult, bool)> {
-        if self.pending_non_editable_image_urls.is_empty()
+        if self.pending_remote_image_urls.is_empty()
             || key_event.modifiers != KeyModifiers::NONE
             || key_event.kind != KeyEventKind::Press
         {
@@ -2464,7 +2472,7 @@ impl ChatComposer {
                     Some((InputResult::None, true))
                 } else if self.textarea.cursor() == 0 {
                     self.selected_remote_image_index =
-                        Some(self.pending_non_editable_image_urls.len() - 1);
+                        Some(self.pending_remote_image_urls.len() - 1);
                     Some((InputResult::None, true))
                 } else {
                     None
@@ -2472,7 +2480,7 @@ impl ChatComposer {
             }
             KeyCode::Down => {
                 if let Some(selected) = self.selected_remote_image_index {
-                    if selected + 1 < self.pending_non_editable_image_urls.len() {
+                    if selected + 1 < self.pending_remote_image_urls.len() {
                         self.selected_remote_image_index = Some(selected + 1);
                     } else {
                         self.clear_remote_image_selection();
@@ -2726,7 +2734,7 @@ impl ChatComposer {
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
         let elements_before = if self.pending_pastes.is_empty()
             && self.attached_images.is_empty()
-            && self.pending_non_editable_image_urls.is_empty()
+            && self.pending_remote_image_urls.is_empty()
         {
             None
         } else {
@@ -2790,8 +2798,7 @@ impl ChatComposer {
 
     fn relabel_attached_images_and_update_placeholders(&mut self) {
         for idx in 0..self.attached_images.len() {
-            let expected =
-                local_image_label_text(self.pending_non_editable_image_urls.len() + idx + 1);
+            let expected = local_image_label_text(self.pending_remote_image_urls.len() + idx + 1);
             let current = self.attached_images[idx].placeholder.clone();
             if current == expected {
                 continue;
@@ -4489,8 +4496,8 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
-        composer
-            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        let remote_image_url = "https://example.com/one.png".to_string();
+        composer.set_pending_remote_image_urls(vec![remote_image_url.clone()]);
         let text = "[Image #1] draft".to_string();
         let text_elements = vec![TextElement::new(
             (0.."[Image #1]".len()).into(),
@@ -4506,7 +4513,7 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some(HistoryEntry::with_pending(
+            Some(HistoryEntry::with_pending_and_remote(
                 "[Image #1] draft".to_string(),
                 vec![TextElement::new(
                     (0.."[Image #1]".len()).into(),
@@ -4514,6 +4521,7 @@ mod tests {
                 )],
                 vec![local_image_path],
                 Vec::new(),
+                vec![remote_image_url],
             ))
         );
     }
@@ -6281,7 +6289,7 @@ mod tests {
     }
 
     #[test]
-    fn history_navigation_restores_image_attachments() {
+    fn history_navigation_restores_remote_and_local_image_attachments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -6292,6 +6300,8 @@ mod tests {
             false,
         );
         composer.set_steer_enabled(true);
+        let remote_image_url = "https://example.com/remote.png".to_string();
+        composer.set_pending_remote_image_urls(vec![remote_image_url.clone()]);
         let path = PathBuf::from("/tmp/image1.png");
         composer.attach_image(path.clone());
 
@@ -6299,17 +6309,50 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(result, InputResult::Submitted { .. }));
 
+        let _ = composer.take_pending_remote_image_urls();
         composer.set_text_content(String::new(), Vec::new(), Vec::new());
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
 
         let text = composer.current_text();
-        assert_eq!(text, "[Image #1]");
+        assert_eq!(text, "[Image #2]");
         let text_elements = composer.text_elements();
         assert_eq!(text_elements.len(), 1);
-        assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
+        assert_eq!(text_elements[0].placeholder(&text), Some("[Image #2]"));
         assert_eq!(composer.local_image_paths(), vec![path]);
-        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+        assert_eq!(composer.pending_remote_image_urls(), vec![remote_image_url]);
+    }
+
+    #[test]
+    fn history_navigation_restores_remote_only_submissions() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        let remote_image_urls = vec![
+            "https://example.com/one.png".to_string(),
+            "https://example.com/two.png".to_string(),
+        ];
+        composer.set_pending_remote_image_urls(remote_image_urls.clone());
+
+        let (submitted_text, submitted_elements) = composer
+            .prepare_submission_text(true)
+            .expect("remote-only submission should be prepared");
+        assert_eq!(submitted_text, "");
+        assert!(submitted_elements.is_empty());
+
+        let _ = composer.take_pending_remote_image_urls();
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "");
+        assert!(composer.text_elements().is_empty());
+        assert_eq!(composer.pending_remote_image_urls(), remote_image_urls);
     }
 
     #[test]
@@ -8203,7 +8246,7 @@ mod tests {
             false,
         );
 
-        composer.set_pending_non_editable_image_urls(vec![
+        composer.set_pending_remote_image_urls(vec![
             "https://example.com/one.png".to_string(),
             "https://example.com/two.png".to_string(),
         ]);
@@ -8224,7 +8267,7 @@ mod tests {
             false,
         );
 
-        composer.set_pending_non_editable_image_urls(vec![
+        composer.set_pending_remote_image_urls(vec![
             "https://example.com/one.png".to_string(),
             "https://example.com/two.png".to_string(),
         ]);
@@ -8246,8 +8289,7 @@ mod tests {
             false,
         );
 
-        composer
-            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        composer.set_pending_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
         let base_text = "[Image #2] hello".to_string();
         let base_elements = vec![TextElement::new(
             (0.."[Image #2]".len()).into(),
@@ -8284,8 +8326,7 @@ mod tests {
             false,
         );
 
-        composer
-            .set_pending_non_editable_image_urls(vec!["https://example.com/one.png".to_string()]);
+        composer.set_pending_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
         let (submitted_text, submitted_elements) = composer
             .prepare_submission_text(true)
             .expect("remote-only submission should be generated");
@@ -8305,7 +8346,7 @@ mod tests {
             false,
         );
 
-        composer.set_pending_non_editable_image_urls(vec![
+        composer.set_pending_remote_image_urls(vec![
             "https://example.com/one.png".to_string(),
             "https://example.com/two.png".to_string(),
         ]);
@@ -8315,7 +8356,7 @@ mod tests {
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(
-            composer.pending_non_editable_image_urls(),
+            composer.pending_remote_image_urls(),
             vec!["https://example.com/one.png".to_string()]
         );
         assert_eq!(composer.current_text(), "[Image #2]");
@@ -8323,10 +8364,7 @@ mod tests {
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        assert_eq!(
-            composer.pending_non_editable_image_urls(),
-            Vec::<String>::new()
-        );
+        assert_eq!(composer.pending_remote_image_urls(), Vec::<String>::new());
         assert_eq!(composer.current_text(), "[Image #1]");
         assert_eq!(composer.attached_images[0].placeholder, "[Image #1]");
     }

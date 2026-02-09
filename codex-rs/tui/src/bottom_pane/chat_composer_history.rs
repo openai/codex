@@ -21,6 +21,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) mention_bindings: Vec<MentionBinding>,
     /// Placeholder-to-payload pairs used to restore large paste content.
     pub(crate) pending_pastes: Vec<(String, String)>,
+    /// Remote image URLs shown above the composer text input.
+    pub(crate) pending_remote_image_urls: Vec<String>,
 }
 
 impl HistoryEntry {
@@ -39,6 +41,7 @@ impl HistoryEntry {
                 })
                 .collect(),
             pending_pastes: Vec::new(),
+            pending_remote_image_urls: Vec::new(),
         }
     }
 
@@ -55,6 +58,25 @@ impl HistoryEntry {
             local_image_paths,
             mention_bindings: Vec::new(),
             pending_pastes,
+            pending_remote_image_urls: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_pending_and_remote(
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        pending_pastes: Vec<(String, String)>,
+        pending_remote_image_urls: Vec<String>,
+    ) -> Self {
+        Self {
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings: Vec::new(),
+            pending_pastes,
+            pending_remote_image_urls,
         }
     }
 }
@@ -70,7 +92,7 @@ pub(crate) struct ChatComposerHistory {
     history_entry_count: usize,
 
     /// Messages submitted by the user *during this UI session* (newest at END).
-    /// Local entries retain full draft state (text elements, image paths, pending pastes).
+    /// Local entries retain full draft state (text elements, image paths, pending pastes, remote image URLs).
     local_history: Vec<HistoryEntry>,
 
     /// Cache of persistent history entries fetched on-demand (text-only).
@@ -117,6 +139,7 @@ impl ChatComposerHistory {
             && entry.local_image_paths.is_empty()
             && entry.mention_bindings.is_empty()
             && entry.pending_pastes.is_empty()
+            && entry.pending_remote_image_urls.is_empty()
         {
             return;
         }

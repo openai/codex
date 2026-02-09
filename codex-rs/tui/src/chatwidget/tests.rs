@@ -544,7 +544,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote.png".to_string();
-    chat.set_pending_non_editable_image_urls(vec![remote_url.clone()]);
+    chat.set_pending_remote_image_urls(vec![remote_url.clone()]);
 
     let placeholder = "[Image #2]";
     let text = format!("{placeholder} submit mixed");
@@ -636,7 +636,7 @@ async fn enter_with_only_pending_remote_images_submits_user_turn() {
     drain_insert_history(&mut rx);
 
     let remote_url = "https://example.com/remote-only.png".to_string();
-    chat.set_pending_non_editable_image_urls(vec![remote_url.clone()]);
+    chat.set_pending_remote_image_urls(vec![remote_url.clone()]);
     assert_eq!(chat.bottom_pane.composer_text(), "");
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -651,7 +651,7 @@ async fn enter_with_only_pending_remote_images_submits_user_turn() {
             image_url: remote_url.clone(),
         }]
     );
-    assert!(chat.pending_non_editable_image_urls().is_empty());
+    assert!(chat.pending_remote_image_urls().is_empty());
 
     let mut user_cell = None;
     while let Ok(ev) = rx.try_recv() {
