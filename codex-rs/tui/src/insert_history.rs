@@ -22,6 +22,16 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+fn queue_set_scroll_region(writer: &mut impl Write, range: std::ops::Range<u16>) -> io::Result<()> {
+    if range.start == 0 || range.end == 0 || range.start > range.end {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid scroll region: {}..{}", range.start, range.end),
+        ));
+    }
+    queue!(writer, SetScrollRegion(range))
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
@@ -54,7 +64,7 @@ where
         //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
         //   4) Resetting the scroll region back to full screen
         let top_1based = area.top() + 1; // Convert 0-based row to 1-based for DECSTBM
-        queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
+        queue_set_scroll_region(writer, top_1based..screen_size.height)?;
         queue!(writer, MoveTo(0, area.top()))?;
         for _ in 0..scroll_amount {
             // Reverse Index (RI): ESC M
@@ -85,7 +95,8 @@ where
     // ││                            ││
     // │╰────────────────────────────╯│
     // └──────────────────────────────┘
-    queue!(writer, SetScrollRegion(1..area.top()))?;
+    let history_region_bottom = area.top().max(1);
+    queue_set_scroll_region(writer, 1..history_region_bottom)?;
 
     // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
     // terminal's last_known_cursor_position, which hopefully will still be accurate after we
@@ -287,8 +298,116 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use ratatui::backend::Backend;
+    use ratatui::backend::ClearType;
+    use ratatui::backend::WindowSize;
+    use ratatui::buffer::Cell;
+    use ratatui::layout::Position;
     use ratatui::layout::Rect;
+    use ratatui::layout::Size;
     use ratatui::style::Color;
+    use std::io::Write;
+
+    #[derive(Debug)]
+    struct RecordingBackend {
+        size: Size,
+        cursor: Position,
+        output: Vec<u8>,
+    }
+
+    impl RecordingBackend {
+        fn new(width: u16, height: u16, cursor: Position) -> Self {
+            Self {
+                size: Size::new(width, height),
+                cursor,
+                output: Vec::new(),
+            }
+        }
+
+        fn output(&self) -> String {
+            String::from_utf8_lossy(&self.output).into_owned()
+        }
+    }
+
+    impl Write for RecordingBackend {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Backend for RecordingBackend {
+        fn draw<'a, I>(&mut self, _content: I) -> std::io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn show_cursor(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+            Ok(self.cursor)
+        }
+
+        fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> std::io::Result<()> {
+            self.cursor = position.into();
+            Ok(())
+        }
+
+        fn clear(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn clear_region(&mut self, _clear_type: ClearType) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn append_lines(&mut self, _line_count: u16) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn size(&self) -> std::io::Result<Size> {
+            Ok(self.size)
+        }
+
+        fn window_size(&mut self) -> std::io::Result<WindowSize> {
+            Ok(WindowSize {
+                columns_rows: self.size,
+                pixels: self.size,
+            })
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_up(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _scroll_by: u16,
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn scroll_region_down(
+            &mut self,
+            _region: std::ops::Range<u16>,
+            _scroll_by: u16,
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -526,5 +645,51 @@ mod tests {
                 cell.fgcolor()
             );
         }
+    }
+
+    #[test]
+    fn set_scroll_region_rejects_descending_range() {
+        let mut out = Vec::<u8>::new();
+        let invalid_range = std::ops::Range { start: 1, end: 0 };
+        let result = queue_set_scroll_region(&mut out, invalid_range);
+        assert!(
+            result.is_err(),
+            "descending scroll-region ranges should be rejected; emitted bytes: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    #[test]
+    fn top_row_viewport_does_not_emit_invalid_scroll_region_single_line_viewport() {
+        let backend = RecordingBackend::new(40, 10, Position::new(0, 0));
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, 0, 40, 1));
+
+        insert_history_lines(&mut term, vec!["alpha".into(), "beta".into()])
+            .expect("history insertion should succeed");
+
+        let output = term.backend().output();
+        assert!(
+            !output.contains("\x1b[1;0r"),
+            "invalid DECSTBM range emitted for top-row viewport: {}",
+            output.escape_default()
+        );
+    }
+
+    #[test]
+    fn top_row_viewport_does_not_emit_invalid_scroll_region_full_height_viewport() {
+        let backend = RecordingBackend::new(40, 10, Position::new(0, 0));
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        term.set_viewport_area(Rect::new(0, 0, 40, 10));
+
+        insert_history_lines(&mut term, vec!["alpha".into()])
+            .expect("history insertion should succeed");
+
+        let output = term.backend().output();
+        assert!(
+            !output.contains("\x1b[1;0r"),
+            "invalid DECSTBM range emitted for full-height top-row viewport: {}",
+            output.escape_default()
+        );
     }
 }

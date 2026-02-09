@@ -148,14 +148,21 @@ where
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
         let cursor_pos = backend.get_cursor_position()?;
+        let max_viewport_y = screen_size.height.saturating_sub(1);
+        let viewport_y = if cursor_pos.y == 0 {
+            max_viewport_y
+        } else {
+            cursor_pos.y.min(max_viewport_y)
+        };
+        let initial_cursor_pos = Position::new(cursor_pos.x, viewport_y);
         Ok(Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
-            viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
+            viewport_area: Rect::new(0, viewport_y, 0, 0),
             last_known_screen_size: screen_size,
-            last_known_cursor_pos: cursor_pos,
+            last_known_cursor_pos: initial_cursor_pos,
         })
     }
 
@@ -606,6 +613,7 @@ impl ModifierDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_backend::VT100Backend;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
@@ -653,6 +661,22 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn with_options_bootstraps_inline_viewport_near_bottom_when_cursor_reports_top_row() {
+        // Regression guard for inline scrollback clipping: a startup cursor report
+        // of row 0 should not pin the viewport to the top of the screen.
+        let backend = VT100Backend::new(20, 6);
+        let terminal = Terminal::with_options(backend).expect("terminal");
+        assert_eq!(
+            terminal.viewport_area.y, 5,
+            "expected inline viewport to start on the last row for a fresh terminal"
+        );
+        assert_eq!(
+            terminal.last_known_cursor_pos.y, 5,
+            "expected startup cursor fallback to keep viewport/cursor bootstrap aligned"
         );
     }
 }
