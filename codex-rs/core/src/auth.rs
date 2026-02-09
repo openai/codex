@@ -29,7 +29,7 @@ use crate::error::RefreshTokenFailedReason;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
-use crate::token_data::parse_id_token;
+use crate::token_data::parse_chatgpt_jwt_claims;
 use crate::util::try_parse_error_message;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -596,7 +596,7 @@ fn update_tokens(
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
     if let Some(id_token) = id_token {
-        tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+        tokens.id_token = parse_chatgpt_jwt_claims(&id_token).map_err(std::io::Error::other)?;
     }
     if let Some(access_token) = access_token {
         tokens.access_token = access_token;
@@ -734,7 +734,7 @@ fn refresh_token_endpoint() -> String {
 impl AuthDotJson {
     fn from_external_tokens(external: &ExternalAuthTokens) -> std::io::Result<Self> {
         let mut token_info =
-            parse_id_token(&external.access_token).map_err(std::io::Error::other)?;
+            parse_chatgpt_jwt_claims(&external.access_token).map_err(std::io::Error::other)?;
         token_info.chatgpt_account_id = Some(external.chatgpt_account_id.clone());
         token_info.chatgpt_plan_type = external
             .chatgpt_plan_type
