@@ -110,9 +110,11 @@ impl ContextManager {
         let base_tokens =
             i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
 
-        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
-            acc.saturating_add(estimate_item_token_count(item))
-        });
+        let items_tokens = self
+            .items
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add);
 
         Some(base_tokens.saturating_add(items_tokens))
     }
@@ -239,9 +241,8 @@ impl ContextManager {
                     }
                 )
             })
-            .fold(0i64, |acc, item| {
-                acc.saturating_add(estimate_item_token_count(item))
-            })
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add)
     }
 
     // These are local items added after the most recent model-emitted item.
@@ -266,9 +267,8 @@ impl ContextManager {
         let items_after_last_model_generated_tokens = self
             .items_after_last_model_generated_item()
             .iter()
-            .fold(0i64, |acc, item| {
-                acc.saturating_add(estimate_item_token_count(item))
-            });
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add);
         if server_reasoning_included {
             last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
@@ -298,9 +298,8 @@ impl ContextManager {
             estimated_tokens_of_items_added_since_last_successful_api_response:
                 items_after_last_model_generated
                     .iter()
-                    .fold(0i64, |acc, item| {
-                        acc.saturating_add(estimate_item_token_count(item))
-                    }),
+                    .map(estimate_item_token_count)
+                    .fold(0i64, i64::saturating_add),
             estimated_bytes_of_items_added_since_last_successful_api_response:
                 items_after_last_model_generated
                     .iter()
