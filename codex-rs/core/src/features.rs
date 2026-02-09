@@ -105,7 +105,7 @@ pub enum Feature {
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
-    /// Enable the get_memory tool backed by SQLite thread memories.
+    /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
