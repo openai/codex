@@ -11,12 +11,14 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WarningEvent;
@@ -901,6 +903,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             exit_code: 0,
             duration: Duration::from_millis(5),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_ok = ep.collect_thread_events(&end_ok);
@@ -988,6 +991,7 @@ fn command_execution_output_delta_updates_item_progress() {
             exit_code: 0,
             duration: Duration::from_millis(3),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1061,6 +1065,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             exit_code: 1,
             duration: Duration::from_millis(2),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Failed,
         }),
     );
     let out_fail = ep.collect_thread_events(&end_fail);
@@ -1102,6 +1107,7 @@ fn exec_command_end_without_begin_is_ignored() {
             exit_code: 0,
             duration: Duration::from_millis(1),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out = ep.collect_thread_events(&end_only);
@@ -1157,6 +1163,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             stderr: String::new(),
             success: true,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1228,6 +1235,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             stderr: "failed to apply".to_string(),
             success: false,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Failed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
