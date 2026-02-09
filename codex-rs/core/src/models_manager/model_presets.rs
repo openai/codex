@@ -10,13 +10,14 @@ pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
 use once_cell::sync::Lazy;
 
 fn builtin_model_presets_from_models_json() -> Vec<ModelPreset> {
-    let presets = serde_json::from_str::<ModelsResponse>(include_str!("../../models.json"))
-        .expect("bundled models.json must parse")
-        .models
-        .into_iter()
-        .map(ModelPreset::from)
-        .collect::<Vec<_>>();
-    presets
+    match serde_json::from_str::<ModelsResponse>(include_str!("../../models.json")) {
+        Ok(models_response) => models_response
+            .models
+            .into_iter()
+            .map(ModelPreset::from)
+            .collect(),
+        Err(error) => vec![],
+    }
 }
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
