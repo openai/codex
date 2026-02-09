@@ -3,11 +3,14 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::FontStyle;
 use syntect::highlighting::Style as SyntectStyle;
 use syntect::highlighting::Theme;
+use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxReference;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
@@ -18,6 +21,7 @@ use two_face::theme::EmbeddedThemeName;
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static THEME: OnceLock<Theme> = OnceLock::new();
 static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
+static CODEX_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
@@ -25,8 +29,40 @@ fn syntax_set() -> &'static SyntaxSet {
 
 /// Set the user-configured theme override before any highlighting occurs.
 /// Must be called at most once, before the first call to `theme()`.
-pub(crate) fn set_theme_override(name: Option<String>) {
+///
+/// Returns a warning message when the configured theme name cannot be
+/// resolved to a bundled theme or a custom `.tmTheme` file on disk.
+/// The caller should surface this via `Config::startup_warnings` so it
+/// appears as a `⚠` banner in the TUI.
+pub(crate) fn set_theme_override(
+    name: Option<String>,
+    codex_home: Option<PathBuf>,
+) -> Option<String> {
+    let warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
     let _ = THEME_OVERRIDE.set(name);
+    let _ = CODEX_HOME.set(codex_home);
+    warning
+}
+
+/// Check whether a theme name resolves to a bundled theme or a custom
+/// `.tmTheme` file.  Returns a user-facing warning when it does not.
+fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>) -> Option<String> {
+    let name = name?;
+    // Bundled themes always resolve.
+    if parse_theme_name(name).is_some() {
+        return None;
+    }
+    // Check for a custom .tmTheme file on disk.
+    let has_custom_file = codex_home
+        .is_some_and(|home| custom_theme_path(name, home).is_file());
+    if has_custom_file {
+        return None;
+    }
+    Some(format!(
+        "Unknown syntax theme \"{name}\", falling back to auto-detection. \
+         Use a bundled name or place a .tmTheme file at \
+         ~/.codex/themes/{name}.tmTheme"
+    ))
 }
 
 /// Map a kebab-case theme name to the corresponding `EmbeddedThemeName`.
@@ -68,14 +104,31 @@ fn parse_theme_name(name: &str) -> Option<EmbeddedThemeName> {
     }
 }
 
+/// Build the expected path for a custom theme file.
+fn custom_theme_path(name: &str, codex_home: &Path) -> PathBuf {
+    codex_home.join("themes").join(format!("{name}.tmTheme"))
+}
+
+/// Try to load a custom `.tmTheme` file from `{codex_home}/themes/{name}.tmTheme`.
+fn load_custom_theme(name: &str, codex_home: &Path) -> Option<Theme> {
+    ThemeSet::get_theme(custom_theme_path(name, codex_home)).ok()
+}
+
 fn theme() -> &'static Theme {
     THEME.get_or_init(|| {
         let ts = two_face::theme::extra();
 
         // Honor user-configured theme if valid.
         if let Some(Some(name)) = THEME_OVERRIDE.get() {
+            // 1. Try bundled theme by kebab-case name.
             if let Some(theme_name) = parse_theme_name(name) {
                 return ts.get(theme_name).clone();
+            }
+            // 2. Try loading ~/.codex/themes/{name}.tmTheme from disk.
+            if let Some(Some(home)) = CODEX_HOME.get() {
+                if let Some(theme) = load_custom_theme(name, home) {
+                    return theme;
+                }
             }
             tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
         }
@@ -542,6 +595,69 @@ mod tests {
     fn parse_theme_name_returns_none_for_unknown() {
         assert_eq!(parse_theme_name("nonexistent-theme"), None);
         assert_eq!(parse_theme_name(""), None);
+    }
+
+    #[test]
+    fn load_custom_theme_from_tmtheme_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        // Minimal valid .tmTheme plist (enough for syntect to parse).
+        std::fs::write(
+            themes_dir.join("test-custom.tmTheme"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>name</key><string>Test</string>
+<key>settings</key><array><dict>
+<key>settings</key><dict>
+<key>foreground</key><string>#FFFFFF</string>
+<key>background</key><string>#000000</string>
+</dict></dict></array>
+</dict></plist>"#,
+        )
+        .unwrap();
+        let theme = load_custom_theme("test-custom", dir.path());
+        assert!(theme.is_some(), "should load .tmTheme from themes dir");
+    }
+
+    #[test]
+    fn load_custom_theme_returns_none_for_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_custom_theme("nonexistent", dir.path()).is_none());
+    }
+
+    #[test]
+    fn validate_theme_name_none_for_bundled() {
+        // Bundled themes should never produce a warning.
+        assert!(validate_theme_name(Some("dracula"), None).is_none());
+        assert!(validate_theme_name(Some("nord"), Some(Path::new("/nonexistent"))).is_none());
+    }
+
+    #[test]
+    fn validate_theme_name_none_when_no_override() {
+        assert!(validate_theme_name(None, None).is_none());
+    }
+
+    #[test]
+    fn validate_theme_name_warns_for_missing_custom() {
+        let dir = tempfile::tempdir().unwrap();
+        let warning = validate_theme_name(Some("my-fancy"), Some(dir.path()));
+        assert!(warning.is_some(), "should warn when theme file is absent");
+        let msg = warning.unwrap();
+        assert!(msg.contains("my-fancy"), "warning should mention the theme name");
+    }
+
+    #[test]
+    fn validate_theme_name_none_when_custom_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        std::fs::write(themes_dir.join("my-fancy.tmTheme"), "placeholder").unwrap();
+        assert!(
+            validate_theme_name(Some("my-fancy"), Some(dir.path())).is_none(),
+            "should not warn when custom .tmTheme file exists on disk"
+        );
     }
 
     #[test]
