@@ -50,7 +50,7 @@ fn shell_responses_with_timeout(
 }
 
 fn shell_responses(call_id: &str, command: &str, login: Option<bool>) -> Vec<String> {
-    shell_responses_with_timeout(call_id, command, login, 2_000)
+    shell_responses_with_timeout(call_id, command, login, MEDIUM_TIMEOUT.as_millis() as i64)
 }
 
 async fn shell_command_harness_with(
