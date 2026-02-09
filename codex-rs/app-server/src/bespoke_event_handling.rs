@@ -138,6 +138,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             grant_root,
         }) => match api_version {
             ApiVersion::V1 => {
+                let approval_id = call_id.clone();
                 let params = ApplyPatchApprovalParams {
                     conversation_id,
                     call_id,
@@ -149,7 +150,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_patch_approval_response(event_turn_id, rx, conversation).await;
+                    on_patch_approval_response(approval_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -214,6 +215,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             parsed_cmd,
         }) => match api_version {
             ApiVersion::V1 => {
+                let approval_id = call_id.clone();
                 let params = ExecCommandApprovalParams {
                     conversation_id,
                     call_id,
@@ -226,7 +228,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_exec_approval_response(event_turn_id, rx, conversation).await;
+                    on_exec_approval_response(approval_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -1428,7 +1430,7 @@ async fn handle_error(
 }
 
 async fn on_patch_approval_response(
-    event_turn_id: String,
+    approval_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexThread>,
 ) {
@@ -1439,7 +1441,7 @@ async fn on_patch_approval_response(
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
-                    id: event_turn_id.clone(),
+                    id: approval_id.clone(),
                     decision: ReviewDecision::Denied,
                 })
                 .await
@@ -1460,7 +1462,7 @@ async fn on_patch_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: approval_id,
             decision: response.decision,
         })
         .await
@@ -1470,7 +1472,7 @@ async fn on_patch_approval_response(
 }
 
 async fn on_exec_approval_response(
-    event_turn_id: String,
+    approval_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1496,7 +1498,7 @@ async fn on_exec_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: approval_id,
             decision: response.decision,
         })
         .await
