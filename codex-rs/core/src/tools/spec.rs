@@ -1666,6 +1666,11 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
+            create_spawn_agent_tool(),
+            create_send_input_tool(),
+            create_resume_agent_tool(),
+            create_wait_tool(),
+            create_close_agent_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1860,6 +1865,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1882,6 +1892,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1906,6 +1921,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1930,6 +1950,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1951,6 +1976,11 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1973,6 +2003,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -1994,6 +2029,11 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -2016,6 +2056,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -2062,6 +2107,11 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
@@ -2085,6 +2135,11 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "spawn_agent",
+                "send_input",
+                "resume_agent",
+                "wait",
+                "close_agent",
             ],
         );
     }
