@@ -1678,7 +1678,7 @@ async fn on_file_change_request_approval_response(
     if let Some(status) = completion_status {
         complete_file_change_item(
             conversation_id,
-            item_id,
+            item_id.clone(),
             changes,
             status,
             event_turn_id.clone(),
@@ -1690,7 +1690,7 @@ async fn on_file_change_request_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: item_id,
             decision,
         })
         .await
@@ -1771,7 +1771,7 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: item_id,
             decision,
         })
         .await
