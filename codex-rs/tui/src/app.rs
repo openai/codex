@@ -164,7 +164,7 @@ fn resume_hint_line(command: String) -> Line<'static> {
         "To continue this session, run ".into(),
         command.cyan(),
         " (or ".into(),
-        "--last".blue(),
+        "--last".cyan(),
         ")".into(),
     ]
     .into()

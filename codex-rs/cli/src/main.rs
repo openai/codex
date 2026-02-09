@@ -397,7 +397,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         codex_core::util::resume_command(thread_name.as_deref(), conversation_id)
     {
         let hint = if color_enabled {
-            format!("{} (or {})", resume_cmd.cyan(), "--last".blue())
+            format!("{} (or {})", resume_cmd.cyan(), "--last".cyan())
         } else {
             format!("{resume_cmd} (or --last)")
         };
