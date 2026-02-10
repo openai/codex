@@ -212,7 +212,7 @@ You are producing plain text that will later be styled by the CLI. Follow these 
 
 **Monospace**
 
-- Wrap commands, env vars, and code identifiers in backticks.
+- Wrap commands, env vars, and code identifiers in backticks (`` `...` ``).
 - Apply to inline examples and to bullet keywords if the keyword itself is a literal file/command.
 - Never mix monospace and bold markers; choose one based on whether it’s a keyword (`**`) or inline code/path (`` ` ``).
 
