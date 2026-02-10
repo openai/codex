@@ -645,6 +645,17 @@ impl App {
         }
     }
 
+    fn open_url_in_browser(&mut self, url: String) {
+        if let Err(err) = webbrowser::open(&url) {
+            self.chat_widget
+                .add_error_message(format!("Failed to open browser for {url}: {err}"));
+            return;
+        }
+
+        self.chat_widget
+            .add_info_message(format!("Opened {url} in your browser."), None);
+    }
+
     async fn shutdown_current_thread(&mut self) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
@@ -1600,6 +1611,12 @@ impl App {
                     url,
                     is_installed,
                 );
+            }
+            AppEvent::OpenUrlInBrowser { url } => {
+                self.open_url_in_browser(url);
+            }
+            AppEvent::RefreshConnectors { force_refetch } => {
+                self.chat_widget.refresh_connectors(force_refetch);
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);

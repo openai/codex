@@ -170,6 +170,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             include: request.include.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
+            deferred: false,
         }
     }
 }

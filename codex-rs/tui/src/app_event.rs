@@ -114,6 +114,16 @@ pub(crate) enum AppEvent {
         is_installed: bool,
     },
 
+    /// Open the provided URL in the user's browser.
+    OpenUrlInBrowser {
+        url: String,
+    },
+
+    /// Refresh app connector state and mention bindings.
+    RefreshConnectors {
+        force_refetch: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

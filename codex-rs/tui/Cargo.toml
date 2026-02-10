@@ -95,6 +95,7 @@ tree-sitter-highlight = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+webbrowser = { workspace = true }
 uuid = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }

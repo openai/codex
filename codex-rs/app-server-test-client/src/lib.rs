@@ -511,6 +511,7 @@ impl CodexClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    opt_out_notification_methods: None,
                 }),
             },
         };
