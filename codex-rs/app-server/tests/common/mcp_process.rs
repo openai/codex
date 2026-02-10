@@ -174,6 +174,7 @@ impl McpProcess {
             client_info,
             Some(InitializeCapabilities {
                 experimental_api: true,
+                opt_out_notification_methods: None,
             }),
         )
         .await
@@ -334,12 +335,14 @@ impl McpProcess {
     /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.
     pub async fn send_chatgpt_auth_tokens_login_request(
         &mut self,
-        id_token: String,
         access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
     ) -> anyhow::Result<i64> {
         let params = LoginAccountParams::ChatgptAuthTokens {
-            id_token,
             access_token,
+            chatgpt_account_id,
+            chatgpt_plan_type,
         };
         let params = Some(serde_json::to_value(params)?);
         self.send_request("account/login/start", params).await

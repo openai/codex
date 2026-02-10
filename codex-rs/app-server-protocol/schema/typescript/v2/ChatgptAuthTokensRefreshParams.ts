@@ -10,7 +10,7 @@ export type ChatgptAuthTokensRefreshParams = { reason: ChatgptAuthTokensRefreshR
  * Clients that manage multiple accounts/workspaces can use this as a hint
  * to refresh the token for the correct workspace.
  *
- * This may be `null` when the prior ID token did not include a workspace
- * identifier (`chatgpt_account_id`) or when the token could not be parsed.
+ * This may be `null` when the prior auth state did not include a workspace
+ * identifier (`chatgpt_account_id`).
  */
 previousAccountId?: string | null, };

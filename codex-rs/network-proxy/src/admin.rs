@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use tracing::error;
 use tracing::info;
@@ -30,6 +31,26 @@ pub async fn run_admin_api(state: Arc<NetworkProxyState>, addr: SocketAddr) -> R
         .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind admin API: {addr}"))?;
+
+    run_admin_api_with_listener(state, listener).await
+}
+
+pub async fn run_admin_api_with_std_listener(
+    state: Arc<NetworkProxyState>,
+    listener: StdTcpListener,
+) -> Result<()> {
+    let listener =
+        TcpListener::try_from(listener).context("convert std listener to admin API listener")?;
+    run_admin_api_with_listener(state, listener).await
+}
+
+async fn run_admin_api_with_listener(
+    state: Arc<NetworkProxyState>,
+    listener: TcpListener,
+) -> Result<()> {
+    let addr = listener
+        .local_addr()
+        .context("read admin API listener local addr")?;
 
     let server_state = state.clone();
     let server = HttpServer::auto(Executor::new()).service(service_fn(move |req| {

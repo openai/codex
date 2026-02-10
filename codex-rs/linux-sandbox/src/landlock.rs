@@ -42,18 +42,22 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
+    allow_network_for_proxy: bool,
 ) -> Result<()> {
+    let install_network_seccomp =
+        should_install_network_seccomp(sandbox_policy, allow_network_for_proxy);
+
     // `PR_SET_NO_NEW_PRIVS` is required for seccomp, but it also prevents
     // setuid privilege elevation. Many `bwrap` deployments rely on setuid, so
     // we avoid this unless we need seccomp or we are explicitly using the
     // legacy Landlock filesystem pipeline.
-    if !sandbox_policy.has_full_network_access()
+    if install_network_seccomp
         || (apply_landlock_fs && !sandbox_policy.has_full_disk_write_access())
     {
         set_no_new_privs()?;
     }
 
-    if !sandbox_policy.has_full_network_access() {
+    if install_network_seccomp {
         install_network_seccomp_filter_on_current_thread()?;
     }
 
@@ -70,6 +74,15 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     // `sandbox_policy.has_full_disk_read_access()` is `false`.
 
     Ok(())
+}
+
+fn should_install_network_seccomp(
+    sandbox_policy: &SandboxPolicy,
+    allow_network_for_proxy: bool,
+) -> bool {
+    // Managed-network sessions should remain fail-closed even for policies that
+    // would normally grant full network access (for example, DangerFullAccess).
+    !sandbox_policy.has_full_network_access() || allow_network_for_proxy
 }
 
 /// Enable `PR_SET_NO_NEW_PRIVS` so seccomp can be applied safely.
@@ -182,4 +195,39 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_install_network_seccomp;
+    use codex_core::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn managed_network_enforces_seccomp_even_for_full_network_policy() {
+        assert_eq!(
+            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, true),
+            true
+        );
+    }
+
+    #[test]
+    fn full_network_policy_without_managed_network_skips_seccomp() {
+        assert_eq!(
+            should_install_network_seccomp(&SandboxPolicy::DangerFullAccess, false),
+            false
+        );
+    }
+
+    #[test]
+    fn restricted_network_policy_always_installs_seccomp() {
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::ReadOnly,
+            false
+        ));
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::ReadOnly,
+            true
+        ));
+    }
 }

@@ -637,7 +637,7 @@ async fn resolve_resume_path(
             Some(config.cwd.as_path())
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            config,
             1,
             None,
             codex_core::ThreadSortKey::UpdatedAt,
