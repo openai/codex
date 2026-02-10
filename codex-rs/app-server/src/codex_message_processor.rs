@@ -551,8 +551,7 @@ impl CodexMessageProcessor {
                 self.turn_start(request_id, params).await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
-                self.turn_steer(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_steer(request_id, params).await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
                 self.turn_interrupt(request_id, params).await;
