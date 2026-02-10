@@ -104,8 +104,8 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
-mod theme_picker;
 mod text_formatting;
+mod theme_picker;
 mod tooltips;
 mod tui;
 mod ui_consts;
@@ -1227,9 +1227,7 @@ trust_level = "untrusted"
 
         // Theme override must use the final config (not initial_config).
         // This mirrors the real call site in run_ratatui_app.
-        if let Some(w) =
-            validate_theme_name(config.tui_theme.as_deref(), Some(temp_dir.path()))
-        {
+        if let Some(w) = validate_theme_name(config.tui_theme.as_deref(), Some(temp_dir.path())) {
             config.startup_warnings.push(w);
         }
 
