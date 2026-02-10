@@ -174,6 +174,7 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SessionNetworkProxyRuntime;
 use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
@@ -1076,6 +1077,14 @@ impl Session {
                 })?),
                 None => None,
             };
+        let session_network_proxy = network_proxy.as_ref().map(|started| {
+            let proxy = started.proxy();
+            SessionNetworkProxyRuntime {
+                http_addr: proxy.http_addr().to_string(),
+                socks_addr: proxy.socks_addr().to_string(),
+                admin_addr: proxy.admin_addr().to_string(),
+            }
+        });
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1157,6 +1166,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                network_proxy: session_network_proxy,
                 rollout_path,
             }),
         })
