@@ -58,6 +58,7 @@ jobs:
         working-directory: codex-rs
     env:
       CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
