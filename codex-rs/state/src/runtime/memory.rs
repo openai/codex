@@ -123,7 +123,7 @@ WHERE thread_id = ?
 
         let rows = match scope_kind {
             MEMORY_SCOPE_KIND_CWD => {
-                let mut rows = sqlx::query(
+                let exact_rows = sqlx::query(
                     r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at
 FROM stage1_outputs AS so
@@ -138,13 +138,9 @@ LIMIT ?
                 .fetch_all(self.pool.as_ref())
                 .await?;
 
-                if rows.len() < n
-                    && let Some(normalized_scope_key) = normalize_cwd_for_scope_matching(scope_key)
-                {
-                    let mut selected_thread_ids = rows
-                        .iter()
-                        .map(|row| row.try_get::<String, _>("thread_id"))
-                        .collect::<Result<HashSet<_>, _>>()?;
+                if let Some(normalized_scope_key) = normalize_cwd_for_scope_matching(scope_key) {
+                    let mut rows = Vec::new();
+                    let mut selected_thread_ids = HashSet::new();
                     let candidate_rows = sqlx::query(
                         r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at, t.cwd AS thread_cwd
@@ -173,9 +169,10 @@ ORDER BY so.source_updated_at DESC, so.thread_id DESC
                             rows.push(row);
                         }
                     }
+                    if rows.is_empty() { exact_rows } else { rows }
+                } else {
+                    exact_rows
                 }
-
-                rows
             }
             MEMORY_SCOPE_KIND_USER => {
                 sqlx::query(
