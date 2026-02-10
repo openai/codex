@@ -397,13 +397,12 @@ async fn enqueue_incoming_message(
             match writer.try_send(overload_error) {
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
-                Err(mpsc::error::TrySendError::Full(overload_error)) => {
-                    if writer.send(overload_error).await.is_err() {
-                        warn!("failed to send overload response for connection: {connection_id:?}");
-                        false
-                    } else {
-                        true
-                    }
+                Err(mpsc::error::TrySendError::Full(_overload_error)) => {
+                    warn!(
+                        "dropping overload response for connection {:?}: outbound queue is full",
+                        connection_id
+                    );
+                    true
                 }
             }
         }
@@ -659,5 +658,56 @@ mod tests {
             }
             _ => panic!("expected forwarded response message"),
         }
+    }
+
+    #[tokio::test]
+    async fn enqueue_incoming_request_does_not_block_when_writer_queue_is_full() {
+        let connection_id = ConnectionId(42);
+        let (transport_event_tx, _transport_event_rx) = mpsc::channel(1);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        transport_event_tx
+            .send(TransportEvent::IncomingMessage {
+                connection_id,
+                message: JSONRPCMessage::Notification(
+                    codex_app_server_protocol::JSONRPCNotification {
+                        method: "initialized".to_string(),
+                        params: None,
+                    },
+                ),
+            })
+            .await
+            .expect("transport queue should accept first message");
+
+        writer_tx
+            .send(OutgoingMessage::Notification(
+                crate::outgoing_message::OutgoingNotification {
+                    method: "queued".to_string(),
+                    params: None,
+                },
+            ))
+            .await
+            .expect("writer queue should accept first message");
+
+        let request = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
+            id: codex_app_server_protocol::RequestId::Integer(7),
+            method: "config/read".to_string(),
+            params: Some(json!({ "includeLayers": false })),
+        });
+
+        let enqueue_result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            enqueue_incoming_message(&transport_event_tx, &writer_tx, connection_id, request),
+        )
+        .await
+        .expect("enqueue should not block while writer queue is full");
+        assert!(enqueue_result);
+
+        let queued_outgoing = writer_rx
+            .recv()
+            .await
+            .expect("writer queue should still contain original message");
+        let queued_json = serde_json::to_value(queued_outgoing).expect("serialize queued message");
+        assert_eq!(queued_json, json!({ "method": "queued" }));
     }
 }

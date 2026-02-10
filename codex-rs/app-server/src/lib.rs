@@ -39,7 +39,6 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -79,7 +78,6 @@ enum OutboundControlEvent {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
         initialized: Arc<AtomicBool>,
-        ready: oneshot::Sender<()>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
@@ -367,6 +365,27 @@ pub async fn run_main_with_transport(
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
         loop {
             tokio::select! {
+                biased;
+                event = outbound_control_rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    match event {
+                        OutboundControlEvent::Opened {
+                            connection_id,
+                            writer,
+                            initialized,
+                        } => {
+                            outbound_connections.insert(
+                                connection_id,
+                                OutboundConnectionState::new(writer, initialized),
+                            );
+                        }
+                        OutboundControlEvent::Closed { connection_id } => {
+                            outbound_connections.remove(&connection_id);
+                        }
+                    }
+                }
                 envelope = outgoing_rx.recv() => {
                     let Some(envelope) = envelope else {
                         break;
@@ -386,28 +405,6 @@ pub async fn run_main_with_transport(
                     }
                     if should_exit {
                         break;
-                    }
-                }
-                event = outbound_control_rx.recv() => {
-                    let Some(event) = event else {
-                        break;
-                    };
-                    match event {
-                        OutboundControlEvent::Opened {
-                            connection_id,
-                            writer,
-                            initialized,
-                            ready,
-                        } => {
-                            outbound_connections.insert(
-                                connection_id,
-                                OutboundConnectionState::new(writer, initialized),
-                            );
-                            let _ = ready.send(());
-                        }
-                        OutboundControlEvent::Closed { connection_id } => {
-                            outbound_connections.remove(&connection_id);
-                        }
                     }
                 }
             }
@@ -443,20 +440,15 @@ pub async fn run_main_with_transport(
                         match event {
                             TransportEvent::ConnectionOpened { connection_id, writer } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
-                                let (ready_tx, ready_rx) = oneshot::channel();
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
-                                        writer: writer.clone(),
+                                        writer,
                                         initialized: Arc::clone(&outbound_initialized),
-                                        ready: ready_tx,
                                     })
                                     .await
                                     .is_err()
                                 {
-                                    break;
-                                }
-                                if ready_rx.await.is_err() {
                                     break;
                                 }
                                 connections.insert(connection_id, ConnectionState::new(outbound_initialized));
