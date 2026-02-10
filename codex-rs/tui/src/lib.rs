@@ -225,7 +225,11 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements = cloud_requirements_loader(
+        cloud_auth_manager,
+        chatgpt_base_url,
+        codex_home.to_path_buf(),
+    );
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -502,6 +506,7 @@ async fn run_ratatui_app(
             cloud_requirements = cloud_requirements_loader(
                 auth_manager.clone(),
                 initial_config.chatgpt_base_url.clone(),
+                initial_config.codex_home.clone(),
             );
         }
 
