@@ -47,7 +47,6 @@ use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
@@ -80,6 +79,7 @@ use toml_edit::DocumentMut;
 
 mod constraint;
 pub mod edit;
+mod network_proxy_spec;
 pub mod profile;
 pub mod schema;
 pub mod service;
@@ -88,6 +88,8 @@ pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;
 
+pub use network_proxy_spec::NetworkProxySpec;
+pub use network_proxy_spec::StartedNetworkProxy;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
@@ -154,7 +156,7 @@ pub struct Config {
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
     /// Effective network configuration applied to all spawned processes.
-    pub network: Option<NetworkProxy>,
+    pub network: Option<NetworkProxySpec>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
@@ -1657,7 +1659,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
-            network: _network_requirements,
+            network: network_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -1682,6 +1684,20 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
+        let network = match network_requirements {
+            Some(Sourced { value, source }) => {
+                let network = NetworkProxySpec::from_constraints(&config_layer_stack, value)
+                    .map_err(|err| {
+                        std::io::Error::new(
+                            err.kind(),
+                            format!("failed to build managed network proxy from {source}: {err}"),
+                        )
+                    })?;
+                Some(network)
+            }
+            None => None,
+        };
+
         let config = Self {
             model,
             review_model,
@@ -1694,7 +1710,7 @@ impl Config {
             approval_policy: constrained_approval_policy.value,
             sandbox_policy: constrained_sandbox_policy.value,
             enforce_residency: enforce_residency.value,
-            network: None,
+            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
