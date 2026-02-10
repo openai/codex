@@ -1372,6 +1372,8 @@ async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
         last_agent_markdown: None,
         agent_turn_markdowns: Vec::new(),
+        agent_turn_markdown_turn_ordinals: Vec::new(),
+        completed_turn_count: 0,
         saw_agent_message_this_turn: false,
     };
     widget.set_model(&resolved_model);

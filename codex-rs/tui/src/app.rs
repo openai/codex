@@ -3213,6 +3213,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_drops_turn_complete_only_copy_source() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: "session".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-1".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "answer first".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer first".to_string()),
+            }),
+        });
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("plan-only answer".to_string()),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("answer first".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(new_info_event("plan details".to_string(), None)) as Arc<dyn HistoryCell>,
+        ];
+
+        app.apply_backtrack_rollback(crate::app_backtrack::BacktrackSelection {
+            nth_user_message: 1,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        });
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            codex_core::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        ));
+
+        assert_eq!(app.chat_widget.agent_turn_markdown_count(), 1);
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some("answer first"),
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_ignores_context_compacted_marker_when_recomputing_copy_source() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
@@ -3236,9 +3329,29 @@ mod tests {
             }),
         });
         app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
             id: "agent-1".to_string(),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "answer first".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer first".to_string()),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
             }),
         });
         app.chat_widget.handle_codex_event(Event {
@@ -3246,9 +3359,28 @@ mod tests {
             msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent),
         });
         app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
             id: "agent-2".to_string(),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "answer second".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer second".to_string()),
             }),
         });
 
@@ -3380,9 +3512,29 @@ mod tests {
             }),
         });
         app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
             id: "agent-real".to_string(),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "Context compacted".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("Context compacted".to_string()),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
             }),
         });
         app.chat_widget.handle_codex_event(Event {
@@ -3390,9 +3542,28 @@ mod tests {
             msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent),
         });
         app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
             id: "agent-new".to_string(),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "answer second".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer second".to_string()),
             }),
         });
 

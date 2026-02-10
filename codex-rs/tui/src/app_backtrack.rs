@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
+#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
@@ -511,11 +512,10 @@ impl App {
 
     /// Trim `transcript_cells` to preserve only content before the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        let before_count = agent_group_count(&self.transcript_cells);
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
-        let remaining = agent_group_count(&self.transcript_cells);
-        let removed = before_count.saturating_sub(remaining);
-        self.chat_widget.drop_recent_agent_turn_markdowns(removed);
+        let remaining_turns = user_count(&self.transcript_cells);
+        self.chat_widget
+            .truncate_agent_turn_markdowns_to_turn_count(remaining_turns);
     }
 }
 
@@ -564,10 +564,12 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
+#[cfg(test)]
 fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     agent_group_positions_iter(cells).count()
 }
 
+#[cfg(test)]
 fn agent_group_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
