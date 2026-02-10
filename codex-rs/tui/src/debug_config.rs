@@ -27,12 +27,28 @@ pub(crate) fn new_debug_config_output(
             socks_addr,
             admin_addr,
         } = proxy;
+        let all_proxy = session_all_proxy_url(
+            http_addr,
+            socks_addr,
+            config
+                .network
+                .as_ref()
+                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+        );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
-        lines.push(format!("    - ALL_PROXY   = socks5h://{socks_addr}").into());
+        lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
         lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
     }
 
     PlainHistoryCell::new(lines)
+}
+
+fn session_all_proxy_url(http_addr: &str, socks_addr: &str, socks_enabled: bool) -> String {
+    if socks_enabled {
+        format!("socks5h://{socks_addr}")
+    } else {
+        format!("http://{http_addr}")
+    }
 }
 
 fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
@@ -288,6 +304,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
 #[cfg(test)]
 mod tests {
     use super::render_debug_config_lines;
+    use super::session_all_proxy_url;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_core::config::Constrained;
     use codex_core::config_loader::ConfigLayerEntry;
@@ -501,6 +518,22 @@ mod tests {
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(
             rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_socks_when_enabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            "socks5h://127.0.0.1:8081".to_string()
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_http_when_socks_disabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            "http://127.0.0.1:3128".to_string()
         );
     }
 }
