@@ -5243,7 +5243,7 @@ impl ChatWidget {
             } else {
                 preset.label.to_string()
             };
-            let description = Some(preset.description.to_string());
+            let description = Some(preset.description.replace(" (Identical to Agent mode)", ""));
             let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
