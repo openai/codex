@@ -1531,6 +1531,17 @@
             "model_provider_id": {
               "type": "string"
             },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
+            },
             "reasoning_effort": {
               "anyOf": [
                 {
@@ -5580,6 +5591,25 @@
         "model",
         "rolloutPath",
         "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
       ],
       "type": "object"
     },
