@@ -1128,18 +1128,6 @@ impl Session {
             ),
         };
 
-        let prewarm_cwd = session_configuration.cwd.clone();
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
-            None,
-        )
-        .boxed();
-        let startup_regular_task = RegularTask::with_startup_prewarm(
-            services.model_client.clone(),
-            services.otel_manager.clone(),
-            turn_metadata_header,
-        );
-        state.set_startup_regular_task(startup_regular_task);
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
