@@ -44,6 +44,7 @@ use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -113,6 +114,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -533,6 +535,7 @@ pub(crate) struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
@@ -797,6 +800,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
+        network: Option<NetworkProxy>,
         sub_id: String,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
@@ -836,6 +840,7 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+            network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
@@ -1058,6 +1063,13 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
+        let network_proxy =
+            match config.network.as_ref() {
+                Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
+                    anyhow::anyhow!("failed to start managed network proxy: {err}")
+                })?),
+                None => None,
+            };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1080,6 +1092,7 @@ impl Session {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy,
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -1553,6 +1566,10 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_info,
+            self.services
+                .network_proxy
+                .as_ref()
+                .map(StartedNetworkProxy::proxy),
             sub_id,
         );
 
@@ -3696,6 +3713,7 @@ async fn spawn_review_thread(
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
@@ -6182,6 +6200,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
@@ -6205,6 +6224,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         );
 
@@ -6315,6 +6335,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -6338,6 +6359,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         ));
 
