@@ -1628,7 +1628,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
+        turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
     })]);
 
@@ -1653,7 +1653,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
+        turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
     })]);
     let replay_popup = render_bottom_popup(&chat, 80);
