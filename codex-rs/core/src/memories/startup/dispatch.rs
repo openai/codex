@@ -199,15 +199,13 @@ mod tests {
             config.cwd = config.codex_home.clone();
             let config = Arc::new(config);
 
-            let state_db = Arc::new(
-                codex_state::StateRuntime::init(
-                    config.codex_home.clone(),
-                    config.model_provider_id.clone(),
-                    None,
-                )
-                .await
-                .expect("initialize state db"),
-            );
+            let state_db = codex_state::StateRuntime::init(
+                config.codex_home.clone(),
+                config.model_provider_id.clone(),
+                None,
+            )
+            .await
+            .expect("initialize state db");
 
             let manager = ThreadManager::with_models_provider_and_home(
                 CodexAuth::from_api_key("dummy"),
