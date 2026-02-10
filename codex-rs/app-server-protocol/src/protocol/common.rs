@@ -214,6 +214,11 @@ client_request_definitions! {
         params: v2::ThreadCompactStartParams,
         response: v2::ThreadCompactStartResponse,
     },
+    #[experimental("thread/backgroundTerminals/clean")]
+    ThreadBackgroundTerminalsClean => "thread/backgroundTerminals/clean" {
+        params: v2::ThreadBackgroundTerminalsCleanParams,
+        response: v2::ThreadBackgroundTerminalsCleanResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -998,7 +1003,8 @@ mod tests {
             request_id: RequestId::Integer(5),
             params: v2::LoginAccountParams::ChatgptAuthTokens {
                 access_token: "access-token".to_string(),
-                id_token: "id-token".to_string(),
+                chatgpt_account_id: "org-123".to_string(),
+                chatgpt_plan_type: Some("business".to_string()),
             },
         };
         assert_eq!(
@@ -1008,7 +1014,8 @@ mod tests {
                 "params": {
                     "type": "chatgptAuthTokens",
                     "accessToken": "access-token",
-                    "idToken": "id-token"
+                    "chatgptAccountId": "org-123",
+                    "chatgptPlanType": "business"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1113,6 +1120,27 @@ mod tests {
                 "params": {
                     "cursor": null,
                     "limit": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_background_terminals_clean() -> Result<()> {
+        let request = ClientRequest::ThreadBackgroundTerminalsClean {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadBackgroundTerminalsCleanParams {
+                thread_id: "thr_123".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/backgroundTerminals/clean",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123"
                 }
             }),
             serde_json::to_value(&request)?,

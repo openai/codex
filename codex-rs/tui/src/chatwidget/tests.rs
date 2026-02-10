@@ -2361,7 +2361,8 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            personality: None, ..
+            personality: Some(Personality::Pragmatic),
+            ..
         } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
@@ -2912,7 +2913,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -2930,7 +2931,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -3128,7 +3129,7 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -3148,7 +3149,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: None,
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
@@ -3166,7 +3167,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -3214,6 +3215,22 @@ async fn slash_exit_requests_exit() {
     chat.dispatch_command(SlashCommand::Exit);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn slash_clean_submits_background_terminal_cleanup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Clean);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Stopping all background terminals."),
+        "expected cleanup confirmation, got {rendered:?}"
+    );
 }
 
 #[tokio::test]
@@ -4601,6 +4618,42 @@ async fn interrupt_clears_unified_exec_processes() {
 }
 
 #[tokio::test]
+async fn review_ended_keeps_unified_exec_processes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::ReviewEnded,
+        }),
+    });
+
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.add_ps_output();
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Background terminals"),
+        "expected /ps to remain available after review-ended abort; got {combined:?}"
+    );
+    assert!(
+        combined.contains("sleep 5") && combined.contains("sleep 6"),
+        "expected /ps to list running unified exec processes; got {combined:?}"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4634,7 +4687,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
 }
 
 #[tokio::test]
-async fn turn_complete_clears_unified_exec_processes() {
+async fn turn_complete_keeps_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -4648,7 +4701,23 @@ async fn turn_complete_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.unified_exec_processes.len(), 2);
+
+    chat.add_ps_output();
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        combined.contains("Background terminals"),
+        "expected /ps to remain available after turn complete; got {combined:?}"
+    );
+    assert!(
+        combined.contains("sleep 5") && combined.contains("sleep 6"),
+        "expected /ps to list running unified exec processes; got {combined:?}"
+    );
 
     let _ = drain_insert_history(&mut rx);
 }

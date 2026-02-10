@@ -1,11 +1,10 @@
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.2")
+bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.3")
 single_version_override(
     module_name = "toolchains_llvm_bootstrapped",
     patch_strip = 1,
     patches = [
         "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
-        "//patches:toolchains_llvm_private_frameworks.patch",
     ],
 )
 
@@ -50,16 +49,15 @@ use_repo(rules_rust, "rules_rust")
 toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
-    # TODO(zbarsky): bump to 1.93 after fixing mingw
-    version = "1.92.0",
+    version = "1.93.0",
 )
 use_repo(
     toolchains,
-    "experimental_rust_toolchains_1_92_0",
-    "rust_toolchain_artifacts_macos_aarch64_1_92_0",
+    "experimental_rust_toolchains_1_93_0",
+    "rust_toolchain_artifacts_macos_aarch64_1_93_0",
 )
 
-register_toolchains("@experimental_rust_toolchains_1_92_0//:all")
+register_toolchains("@experimental_rust_toolchains_1_93_0//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(

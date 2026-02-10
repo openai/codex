@@ -5,7 +5,7 @@ use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
-use crate::truncate::approx_tokens_from_byte_count;
+use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
 use crate::user_shell_command::is_user_shell_command_text;
@@ -25,6 +25,14 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TotalTokenUsageBreakdown {
+    pub last_api_response_total_tokens: i64,
+    pub all_history_items_model_visible_bytes: i64,
+    pub estimated_tokens_of_items_added_since_last_successful_api_response: i64,
+    pub estimated_bytes_of_items_added_since_last_successful_api_response: i64,
 }
 
 impl ContextManager {
@@ -102,9 +110,11 @@ impl ContextManager {
         let base_tokens =
             i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
 
-        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
-            acc.saturating_add(estimate_item_token_count(item))
-        });
+        let items_tokens = self
+            .items
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add);
 
         Some(base_tokens.saturating_add(items_tokens))
     }
@@ -231,20 +241,19 @@ impl ContextManager {
                     }
                 )
             })
-            .fold(0i64, |acc, item| {
-                acc.saturating_add(estimate_item_token_count(item))
-            })
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add)
     }
 
-    fn get_trailing_codex_generated_items_tokens(&self) -> i64 {
-        let mut total = 0i64;
-        for item in self.items.iter().rev() {
-            if !is_codex_generated_item(item) {
-                break;
-            }
-            total = total.saturating_add(estimate_item_token_count(item));
-        }
-        total
+    // These are local items added after the most recent model-emitted item.
+    // They are not reflected in `last_token_usage.total_tokens`.
+    fn items_after_last_model_generated_item(&self) -> &[ResponseItem] {
+        let start = self
+            .items
+            .iter()
+            .rposition(is_model_generated_item)
+            .map_or(self.items.len(), |index| index.saturating_add(1));
+        &self.items[start..]
     }
 
     /// When true, the server already accounted for past reasoning tokens and
@@ -255,13 +264,45 @@ impl ContextManager {
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
             .unwrap_or(0);
-        let trailing_codex_generated_tokens = self.get_trailing_codex_generated_items_tokens();
+        let items_after_last_model_generated_tokens = self
+            .items_after_last_model_generated_item()
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add);
         if server_reasoning_included {
-            last_tokens.saturating_add(trailing_codex_generated_tokens)
+            last_tokens.saturating_add(items_after_last_model_generated_tokens)
         } else {
             last_tokens
                 .saturating_add(self.get_non_last_reasoning_items_tokens())
-                .saturating_add(trailing_codex_generated_tokens)
+                .saturating_add(items_after_last_model_generated_tokens)
+        }
+    }
+
+    pub(crate) fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
+        let last_usage = self
+            .token_info
+            .as_ref()
+            .map(|info| info.last_token_usage.clone())
+            .unwrap_or_default();
+        let items_after_last_model_generated = self.items_after_last_model_generated_item();
+
+        TotalTokenUsageBreakdown {
+            last_api_response_total_tokens: last_usage.total_tokens,
+            all_history_items_model_visible_bytes: self
+                .items
+                .iter()
+                .map(estimate_response_item_model_visible_bytes)
+                .fold(0i64, i64::saturating_add),
+            estimated_tokens_of_items_added_since_last_successful_api_response:
+                items_after_last_model_generated
+                    .iter()
+                    .map(estimate_item_token_count)
+                    .fold(0i64, i64::saturating_add),
+            estimated_bytes_of_items_added_since_last_successful_api_response:
+                items_after_last_model_generated
+                    .iter()
+                    .map(estimate_response_item_model_visible_bytes)
+                    .fold(0i64, i64::saturating_add),
         }
     }
 
@@ -348,6 +389,11 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
 }
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
+    let model_visible_bytes = estimate_response_item_model_visible_bytes(item);
+    approx_tokens_from_byte_count_i64(model_visible_bytes)
+}
+
+pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
         ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
@@ -356,14 +402,26 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
         }
         | ResponseItem::Compaction {
             encrypted_content: content,
-        } => {
-            let reasoning_bytes = estimate_reasoning_length(content.len());
-            i64::try_from(approx_tokens_from_byte_count(reasoning_bytes)).unwrap_or(i64::MAX)
-        }
-        item => {
-            let serialized = serde_json::to_string(item).unwrap_or_default();
-            i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
-        }
+        } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
+        item => serde_json::to_string(item)
+            .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
+            .unwrap_or_default(),
+    }
+}
+
+fn is_model_generated_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role == "assistant",
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Compaction { .. } => true,
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Other => false,
     }
 }
 
