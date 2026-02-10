@@ -756,6 +756,14 @@ fn compact_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn compact_stream_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact/stream$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
 fn models_mock() -> (MockBuilder, ModelsMock) {
     let models_mock = ModelsMock::new();
     let mock = Mock::given(method("GET"))
@@ -813,6 +821,27 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
         ResponseTemplate::new(200)
             .insert_header("content-type", "application/json")
             .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    response_mock
+}
+
+pub async fn mount_compact_stream_json_once(
+    server: &MockServer,
+    body: serde_json::Value,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_stream_mock();
+    let event = serde_json::json!({
+        "type": "compact.completed",
+        "response": body,
+    });
+    let response_body = format!("event: compact.completed\ndata: {event}\n\n");
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(response_body),
     )
     .up_to_n_times(1)
     .mount(server)

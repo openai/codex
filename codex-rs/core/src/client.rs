@@ -269,10 +269,23 @@ impl ModelClient {
         };
 
         let extra_headers = self.build_subagent_headers();
-        client
-            .compact_input(&payload, extra_headers)
+        // Use the stream compact endpoint if available, otherwise fallback to the unary endpoint.
+        match client
+            .compact_stream_input(&payload, extra_headers.clone())
             .await
-            .map_err(map_api_error)
+        {
+            Ok(output) => Ok(output),
+            Err(ApiError::Transport(TransportError::Http { status, .. }))
+                if status == HttpStatusCode::NOT_FOUND
+                    || status == HttpStatusCode::METHOD_NOT_ALLOWED =>
+            {
+                client
+                    .compact_input(&payload, extra_headers)
+                    .await
+                    .map_err(map_api_error)
+            }
+            Err(err) => Err(map_api_error(err)),
+        }
     }
 
     /// Builds memory summaries for each provided normalized trace.
