@@ -174,9 +174,16 @@ impl ModelsManager {
         config: &Config,
         refresh_strategy: RefreshStrategy,
     ) -> CoreResult<()> {
-        if !config.features.enabled(Feature::RemoteModels)
-            || self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
-        {
+        if !config.features.enabled(Feature::RemoteModels) {
+            return Ok(());
+        }
+        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
+            if matches!(
+                refresh_strategy,
+                RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
+            ) {
+                self.try_load_cache().await;
+            }
             return Ok(());
         }
 
