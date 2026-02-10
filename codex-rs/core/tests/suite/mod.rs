@@ -56,6 +56,7 @@ pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
 
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
+mod agent_jobs;
 mod agent_websocket;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
