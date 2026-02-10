@@ -878,7 +878,7 @@ impl ChatComposer {
             image_placeholders_in_element_order(&text, &text_elements);
         if image_placeholders_in_order.is_empty() {
             for (idx, path) in local_image_paths.into_iter().enumerate() {
-                let placeholder = local_image_label_text(idx + 1);
+                let placeholder = local_image_label_text(self.remote_image_urls.len() + idx + 1);
                 self.attached_images
                     .push(AttachedImage { placeholder, path });
             }
