@@ -14,6 +14,7 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -36,6 +37,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
@@ -336,79 +338,143 @@ pub async fn run_main_with_transport(
         }
     }
 
-    let processor_handle = tokio::spawn({
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
-        let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
-        let loader_overrides = loader_overrides_for_config_api;
-        let mut processor = MessageProcessor::new(MessageProcessorArgs {
-            outgoing: outgoing_message_sender,
-            codex_linux_sandbox_exe,
-            config: Arc::new(config),
-            cli_overrides,
-            loader_overrides,
-            cloud_requirements: cloud_requirements.clone(),
-            feedback: feedback.clone(),
-            config_warnings,
-        });
-        let mut thread_created_rx = processor.thread_created_receiver();
-        let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+    let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
+    let loader_overrides = loader_overrides_for_config_api;
+    let processor = MessageProcessor::new(MessageProcessorArgs {
+        outgoing: outgoing_message_sender,
+        codex_linux_sandbox_exe,
+        config: Arc::new(config),
+        cli_overrides,
+        loader_overrides,
+        cloud_requirements: cloud_requirements.clone(),
+        feedback: feedback.clone(),
+        config_warnings,
+    });
+    let mut thread_created_rx = processor.thread_created_receiver();
+    let processor = Arc::new(Mutex::new(processor));
+    let connections = Arc::new(Mutex::new(HashMap::<ConnectionId, ConnectionState>::new()));
+
+    let incoming_handle = tokio::spawn({
+        let processor = Arc::clone(&processor);
+        let connections = Arc::clone(&connections);
+        async move {
+            let mut sessions = HashMap::<ConnectionId, ConnectionSessionState>::new();
+            while let Some(event) = transport_event_rx.recv().await {
+                match event {
+                    TransportEvent::ConnectionOpened {
+                        connection_id,
+                        writer,
+                    } => {
+                        sessions.insert(connection_id, ConnectionSessionState::default());
+                        connections
+                            .lock()
+                            .await
+                            .insert(connection_id, ConnectionState::new(writer));
+                    }
+                    TransportEvent::ConnectionClosed { connection_id } => {
+                        sessions.remove(&connection_id);
+                        let should_shutdown = {
+                            let mut connections = connections.lock().await;
+                            connections.remove(&connection_id);
+                            shutdown_when_no_connections && connections.is_empty()
+                        };
+                        if should_shutdown {
+                            break;
+                        }
+                    }
+                    TransportEvent::IncomingMessage {
+                        connection_id,
+                        message,
+                    } => match message {
+                        JSONRPCMessage::Request(request) => {
+                            let Some(session) = sessions.get_mut(&connection_id) else {
+                                warn!(
+                                    "dropping request from unknown connection: {:?}",
+                                    connection_id
+                                );
+                                continue;
+                            };
+                            let was_initialized = session.initialized;
+                            let pre_synced_initialize =
+                                !session.initialized && request.method == "initialize";
+                            if pre_synced_initialize
+                                && let Some(connection_state) =
+                                    connections.lock().await.get_mut(&connection_id)
+                            {
+                                connection_state.session.initialized = true;
+                            }
+
+                            processor
+                                .lock()
+                                .await
+                                .process_request(connection_id, request, session)
+                                .await;
+
+                            if pre_synced_initialize
+                                && !session.initialized
+                                && let Some(connection_state) =
+                                    connections.lock().await.get_mut(&connection_id)
+                            {
+                                connection_state.session.initialized = false;
+                            } else if session.initialized != was_initialized
+                                && let Some(connection_state) =
+                                    connections.lock().await.get_mut(&connection_id)
+                            {
+                                connection_state.session.initialized = session.initialized;
+                            }
+                        }
+                        JSONRPCMessage::Response(response) => {
+                            processor.lock().await.process_response(response).await;
+                        }
+                        JSONRPCMessage::Notification(notification) => {
+                            processor
+                                .lock()
+                                .await
+                                .process_notification(notification)
+                                .await;
+                        }
+                        JSONRPCMessage::Error(err) => {
+                            processor.lock().await.process_error(err).await;
+                        }
+                    },
+                }
+            }
+
+            info!("incoming processor task exited (channel closed)");
+        }
+    });
+
+    let outgoing_handle = tokio::spawn({
+        let processor = Arc::clone(&processor);
+        let connections = Arc::clone(&connections);
         async move {
             let mut listen_for_threads = true;
             loop {
                 tokio::select! {
-                    event = transport_event_rx.recv() => {
-                        let Some(event) = event else {
-                            break;
-                        };
-                        match event {
-                            TransportEvent::ConnectionOpened { connection_id, writer } => {
-                                connections.insert(connection_id, ConnectionState::new(writer));
-                            }
-                            TransportEvent::ConnectionClosed { connection_id } => {
-                                connections.remove(&connection_id);
-                                if shutdown_when_no_connections && connections.is_empty() {
-                                    break;
-                                }
-                            }
-                            TransportEvent::IncomingMessage { connection_id, message } => {
-                                match message {
-                                    JSONRPCMessage::Request(request) => {
-                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
-                                            warn!("dropping request from unknown connection: {:?}", connection_id);
-                                            continue;
-                                        };
-                                        processor
-                                            .process_request(
-                                                connection_id,
-                                                request,
-                                                &mut connection_state.session,
-                                            )
-                                            .await;
-                                    }
-                                    JSONRPCMessage::Response(response) => {
-                                        processor.process_response(response).await;
-                                    }
-                                    JSONRPCMessage::Notification(notification) => {
-                                        processor.process_notification(notification).await;
-                                    }
-                                    JSONRPCMessage::Error(err) => {
-                                        processor.process_error(err).await;
-                                    }
-                                }
-                            }
-                        }
-                    }
                     envelope = outgoing_rx.recv() => {
                         let Some(envelope) = envelope else {
                             break;
                         };
+                        let mut connections = connections.lock().await;
                         route_outgoing_envelope(&mut connections, envelope).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                if has_initialized_connections(&connections) {
-                                    processor.try_attach_thread_listener(thread_id).await;
+                                let should_attach = {
+                                    let connections = connections.lock().await;
+                                    has_initialized_connections(&connections)
+                                };
+                                if should_attach {
+                                    let processor = Arc::clone(&processor);
+                                    tokio::spawn(async move {
+                                        processor
+                                            .lock()
+                                            .await
+                                            .try_attach_thread_listener(thread_id)
+                                            .await;
+                                    });
                                 }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -426,13 +492,15 @@ pub async fn run_main_with_transport(
                 }
             }
 
-            info!("processor task exited (channel closed)");
+            info!("outgoing router task exited (channel closed)");
         }
     });
 
     drop(transport_event_tx);
 
-    let _ = processor_handle.await;
+    let _ = incoming_handle.await;
+    outgoing_handle.abort();
+    let _ = outgoing_handle.await;
 
     if let Some(handle) = websocket_accept_handle {
         handle.abort();
