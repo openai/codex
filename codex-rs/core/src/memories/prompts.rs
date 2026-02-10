@@ -11,8 +11,6 @@ const STAGE_ONE_INPUT_PROMPT_TEMPLATE: &str =
     include_str!("../../templates/memories/stage_one_input.md");
 
 /// Builds the consolidation subagent prompt for a specific memory root.
-///
-/// Falls back to a simple string replacement if Askama rendering fails.
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     CONSOLIDATION_PROMPT_TEMPLATE.replace("{{ memory_root }}", &memory_root)
