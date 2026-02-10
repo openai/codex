@@ -1669,6 +1669,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
+ "codex-hooks",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
@@ -1910,6 +1911,21 @@ dependencies = [
  "thiserror 2.0.18",
  "ts-rs",
  "walkdir",
+]
+
+[[package]]
+name = "codex-hooks"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-protocol",
+ "futures",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
