@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 pub struct BatchJobHandler;
 
-const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 64;
+const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);

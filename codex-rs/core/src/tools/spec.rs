@@ -669,7 +669,7 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         "max_concurrency".to_string(),
         JsonSchema::Number {
             description: Some(
-                "Maximum concurrent workers for this job. Defaults to 64 and is capped by config."
+                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
                     .to_string(),
             ),
         },
