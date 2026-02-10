@@ -231,7 +231,9 @@ mod tests {
             let thread_id = ThreadId::new();
             let mut metadata_builder = ThreadMetadataBuilder::new(
                 thread_id,
-                self.config.codex_home.join(format!("rollout-{thread_id}.jsonl")),
+                self.config
+                    .codex_home
+                    .join(format!("rollout-{thread_id}.jsonl")),
                 Utc::now(),
                 SessionSource::Cli,
             );
@@ -299,7 +301,10 @@ mod tests {
 
         let scheduled =
             run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
-        assert!(scheduled, "dispatch should reclaim stale lock and spawn one agent");
+        assert!(
+            scheduled,
+            "dispatch should reclaim stale lock and spawn one agent"
+        );
 
         let running_claim = harness
             .state_db
