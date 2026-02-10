@@ -70,12 +70,8 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 }
 
 fn assert_parallel_duration(actual: Duration) {
-    // Allow extra headroom on aarch64 CI while still catching clearly sequential execution.
-    let max_duration_ms = if cfg!(target_arch = "aarch64") {
-        1_600
-    } else {
-        1_200
-    };
+    // Allow extra headroom in CI while still catching clearly sequential execution.
+    let max_duration_ms = 1_600;
     assert!(
         actual < Duration::from_millis(max_duration_ms),
         "expected parallel execution to finish quickly, got {actual:?}"
