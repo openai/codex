@@ -33,8 +33,11 @@ use uuid::Uuid;
 
 pub struct AgentJobsHandler;
 
-const STATUS_POLL_INTERVAL_MS: u64 = 250;
-const DEFAULT_AGENT_JOB_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
+const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 64;
+const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);
+const RUNNING_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 
 #[derive(Debug, Deserialize)]
 struct SpawnAgentsOnCsvArgs {
@@ -102,9 +105,10 @@ struct JobProgressEmitter {
 impl JobProgressEmitter {
     fn new() -> Self {
         let now = Instant::now();
+        let last_emit_at = now.checked_sub(PROGRESS_EMIT_INTERVAL).unwrap_or(now);
         Self {
             started_at: now,
-            last_emit_at: now,
+            last_emit_at,
             last_processed: 0,
             last_failed: 0,
         }
@@ -118,12 +122,11 @@ impl JobProgressEmitter {
         progress: &codex_state::AgentJobProgress,
         force: bool,
     ) -> anyhow::Result<()> {
-        const EMIT_INTERVAL: Duration = Duration::from_secs(1);
         let processed = progress.completed_items + progress.failed_items;
         let should_emit = force
             || processed != self.last_processed
             || progress.failed_items != self.last_failed
-            || self.last_emit_at.elapsed() >= EMIT_INTERVAL;
+            || self.last_emit_at.elapsed() >= PROGRESS_EMIT_INTERVAL;
         if !should_emit {
             return Ok(());
         }
@@ -260,12 +263,14 @@ mod spawn_agents_on_csv {
                 .and_then(|index| row.get(index).cloned())
                 .filter(|value| !value.trim().is_empty());
             let row_index = idx + 1;
-            let mut item_id = source_id
+            let base_item_id = source_id
                 .clone()
                 .unwrap_or_else(|| format!("row-{row_index}"));
-            if !seen_ids.insert(item_id.clone()) {
-                item_id = format!("{item_id}-{row_index}");
-                seen_ids.insert(item_id.clone());
+            let mut item_id = base_item_id.clone();
+            let mut suffix = 1usize;
+            while !seen_ids.insert(item_id.clone()) {
+                item_id = format!("{base_item_id}-{suffix}");
+                suffix = suffix.saturating_add(1);
             }
 
             let row_object = headers
@@ -468,8 +473,8 @@ async fn build_runner_options(
 }
 
 fn normalize_concurrency(requested: Option<usize>, max_threads: Option<usize>) -> usize {
-    let requested = requested.unwrap_or(64).max(1);
-    let requested = requested.min(64);
+    let requested = requested.unwrap_or(DEFAULT_AGENT_JOB_CONCURRENCY).max(1);
+    let requested = requested.min(MAX_AGENT_JOB_CONCURRENCY);
     if let Some(max_threads) = max_threads {
         requested.min(max_threads.max(1))
     } else {
@@ -577,7 +582,6 @@ async fn run_agent_job_loop(
                         .agent_control
                         .shutdown_agent(thread_id)
                         .await;
-                    progressed = true;
                     continue;
                 }
                 active_items.insert(
@@ -611,7 +615,7 @@ async fn run_agent_job_loop(
                 break;
             }
             if !progressed {
-                tokio::time::sleep(Duration::from_millis(STATUS_POLL_INTERVAL_MS)).await;
+                tokio::time::sleep(STATUS_POLL_INTERVAL).await;
             }
             continue;
         }
@@ -743,9 +747,9 @@ async fn find_finished_threads(
     active_items: &HashMap<ThreadId, ActiveJobItem>,
 ) -> Vec<(ThreadId, String)> {
     let mut finished = Vec::new();
-    for (thread_id, item_id) in active_items {
+    for (thread_id, item) in active_items {
         if is_final(&session.services.agent_control.get_status(*thread_id).await) {
-            finished.push((*thread_id, item_id.item_id.clone()));
+            finished.push((*thread_id, item.item_id.clone()));
         }
     }
     finished
@@ -900,7 +904,7 @@ fn ensure_unique_headers(headers: &[String]) -> Result<(), FunctionCallError> {
 fn job_runtime_timeout(job: &codex_state::AgentJob) -> Duration {
     job.max_runtime_seconds
         .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_AGENT_JOB_ITEM_TIMEOUT)
+        .unwrap_or(RUNNING_ITEM_TIMEOUT)
 }
 
 fn started_at_from_item(item: &codex_state::AgentJobItem) -> Instant {
