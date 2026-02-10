@@ -70,20 +70,8 @@ struct Dependencies {
 
 #[derive(Debug, Deserialize)]
 struct Policy {
-    #[serde(default = "default_allow_implicit_invocation")]
-    allow_implicit_invocation: bool,
-}
-
-impl Default for Policy {
-    fn default() -> Self {
-        Self {
-            allow_implicit_invocation: true,
-        }
-    }
-}
-
-fn default_allow_implicit_invocation() -> bool {
-    true
+    #[serde(default)]
+    allow_implicit_invocation: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1267,7 +1255,7 @@ policy:
         assert_eq!(
             outcome.skills[0].policy,
             Some(SkillPolicy {
-                allow_implicit_invocation: false,
+                allow_implicit_invocation: Some(false),
             })
         );
         assert!(outcome.allowed_skills_for_implicit_invocation().is_empty());
@@ -1298,8 +1286,12 @@ policy: {}
         assert_eq!(
             outcome.skills[0].policy,
             Some(SkillPolicy {
-                allow_implicit_invocation: true,
+                allow_implicit_invocation: None,
             })
+        );
+        assert_eq!(
+            outcome.allowed_skills_for_implicit_invocation(),
+            outcome.skills.clone()
         );
     }
 

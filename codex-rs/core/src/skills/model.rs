@@ -19,19 +19,20 @@ impl SkillMetadata {
     fn allow_implicit_invocation(&self) -> bool {
         self.policy
             .as_ref()
-            .map_or(true, |policy| policy.allow_implicit_invocation)
+            .and_then(|policy| policy.allow_implicit_invocation)
+            .unwrap_or(true)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkillPolicy {
-    pub allow_implicit_invocation: bool,
+    pub allow_implicit_invocation: Option<bool>,
 }
 
 impl Default for SkillPolicy {
     fn default() -> Self {
         Self {
-            allow_implicit_invocation: true,
+            allow_implicit_invocation: None,
         }
     }
 }

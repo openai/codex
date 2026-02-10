@@ -298,6 +298,19 @@ impl Codex {
             loaded_skills.allowed_skills_for_implicit_invocation();
         let user_instructions =
             get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
+        let allowed_skill_names: Vec<&str> = allowed_skills_for_implicit_invocation
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        info!(
+            allowed_skills = ?allowed_skill_names,
+            "allowed skills for implicit invocation"
+        );
+        if let Some(instructions) = user_instructions.as_deref() {
+            info!(%instructions, "user instructions");
+        } else {
+            info!("user instructions: <none>");
+        }
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await
