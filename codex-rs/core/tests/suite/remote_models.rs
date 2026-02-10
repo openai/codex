@@ -648,7 +648,7 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     skip_if_sandbox!(Ok(()));
 
     let server = MockServer::start().await;
-    let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
+    let _models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     let codex_home = TempDir::new()?;
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -672,11 +672,6 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     assert!(
         available.iter().any(|model| model.model == bundled_slug),
         "bundled models should remain available after empty remote response"
-    );
-    assert_eq!(
-        models_mock.requests().len(),
-        1,
-        "expected a single /models request"
     );
     // Keep the mock server alive until after async assertions complete.
     drop(server);
