@@ -1291,7 +1291,7 @@ policy: {}
         );
         assert_eq!(
             outcome.allowed_skills_for_implicit_invocation(),
-            outcome.skills.clone()
+            outcome.skills
         );
     }
 
