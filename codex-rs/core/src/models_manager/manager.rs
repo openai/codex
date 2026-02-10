@@ -137,16 +137,36 @@ impl ModelsManager {
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
-            .get_remote_models(config)
-            .await
-            .into_iter()
-            .find(|m| m.slug == model);
+            .find_remote_model_by_longest_prefix(model, config)
+            .await;
         let model = if let Some(remote) = remote {
             remote
         } else {
             model_info::find_model_info_for_slug(model)
         };
         model_info::with_config_overrides(model, config)
+    }
+
+    async fn find_remote_model_by_longest_prefix(
+        &self,
+        model: &str,
+        config: &Config,
+    ) -> Option<ModelInfo> {
+        let mut best: Option<ModelInfo> = None;
+        for candidate in self.get_remote_models(config).await {
+            if !model.starts_with(&candidate.slug) {
+                continue;
+            }
+            let is_better_match = if let Some(current) = best.as_ref() {
+                candidate.slug.len() > current.slug.len()
+            } else {
+                true
+            };
+            if is_better_match {
+                best = Some(candidate);
+            }
+        }
+        best
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
