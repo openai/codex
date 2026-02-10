@@ -137,6 +137,7 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: None,
+            policy: None,
             path: PathBuf::from(path),
             scope: SkillScope::User,
         }
