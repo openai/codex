@@ -7,6 +7,7 @@ CREATE TABLE agent_jobs (
     input_headers_json TEXT NOT NULL,
     input_csv_path TEXT NOT NULL,
     output_csv_path TEXT NOT NULL,
+    auto_export INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     started_at INTEGER,

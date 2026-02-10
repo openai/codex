@@ -1,2 +1,0 @@
-ALTER TABLE agent_jobs
-ADD COLUMN auto_export INTEGER NOT NULL DEFAULT 1;
