@@ -4237,6 +4237,8 @@ impl ChatWidget {
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
+            let review_markdown = codex_core::review_format::render_review_output_text(&output);
+            self.record_agent_markdown(&review_markdown);
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
             self.flush_active_cell();

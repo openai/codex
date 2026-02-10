@@ -1253,6 +1253,60 @@ async fn review_restores_context_window_indicator() {
     assert!(!chat.is_review_mode);
 }
 
+#[tokio::test]
+async fn exited_review_mode_explanation_only_updates_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let output = codex_core::protocol::ReviewOutputEvent {
+        findings: Vec::new(),
+        overall_correctness: "correct".to_string(),
+        overall_explanation: "Review explanation body".to_string(),
+        overall_confidence_score: 0.9,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(output),
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("Review explanation body")
+    );
+}
+
+#[tokio::test]
+async fn exited_review_mode_findings_updates_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let finding = codex_core::protocol::ReviewFinding {
+        title: "Preserve copy source".to_string(),
+        body: "Review details.".to_string(),
+        confidence_score: 0.8,
+        priority: 2,
+        code_location: codex_core::protocol::ReviewCodeLocation {
+            absolute_file_path: PathBuf::from("tui/src/chatwidget.rs"),
+            line_range: codex_core::protocol::ReviewLineRange { start: 1, end: 2 },
+        },
+    };
+    let output = codex_core::protocol::ReviewOutputEvent {
+        findings: vec![finding],
+        overall_correctness: "incorrect".to_string(),
+        overall_explanation: String::new(),
+        overall_confidence_score: 0.9,
+    };
+    let expected = codex_core::review_format::render_review_output_text(&output);
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(output),
+        }),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some(expected.as_str()));
+}
+
 /// Receiving a TokenCount event without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
