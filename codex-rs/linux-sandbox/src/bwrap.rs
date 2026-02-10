@@ -74,11 +74,11 @@ pub(crate) fn create_bwrap_command_args(
     options: BwrapOptions,
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
-        if options.network_mode == BwrapNetworkMode::FullAccess {
-            return Ok(command);
-        }
-
-        return Ok(create_bwrap_flags_full_filesystem(command, options));
+        return if options.network_mode == BwrapNetworkMode::FullAccess {
+            Ok(command)
+        } else {
+            Ok(create_bwrap_flags_full_filesystem(command, options))
+        };
     }
 
     create_bwrap_flags(command, sandbox_policy, cwd, options)

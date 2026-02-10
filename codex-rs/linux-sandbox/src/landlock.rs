@@ -221,13 +221,13 @@ mod tests {
 
     #[test]
     fn restricted_network_policy_always_installs_seccomp() {
-        assert_eq!(
-            should_install_network_seccomp(&SandboxPolicy::ReadOnly, false),
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::ReadOnly,
+            false
+        ));
+        assert!(should_install_network_seccomp(
+            &SandboxPolicy::ReadOnly,
             true
-        );
-        assert_eq!(
-            should_install_network_seccomp(&SandboxPolicy::ReadOnly, true),
-            true
-        );
+        ));
     }
 }
