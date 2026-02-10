@@ -11,8 +11,6 @@ pub(crate) struct RolloutCandidate {
     pub(crate) rollout_path: PathBuf,
     /// Thread working directory used for per-project memory bucketing.
     pub(crate) cwd: PathBuf,
-    /// Best-effort thread title used to build readable memory filenames.
-    pub(crate) title: String,
     /// Last observed thread update timestamp (RFC3339), if available.
     pub(crate) updated_at: Option<String>,
 }

@@ -1,3 +1,5 @@
+use super::MEMORY_SCOPE_KIND_CWD;
+use super::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS;
 use super::StageOneResponseItemKinds;
 use super::StageOneRolloutFilter;
 use super::ensure_layout;
@@ -77,7 +79,7 @@ fn memory_root_varies_by_cwd() {
         .and_then(std::path::Path::file_name)
         .and_then(std::ffi::OsStr::to_str)
         .expect("cwd bucket");
-    assert_eq!(bucket_a.len(), 64);
+    assert_eq!(bucket_a.len(), 16);
     assert!(bucket_a.chars().all(|ch| ch.is_ascii_hexdigit()));
 }
 
@@ -206,64 +208,58 @@ fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
 }
 
 #[test]
-fn select_rollout_candidates_uses_db_memory_recency() {
+fn select_rollout_candidates_filters_by_age_window() {
     let dir = tempdir().expect("tempdir");
     let cwd_a = dir.path().join("workspace-a");
     let cwd_b = dir.path().join("workspace-b");
     std::fs::create_dir_all(&cwd_a).expect("mkdir cwd a");
     std::fs::create_dir_all(&cwd_b).expect("mkdir cwd b");
 
+    let now = Utc::now().timestamp();
     let current_thread_id = ThreadId::default();
-    let stale_thread_id = ThreadId::default();
-    let fresh_thread_id = ThreadId::default();
-    let missing_thread_id = ThreadId::default();
+    let recent_thread_id = ThreadId::default();
+    let old_thread_id = ThreadId::default();
+    let recent_two_thread_id = ThreadId::default();
 
     let current = thread_metadata(
         current_thread_id,
         dir.path().join("current.jsonl"),
         cwd_a.clone(),
         "current",
-        500,
+        now,
     );
-    let fresh = thread_metadata(
-        fresh_thread_id,
-        dir.path().join("fresh.jsonl"),
+    let recent = thread_metadata(
+        recent_thread_id,
+        dir.path().join("recent.jsonl"),
         cwd_a,
-        "fresh",
-        400,
+        "recent",
+        now - 10,
     );
-    let stale = thread_metadata(
-        stale_thread_id,
-        dir.path().join("stale.jsonl"),
+    let old = thread_metadata(
+        old_thread_id,
+        dir.path().join("old.jsonl"),
         cwd_b.clone(),
-        "stale",
-        300,
+        "old",
+        now - (PHASE_ONE_MAX_ROLLOUT_AGE_DAYS + 1) * 24 * 60 * 60,
     );
-    let missing = thread_metadata(
-        missing_thread_id,
-        dir.path().join("missing.jsonl"),
+    let recent_two = thread_metadata(
+        recent_two_thread_id,
+        dir.path().join("recent-two.jsonl"),
         cwd_b,
-        "missing",
-        200,
+        "recent-two",
+        now - 20,
     );
-
-    let memories = vec![ThreadMemory {
-        thread_id: fresh_thread_id,
-        raw_memory: "raw memory".to_string(),
-        memory_summary: "memory".to_string(),
-        updated_at: Utc.timestamp_opt(450, 0).single().expect("timestamp"),
-    }];
 
     let candidates = select_rollout_candidates_from_db(
-        &[current, fresh, stale, missing],
+        &[current, recent, old, recent_two],
         current_thread_id,
-        &memories,
         5,
+        PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
     );
 
     assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0].thread_id, stale_thread_id);
-    assert_eq!(candidates[1].thread_id, missing_thread_id);
+    assert_eq!(candidates[0].thread_id, recent_thread_id);
+    assert_eq!(candidates[1].thread_id, recent_two_thread_id);
 }
 
 #[tokio::test]
@@ -274,8 +270,8 @@ async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
 
     let keep_id = ThreadId::default().to_string();
     let drop_id = ThreadId::default().to_string();
-    let keep_path = raw_memories_dir(&root).join(format!("{keep_id}_keep.md"));
-    let drop_path = raw_memories_dir(&root).join(format!("{drop_id}_drop.md"));
+    let keep_path = raw_memories_dir(&root).join(format!("{keep_id}.md"));
+    let drop_path = raw_memories_dir(&root).join(format!("{drop_id}.md"));
     tokio::fs::write(&keep_path, "keep")
         .await
         .expect("write keep");
@@ -285,9 +281,15 @@ async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
 
     let memories = vec![ThreadMemory {
         thread_id: ThreadId::try_from(keep_id.clone()).expect("thread id"),
+        scope_kind: MEMORY_SCOPE_KIND_CWD.to_string(),
+        scope_key: "scope".to_string(),
         raw_memory: "raw memory".to_string(),
         memory_summary: "short summary".to_string(),
         updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
+        last_used_at: None,
+        used_count: 0,
+        invalidated_at: None,
+        invalid_reason: None,
     }];
 
     prune_to_recent_memories_and_rebuild_summary(&root, &memories)

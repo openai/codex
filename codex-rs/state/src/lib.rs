@@ -31,6 +31,7 @@ pub use model::ThreadMemory;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
+pub use runtime::Phase1JobClaimOutcome;
 pub use runtime::STATE_DB_FILENAME;
 pub use runtime::STATE_DB_VERSION;
 pub use runtime::state_db_filename;

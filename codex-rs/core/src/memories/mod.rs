@@ -17,13 +17,20 @@ use std::path::PathBuf;
 /// Subagent source label used to identify consolidation tasks.
 pub(crate) const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
 /// Maximum number of rollout candidates processed per startup pass.
-pub(crate) const MAX_ROLLOUTS_PER_STARTUP: usize = 8;
+pub(crate) const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.
 pub(crate) const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
-/// Maximum number of recent raw memories retained per working directory.
-pub(crate) const MAX_RAW_MEMORIES_PER_CWD: usize = 10;
+/// Maximum number of recent raw memories retained per scope.
+pub(crate) const MAX_RAW_MEMORIES_PER_SCOPE: usize = 64;
+/// Maximum rollout age considered for phase-1 extraction.
+pub(crate) const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+/// Lease duration (seconds) for phase-1 job ownership.
+pub(crate) const PHASE_ONE_JOB_LEASE_SECONDS: i64 = 3_600;
 /// Lease duration (seconds) for per-cwd consolidation locks.
 pub(crate) const CONSOLIDATION_LOCK_LEASE_SECONDS: i64 = 600;
+pub(crate) const MEMORY_SCOPE_KIND_CWD: &str = "cwd";
+pub(crate) const MEMORY_SCOPE_KIND_USER: &str = "user";
+pub(crate) const MEMORY_SCOPE_KEY_USER: &str = "user";
 
 const MEMORY_SUBDIR: &str = "memory";
 const RAW_MEMORIES_SUBDIR: &str = "raw_memories";
@@ -31,6 +38,7 @@ const MEMORY_SUMMARY_FILENAME: &str = "memory_summary.md";
 const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
 const LEGACY_CONSOLIDATED_FILENAME: &str = "consolidated.md";
 const SKILLS_SUBDIR: &str = "skills";
+const CWD_MEMORY_BUCKET_HEX_LEN: usize = 16;
 
 pub(crate) use phase_one::RAW_MEMORY_PROMPT;
 pub(crate) use phase_one::parse_stage_one_output;
@@ -43,6 +51,7 @@ pub(crate) use rollout::StageOneRolloutFilter;
 pub(crate) use rollout::serialize_filtered_rollout_response_items;
 pub(crate) use selection::select_rollout_candidates_from_db;
 pub(crate) use storage::prune_to_recent_memories_and_rebuild_summary;
+pub(crate) use storage::rebuild_memory_summary_from_memories;
 pub(crate) use storage::wipe_consolidation_outputs;
 pub(crate) use storage::write_raw_memory;
 pub(crate) use types::RolloutCandidate;
@@ -54,6 +63,14 @@ pub(crate) use types::RolloutCandidate;
 pub(crate) fn memory_root_for_cwd(codex_home: &Path, cwd: &Path) -> PathBuf {
     let bucket = memory_bucket_for_cwd(cwd);
     codex_home.join("memories").join(bucket).join(MEMORY_SUBDIR)
+}
+
+/// Returns the on-disk user-shared memory root directory.
+pub(crate) fn memory_root_for_user(codex_home: &Path) -> PathBuf {
+    codex_home
+        .join("memories")
+        .join(MEMORY_SCOPE_KEY_USER)
+        .join(MEMORY_SUBDIR)
 }
 
 fn raw_memories_dir(root: &Path) -> PathBuf {
@@ -74,5 +91,6 @@ fn memory_bucket_for_cwd(cwd: &Path) -> String {
     let normalized = normalized.to_string_lossy();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let full_hash = format!("{:x}", hasher.finalize());
+    full_hash[..CWD_MEMORY_BUCKET_HEX_LEN].to_string()
 }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use tracing::warn;
 
 use super::LEGACY_CONSOLIDATED_FILENAME;
-use super::MAX_RAW_MEMORIES_PER_CWD;
+use super::MAX_RAW_MEMORIES_PER_SCOPE;
 use super::MEMORY_REGISTRY_FILENAME;
 use super::SKILLS_SUBDIR;
 use super::ensure_layout;
@@ -23,8 +23,7 @@ pub(crate) async fn write_raw_memory(
     candidate: &RolloutCandidate,
     raw_memory: &str,
 ) -> std::io::Result<PathBuf> {
-    let slug = build_memory_slug(&candidate.title);
-    let filename = format!("{}_{}.md", candidate.thread_id, slug);
+    let filename = format!("{}.md", candidate.thread_id);
     let path = raw_memories_dir(root).join(filename);
 
     remove_outdated_thread_raw_memories(root, &candidate.thread_id.to_string(), &path).await?;
@@ -57,11 +56,20 @@ pub(crate) async fn prune_to_recent_memories_and_rebuild_summary(
 
     let keep = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_PER_CWD)
+        .take(MAX_RAW_MEMORIES_PER_SCOPE)
         .map(|memory| memory.thread_id.to_string())
         .collect::<BTreeSet<_>>();
 
     prune_raw_memories(root, &keep).await?;
+    rebuild_memory_summary(root, memories).await
+}
+
+/// Rebuild `memory_summary.md` for a scope without pruning raw memory files.
+pub(crate) async fn rebuild_memory_summary_from_memories(
+    root: &Path,
+    memories: &[ThreadMemory],
+) -> std::io::Result<()> {
+    ensure_layout(root).await?;
     rebuild_memory_summary(root, memories).await
 }
 
@@ -103,7 +111,7 @@ async fn rebuild_memory_summary(root: &Path, memories: &[ThreadMemory]) -> std::
     }
 
     body.push_str("Map of concise summaries to thread IDs (latest first):\n\n");
-    for memory in memories.iter().take(MAX_RAW_MEMORIES_PER_CWD) {
+    for memory in memories.iter().take(MAX_RAW_MEMORIES_PER_SCOPE) {
         let summary = compact_summary_for_index(&memory.memory_summary);
         writeln!(body, "- {summary} (thread: `{}`)", memory.thread_id)
             .map_err(|err| std::io::Error::other(format!("format memory summary: {err}")))?;
@@ -179,39 +187,21 @@ async fn remove_outdated_thread_raw_memories(
     Ok(())
 }
 
-fn build_memory_slug(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_sep = false;
-
-    for ch in value.chars() {
-        let normalized = ch.to_ascii_lowercase();
-        if normalized.is_ascii_alphanumeric() {
-            slug.push(normalized);
-            last_was_sep = false;
-        } else if !last_was_sep {
-            slug.push('_');
-            last_was_sep = true;
-        }
-    }
-
-    let slug = slug.trim_matches('_').to_string();
-    if slug.is_empty() {
-        "memory".to_string()
-    } else {
-        slug.chars().take(64).collect()
-    }
-}
-
 fn compact_summary_for_index(summary: &str) -> String {
     summary.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn extract_thread_id_from_summary_filename(file_name: &str) -> Option<&str> {
     let stem = file_name.strip_suffix(".md")?;
-    let (thread_id, _) = stem.split_once('_')?;
-    if thread_id.is_empty() {
+    if stem.is_empty() {
         None
+    } else if let Some((thread_id, _legacy_slug)) = stem.split_once('_') {
+        if thread_id.is_empty() {
+            None
+        } else {
+            Some(thread_id)
+        }
     } else {
-        Some(thread_id)
+        Some(stem)
     }
 }

@@ -1,6 +1,27 @@
 use super::*;
+use chrono::DateTime;
+use chrono::Utc;
+use sha2::Digest;
+use sha2::Sha256;
+use std::time::Duration;
 
 const MEMORY_STARTUP_STAGE: &str = "run_memories_startup_pipeline";
+const PHASE_ONE_THREAD_SCAN_LIMIT: usize = 5_000;
+const PHASE_ONE_DB_LOCK_RETRY_LIMIT: usize = 3;
+const PHASE_ONE_DB_LOCK_RETRY_BACKOFF_MS: u64 = 25;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct MemoryScopeTarget {
+    scope_kind: &'static str,
+    scope_key: String,
+    memory_root: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct ClaimedPhaseOneCandidate {
+    candidate: memories::RolloutCandidate,
+    claimed_scopes: Vec<(MemoryScopeTarget, String)>,
+}
 
 #[derive(Clone)]
 struct StageOneRequestContext {
@@ -55,7 +76,7 @@ pub(super) async fn run_memories_startup_pipeline(
     let Some(page) = state_db::list_threads_db(
         session.services.state_db.as_deref(),
         &config.codex_home,
-        200,
+        PHASE_ONE_THREAD_SCAN_LIMIT,
         None,
         ThreadSortKey::UpdatedAt,
         INTERACTIVE_SESSION_SOURCES,
@@ -68,32 +89,26 @@ pub(super) async fn run_memories_startup_pipeline(
         return Ok(());
     };
 
-    let mut existing_memories = Vec::new();
-    for item in &page.items {
-        if let Some(memory) = state_db::get_thread_memory(
-            session.services.state_db.as_deref(),
-            item.id,
-            MEMORY_STARTUP_STAGE,
-        )
-        .await
-        {
-            existing_memories.push(memory);
-        }
-    }
-
-    let candidates = memories::select_rollout_candidates_from_db(
+    let selection_candidates = memories::select_rollout_candidates_from_db(
         &page.items,
         session.conversation_id,
-        &existing_memories,
-        memories::MAX_ROLLOUTS_PER_STARTUP,
+        PHASE_ONE_THREAD_SCAN_LIMIT,
+        memories::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
     );
+    let claimed_candidates = claim_phase_one_candidates(
+        session,
+        config.as_ref(),
+        selection_candidates,
+        memories::MAX_ROLLOUTS_PER_STARTUP,
+    )
+    .await;
     info!(
-        "memory phase-1 candidate selection complete: {} candidate(s) from {} indexed thread(s)",
-        candidates.len(),
+        "memory phase-1 candidate selection complete: {} claimed candidate(s) from {} indexed thread(s)",
+        claimed_candidates.len(),
         page.items.len()
     );
 
-    if candidates.is_empty() {
+    if claimed_candidates.is_empty() {
         return Ok(());
     }
 
@@ -102,62 +117,173 @@ pub(super) async fn run_memories_startup_pipeline(
         turn_context.resolve_turn_metadata_header().await,
     );
 
-    let touched_cwds =
-        futures::stream::iter(candidates.into_iter())
-            .map(|candidate| {
+    let touched_scope_sets =
+        futures::stream::iter(claimed_candidates.into_iter())
+            .map(|claimed_candidate| {
                 let session = Arc::clone(session);
-                let config = Arc::clone(&config);
                 let stage_one_context = stage_one_context.clone();
                 async move {
-                    process_memory_candidate(session, config, candidate, stage_one_context).await
+                    process_memory_candidate(session, claimed_candidate, stage_one_context).await
                 }
             })
             .buffer_unordered(memories::PHASE_ONE_CONCURRENCY_LIMIT)
-            .filter_map(futures::future::ready)
-            .collect::<HashSet<PathBuf>>()
+            .collect::<Vec<HashSet<MemoryScopeTarget>>>()
             .await;
+    let touched_scopes = touched_scope_sets
+        .into_iter()
+        .flatten()
+        .collect::<HashSet<MemoryScopeTarget>>();
     info!(
-        "memory phase-1 extraction complete: {} cwd(s) touched",
-        touched_cwds.len()
+        "memory phase-1 extraction complete: {} scope(s) touched",
+        touched_scopes.len()
     );
 
-    if touched_cwds.is_empty() {
+    if touched_scopes.is_empty() {
         return Ok(());
     }
 
-    let consolidation_cwd_count = touched_cwds.len();
-    futures::stream::iter(touched_cwds.into_iter())
-        .map(|cwd| {
+    let consolidation_scope_count = touched_scopes.len();
+    futures::stream::iter(touched_scopes.into_iter())
+        .map(|scope| {
             let session = Arc::clone(session);
             let config = Arc::clone(&config);
             async move {
-                run_memory_consolidation_for_cwd(session, config, cwd).await;
+                run_memory_consolidation_for_scope(session, config, scope).await;
             }
         })
         .buffer_unordered(memories::PHASE_ONE_CONCURRENCY_LIMIT)
         .collect::<Vec<_>>()
         .await;
     info!(
-        "memory phase-2 consolidation dispatch complete: {} cwd(s) scheduled",
-        consolidation_cwd_count
+        "memory phase-2 consolidation dispatch complete: {} scope(s) scheduled",
+        consolidation_scope_count
     );
 
     Ok(())
 }
 
+async fn claim_phase_one_candidates(
+    session: &Session,
+    config: &Config,
+    candidates: Vec<memories::RolloutCandidate>,
+    max_claimed_candidates: usize,
+) -> Vec<ClaimedPhaseOneCandidate> {
+    if max_claimed_candidates == 0 {
+        return Vec::new();
+    }
+
+    let Some(state_db) = session.services.state_db.as_deref() else {
+        return Vec::new();
+    };
+
+    let mut claimed_candidates = Vec::new();
+    for candidate in candidates {
+        if claimed_candidates.len() >= max_claimed_candidates {
+            break;
+        }
+
+        let source_updated_at = parse_source_updated_at_epoch(&candidate);
+        let mut claimed_scopes = Vec::<(MemoryScopeTarget, String)>::new();
+        for scope in memory_scope_targets_for_candidate(config, &candidate) {
+            let Some(claim) = try_claim_phase1_job_with_retry(
+                state_db,
+                candidate.thread_id,
+                scope.scope_kind,
+                &scope.scope_key,
+                session.conversation_id,
+                source_updated_at,
+            )
+            .await
+            else {
+                continue;
+            };
+
+            if let codex_state::Phase1JobClaimOutcome::Claimed { ownership_token } = claim {
+                claimed_scopes.push((scope, ownership_token));
+            }
+        }
+
+        if !claimed_scopes.is_empty() {
+            claimed_candidates.push(ClaimedPhaseOneCandidate {
+                candidate,
+                claimed_scopes,
+            });
+        }
+    }
+
+    claimed_candidates
+}
+
+async fn try_claim_phase1_job_with_retry(
+    state_db: &codex_state::StateRuntime,
+    thread_id: ThreadId,
+    scope_kind: &str,
+    scope_key: &str,
+    owner_session_id: ThreadId,
+    source_updated_at: i64,
+) -> Option<codex_state::Phase1JobClaimOutcome> {
+    for attempt in 0..=PHASE_ONE_DB_LOCK_RETRY_LIMIT {
+        match state_db
+            .try_claim_phase1_job(
+                thread_id,
+                scope_kind,
+                scope_key,
+                owner_session_id,
+                source_updated_at,
+                memories::PHASE_ONE_JOB_LEASE_SECONDS,
+            )
+            .await
+        {
+            Ok(claim) => return Some(claim),
+            Err(err) => {
+                let is_locked = err.to_string().contains("database is locked");
+                if is_locked && attempt < PHASE_ONE_DB_LOCK_RETRY_LIMIT {
+                    tokio::time::sleep(Duration::from_millis(
+                        PHASE_ONE_DB_LOCK_RETRY_BACKOFF_MS * (attempt as u64 + 1),
+                    ))
+                    .await;
+                    continue;
+                }
+                warn!("state db try_claim_phase1_job failed during {MEMORY_STARTUP_STAGE}: {err}");
+                return None;
+            }
+        }
+    }
+    None
+}
+
 async fn process_memory_candidate(
     session: Arc<Session>,
-    config: Arc<Config>,
-    candidate: memories::RolloutCandidate,
+    claimed_candidate: ClaimedPhaseOneCandidate,
     stage_one_context: StageOneRequestContext,
-) -> Option<PathBuf> {
-    let memory_root = memories::memory_root_for_cwd(&config.codex_home, &candidate.cwd);
-    if let Err(err) = memories::ensure_layout(&memory_root).await {
-        warn!(
-            "failed to create memory layout for cwd {}: {err}",
-            candidate.cwd.display()
-        );
-        return None;
+) -> HashSet<MemoryScopeTarget> {
+    let candidate = claimed_candidate.candidate;
+    let claimed_scopes = claimed_candidate.claimed_scopes;
+
+    let mut ready_scopes = Vec::<(MemoryScopeTarget, String)>::new();
+    for (scope, ownership_token) in claimed_scopes {
+        if let Err(err) = memories::ensure_layout(&scope.memory_root).await {
+            warn!(
+                "failed to create memory layout for scope {}:{} root={}: {err}",
+                scope.scope_kind,
+                scope.scope_key,
+                scope.memory_root.display()
+            );
+            mark_phase1_job_failed_best_effort(
+                session.as_ref(),
+                candidate.thread_id,
+                scope.scope_kind,
+                &scope.scope_key,
+                &ownership_token,
+                "failed to create memory layout",
+            )
+            .await;
+            continue;
+        }
+        ready_scopes.push((scope, ownership_token));
+    }
+    if ready_scopes.is_empty() {
+        return HashSet::new();
     }
 
     let (rollout_items, _thread_id, parse_errors) =
@@ -168,7 +294,14 @@ async fn process_memory_candidate(
                     "failed to load rollout {} for memories: {err}",
                     candidate.rollout_path.display()
                 );
-                return None;
+                fail_claimed_phase_one_jobs(
+                    &session,
+                    &candidate,
+                    &ready_scopes,
+                    "failed to load rollout",
+                )
+                .await;
+                return HashSet::new();
             }
         };
     if parse_errors > 0 {
@@ -188,7 +321,14 @@ async fn process_memory_candidate(
                 "failed to prepare filtered rollout payload {} for memories: {err}",
                 candidate.rollout_path.display()
             );
-            return None;
+            fail_claimed_phase_one_jobs(
+                &session,
+                &candidate,
+                &ready_scopes,
+                "failed to serialize filtered rollout",
+            )
+            .await;
+            return HashSet::new();
         }
     };
 
@@ -232,7 +372,14 @@ async fn process_memory_candidate(
                 "stage-1 memory request failed for rollout {}: {err}",
                 candidate.rollout_path.display()
             );
-            return None;
+            fail_claimed_phase_one_jobs(
+                &session,
+                &candidate,
+                &ready_scopes,
+                "stage-1 memory request failed",
+            )
+            .await;
+            return HashSet::new();
         }
     };
 
@@ -243,7 +390,14 @@ async fn process_memory_candidate(
                 "failed while waiting for stage-1 memory response for rollout {}: {err}",
                 candidate.rollout_path.display()
             );
-            return None;
+            fail_claimed_phase_one_jobs(
+                &session,
+                &candidate,
+                &ready_scopes,
+                "stage-1 memory response stream failed",
+            )
+            .await;
+            return HashSet::new();
         }
     };
 
@@ -254,38 +408,163 @@ async fn process_memory_candidate(
                 "invalid stage-1 memory payload for rollout {}: {err}",
                 candidate.rollout_path.display()
             );
-            return None;
+            fail_claimed_phase_one_jobs(
+                &session,
+                &candidate,
+                &ready_scopes,
+                "invalid stage-1 memory payload",
+            )
+            .await;
+            return HashSet::new();
         }
     };
 
-    let raw_memory_path =
-        match memories::write_raw_memory(&memory_root, &candidate, &stage_one_output.raw_memory)
-            .await
+    let mut touched_scopes = HashSet::new();
+    for (scope, ownership_token) in &ready_scopes {
+        if persist_phase_one_memory_for_scope(
+            &session,
+            &candidate,
+            scope,
+            ownership_token,
+            &stage_one_output.raw_memory,
+            &stage_one_output.summary,
+        )
+        .await
         {
+            touched_scopes.insert(scope.clone());
+        }
+    }
+
+    touched_scopes
+}
+
+fn parse_source_updated_at_epoch(candidate: &memories::RolloutCandidate) -> i64 {
+    candidate
+        .updated_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc).timestamp())
+        .unwrap_or_else(|| Utc::now().timestamp())
+}
+
+fn memory_scope_targets_for_candidate(
+    config: &Config,
+    candidate: &memories::RolloutCandidate,
+) -> Vec<MemoryScopeTarget> {
+    vec![
+        MemoryScopeTarget {
+            scope_kind: memories::MEMORY_SCOPE_KIND_CWD,
+            scope_key: candidate.cwd.display().to_string(),
+            memory_root: memories::memory_root_for_cwd(&config.codex_home, &candidate.cwd),
+        },
+        MemoryScopeTarget {
+            scope_kind: memories::MEMORY_SCOPE_KIND_USER,
+            scope_key: memories::MEMORY_SCOPE_KEY_USER.to_string(),
+            memory_root: memories::memory_root_for_user(&config.codex_home),
+        },
+    ]
+}
+
+async fn fail_claimed_phase_one_jobs(
+    session: &Session,
+    candidate: &memories::RolloutCandidate,
+    claimed_scopes: &[(MemoryScopeTarget, String)],
+    reason: &str,
+) {
+    for (scope, ownership_token) in claimed_scopes {
+        mark_phase1_job_failed_best_effort(
+            session,
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            reason,
+        )
+        .await;
+    }
+}
+
+async fn persist_phase_one_memory_for_scope(
+    session: &Session,
+    candidate: &memories::RolloutCandidate,
+    scope: &MemoryScopeTarget,
+    ownership_token: &str,
+    raw_memory: &str,
+    summary: &str,
+) -> bool {
+    let Some(state_db) = session.services.state_db.as_deref() else {
+        mark_phase1_job_failed_best_effort(
+            session,
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            "state db unavailable for scoped thread memory upsert",
+        )
+        .await;
+        return false;
+    };
+
+    let lease_renewed = match state_db
+        .renew_phase1_job_lease(
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+        )
+        .await
+    {
+        Ok(renewed) => renewed,
+        Err(err) => {
+            warn!("state db renew_phase1_job_lease failed during {MEMORY_STARTUP_STAGE}: {err}");
+            return false;
+        }
+    };
+    if !lease_renewed {
+        debug!(
+            "memory phase-1 write skipped after ownership changed: rollout={} scope={} scope_key={}",
+            candidate.rollout_path.display(),
+            scope.scope_kind,
+            scope.scope_key
+        );
+        return false;
+    }
+
+    let raw_memory_path =
+        match memories::write_raw_memory(&scope.memory_root, candidate, raw_memory).await {
             Ok(path) => path,
             Err(err) => {
                 warn!(
-                    "failed to write raw memory for rollout {}: {err}",
-                    candidate.rollout_path.display()
+                    "failed to write raw memory for rollout {} scope {}:{}: {err}",
+                    candidate.rollout_path.display(),
+                    scope.scope_kind,
+                    scope.scope_key
                 );
-                return None;
+                mark_phase1_job_failed_best_effort(
+                    session,
+                    candidate.thread_id,
+                    scope.scope_kind,
+                    &scope.scope_key,
+                    ownership_token,
+                    "failed to write raw memory",
+                )
+                .await;
+                return false;
             }
         };
 
-    if state_db::upsert_thread_memory(
-        session.services.state_db.as_deref(),
-        candidate.thread_id,
-        &stage_one_output.raw_memory,
-        &stage_one_output.summary,
-        MEMORY_STARTUP_STAGE,
-    )
-    .await
-    .is_none()
+    if let Err(err) = state_db
+        .upsert_thread_memory_for_scope(
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            raw_memory,
+            summary,
+        )
+        .await
     {
         warn!(
-            "failed to upsert thread memory for rollout {}; removing {}",
-            candidate.rollout_path.display(),
-            raw_memory_path.display()
+            "state db upsert_thread_memory_for_scope failed during {MEMORY_STARTUP_STAGE}: {err}"
         );
         if let Err(err) = tokio::fs::remove_file(&raw_memory_path).await
             && err.kind() != std::io::ErrorKind::NotFound
@@ -295,27 +574,115 @@ async fn process_memory_candidate(
                 raw_memory_path.display()
             );
         }
-        return None;
+        mark_phase1_job_failed_best_effort(
+            session,
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            "failed to upsert scoped thread memory",
+        )
+        .await;
+        return false;
     }
+
+    let latest_memories = match state_db
+        .get_last_n_thread_memories_for_scope(
+            scope.scope_kind,
+            &scope.scope_key,
+            memories::MAX_RAW_MEMORIES_PER_SCOPE,
+        )
+        .await
+    {
+        Ok(memories) => memories,
+        Err(err) => {
+            warn!(
+                "state db get_last_n_thread_memories_for_scope failed during {MEMORY_STARTUP_STAGE}: {err}"
+            );
+            mark_phase1_job_failed_best_effort(
+                session,
+                candidate.thread_id,
+                scope.scope_kind,
+                &scope.scope_key,
+                ownership_token,
+                "failed to read scope memories after upsert",
+            )
+            .await;
+            return false;
+        }
+    };
+
+    if let Err(err) =
+        memories::rebuild_memory_summary_from_memories(&scope.memory_root, &latest_memories).await
+    {
+        warn!(
+            "failed rebuilding memory_summary for scope {}:{} root={}: {err}",
+            scope.scope_kind,
+            scope.scope_key,
+            scope.memory_root.display()
+        );
+        mark_phase1_job_failed_best_effort(
+            session,
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            "failed to rebuild scope memory summary",
+        )
+        .await;
+        return false;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(summary.as_bytes());
+    let summary_hash = format!("{:x}", hasher.finalize());
+    let marked_succeeded = match state_db
+        .mark_phase1_job_succeeded(
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            &raw_memory_path.display().to_string(),
+            &summary_hash,
+        )
+        .await
+    {
+        Ok(marked) => marked,
+        Err(err) => {
+            warn!("state db mark_phase1_job_succeeded failed during {MEMORY_STARTUP_STAGE}: {err}");
+            return false;
+        }
+    };
+    if !marked_succeeded {
+        return false;
+    }
+
+    if let Err(err) = state_db
+        .mark_memory_scope_dirty(scope.scope_kind, &scope.scope_key, true)
+        .await
+    {
+        warn!("state db mark_memory_scope_dirty failed during {MEMORY_STARTUP_STAGE}: {err}");
+    }
+
     info!(
-        "memory phase-1 raw memory persisted: rollout={} cwd={} raw_memory_path={}",
+        "memory phase-1 raw memory persisted: rollout={} scope={} scope_key={} raw_memory_path={}",
         candidate.rollout_path.display(),
-        candidate.cwd.display(),
+        scope.scope_kind,
+        scope.scope_key,
         raw_memory_path.display()
     );
-
-    Some(candidate.cwd)
+    true
 }
 
-async fn run_memory_consolidation_for_cwd(
+async fn run_memory_consolidation_for_scope(
     session: Arc<Session>,
     config: Arc<Config>,
-    cwd: PathBuf,
+    scope: MemoryScopeTarget,
 ) {
     let lock_owner = session.conversation_id;
     let Some(lock_acquired) = state_db::try_acquire_memory_consolidation_lock(
         session.services.state_db.as_deref(),
-        &cwd,
+        &scope.memory_root,
         lock_owner,
         memories::CONSOLIDATION_LOCK_LEASE_SECONDS,
         MEMORY_STARTUP_STAGE,
@@ -323,34 +690,27 @@ async fn run_memory_consolidation_for_cwd(
     .await
     else {
         warn!(
-            "failed to acquire memory consolidation lock for cwd {}; skipping consolidation",
-            cwd.display()
+            "failed to acquire memory consolidation lock for scope {}:{}; skipping consolidation",
+            scope.scope_kind, scope.scope_key
         );
         return;
     };
     if !lock_acquired {
         debug!(
-            "memory consolidation lock already held for cwd {}; skipping",
-            cwd.display()
+            "memory consolidation lock already held for scope {}:{}; skipping",
+            scope.scope_kind, scope.scope_key
         );
         return;
     }
 
-    let Some(latest_memories) = state_db::get_last_n_thread_memories_for_cwd(
-        session.services.state_db.as_deref(),
-        &cwd,
-        memories::MAX_RAW_MEMORIES_PER_CWD,
-        MEMORY_STARTUP_STAGE,
-    )
-    .await
-    else {
+    let Some(state_db) = session.services.state_db.as_deref() else {
         warn!(
-            "failed to read recent thread memories for cwd {}; skipping consolidation",
-            cwd.display()
+            "state db unavailable for scope {}:{}; skipping consolidation",
+            scope.scope_kind, scope.scope_key
         );
         let _ = state_db::release_memory_consolidation_lock(
             session.services.state_db.as_deref(),
-            &cwd,
+            &scope.memory_root,
             lock_owner,
             MEMORY_STARTUP_STAGE,
         )
@@ -358,17 +718,41 @@ async fn run_memory_consolidation_for_cwd(
         return;
     };
 
-    let memory_root = memories::memory_root_for_cwd(&config.codex_home, &cwd);
+    let latest_memories = match state_db
+        .get_last_n_thread_memories_for_scope(
+            scope.scope_kind,
+            &scope.scope_key,
+            memories::MAX_RAW_MEMORIES_PER_SCOPE,
+        )
+        .await
+    {
+        Ok(memories) => memories,
+        Err(err) => {
+            warn!(
+                "state db get_last_n_thread_memories_for_scope failed during {MEMORY_STARTUP_STAGE}: {err}"
+            );
+            let _ = state_db::release_memory_consolidation_lock(
+                session.services.state_db.as_deref(),
+                &scope.memory_root,
+                lock_owner,
+                MEMORY_STARTUP_STAGE,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let memory_root = scope.memory_root.clone();
     if let Err(err) =
         memories::prune_to_recent_memories_and_rebuild_summary(&memory_root, &latest_memories).await
     {
         warn!(
-            "failed to refresh phase-1 memory outputs for cwd {}: {err}",
-            cwd.display()
+            "failed to refresh phase-1 memory outputs for scope {}:{}: {err}",
+            scope.scope_kind, scope.scope_key
         );
         let _ = state_db::release_memory_consolidation_lock(
             session.services.state_db.as_deref(),
-            &cwd,
+            &scope.memory_root,
             lock_owner,
             MEMORY_STARTUP_STAGE,
         )
@@ -378,12 +762,12 @@ async fn run_memory_consolidation_for_cwd(
 
     if let Err(err) = memories::wipe_consolidation_outputs(&memory_root).await {
         warn!(
-            "failed to wipe previous consolidation outputs for cwd {}: {err}",
-            cwd.display()
+            "failed to wipe previous consolidation outputs for scope {}:{}: {err}",
+            scope.scope_kind, scope.scope_key
         );
         let _ = state_db::release_memory_consolidation_lock(
             session.services.state_db.as_deref(),
-            &cwd,
+            &scope.memory_root,
             lock_owner,
             MEMORY_STARTUP_STAGE,
         )
@@ -405,25 +789,24 @@ async fn run_memory_consolidation_for_cwd(
     {
         Ok(consolidation_agent_id) => {
             info!(
-                "memory phase-2 consolidation agent started: cwd={} agent_id={}",
-                cwd.display(),
-                consolidation_agent_id
+                "memory phase-2 consolidation agent started: scope={} scope_key={} agent_id={}",
+                scope.scope_kind, scope.scope_key, consolidation_agent_id
             );
             spawn_memory_lock_release_task(
                 session.as_ref(),
-                cwd,
+                scope.memory_root,
                 lock_owner,
                 consolidation_agent_id,
             );
         }
         Err(err) => {
             warn!(
-                "failed to spawn memory consolidation agent for cwd {}: {err}",
-                cwd.display()
+                "failed to spawn memory consolidation agent for scope {}:{}: {err}",
+                scope.scope_kind, scope.scope_key
             );
             let _ = state_db::release_memory_consolidation_lock(
                 session.services.state_db.as_deref(),
-                &cwd,
+                &scope.memory_root,
                 lock_owner,
                 MEMORY_STARTUP_STAGE,
             )
@@ -489,6 +872,31 @@ fn spawn_memory_lock_release_task(
             final_status
         );
     });
+}
+
+async fn mark_phase1_job_failed_best_effort(
+    session: &Session,
+    thread_id: ThreadId,
+    scope_kind: &str,
+    scope_key: &str,
+    ownership_token: &str,
+    failure_reason: &str,
+) {
+    let Some(state_db) = session.services.state_db.as_deref() else {
+        return;
+    };
+    if let Err(err) = state_db
+        .mark_phase1_job_failed(
+            thread_id,
+            scope_kind,
+            scope_key,
+            ownership_token,
+            failure_reason,
+        )
+        .await
+    {
+        warn!("state db mark_phase1_job_failed failed during {MEMORY_STARTUP_STAGE}: {err}");
+    }
 }
 
 async fn collect_response_text_until_completed(stream: &mut ResponseStream) -> CodexResult<String> {
