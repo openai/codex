@@ -905,21 +905,20 @@ pub enum LoginAccountParams {
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
-    #[serde(rename = "chatgptAuthTokens")]
-    #[ts(rename = "chatgptAuthTokens")]
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {
-        /// ID token (JWT) supplied by the client.
-        ///
-        /// This token is used for identity and account metadata (email, plan type,
-        /// workspace id).
-        #[serde(rename = "idToken")]
-        #[ts(rename = "idToken")]
-        id_token: String,
         /// Access token (JWT) supplied by the client.
-        /// This token is used for backend API requests.
-        #[serde(rename = "accessToken")]
-        #[ts(rename = "accessToken")]
+        /// This token is used for backend API requests and email extraction.
         access_token: String,
+        /// Workspace/account identifier supplied by the client.
+        chatgpt_account_id: String,
+        /// Optional plan type supplied by the client.
+        ///
+        /// When `null`, Codex attempts to derive the plan type from access-token
+        /// claims. If unavailable, the plan defaults to `unknown`.
+        #[ts(optional = nullable)]
+        chatgpt_plan_type: Option<String>,
     },
 }
 
@@ -991,8 +990,8 @@ pub struct ChatgptAuthTokensRefreshParams {
     /// Clients that manage multiple accounts/workspaces can use this as a hint
     /// to refresh the token for the correct workspace.
     ///
-    /// This may be `null` when the prior ID token did not include a workspace
-    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    /// This may be `null` when the prior auth state did not include a workspace
+    /// identifier (`chatgpt_account_id`).
     #[ts(optional = nullable)]
     pub previous_account_id: Option<String>,
 }
@@ -1001,8 +1000,9 @@ pub struct ChatgptAuthTokensRefreshParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshResponse {
-    pub id_token: String,
     pub access_token: String,
+    pub chatgpt_account_id: String,
+    pub chatgpt_plan_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -100,7 +100,8 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 
         Ok(ExternalAuthTokens {
             access_token: response.access_token,
-            id_token: response.id_token,
+            chatgpt_account_id: response.chatgpt_account_id,
+            chatgpt_plan_type: response.chatgpt_plan_type,
         })
     }
 }

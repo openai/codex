@@ -1003,7 +1003,8 @@ mod tests {
             request_id: RequestId::Integer(5),
             params: v2::LoginAccountParams::ChatgptAuthTokens {
                 access_token: "access-token".to_string(),
-                id_token: "id-token".to_string(),
+                chatgpt_account_id: "org-123".to_string(),
+                chatgpt_plan_type: Some("business".to_string()),
             },
         };
         assert_eq!(
@@ -1013,7 +1014,8 @@ mod tests {
                 "params": {
                     "type": "chatgptAuthTokens",
                     "accessToken": "access-token",
-                    "idToken": "id-token"
+                    "chatgptAccountId": "org-123",
+                    "chatgptPlanType": "business"
                 }
             }),
             serde_json::to_value(&request)?,

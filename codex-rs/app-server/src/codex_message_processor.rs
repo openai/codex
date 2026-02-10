@@ -203,7 +203,6 @@ use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::open_if_present;
-use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -789,11 +788,17 @@ impl CodexMessageProcessor {
                 self.login_chatgpt_v2(request_id).await;
             }
             LoginAccountParams::ChatgptAuthTokens {
-                id_token,
                 access_token,
+                chatgpt_account_id,
+                chatgpt_plan_type,
             } => {
-                self.login_chatgpt_auth_tokens(request_id, id_token, access_token)
-                    .await;
+                self.login_chatgpt_auth_tokens(
+                    request_id,
+                    access_token,
+                    chatgpt_account_id,
+                    chatgpt_plan_type,
+                )
+                .await;
             }
         }
     }
@@ -1224,8 +1229,9 @@ impl CodexMessageProcessor {
     async fn login_chatgpt_auth_tokens(
         &mut self,
         request_id: ConnectionRequestId,
-        id_token: String,
         access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
     ) {
         if matches!(
             self.config.forced_login_method,
@@ -1249,27 +1255,13 @@ impl CodexMessageProcessor {
             }
         }
 
-        let id_token_info = match parse_id_token(&id_token) {
-            Ok(info) => info,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid id token: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
         if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && id_token_info.chatgpt_account_id.as_deref() != Some(expected_workspace)
+            && chatgpt_account_id != expected_workspace
         {
-            let account_id = id_token_info.chatgpt_account_id;
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
-                    "External auth must use workspace {expected_workspace}, but received {account_id:?}."
+                    "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
                 ),
                 data: None,
             };
@@ -1277,9 +1269,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if let Err(err) =
-            login_with_chatgpt_auth_tokens(&self.config.codex_home, &id_token, &access_token)
-        {
+        if let Err(err) = login_with_chatgpt_auth_tokens(
+            &self.config.codex_home,
+            &access_token,
+            &chatgpt_account_id,
+            chatgpt_plan_type.as_deref(),
+        ) {
             let error = JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to set external auth: {err}"),
@@ -1639,13 +1634,30 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let started_network_proxy = match self.config.network.as_ref() {
+            Some(spec) => match spec.start_proxy().await {
+                Ok(started) => Some(started),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start managed network proxy: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            },
+            None => None,
+        };
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let exec_params = ExecParams {
             command: params.command,
             cwd,
             expiration: timeout_ms.into(),
             env,
-            network: self.config.network.clone(),
+            network: started_network_proxy
+                .as_ref()
+                .map(codex_core::config::StartedNetworkProxy::proxy),
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
             justification: None,
@@ -1673,9 +1685,11 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let request_for_task = request;
         let sandbox_cwd = self.config.cwd.clone();
+        let started_network_proxy_for_task = started_network_proxy;
         let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
 
         tokio::spawn(async move {
+            let _started_network_proxy = started_network_proxy_for_task;
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
