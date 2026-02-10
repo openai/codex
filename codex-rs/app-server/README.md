@@ -59,6 +59,8 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
 
+`initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -76,6 +78,29 @@ Example (from OpenAI's official VSCode extension):
       "name": "codex_vscode",
       "title": "Codex VS Code Extension",
       "version": "0.1.0"
+    }
+  }
+}
+```
+
+Example with notification opt-out:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true,
+      "optOutNotificationMethods": [
+        "codex/event/session_configured",
+        "item/agentMessage/delta"
+      ]
     }
   }
 }
@@ -486,6 +511,20 @@ Notes:
 ## Events
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+
+### Notification opt-out
+
+Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.
+
+- Exact-match only: `item/agentMessage/delta` suppresses only that method.
+- Unknown method names are ignored.
+- Applies to both legacy (`codex/event/*`) and v2 (`thread/*`, `turn/*`, `item/*`, etc.) notifications.
+- Does not apply to requests/responses/errors.
+
+Examples:
+
+- Opt out of legacy session setup event: `codex/event/session_configured`
+- Opt out of streamed agent text deltas: `item/agentMessage/delta`
 
 ### Turn events
 

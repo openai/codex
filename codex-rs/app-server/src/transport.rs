@@ -382,10 +382,23 @@ pub(crate) async fn route_outgoing_envelope(
             }
         }
         OutgoingEnvelope::Broadcast { message } => {
+            let notification_method = match &message {
+                OutgoingMessage::Notification(notification) => Some(notification.method.clone()),
+                OutgoingMessage::AppServerNotification(notification) => {
+                    Some(notification.to_string())
+                }
+                _ => None,
+            };
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.session.initialized {
+                    let is_opted_out = notification_method.as_ref().is_some_and(|method| {
+                        connection_state
+                            .session
+                            .opted_out_notification_methods
+                            .contains(method)
+                    });
+                    if connection_state.session.initialized && !is_opted_out {
                         Some(*connection_id)
                     } else {
                         None
@@ -416,7 +429,15 @@ pub(crate) fn has_initialized_connections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingNotification;
+    use crate::outgoing_message::OutgoingResponse;
+    use codex_app_server_protocol::DeprecationNoticeNotification;
+    use codex_app_server_protocol::RequestId;
+    use codex_app_server_protocol::ServerNotification;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     #[test]
     fn app_server_transport_parses_stdio_listen_url() {
@@ -455,5 +476,117 @@ mod tests {
             err.to_string(),
             "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
         );
+    }
+
+    fn initialized_connection_state(
+        opted_out_notification_methods: &[&str],
+    ) -> (ConnectionState, mpsc::Receiver<OutgoingMessage>) {
+        let (writer, reader) = mpsc::channel(CHANNEL_CAPACITY);
+        let mut connection_state = ConnectionState::new(writer);
+        connection_state.session.initialized = true;
+        connection_state.session.opted_out_notification_methods = opted_out_notification_methods
+            .iter()
+            .map(|method| (*method).to_string())
+            .collect();
+        (connection_state, reader)
+    }
+
+    #[tokio::test]
+    async fn route_outgoing_envelope_broadcast_sends_notification_when_not_opted_out() {
+        let (connection_state, mut reader) = initialized_connection_state(&[]);
+        let mut connections = HashMap::from([(ConnectionId(1), connection_state)]);
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::Broadcast {
+                message: OutgoingMessage::Notification(OutgoingNotification {
+                    method: "codex/event/session_configured".to_string(),
+                    params: None,
+                }),
+            },
+        )
+        .await;
+
+        let message = timeout(Duration::from_millis(100), reader.recv())
+            .await
+            .expect("expected notification to be sent")
+            .expect("connection should still be open");
+        let OutgoingMessage::Notification(notification) = message else {
+            panic!("expected legacy notification message");
+        };
+        assert_eq!(notification.method, "codex/event/session_configured");
+    }
+
+    #[tokio::test]
+    async fn route_outgoing_envelope_broadcast_suppresses_opted_out_legacy_notification() {
+        let (connection_state, mut reader) =
+            initialized_connection_state(&["codex/event/session_configured"]);
+        let mut connections = HashMap::from([(ConnectionId(1), connection_state)]);
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::Broadcast {
+                message: OutgoingMessage::Notification(OutgoingNotification {
+                    method: "codex/event/session_configured".to_string(),
+                    params: None,
+                }),
+            },
+        )
+        .await;
+
+        timeout(Duration::from_millis(100), reader.recv())
+            .await
+            .expect_err("notification should be filtered");
+    }
+
+    #[tokio::test]
+    async fn route_outgoing_envelope_broadcast_suppresses_opted_out_v2_notification() {
+        let (connection_state, mut reader) = initialized_connection_state(&["deprecationNotice"]);
+        let mut connections = HashMap::from([(ConnectionId(1), connection_state)]);
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::Broadcast {
+                message: OutgoingMessage::AppServerNotification(
+                    ServerNotification::DeprecationNotice(DeprecationNoticeNotification {
+                        summary: "deprecated".to_string(),
+                        details: None,
+                    }),
+                ),
+            },
+        )
+        .await;
+
+        timeout(Duration::from_millis(100), reader.recv())
+            .await
+            .expect_err("notification should be filtered");
+    }
+
+    #[tokio::test]
+    async fn route_outgoing_envelope_broadcast_does_not_filter_non_notification_messages() {
+        let (connection_state, mut reader) =
+            initialized_connection_state(&["account/updated", "codex/event/task_complete"]);
+        let mut connections = HashMap::from([(ConnectionId(1), connection_state)]);
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::Broadcast {
+                message: OutgoingMessage::Response(OutgoingResponse {
+                    id: RequestId::Integer(7),
+                    result: json!({"ok": true}),
+                }),
+            },
+        )
+        .await;
+
+        let message = timeout(Duration::from_millis(100), reader.recv())
+            .await
+            .expect("expected message to be sent")
+            .expect("connection should still be open");
+        let OutgoingMessage::Response(response) = message else {
+            panic!("expected response message");
+        };
+        assert_eq!(response.id, RequestId::Integer(7));
+        assert_eq!(response.result, json!({"ok": true}));
     }
 }

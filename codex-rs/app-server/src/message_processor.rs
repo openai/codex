@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -117,6 +118,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Debug, Default)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
+    pub(crate) opted_out_notification_methods: HashSet<String>,
     experimental_api_enabled: bool,
 }
 
@@ -239,16 +241,19 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
+                    let capabilities = params.capabilities.unwrap_or_default();
                     // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
                     // Current behavior is per-connection. Reviewer feedback notes this can
                     // create odd cross-client behavior (for example dynamic tool calls on a
                     // shared thread when another connected client did not opt into
                     // experimental API). Proposed direction is instance-global first-write-wins
                     // with initialize-time mismatch rejection.
-                    session.experimental_api_enabled = params
-                        .capabilities
-                        .as_ref()
-                        .is_some_and(|cap| cap.experimental_api);
+                    session.experimental_api_enabled = capabilities.experimental_api;
+                    session.opted_out_notification_methods = capabilities
+                        .opt_out_notification_methods
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
                     let ClientInfo {
                         name,
                         title: _title,
