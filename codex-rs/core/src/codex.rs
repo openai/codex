@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -154,6 +155,7 @@ use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
+use crate::mentions::collect_tool_paths_from_tool_outputs;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
 use crate::proposed_plan_parser::ProposedPlanSegment;
@@ -3955,6 +3957,20 @@ pub(crate) async fn run_turn(
     }
     let mut seen_app_paths = HashSet::new();
     explicit_app_paths.retain(|path| seen_app_paths.insert(path.clone()));
+    let mut turn_input = input.clone();
+    let TurnMentionResolution {
+        mut mentioned_skills,
+        mut explicit_app_paths,
+        rewritten_skill_contents,
+    } = resolve_turn_mentions(
+        &turn_input,
+        skills_outcome.as_ref(),
+        &skill_name_counts,
+        &skill_name_counts_lower,
+        &connector_slug_counts,
+        &connectors_for_mentions,
+    )
+    .await;
 
     let config = turn_context.config.clone();
     if config
@@ -4026,10 +4042,12 @@ pub(crate) async fn run_turn(
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
+        let mut pending_user_inputs = Vec::new();
 
         if !pending_response_items.is_empty() {
             for response_item in pending_response_items {
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    pending_user_inputs.extend(user_message.content.clone());
                     // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
                     sess.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
@@ -4045,6 +4063,74 @@ pub(crate) async fn run_turn(
                     .await;
                 }
             }
+        }
+        if !pending_user_inputs.is_empty() {
+            turn_input.extend(pending_user_inputs);
+            let previously_mentioned_skill_paths = mentioned_skills
+                .iter()
+                .map(|skill| skill.path.clone())
+                .collect::<HashSet<_>>();
+            let TurnMentionResolution {
+                mentioned_skills: refreshed_mentioned_skills,
+                explicit_app_paths: refreshed_explicit_app_paths,
+                rewritten_skill_contents: refreshed_rewritten_skill_contents,
+            } = resolve_turn_mentions(
+                &turn_input,
+                skills_outcome.as_ref(),
+                &skill_name_counts,
+                &skill_name_counts_lower,
+                &connector_slug_counts,
+                &connectors_for_mentions,
+            )
+            .await;
+            let newly_mentioned_skills = refreshed_mentioned_skills
+                .iter()
+                .filter(|skill| !previously_mentioned_skill_paths.contains(&skill.path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !newly_mentioned_skills.is_empty() {
+                if config
+                    .features
+                    .enabled(Feature::SkillEnvVarDependencyPrompt)
+                {
+                    let env_var_dependencies =
+                        collect_env_var_dependencies(&newly_mentioned_skills);
+                    resolve_skill_dependencies_for_turn(
+                        &sess,
+                        &turn_context,
+                        &env_var_dependencies,
+                    )
+                    .await;
+                }
+                maybe_prompt_and_install_mcp_dependencies(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &cancellation_token,
+                    &newly_mentioned_skills,
+                )
+                .await;
+                let SkillInjections {
+                    items: pending_skill_items,
+                    warnings: pending_skill_warnings,
+                } = build_skill_injections(
+                    &newly_mentioned_skills,
+                    &refreshed_rewritten_skill_contents,
+                    Some(&otel_manager),
+                    &sess.services.analytics_events_client,
+                    tracking.clone(),
+                )
+                .await;
+                for message in pending_skill_warnings {
+                    sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                        .await;
+                }
+                if !pending_skill_items.is_empty() {
+                    sess.record_conversation_items(&turn_context, &pending_skill_items)
+                        .await;
+                }
+            }
+            mentioned_skills = refreshed_mentioned_skills;
+            explicit_app_paths = refreshed_explicit_app_paths;
         }
 
         // Construct the input that we will send to the model.
@@ -4175,6 +4261,8 @@ fn filter_connectors_for_input(
 ) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
     if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
+    let tool_output_paths = collect_tool_paths_from_tool_outputs(input);
+    if user_messages.is_empty() && explicit_app_paths.is_empty() && tool_output_paths.is_empty() {
         return Vec::new();
     }
 
@@ -4190,6 +4278,8 @@ fn filter_connectors_for_input(
     for path in mentions
         .paths
         .iter()
+        .chain(mentions.paths.iter())
+        .chain(tool_output_paths.iter())
         .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
     {
         if let Some(connector_id) = app_id_from_path(path) {
@@ -4260,6 +4350,97 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn has_codex_apps_mcp_tools(
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+) -> bool {
+    mcp_tools
+        .values()
+        .any(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+}
+
+fn input_requests_app_connector(input: &[ResponseItem], explicit_app_paths: &[String]) -> bool {
+    if explicit_app_paths
+        .iter()
+        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    {
+        return true;
+    }
+
+    let user_messages = collect_user_messages(input);
+    let message_mentions = collect_tool_mentions_from_messages(&user_messages);
+    if message_mentions
+        .paths
+        .iter()
+        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+    {
+        return true;
+    }
+
+    let tool_output_paths = collect_tool_paths_from_tool_outputs(input);
+    tool_output_paths
+        .iter()
+        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+}
+
+struct SamplingRequestToolSelection<'a> {
+    explicit_app_paths: &'a [String],
+    skill_name_counts_lower: &'a HashMap<String, usize>,
+}
+
+struct TurnMentionResolution {
+    mentioned_skills: Vec<SkillMetadata>,
+    explicit_app_paths: Vec<String>,
+    rewritten_skill_contents: HashMap<PathBuf, String>,
+}
+
+async fn resolve_turn_mentions(
+    input: &[UserInput],
+    skills_outcome: Option<&SkillLoadOutcome>,
+    skill_name_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+    connector_slug_counts: &HashMap<String, usize>,
+    connectors_for_mentions: &[connectors::AppInfo],
+) -> TurnMentionResolution {
+    let mut mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+        collect_explicit_skill_mentions(
+            input,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            skill_name_counts,
+            connector_slug_counts,
+        )
+    });
+    let mut explicit_app_paths = collect_explicit_app_paths(input);
+    let mut rewritten_skill_contents = HashMap::new();
+    if let Some(outcome) = skills_outcome {
+        let ExpandedSkillMentions {
+            skills,
+            explicit_app_paths: skill_app_paths,
+            rewritten_contents,
+        } = expand_skill_mentions(
+            &mentioned_skills,
+            &outcome.skills,
+            &outcome.disabled_paths,
+            skill_name_counts,
+            skill_name_counts_lower,
+            connector_slug_counts,
+            connectors_for_mentions,
+        )
+        .await;
+        mentioned_skills = skills;
+        explicit_app_paths.extend(skill_app_paths);
+        rewritten_skill_contents = rewritten_contents;
+    }
+    let mut seen_app_paths = HashSet::new();
+    explicit_app_paths.retain(|path| seen_app_paths.insert(path.clone()));
+
+    TurnMentionResolution {
+        mentioned_skills,
+        explicit_app_paths,
+        rewritten_skill_contents,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -4289,6 +4470,78 @@ async fn run_sampling_request(
         &cancellation_token,
     )
     .await?;
+    let mut mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .or_cancel(&cancellation_token)
+        .await?;
+
+    if turn_context.config.features.enabled(Feature::Apps)
+        && !has_codex_apps_mcp_tools(&mcp_tools)
+        && input_requests_app_connector(&input, tool_selection.explicit_app_paths)
+    {
+        let codex_apps_ready = sess
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::from_secs(2))
+            .or_cancel(&cancellation_token)
+            .await?;
+        if codex_apps_ready {
+            mcp_tools = sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(&cancellation_token)
+                .await?;
+        }
+    }
+    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        Some(filter_connectors_for_input(
+            connectors,
+            &input,
+            tool_selection.explicit_app_paths,
+            tool_selection.skill_name_counts_lower,
+        ))
+    } else {
+        None
+    };
+
+    if turn_context.config.features.enabled(Feature::SearchTool) {
+        let mut selected_mcp_tools =
+            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
+                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+            } else {
+                HashMap::new()
+            };
+
+        if let Some(connectors) = connectors_for_tools.as_ref() {
+            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
+            selected_mcp_tools.extend(apps_mcp_tools);
+        }
+
+        mcp_tools = selected_mcp_tools;
+    } else if let Some(connectors) = connectors_for_tools.as_ref() {
+        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
+    }
+
+    let router = Arc::new(ToolRouter::from_config(
+        &turn_context.tools_config,
+        Some(
+            mcp_tools
+                .into_iter()
+                .map(|(name, tool)| (name, tool.tool))
+                .collect(),
+        ),
+        turn_context.dynamic_tools.as_slice(),
+    ));
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
@@ -5464,6 +5717,85 @@ mod tests {
                 "mcp__rmcp__echo".to_string(),
             ]
         );
+    fn filter_connectors_for_input_allows_app_path_from_tool_output() {
+        let connector = make_connector("github-id", "GitHub");
+        let connectors = vec![connector.clone()];
+        let input = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(
+                "L1: use [$GitHub](app://github-id)".to_string(),
+            ),
+        }];
+        let explicit_app_paths = Vec::new();
+        let skill_name_counts_lower = HashMap::new();
+
+        let selected = filter_connectors_for_input(
+            connectors,
+            &input,
+            &explicit_app_paths,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, vec![connector]);
+    }
+
+    #[test]
+    fn input_requests_app_connector_returns_true_for_explicit_app_path() {
+        let input = vec![user_message("hello")];
+        let explicit_app_paths = vec!["app://connector-id".to_string()];
+
+        assert!(input_requests_app_connector(&input, &explicit_app_paths));
+    }
+
+    #[test]
+    fn input_requests_app_connector_returns_true_for_tool_output_path() {
+        let input = vec![ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(
+                "L1: use [$GoogleCalendar](app://connector-id)".to_string(),
+            ),
+        }];
+        let explicit_app_paths = Vec::new();
+
+        assert!(input_requests_app_connector(&input, &explicit_app_paths));
+    }
+
+    #[test]
+    fn input_requests_app_connector_returns_false_without_app_mentions() {
+        let input = vec![user_message("use $alpha-skill for this task")];
+        let explicit_app_paths = Vec::new();
+
+        assert!(!input_requests_app_connector(&input, &explicit_app_paths));
+    }
+
+    #[tokio::test]
+    async fn resolve_turn_mentions_dedupes_explicit_app_paths_without_skills() {
+        let input = vec![
+            UserInput::Mention {
+                name: "Google Calendar".to_string(),
+                path: "app://connector-id".to_string(),
+            },
+            UserInput::Mention {
+                name: "Google Calendar".to_string(),
+                path: "app://connector-id".to_string(),
+            },
+        ];
+        let resolution = resolve_turn_mentions(
+            &input,
+            None,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &Vec::new(),
+        )
+        .await;
+
+        assert!(resolution.mentioned_skills.is_empty());
+        assert_eq!(
+            resolution.explicit_app_paths,
+            vec!["app://connector-id".to_string()]
+        );
+        assert!(resolution.rewritten_skill_contents.is_empty());
     }
 
     #[tokio::test]

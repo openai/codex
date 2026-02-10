@@ -5,6 +5,7 @@ mod grep_files;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
+mod mention_rewrite;
 mod plan;
 mod read_file;
 mod request_user_input;

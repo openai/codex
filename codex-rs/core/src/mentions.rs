@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
@@ -46,6 +47,22 @@ pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
         .filter(|path| tool_kind_for_path(path.as_str()) == ToolMentionKind::App)
         .filter_map(|path| app_id_from_path(path.as_str()).map(str::to_string))
         .collect()
+}
+
+pub(crate) fn collect_tool_paths_from_tool_outputs(input: &[ResponseItem]) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    for item in input {
+        let text = match item {
+            ResponseItem::FunctionCallOutput { output, .. } => output.body.to_text(),
+            ResponseItem::CustomToolCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let mentions = extract_tool_mentions(&text);
+            paths.extend(mentions.paths().map(str::to_string));
+        }
+    }
+    paths
 }
 
 pub(crate) fn build_skill_name_counts(

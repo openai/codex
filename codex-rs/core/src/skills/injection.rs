@@ -94,6 +94,53 @@ pub(crate) struct ExpandedSkillMentions {
     pub(crate) rewritten_contents: HashMap<PathBuf, String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MentionRewriteContext {
+    skill_paths_by_name: HashMap<String, String>,
+    skill_paths_by_normalized_path: HashMap<String, String>,
+    connector_paths_by_slug: HashMap<String, String>,
+}
+
+pub(crate) fn build_mention_rewrite_context(
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
+    skill_name_counts: &HashMap<String, usize>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+    connector_slug_counts: &HashMap<String, usize>,
+    connectors: &[AppInfo],
+) -> MentionRewriteContext {
+    MentionRewriteContext {
+        skill_paths_by_name: build_unambiguous_skill_path_map(
+            skills,
+            disabled_paths,
+            skill_name_counts,
+            connector_slug_counts,
+        ),
+        skill_paths_by_normalized_path: build_skill_path_lookup(skills, disabled_paths),
+        connector_paths_by_slug: build_unambiguous_connector_path_map(
+            connectors,
+            connector_slug_counts,
+            skill_name_counts_lower,
+        ),
+    }
+}
+
+pub(crate) fn rewrite_text_mentions(
+    text: &str,
+    context: &MentionRewriteContext,
+    explicit_app_paths: &mut HashSet<String>,
+) -> String {
+    let mentions = extract_tool_mentions(text);
+    rewrite_skill_mentions(
+        text,
+        &mentions,
+        &context.skill_paths_by_name,
+        &context.skill_paths_by_normalized_path,
+        &context.connector_paths_by_slug,
+        explicit_app_paths,
+    )
+}
+
 pub(crate) async fn expand_skill_mentions(
     mentioned_skills: &[SkillMetadata],
     skills: &[SkillMetadata],
@@ -125,10 +172,6 @@ pub(crate) async fn expand_skill_mentions(
         connector_slug_counts,
         skill_name_counts_lower,
     );
-    let connector_ids = connectors
-        .iter()
-        .map(|connector| connector.id.clone())
-        .collect::<HashSet<String>>();
 
     let mut selected = Vec::new();
     let mut seen_names = HashSet::new();
@@ -178,7 +221,6 @@ pub(crate) async fn expand_skill_mentions(
             &skill_paths_by_name,
             &skill_paths_by_normalized_path,
             &connector_paths_by_slug,
-            &connector_ids,
             &mut explicit_app_paths,
         );
         rewritten_contents.insert(skill.path.clone(), replacement);
@@ -264,7 +306,6 @@ fn rewrite_skill_mentions(
     skill_paths_by_name: &HashMap<String, String>,
     skill_paths_by_normalized_path: &HashMap<String, String>,
     connector_paths_by_slug: &HashMap<String, String>,
-    connector_ids: &HashSet<String>,
     explicit_app_paths: &mut HashSet<String>,
 ) -> String {
     let mut pending_explicit_app_paths = HashSet::new();
@@ -275,9 +316,7 @@ fn rewrite_skill_mentions(
         }
     }
     for path in mentions.paths() {
-        if let Some(connector_id) = app_id_from_path(path)
-            && connector_ids.contains(connector_id)
-        {
+        if let Some(connector_id) = app_id_from_path(path) {
             pending_explicit_app_paths.insert(format!("{APP_PATH_PREFIX}{connector_id}"));
         }
     }
@@ -300,7 +339,7 @@ fn rewrite_skill_mentions(
             }
 
             let Some(canonical_path) =
-                resolve_linked_mention_path(path, skill_paths_by_normalized_path, connector_ids)
+                resolve_linked_mention_path(path, skill_paths_by_normalized_path)
             else {
                 return text.to_string();
             };
@@ -363,14 +402,11 @@ fn rewrite_skill_mentions(
 fn resolve_linked_mention_path(
     path: &str,
     skill_paths_by_normalized_path: &HashMap<String, String>,
-    connector_ids: &HashSet<String>,
 ) -> Option<String> {
     match tool_kind_for_path(path) {
         ToolMentionKind::App => {
             let connector_id = app_id_from_path(path)?;
-            connector_ids
-                .contains(connector_id)
-                .then(|| format!("{APP_PATH_PREFIX}{connector_id}"))
+            Some(format!("{APP_PATH_PREFIX}{connector_id}"))
         }
         ToolMentionKind::Skill => {
             let normalized = normalize_skill_path(path);
@@ -1157,6 +1193,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn expand_skill_mentions_collects_linked_app_path_without_connectors() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let alpha_path = temp.path().join("alpha").join("SKILL.md");
+        std::fs::create_dir_all(alpha_path.parent().expect("alpha parent"))
+            .expect("create alpha dir");
+        std::fs::write(
+            &alpha_path,
+            "Invoke [$google-calendar](app://connector-id) for this task.",
+        )
+        .expect("write alpha skill");
+
+        let alpha = make_skill("alpha-skill", alpha_path.to_string_lossy().as_ref());
+        let skills = vec![alpha.clone()];
+        let mentioned_skills = vec![alpha.clone()];
+        let disabled_paths = HashSet::new();
+        let skill_name_counts = HashMap::from([("alpha-skill".to_string(), 1usize)]);
+        let skill_name_counts_lower = HashMap::from([("alpha-skill".to_string(), 1usize)]);
+        let connector_slug_counts = HashMap::new();
+        let connectors = Vec::new();
+
+        let expanded = expand_skill_mentions(
+            &mentioned_skills,
+            &skills,
+            &disabled_paths,
+            &skill_name_counts,
+            &skill_name_counts_lower,
+            &connector_slug_counts,
+            &connectors,
+        )
+        .await;
+
+        assert_eq!(
+            expanded.explicit_app_paths,
+            vec!["app://connector-id".to_string()]
+        );
+        assert_eq!(
+            expanded.rewritten_contents.get(&alpha.path),
+            Some(&"Invoke [$google-calendar](app://connector-id) for this task.".to_string())
+        );
+    }
+
     #[test]
     fn rewrite_skill_mentions_rolls_back_all_changes_on_unresolvable_link() {
         let text = "use $todoist and [$beta](./SKILL.md)";
@@ -1168,7 +1246,6 @@ mod tests {
         let skill_paths_by_normalized_path = HashMap::new();
         let connector_paths_by_slug =
             HashMap::from([("todoist".to_string(), "app://todoist-id".to_string())]);
-        let connector_ids = HashSet::from(["todoist-id".to_string()]);
         let mut explicit_app_paths = HashSet::new();
 
         let rewritten = rewrite_skill_mentions(
@@ -1177,7 +1254,6 @@ mod tests {
             &skill_paths_by_name,
             &skill_paths_by_normalized_path,
             &connector_paths_by_slug,
-            &connector_ids,
             &mut explicit_app_paths,
         );
 
@@ -1195,7 +1271,6 @@ mod tests {
         )]);
         let skill_paths_by_normalized_path = HashMap::new();
         let connector_paths_by_slug = HashMap::new();
-        let connector_ids = HashSet::new();
         let mut explicit_app_paths = HashSet::new();
 
         let rewritten = rewrite_skill_mentions(
@@ -1204,12 +1279,36 @@ mod tests {
             &skill_paths_by_name,
             &skill_paths_by_normalized_path,
             &connector_paths_by_slug,
-            &connector_ids,
             &mut explicit_app_paths,
         );
 
         assert_eq!(rewritten, text);
         assert_eq!(explicit_app_paths, HashSet::<String>::new());
+    }
+
+    #[test]
+    fn rewrite_skill_mentions_tracks_linked_app_path_without_known_connector() {
+        let text = "use [$google-calendar](app://connector-id)";
+        let mentions = extract_tool_mentions(text);
+        let skill_paths_by_name = HashMap::new();
+        let skill_paths_by_normalized_path = HashMap::new();
+        let connector_paths_by_slug = HashMap::new();
+        let mut explicit_app_paths = HashSet::new();
+
+        let rewritten = rewrite_skill_mentions(
+            text,
+            &mentions,
+            &skill_paths_by_name,
+            &skill_paths_by_normalized_path,
+            &connector_paths_by_slug,
+            &mut explicit_app_paths,
+        );
+
+        assert_eq!(rewritten, text);
+        assert_eq!(
+            explicit_app_paths,
+            HashSet::from(["app://connector-id".to_string()])
+        );
     }
 
     #[test]
@@ -1220,7 +1319,6 @@ mod tests {
         let skill_paths_by_normalized_path = HashMap::new();
         let connector_paths_by_slug =
             HashMap::from([("github".to_string(), "app://github-id".to_string())]);
-        let connector_ids = HashSet::from(["github-id".to_string()]);
         let mut explicit_app_paths = HashSet::new();
 
         let rewritten = rewrite_skill_mentions(
@@ -1229,7 +1327,6 @@ mod tests {
             &skill_paths_by_name,
             &skill_paths_by_normalized_path,
             &connector_paths_by_slug,
-            &connector_ids,
             &mut explicit_app_paths,
         );
 
