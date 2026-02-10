@@ -783,6 +783,10 @@ async fn run_memory_consolidation_for_scope(
     }
 
     let prompt = memories::build_consolidation_prompt(&memory_root);
+    let input = vec![UserInput::Text {
+        text: prompt,
+        text_elements: vec![],
+    }];
     let mut consolidation_config = config.as_ref().clone();
     consolidation_config.cwd = memory_root.clone();
     let source = SessionSource::SubAgent(SubAgentSource::Other(
@@ -791,14 +795,7 @@ async fn run_memory_consolidation_for_scope(
     match session
         .services
         .agent_control
-        .spawn_agent(
-            consolidation_config,
-            vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-            Some(source),
-        )
+        .spawn_agent(consolidation_config, input, Some(source))
         .await
     {
         Ok(consolidation_agent_id) => {
