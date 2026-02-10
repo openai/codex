@@ -14,7 +14,7 @@ use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
-use dirs::home_dir;
+use codex_utils_home_dir::find_agents_home;
 use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -176,7 +176,7 @@ where
 
 fn skill_roots_from_layer_stack_inner(
     config_layer_stack: &ConfigLayerStack,
-    home_dir: Option<&Path>,
+    agents_home: Option<&Path>,
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
@@ -202,10 +202,11 @@ fn skill_roots_from_layer_stack_inner(
                     scope: SkillScope::User,
                 });
 
-                // `$HOME/.agents/skills` (user-installed skills).
-                if let Some(home_dir) = home_dir {
+                // `$AGENTS_HOME/skills` (user-installed skills, defaulting to
+                // `~/.agents/skills` when `AGENTS_HOME` is unset).
+                if let Some(agents_home) = agents_home {
                     roots.push(SkillRoot {
-                        path: home_dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+                        path: agents_home.join(SKILLS_DIR_NAME),
                         scope: SkillScope::User,
                     });
                 }
@@ -242,16 +243,23 @@ fn skill_roots(config: &Config) -> Vec<SkillRoot> {
 #[cfg(test)]
 pub(crate) fn skill_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
-    home_dir: Option<&Path>,
+    agents_home: Option<&Path>,
 ) -> Vec<SkillRoot> {
-    skill_roots_from_layer_stack_inner(config_layer_stack, home_dir)
+    skill_roots_from_layer_stack_inner(config_layer_stack, agents_home)
 }
 
 pub(crate) fn skill_roots_from_layer_stack_with_agents(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
 ) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir().as_deref());
+    let agents_home = match find_agents_home() {
+        Ok(path) => Some(path),
+        Err(err) => {
+            tracing::warn!("failed to resolve AGENTS_HOME: {err}");
+            None
+        }
+    };
+    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, agents_home.as_deref());
     roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
     dedupe_skill_roots_by_path(&mut roots);
     roots
@@ -809,6 +817,7 @@ mod tests {
     use codex_protocol::config_types::TrustLevel;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::Path;
@@ -866,6 +875,15 @@ mod tests {
         canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
+    fn load_skills_for_test(cfg: &Config) -> SkillLoadOutcome {
+        // Keep loader tests deterministic regardless of user-installed
+        // `$AGENTS_HOME/skills` on the host running the test.
+        let mut roots = skill_roots_from_layer_stack_inner(&cfg.config_layer_stack, None);
+        roots.extend(repo_agents_skill_roots(&cfg.config_layer_stack, &cfg.cwd));
+        dedupe_skill_roots_by_path(&mut roots);
+        load_skills_from_roots(roots)
+    }
+
     #[test]
     fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to_admin()
     -> anyhow::Result<()> {
@@ -873,6 +891,7 @@ mod tests {
 
         let system_folder = tmp.path().join("etc/codex");
         let home_folder = tmp.path().join("home");
+        let agents_home = home_folder.join(AGENTS_DIR_NAME);
         let user_folder = home_folder.join("codex");
         fs::create_dir_all(&system_folder)?;
         fs::create_dir_all(&user_folder)?;
@@ -897,7 +916,7 @@ mod tests {
             ConfigRequirementsToml::default(),
         )?;
 
-        let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+        let got = skill_roots_from_layer_stack(&stack, Some(&agents_home))
             .into_iter()
             .map(|root| (root.scope, root.path))
             .collect::<Vec<_>>();
@@ -906,10 +925,7 @@ mod tests {
             got,
             vec![
                 (SkillScope::User, user_folder.join("skills")),
-                (
-                    SkillScope::User,
-                    home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
-                ),
+                (SkillScope::User, agents_home.join(SKILLS_DIR_NAME)),
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system")
@@ -926,6 +942,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
 
         let home_folder = tmp.path().join("home");
+        let agents_home = home_folder.join(AGENTS_DIR_NAME);
         let user_folder = home_folder.join("codex");
         fs::create_dir_all(&user_folder)?;
 
@@ -955,7 +972,7 @@ mod tests {
             ConfigRequirementsToml::default(),
         )?;
 
-        let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+        let got = skill_roots_from_layer_stack(&stack, Some(&agents_home))
             .into_iter()
             .map(|root| (root.scope, root.path))
             .collect::<Vec<_>>();
@@ -965,10 +982,7 @@ mod tests {
             vec![
                 (SkillScope::Repo, dot_codex.join("skills")),
                 (SkillScope::User, user_folder.join("skills")),
-                (
-                    SkillScope::User,
-                    home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
-                ),
+                (SkillScope::User, agents_home.join(SKILLS_DIR_NAME)),
                 (
                     SkillScope::System,
                     user_folder.join("skills").join(".system")
@@ -984,6 +998,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
 
         let home_folder = tmp.path().join("home");
+        let agents_home = home_folder.join(AGENTS_DIR_NAME);
         let user_folder = home_folder.join("codex");
         fs::create_dir_all(&user_folder)?;
 
@@ -999,14 +1014,14 @@ mod tests {
         )?;
 
         let skill_path = write_skill_at(
-            &home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME),
+            &agents_home.join(SKILLS_DIR_NAME),
             "agents-home",
             "agents-home-skill",
             "from home agents",
         );
 
         let outcome =
-            load_skills_from_roots(skill_roots_from_layer_stack(&stack, Some(&home_folder)));
+            load_skills_from_roots(skill_roots_from_layer_stack(&stack, Some(&agents_home)));
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1117,7 +1132,7 @@ mod tests {
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1195,7 +1210,7 @@ interface:
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1244,7 +1259,7 @@ policy:
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1275,7 +1290,7 @@ policy: {}
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1316,7 +1331,7 @@ policy: {}
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1363,7 +1378,7 @@ policy: {}
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1409,7 +1424,7 @@ policy: {}
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1457,7 +1472,7 @@ policy: {}
         );
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1501,7 +1516,7 @@ policy: {}
         symlink_dir(shared.path(), &codex_home.path().join("skills/shared"));
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1537,7 +1552,7 @@ policy: {}
         symlink_file(&shared_skill_path, &skill_dir.join(SKILLS_FILENAME));
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1561,7 +1576,7 @@ policy: {}
         let skill_path = write_skill_at(&cycle_dir, "demo", "cycle-skill", "still loads");
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1637,7 +1652,7 @@ policy: {}
         symlink_dir(shared.path(), &repo_skills_root.join("shared"));
 
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -1732,7 +1747,7 @@ policy: {}
         let skill_path = write_skill(&codex_home, "demo", "demo-skill", "does things\ncarefully");
         let cfg = make_config(&codex_home).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1763,7 +1778,7 @@ policy: {}
         fs::write(&skill_path, contents).unwrap();
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1796,7 +1811,7 @@ policy: {}
         fs::write(skill_dir.join(SKILLS_FILENAME), contents).unwrap();
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
         assert!(
@@ -1825,7 +1840,7 @@ policy: {}
         fs::write(invalid_dir.join(SKILLS_FILENAME), "---\nname: bad").unwrap();
 
         let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert_eq!(outcome.skills.len(), 0);
         assert_eq!(outcome.errors.len(), 1);
         assert!(
@@ -1843,7 +1858,7 @@ policy: {}
         write_skill(&codex_home, "max-len", "max-len", &max_desc);
         let cfg = make_config(&codex_home).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1853,7 +1868,7 @@ policy: {}
 
         let too_long_desc = "\u{1F4A1}".repeat(MAX_DESCRIPTION_LEN + 1);
         write_skill(&codex_home, "too-long", "too-long", &too_long_desc);
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.errors.len(), 1);
         assert!(
@@ -1875,7 +1890,7 @@ policy: {}
         let skill_path = write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1910,7 +1925,7 @@ policy: {}
         );
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -1962,7 +1977,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2012,7 +2027,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2089,7 +2104,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2152,7 +2167,7 @@ policy: {}
         );
 
         let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
 
         assert!(
             outcome.errors.is_empty(),
@@ -2216,7 +2231,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, repo_dir).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2245,7 +2260,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, file_path).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2285,7 +2300,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
@@ -2303,7 +2318,7 @@ policy: {}
 
         let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
 
-        let outcome = load_skills(&cfg);
+        let outcome = load_skills_for_test(&cfg);
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
