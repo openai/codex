@@ -2265,6 +2265,13 @@ pub struct SkillsListEntry {
     pub errors: Vec<SkillErrorInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SessionNetworkProxyRuntime {
+    pub http_addr: String,
+    pub socks_addr: String,
+    pub admin_addr: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
@@ -2305,6 +2312,11 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    /// Runtime proxy bind addresses, when the managed proxy was started for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2696,6 +2708,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(rollout_file.path().to_path_buf()),
             }),
         };

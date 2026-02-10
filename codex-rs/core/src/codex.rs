@@ -13,6 +13,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
+use crate::agent::status::is_final as is_final_agent_status;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
@@ -26,9 +27,6 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
-use crate::hooks::HookEvent;
-use crate::hooks::HookEventAfterAgent;
-use crate::hooks::Hooks;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -44,6 +42,11 @@ use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookPayload;
+use codex_hooks::Hooks;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -107,12 +110,14 @@ use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -144,6 +149,7 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
 use crate::mcp_connection_manager::filter_mcp_tools_by_name;
+use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_paths;
@@ -172,6 +178,7 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SessionNetworkProxyRuntime;
 use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
@@ -184,8 +191,10 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
+use crate::rollout::list::ThreadSortKey;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::shell;
@@ -237,6 +246,9 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
+
+mod memory_startup;
+
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
@@ -539,6 +551,7 @@ pub(crate) struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
@@ -803,6 +816,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
+        network: Option<NetworkProxy>,
         sub_id: String,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
@@ -842,6 +856,7 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.value(),
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+            network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
             tools_config,
@@ -1064,6 +1079,21 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
+        let network_proxy =
+            match config.network.as_ref() {
+                Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
+                    anyhow::anyhow!("failed to start managed network proxy: {err}")
+                })?),
+                None => None,
+            };
+        let session_network_proxy = network_proxy.as_ref().map(|started| {
+            let proxy = started.proxy();
+            SessionNetworkProxyRuntime {
+                http_addr: proxy.http_addr().to_string(),
+                socks_addr: proxy.socks_addr().to_string(),
+                admin_addr: proxy.admin_addr().to_string(),
+            }
+        });
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1073,7 +1103,7 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.as_ref()),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
@@ -1086,6 +1116,7 @@ impl Session {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy,
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -1144,6 +1175,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                network_proxy: session_network_proxy,
                 rollout_path,
             }),
         })
@@ -1206,6 +1238,12 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
+
+        memory_startup::start_memories_startup_task(
+            &sess,
+            Arc::clone(&config),
+            &session_configuration.session_source,
+        );
 
         Ok(sess)
     }
@@ -1559,6 +1597,10 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_info,
+            self.services
+                .network_proxy
+                .as_ref()
+                .map(StartedNetworkProxy::proxy),
             sub_id,
         );
 
@@ -3702,6 +3744,7 @@ async fn spawn_review_thread(
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
@@ -4014,7 +4057,7 @@ pub(crate) async fn run_turn(
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
                     sess.hooks()
-                        .dispatch(crate::hooks::HookPayload {
+                        .dispatch(HookPayload {
                             session_id: sess.conversation_id,
                             cwd: turn_context.cwd.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -6175,7 +6218,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(&config),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
@@ -6188,6 +6231,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
@@ -6211,6 +6255,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         );
 
@@ -6308,7 +6353,7 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(&config),
+            hooks: Hooks::new(config.notify.clone()),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
@@ -6321,6 +6366,7 @@ mod tests {
             skills_manager,
             file_watcher,
             agent_control,
+            network_proxy: None,
             state_db: None,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -6344,6 +6390,7 @@ mod tests {
             &session_configuration,
             per_turn_config,
             model_info,
+            None,
             "turn_id".to_string(),
         ));
 

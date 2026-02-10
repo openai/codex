@@ -25,7 +25,7 @@ if _SPEC is None or _SPEC.loader is None:
 _BUILD_MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BUILD_MODULE)
 PACKAGE_NATIVE_COMPONENTS = getattr(_BUILD_MODULE, "PACKAGE_NATIVE_COMPONENTS", {})
-WINDOWS_ONLY_COMPONENTS = getattr(_BUILD_MODULE, "WINDOWS_ONLY_COMPONENTS", {})
+PACKAGE_EXPANSIONS = getattr(_BUILD_MODULE, "PACKAGE_EXPANSIONS", {})
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,8 +64,17 @@ def collect_native_components(packages: list[str]) -> set[str]:
     components: set[str] = set()
     for package in packages:
         components.update(PACKAGE_NATIVE_COMPONENTS.get(package, []))
-        components.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
     return components
+
+
+def expand_packages(packages: list[str]) -> list[str]:
+    expanded: list[str] = []
+    for package in packages:
+        for expanded_package in PACKAGE_EXPANSIONS.get(package, [package]):
+            if expanded_package in expanded:
+                continue
+            expanded.append(expanded_package)
+    return expanded
 
 
 def resolve_release_workflow(version: str) -> dict:
@@ -128,14 +137,14 @@ def main() -> int:
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
-    packages = list(args.packages)
+    packages = expand_packages(list(args.packages))
     native_components = collect_native_components(packages)
 
     vendor_temp_root: Path | None = None
     vendor_src: Path | None = None
     resolved_head_sha: str | None = None
 
-    final_messsages = []
+    final_messages = []
 
     try:
         if native_components:
@@ -174,12 +183,12 @@ def main() -> int:
                 if not args.keep_staging_dirs:
                     shutil.rmtree(staging_dir, ignore_errors=True)
 
-            final_messsages.append(f"Staged {package} at {pack_output}")
+            final_messages.append(f"Staged {package} at {pack_output}")
     finally:
         if vendor_temp_root is not None and not args.keep_staging_dirs:
             shutil.rmtree(vendor_temp_root, ignore_errors=True)
 
-    for msg in final_messsages:
+    for msg in final_messages:
         print(msg)
 
     return 0

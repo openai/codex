@@ -593,18 +593,20 @@ jobs:
           version="${{ needs.release.outputs.version }}"
           tag="${{ needs.release.outputs.tag }}"
           mkdir -p dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-sdk-npm-${version}.tgz" \
-            --dir dist/npm
+          patterns=(
+            "codex-npm-${version}.tgz"
+            "codex-linux-*-npm-${version}.tgz"
+            "codex-darwin-*-npm-${version}.tgz"
+            "codex-win32-*-npm-${version}.tgz"
+            "codex-responses-api-proxy-npm-${version}.tgz"
+            "codex-sdk-npm-${version}.tgz"
+          )
+          for pattern in "${patterns[@]}"; do
+            gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$pattern" \
+              --dir dist/npm
+          done
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
       - name: Publish to npm
@@ -618,14 +620,15 @@ jobs:
             tag_args+=(--tag "${NPM_TAG}")
           fi
 
-          tarballs=(
-            "codex-npm-${VERSION}.tgz"
-            "codex-responses-api-proxy-npm-${VERSION}.tgz"
-            "codex-sdk-npm-${VERSION}.tgz"
-          )
+          shopt -s nullglob
+          tarballs=(dist/npm/*-npm-"${VERSION}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found in dist/npm for version ${VERSION}"
+            exit 1
+          fi
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+            npm publish "${GITHUB_WORKSPACE}/${tarball}" "${tag_args[@]}"
           done
 
   update-branch:

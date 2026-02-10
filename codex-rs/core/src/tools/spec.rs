@@ -453,26 +453,80 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
+fn create_collab_input_items_schema() -> JsonSchema {
+    let properties = BTreeMap::from([
+        (
+            "type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Input item type: text, image, local_image, skill, or mention.".to_string(),
+                ),
+            },
+        ),
+        (
+            "text".to_string(),
+            JsonSchema::String {
+                description: Some("Text content when type is text.".to_string()),
+            },
+        ),
+        (
+            "image_url".to_string(),
+            JsonSchema::String {
+                description: Some("Image URL when type is image.".to_string()),
+            },
+        ),
+        (
+            "path".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Path when type is local_image/skill, or mention target such as app://<connector-id> when type is mention."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "name".to_string(),
+            JsonSchema::String {
+                description: Some("Display name when type is skill or mention.".to_string()),
+            },
+        ),
+    ]);
+
+    JsonSchema::Array {
+        items: Box::new(JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        }),
+        description: Some(
+            "Structured input items. Use this to pass explicit mentions (for example app:// connector paths)."
+                .to_string(),
+        ),
+    }
+}
+
 fn create_spawn_agent_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Initial task for the new agent. Include scope, constraints, and the expected output."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "agent_type".to_string(),
-        JsonSchema::String {
-            description: Some(format!(
-                "Optional agent type ({}). Use an explicit type when delegating.",
-                AgentRole::enum_values().join(", ")
-            )),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Initial plain-text task for the new agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "agent_type".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Optional agent type ({}). Use an explicit type when delegating.",
+                    AgentRole::enum_values().join(", ")
+                )),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -482,35 +536,40 @@ fn create_spawn_agent_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["message".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
 }
 
 fn create_send_input_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to message (from spawn_agent).".to_string()),
-        },
-    );
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some("Message to send to the agent.".to_string()),
-        },
-    );
-    properties.insert(
-        "interrupt".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some("Agent id to message (from spawn_agent).".to_string()),
+            },
+        ),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Legacy plain-text message to send to the agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
@@ -520,7 +579,7 @@ fn create_send_input_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string(), "message".to_string()]),
+            required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1086,6 +1145,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
         },
     })
 }
+
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
