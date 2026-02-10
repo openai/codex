@@ -15,6 +15,7 @@ mod upstream;
 
 pub use config::NetworkMode;
 pub use config::NetworkProxyConfig;
+pub use config::host_and_port_from_network_addr;
 pub use network_policy::NetworkDecision;
 pub use network_policy::NetworkPolicyDecider;
 pub use network_policy::NetworkPolicyRequest;

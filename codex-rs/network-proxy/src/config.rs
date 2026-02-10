@@ -8,13 +8,13 @@ use std::net::SocketAddr;
 use tracing::warn;
 use url::Url;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkProxyConfig {
     #[serde(default)]
     pub network: NetworkProxySettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
@@ -205,6 +205,30 @@ fn resolve_addr(url: &str, default_port: u16) -> Result<SocketAddr> {
     }
 }
 
+pub fn host_and_port_from_network_addr(value: &str, default_port: u16) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<missing>".to_string();
+    }
+
+    let parts = match parse_host_port(trimmed, default_port) {
+        Ok(parts) => parts,
+        Err(_) => {
+            return format_host_and_port(trimmed, default_port);
+        }
+    };
+
+    format_host_and_port(&parts.host, parts.port)
+}
+
+fn format_host_and_port(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SocketAddressParts {
     host: String,
@@ -280,14 +304,13 @@ fn parse_host_port_fallback(input: &str, default_port: u16) -> Result<SocketAddr
     // accidentally interpreting unbracketed IPv6 addresses as `host:port`.
     if host_port.bytes().filter(|b| *b == b':').count() == 1
         && let Some((host, port)) = host_port.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
     {
         if host.is_empty() {
             bail!("missing host in network proxy address: {input}");
         }
         return Ok(SocketAddressParts {
             host: host.to_string(),
-            port,
+            port: port.parse::<u16>().ok().unwrap_or(default_port),
         });
     }
 
@@ -376,9 +399,22 @@ mod tests {
         assert_eq!(
             parse_host_port("example.com:notaport", 3128).unwrap(),
             SocketAddressParts {
-                host: "example.com:notaport".to_string(),
+                host: "example.com".to_string(),
                 port: 3128,
             }
+        );
+    }
+
+    #[test]
+    fn host_and_port_from_network_addr_defaults_for_empty_string() {
+        assert_eq!(host_and_port_from_network_addr("", 1234), "<missing>");
+    }
+
+    #[test]
+    fn host_and_port_from_network_addr_formats_ipv6() {
+        assert_eq!(
+            host_and_port_from_network_addr("http://[::1]:8080", 3128),
+            "[::1]:8080"
         );
     }
 
