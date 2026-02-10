@@ -142,7 +142,7 @@ impl ModelsManager {
         let model = if let Some(remote) = remote {
             remote
         } else {
-            model_info::find_model_info_for_slug(model)
+            model_info::model_info_from_slug(model)
         };
         model_info::with_config_overrides(model, config)
     }
@@ -366,7 +366,7 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
+        model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
     }
 }
 

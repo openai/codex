@@ -498,7 +498,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
@@ -632,4 +632,24 @@ pub fn maybe_push_unstable_features_warning(
         id: "".to_owned(),
         msg: EventMsg::Warning(WarningEvent { message }),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn under_development_features_are_disabled_by_default() {
+        for spec in FEATURES {
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                assert_eq!(
+                    spec.default_enabled, false,
+                    "feature `{}` is under development and must be disabled by default",
+                    spec.key
+                );
+            }
+        }
+    }
 }
