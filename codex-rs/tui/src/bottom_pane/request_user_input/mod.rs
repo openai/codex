@@ -280,9 +280,12 @@ impl RequestUserInputOverlay {
                         let prefix = if selected { '›' } else { ' ' };
                         let label = opt.label.as_str();
                         let number = idx + 1;
+                        let prefix_label = format!("{prefix} {number}. ");
+                        let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                         GenericDisplayRow {
-                            name: format!("{prefix} {number}. {label}"),
+                            name: format!("{prefix_label}{label}"),
                             description: Some(opt.description.clone()),
+                            wrap_indent: Some(wrap_indent),
                             ..Default::default()
                         }
                     })
@@ -293,9 +296,12 @@ impl RequestUserInputOverlay {
                     let selected = selected_idx.is_some_and(|sel| sel == idx);
                     let prefix = if selected { '›' } else { ' ' };
                     let number = idx + 1;
+                    let prefix_label = format!("{prefix} {number}. ");
+                    let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                     rows.push(GenericDisplayRow {
-                        name: format!("{prefix} {number}. {OTHER_OPTION_LABEL}"),
+                        name: format!("{prefix_label}{OTHER_OPTION_LABEL}"),
                         description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
+                        wrap_indent: Some(wrap_indent),
                         ..Default::default()
                     });
                 }
@@ -443,10 +449,10 @@ impl RequestUserInputOverlay {
         };
         tips.push(enter_tip);
         if question_count > 1 {
-            if is_last_question {
-                tips.push(FooterTip::new("ctrl + n first question"));
-            } else {
-                tips.push(FooterTip::new("ctrl + n next question"));
+            if self.has_options() && !self.focus_is_notes() {
+                tips.push(FooterTip::new("←/→ to navigate questions"));
+            } else if !self.has_options() {
+                tips.push(FooterTip::new("ctrl + p / ctrl + n change question"));
             }
         }
         if !(self.has_options() && notes_visible) {
@@ -1043,7 +1049,23 @@ impl BottomPaneView for RequestUserInputOverlay {
                 return;
             }
             KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_options() && matches!(self.focus, Focus::Options) => {
+                self.move_question(false);
+                return;
+            }
+            KeyEvent {
                 code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_options() && matches!(self.focus, Focus::Options) => {
+                self.move_question(true);
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
@@ -1366,6 +1388,57 @@ mod tests {
         }
     }
 
+    fn question_with_very_long_option_text(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Choose one option.".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/unknown (Recommended when triaging long-running background work and status transitions)".to_string(),
+                    description: "Keep async job statuses for progress tracking and include enough context for debugging retries, stale workers, and unexpected expiration paths.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Add a short status model".to_string(),
+                    description: "Simpler labels with less detail for quick rollouts.".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn question_with_long_scroll_options(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question:
+                "Choose one option; each hint is intentionally very long to test wrapped scrolling."
+                    .to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint A (Recommended)".to_string(),
+                    description: "Select this if you want a deliberately overextended explanatory hint that reads like a miniature specification, including context, rationale, expected behavior, and an explicit statement that this choice is mainly for testing how gracefully the interface wraps, truncates, and preserves readability under unusually verbose helper text conditions.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint B".to_string(),
+                    description: "Select this if you want an equally verbose but differently phrased guidance block that emphasizes user-facing clarity, spacing tolerance, multiline wrapping, visual hierarchy interactions, and whether long descriptive metadata remains understandable when scanned quickly in a constrained layout where cognitive load is already high.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint C".to_string(),
+                    description: "Select this when you specifically want to verify that navigating downward will keep the currently highlighted option visible, even when previous options consume many wrapped lines and would otherwise push the selection out of the viewport.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "None of the above".to_string(),
+                    description:
+                        "Use this only if the previous long-form options do not apply.".to_string(),
+                },
+            ]),
+        }
+    }
+
     fn question_without_options(id: &str, header: &str) -> RequestUserInputQuestion {
         RequestUserInputQuestion {
             id: id.to_string(),
@@ -1641,6 +1714,97 @@ mod tests {
         assert_eq!(overlay.current_index(), 1);
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
         assert_eq!(overlay.current_index(), 0);
+    }
+
+    #[test]
+    fn left_right_move_between_questions_in_options() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(overlay.current_index(), 0);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Right));
+        assert_eq!(overlay.current_index(), 1);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Left));
+        assert_eq!(overlay.current_index(), 0);
+    }
+
+    #[test]
+    fn options_notes_focus_hides_question_navigation_tip() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let tips = overlay.footer_tips();
+        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            tip_texts,
+            vec![
+                "tab to add notes",
+                "enter to submit answer",
+                "←/→ to navigate questions",
+                "esc to interrupt",
+            ]
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        let tips = overlay.footer_tips();
+        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            tip_texts,
+            vec!["tab or esc to clear notes", "enter to submit answer",]
+        );
+    }
+
+    #[test]
+    fn freeform_shows_ctrl_p_and_ctrl_n_question_navigation_tip() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Area"),
+                    question_without_options("q2", "Goal"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay.move_question(true);
+
+        let tips = overlay.footer_tips();
+        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            tip_texts,
+            vec![
+                "enter to submit all",
+                "ctrl + p / ctrl + n change question",
+                "esc to interrupt",
+            ]
+        );
     }
 
     #[test]
@@ -2465,6 +2629,49 @@ mod tests {
         insta::assert_snapshot!(
             "request_user_input_wrapped_options",
             render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_long_option_text_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_very_long_option_text("q1", "Status")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let area = Rect::new(0, 0, 120, 18);
+        insta::assert_snapshot!(
+            "request_user_input_long_option_text",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn selected_long_wrapped_option_stays_visible() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_long_scroll_options("q1", "Scroll")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.options_state.selected_idx = Some(2);
+
+        let rendered = render_snapshot(&overlay, Rect::new(0, 0, 80, 20));
+        assert!(
+            rendered.contains("› 3. Use Detailed Hint C"),
+            "expected selected option to be visible in viewport\n{rendered}"
         );
     }
 

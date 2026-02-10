@@ -1,7 +1,7 @@
 use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;
@@ -75,7 +75,8 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,
@@ -107,8 +108,12 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
             "app.version".to_string(),
             env!("CARGO_PKG_VERSION").to_string(),
         ),
-        ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
+        (
+            "auth_mode".to_string(),
+            TelemetryAuthMode::ApiKey.to_string(),
+        ),
         ("model".to_string(), "gpt-5.1".to_string()),
+        ("originator".to_string(), "test_originator".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("success".to_string(), "true".to_string()),

@@ -99,8 +99,11 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::canonicalize;
     use super::config_schema_json;
+    use super::write_config_schema;
 
+    use pretty_assertions::assert_eq;
     use similar::TextDiff;
+    use tempfile::TempDir;
 
     #[test]
     fn config_schema_matches_fixture() {
@@ -128,5 +131,19 @@ mod tests {
 Run `just write-config-schema` to overwrite with your changes.\n\n{diff}"
             );
         }
+
+        // Make sure the version in the repo matches exactly: https://github.com/openai/codex/pull/10977.
+        let tmp = TempDir::new().expect("create temp dir");
+        let tmp_path = tmp.path().join("config.schema.json");
+        write_config_schema(&tmp_path).expect("write config schema to temp path");
+        let tmp_contents =
+            std::fs::read_to_string(&tmp_path).expect("read back config schema from temp path");
+        #[cfg(windows)]
+        let fixture = fixture.replace("\r\n", "\n");
+
+        assert_eq!(
+            fixture, tmp_contents,
+            "fixture should match exactly with generated schema"
+        );
     }
 }

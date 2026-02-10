@@ -51,6 +51,7 @@ You can enable notifications by configuring a script that is run whenever the ag
 ### `codex exec` to run Codex programmatically/non-interactively
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
+Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
 ### Experimenting with the Codex Sandbox
 
@@ -96,3 +97,5 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+
+If you want to contribute or inspect behavior in detail, start by reading the module-level `README.md` files under each crate and run the project workspace from the top-level `codex-rs` directory so shared config, features, and build scripts stay aligned.

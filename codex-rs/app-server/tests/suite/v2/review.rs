@@ -5,6 +5,8 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -19,7 +21,9 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -206,7 +210,9 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     mcp.send_response(
         request_id,
-        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
     )
     .await?;
     timeout(
@@ -270,6 +276,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
+    materialize_thread_rollout(&mut mcp, &thread_id).await?;
 
     let review_req = mcp
         .send_review_start_request(ReviewStartParams {
@@ -387,6 +394,30 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     Ok(thread.id)
 }
 
+async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Result<()> {
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![V2UserInput::Text {
+                text: "materialize rollout".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    Ok(())
+}
+
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
     create_config_toml_with_approval_policy(codex_home, server_uri, "never")
 }
@@ -406,6 +437,9 @@ approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+remote_models = false
 
 [model_providers.mock_provider]
 name = "Mock provider"

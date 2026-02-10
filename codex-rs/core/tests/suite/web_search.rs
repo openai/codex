@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::WireApi;
-use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::WebSearchMode;
@@ -22,15 +20,6 @@ fn find_web_search_tool(body: &Value) -> &Value {
         .expect("tools should include a web_search tool")
 }
 
-#[allow(clippy::expect_used)]
-fn has_web_search_tool(body: &Value) -> bool {
-    body["tools"]
-        .as_array()
-        .expect("request body should include tools array")
-        .iter()
-        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_mode_cached_sets_external_web_access_false() {
     skip_if_no_network!();
@@ -45,14 +34,17 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached web search")
+    test.submit_turn_with_policy("hello cached web search", SandboxPolicy::ReadOnly)
         .await
         .expect("submit turn");
 
@@ -80,14 +72,17 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
         .with_model("gpt-5-codex")
         .with_config(|config| {
             config.features.enable(Feature::WebSearchRequest);
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached+live flags")
+    test.submit_turn_with_policy("hello cached+live flags", SandboxPolicy::ReadOnly)
         .await
         .expect("submit turn");
 
@@ -101,7 +96,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_mode_defaults_to_cached_when_unset() {
+async fn web_search_mode_defaults_to_cached_when_features_disabled() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -114,7 +109,10 @@ async fn web_search_mode_defaults_to_cached_when_unset() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = None;
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.disable(Feature::WebSearchCached);
             config.features.disable(Feature::WebSearchRequest);
         });
@@ -159,7 +157,10 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = None;
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
             config.features.disable(Feature::WebSearchCached);
             config.features.disable(Feature::WebSearchRequest);
         });
@@ -196,50 +197,5 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
             .and_then(Value::as_bool),
         Some(true),
         "danger-full-access policy should default web_search to live"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_mode_defaults_to_disabled_for_azure_responses() {
-    skip_if_no_network!();
-
-    let server = start_mock_server().await;
-    let sse = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let resp_mock = responses::mount_sse_once(&server, sse).await;
-
-    let mut builder = test_codex()
-        .with_model("gpt-5-codex")
-        .with_config(|config| {
-            let base_url = config.model_provider.base_url.clone();
-            let mut provider = built_in_model_providers()["openai"].clone();
-            provider.name = "Azure".to_string();
-            provider.base_url = base_url;
-            provider.wire_api = WireApi::Responses;
-            config.model_provider_id = provider.name.clone();
-            config.model_provider = provider;
-            config.web_search_mode = None;
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
-        });
-    let test = builder
-        .build(&server)
-        .await
-        .expect("create test Codex conversation");
-
-    test.submit_turn_with_policy(
-        "hello azure default web search",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await
-    .expect("submit turn");
-
-    let body = resp_mock.single_request().body_json();
-    assert_eq!(
-        has_web_search_tool(&body),
-        false,
-        "azure responses requests should disable web_search by default"
     );
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -100,7 +101,8 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 
         Ok(ExternalAuthTokens {
             access_token: response.access_token,
-            id_token: response.id_token,
+            chatgpt_account_id: response.chatgpt_account_id,
+            chatgpt_plan_type: response.chatgpt_plan_type,
         })
     }
 }
@@ -156,6 +158,7 @@ impl MessageProcessor {
             auth_manager.clone(),
             SessionSource::VSCode,
         ));
+        let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
             thread_manager,
@@ -225,12 +228,21 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
-                    let experimental_api_enabled = params
-                        .capabilities
-                        .as_ref()
-                        .is_some_and(|cap| cap.experimental_api);
+                    let (experimental_api_enabled, opt_out_notification_methods) =
+                        match params.capabilities {
+                            Some(capabilities) => (
+                                capabilities.experimental_api,
+                                capabilities
+                                    .opt_out_notification_methods
+                                    .unwrap_or_default(),
+                            ),
+                            None => (false, Vec::new()),
+                        };
                     self.experimental_api_enabled
                         .store(experimental_api_enabled, Ordering::Relaxed);
+                    self.outgoing
+                        .set_opted_out_notification_methods(opt_out_notification_methods)
+                        .await;
                     let ClientInfo {
                         name,
                         title: _title,

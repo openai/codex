@@ -15,13 +15,14 @@ In the codex-rs folder where the rust code lives:
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
+- Do not create small helper methods that are referenced only once.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
-Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
+Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
 ## TUI style conventions
 
@@ -128,15 +129,11 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
   `*Params` for request payloads, `*Response` for responses, and `*Notification` for notifications.
 - Expose RPC methods as `<resource>/<method>` and keep `<resource>` singular (for example, `thread/read`, `app/list`).
 - Always expose fields as camelCase on the wire with `#[serde(rename_all = "camelCase")]` unless a tagged union or explicit compatibility requirement needs a targeted rename.
+- Exception: config RPC payloads are expected to use snake_case to mirror config.toml keys (see the config read/write/list APIs in `app-server-protocol/src/protocol/v2.rs`).
 - Always set `#[ts(export_to = "v2/")]` on v2 request/response/notification types so generated TypeScript lands in the correct namespace.
 - Never use `#[serde(skip_serializing_if = "Option::is_none")]` for v2 API payload fields.
   Exception: client->server requests that intentionally have no params may use:
   `params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>`.
-- For client->server JSON-RPC request payloads (`*Params`) only, every optional field must be annotated with `#[ts(optional = nullable)]`. Do not use `#[ts(optional = nullable)]` outside client->server request payloads (`*Params`).
-- For client->server JSON-RPC request payloads only, and you want to express a boolean field where omission means `false`, use `#[serde(default, skip_serializing_if = "std::ops::Not::not")] pub field: bool` over `Option<bool>`.
-- For new list methods, implement cursor pagination by default:
-  request fields `pub cursor: Option<String>` and `pub limit: Option<u32>`,
-  response fields `pub data: Vec<...>` and `pub next_cursor: Option<String>`.
 - Keep Rust and TS wire renames aligned. If a field or variant uses `#[serde(rename = "...")]`, add matching `#[ts(rename = "...")]`.
 - For discriminated unions, use explicit tagging in both serializers:
   `#[serde(tag = "type", ...)]` and `#[ts(tag = "type", ...)]`.
@@ -144,6 +141,15 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - Timestamps should be integer Unix seconds (`i64`) and named `*_at` (for example, `created_at`, `updated_at`, `resets_at`).
 - For experimental API surface area:
   use `#[experimental("method/or/field")]`, derive `ExperimentalApi` when field-level gating is needed, and use `inspect_params: true` in `common.rs` when only some fields of a method are experimental.
+
+### Client->server request payloads (`*Params`)
+
+- Every optional field must be annotated with `#[ts(optional = nullable)]`. Do not use `#[ts(optional = nullable)]` outside client->server request payloads (`*Params`).
+- Optional collection fields (for example `Vec`, `HashMap`) must use `Option<...>` + `#[ts(optional = nullable)]`. Do not use `#[serde(default)]` to model optional collections, and do not use `skip_serializing_if` on v2 payload fields.
+- When you want omission to mean `false` for boolean fields, use `#[serde(default, skip_serializing_if = "std::ops::Not::not")] pub field: bool` over `Option<bool>`.
+- For new list methods, implement cursor pagination by default:
+  request fields `pub cursor: Option<String>` and `pub limit: Option<u32>`,
+  response fields `pub data: Vec<...>` and `pub next_cursor: Option<String>`.
 
 ### Development Workflow
 

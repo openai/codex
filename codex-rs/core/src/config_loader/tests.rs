@@ -16,6 +16,7 @@ use crate::config_loader::config_requirements::RequirementSource;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
@@ -54,6 +55,30 @@ async fn make_config_for_test(
         .expect("serialize config"),
     )
     .await
+}
+
+#[tokio::test]
+async fn cli_overrides_resolve_relative_paths_against_cwd() -> std::io::Result<()> {
+    let codex_home = tempdir().expect("tempdir");
+    let cwd_dir = tempdir().expect("tempdir");
+    let cwd_path = cwd_dir.path().to_path_buf();
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "log_dir".to_string(),
+            TomlValue::String("run-logs".to_string()),
+        )])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd_path.clone()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let expected = AbsolutePathBuf::resolve_path_against_base("run-logs", cwd_path)?;
+    assert_eq!(config.log_dir, expected.to_path_buf());
+    Ok(())
 }
 
 #[tokio::test]
@@ -261,10 +286,9 @@ async fn returns_empty_when_all_layers_missing() {
         .iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::System { .. }))
         .count();
-    let expected_system_layers = if cfg!(unix) { 1 } else { 0 };
     assert_eq!(
-        num_system_layers, expected_system_layers,
-        "system layer should be present only on unix"
+        num_system_layers, 1,
+        "system layer should always be present"
     );
 
     #[cfg(not(target_os = "macos"))]
@@ -451,6 +475,7 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
         &requirements_file,
         r#"
 allowed_approval_policies = ["never", "on-request"]
+allowed_web_search_modes = ["cached"]
 enforce_residency = "us"
 "#,
     )
@@ -465,6 +490,13 @@ enforce_residency = "us"
             .as_deref()
             .cloned(),
         Some(vec![AskForApproval::Never, AskForApproval::OnRequest])
+    );
+    assert_eq!(
+        config_requirements_toml
+            .allowed_web_search_modes
+            .as_deref()
+            .cloned(),
+        Some(vec![crate::config_loader::WebSearchModeRequirement::Cached])
     );
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
@@ -481,9 +513,83 @@ enforce_residency = "us"
             .is_err()
     );
     assert_eq!(
+        config_requirements.web_search_mode.value(),
+        WebSearchMode::Cached
+    );
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Cached)?;
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Cached)?;
+    config_requirements
+        .web_search_mode
+        .can_set(&WebSearchMode::Disabled)?;
+    assert!(
+        config_requirements
+            .web_search_mode
+            .can_set(&WebSearchMode::Live)
+            .is_err()
+    );
+    assert_eq!(
         config_requirements.enforce_residency.value(),
         Some(crate::config_loader::ResidencyRequirement::Us)
     );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn cloud_requirements_take_precedence_over_mdm_requirements() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+allowed_approval_policies = ["on-request"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            ..LoaderOverrides::default()
+        },
+        CloudRequirementsLoader::new(async {
+            Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            })
+        }),
+    )
+    .await?;
+
+    assert_eq!(
+        state.requirements().approval_policy.value(),
+        AskForApproval::Never
+    );
+    assert_eq!(
+        state
+            .requirements()
+            .approval_policy
+            .can_set(&AskForApproval::OnRequest),
+        Err(ConstraintError::InvalidValue {
+            field_name: "approval_policy",
+            candidate: "OnRequest".into(),
+            allowed: "[Never]".into(),
+            requirement_source: RequirementSource::CloudRequirements,
+        })
+    );
+
     Ok(())
 }
 
@@ -505,9 +611,11 @@ allowed_approval_policies = ["on-request"]
         ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_sandbox_modes: None,
+            allowed_web_search_modes: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
+            network: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -540,9 +648,11 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
     let requirements = ConfigRequirementsToml {
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_sandbox_modes: None,
+        allowed_web_search_modes: None,
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
+        network: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Some(requirements) });

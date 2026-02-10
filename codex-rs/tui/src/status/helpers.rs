@@ -3,7 +3,7 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use codex_core::AuthManager;
-use codex_core::CodexAuth;
+use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_protocol::account::PlanType;
@@ -90,15 +90,15 @@ pub(crate) fn compose_account_display(
 ) -> Option<StatusAccountDisplay> {
     let auth = auth_manager.auth_cached()?;
 
-    match auth {
-        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+    match auth.auth_mode() {
+        CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
+        CoreAuthMode::Chatgpt => {
             let email = auth.get_account_email();
             let plan = plan
                 .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))
                 .or_else(|| Some("Unknown".to_string()));
             Some(StatusAccountDisplay::ChatGpt { email, plan })
         }
-        CodexAuth::ApiKey(_) => Some(StatusAccountDisplay::ApiKey),
     }
 }
 

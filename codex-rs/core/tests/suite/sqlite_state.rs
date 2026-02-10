@@ -43,6 +43,18 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     }
 
     let db = test.codex.state_db().expect("state db enabled");
+    assert!(
+        !rollout_path.exists(),
+        "fresh thread rollout should not be materialized before first user message"
+    );
+
+    let initial_metadata = db.get_thread(thread_id).await?;
+    assert!(
+        initial_metadata.is_none(),
+        "fresh thread should not be recorded in state db before first user message"
+    );
+
+    test.submit_turn("materialize rollout").await?;
 
     let mut metadata = None;
     for _ in 0..100 {
@@ -56,6 +68,10 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     let metadata = metadata.expect("thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
     assert_eq!(metadata.rollout_path, rollout_path);
+    assert!(
+        rollout_path.exists(),
+        "rollout should be materialized after first user message"
+    );
 
     Ok(())
 }
@@ -169,7 +185,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     assert_eq!(metadata.id, thread_id);
     assert_eq!(metadata.rollout_path, rollout_path);
     assert_eq!(metadata.model_provider, default_provider);
-    assert!(metadata.has_user_event);
+    assert!(metadata.first_user_message.is_some());
 
     let mut stored_tools = None;
     for _ in 0..40 {
@@ -221,7 +237,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
         metadata = db.get_thread(thread_id).await?;
         if metadata
             .as_ref()
-            .map(|entry| entry.has_user_event)
+            .map(|entry| entry.first_user_message.is_some())
             .unwrap_or(false)
         {
             break;
@@ -230,7 +246,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     }
 
     let metadata = metadata.expect("thread should exist in state db");
-    assert!(metadata.has_user_event);
+    assert!(metadata.first_user_message.is_some());
 
     Ok(())
 }

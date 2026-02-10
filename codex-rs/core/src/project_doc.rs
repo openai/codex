@@ -547,6 +547,30 @@ mod tests {
         assert_eq!(res, expected);
     }
 
+    #[tokio::test]
+    async fn apps_feature_does_not_emit_user_instructions_by_itself() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None).await;
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn apps_feature_does_not_append_to_project_doc_user_instructions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("instructions expected");
+        assert_eq!(res, "base doc");
+    }
+
     fn create_skill(codex_home: PathBuf, name: &str, description: &str) {
         let skill_dir = codex_home.join(format!("skills/{name}"));
         fs::create_dir_all(&skill_dir).unwrap();

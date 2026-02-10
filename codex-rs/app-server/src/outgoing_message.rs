@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -24,6 +25,7 @@ pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingMessage>,
     request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
+    opted_out_notification_methods: Mutex<HashSet<String>>,
 }
 
 impl OutgoingMessageSender {
@@ -32,7 +34,19 @@ impl OutgoingMessageSender {
             next_request_id: AtomicI64::new(0),
             sender,
             request_id_to_callback: Mutex::new(HashMap::new()),
+            opted_out_notification_methods: Mutex::new(HashSet::new()),
         }
+    }
+
+    pub(crate) async fn set_opted_out_notification_methods(&self, methods: Vec<String>) {
+        let mut opted_out = self.opted_out_notification_methods.lock().await;
+        opted_out.clear();
+        opted_out.extend(methods);
+    }
+
+    async fn should_skip_notification(&self, method: &str) -> bool {
+        let opted_out = self.opted_out_notification_methods.lock().await;
+        opted_out.contains(method)
     }
 
     pub(crate) async fn send_request(
@@ -130,6 +144,10 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        let method = notification.to_string();
+        if self.should_skip_notification(&method).await {
+            return;
+        }
         if let Err(err) = self
             .sender
             .send(OutgoingMessage::AppServerNotification(notification))
@@ -142,6 +160,12 @@ impl OutgoingMessageSender {
     /// All notifications should be migrated to [`ServerNotification`] and
     /// [`OutgoingMessage::Notification`] should be removed.
     pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+        if self
+            .should_skip_notification(notification.method.as_str())
+            .await
+        {
+            return;
+        }
         let outgoing_message = OutgoingMessage::Notification(notification);
         if let Err(err) = self.sender.send(outgoing_message).await {
             warn!("failed to send notification to client: {err:?}");

@@ -51,7 +51,7 @@ derive_more = { workspace = true, features = ["is_variant"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
-image = { workspace = true, features = ["jpeg", "png"] }
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 pathdiff = { workspace = true }
@@ -95,6 +95,7 @@ tree-sitter-highlight = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
+webbrowser = { workspace = true }
 uuid = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }

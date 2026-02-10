@@ -11,17 +11,18 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::ThreadManager;
-use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -667,6 +668,77 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_apps_guidance_as_developer_message_when_enabled() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.features.enable(Feature::Apps);
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let input = request_body["input"].as_array().expect("input array");
+    let apps_snippet = "Apps are mentioned in the prompt in the format";
+
+    let has_developer_apps_guidance = input.iter().any(|item| {
+        item.get("role").and_then(|value| value.as_str()) == Some("developer")
+            && item
+                .get("content")
+                .and_then(|value| value.as_array())
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains(apps_snippet))
+    });
+    assert!(
+        has_developer_apps_guidance,
+        "expected apps guidance in a developer message, got {input:#?}"
+    );
+
+    let has_user_apps_guidance = input.iter().any(|item| {
+        item.get("role").and_then(|value| value.as_str()) == Some("user")
+            && item
+                .get("content")
+                .and_then(|value| value.as_array())
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains(apps_snippet))
+    });
+    assert!(
+        !has_user_apps_guidance,
+        "did not expect apps guidance in user messages, got {input:#?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skills_append_to_instructions() {
     skip_if_no_network!();
     let server = MockServer::start().await;
@@ -1258,25 +1330,26 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Exec,
     );
 
-    let mut client = ModelClient::new(
-        Arc::clone(&config),
+    let client = ModelClient::new(
         None,
-        model_info,
-        otel_manager,
-        provider,
-        effort,
-        summary,
         conversation_id,
+        provider.clone(),
         SessionSource::Exec,
-        TransportManager::new(),
-    )
-    .new_session(None);
+        config.model_verbosity,
+        false,
+        false,
+        false,
+        false,
+        None,
+    );
+    let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1314,10 +1387,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
-        output: FunctionCallOutputPayload {
-            content: "ok".into(),
-            ..Default::default()
-        },
+        output: FunctionCallOutputPayload::from_text("ok".into()),
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
@@ -1343,8 +1413,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         output: "ok".into(),
     });
 
-    let mut stream = client
-        .stream(&prompt)
+    let mut stream = client_session
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
         .await
         .expect("responses stream to start");
 

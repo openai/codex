@@ -91,6 +91,9 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
+    /// Terminate all running background terminal processes for this thread.
+    CleanBackgroundTerminals,
+
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context
@@ -195,6 +198,9 @@ pub enum Op {
     ExecApproval {
         /// The id of the submission we are approving
         id: String,
+        /// Turn id associated with the approval event, when available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
     },
@@ -879,6 +885,10 @@ pub enum EventMsg {
     CollabCloseBegin(CollabCloseBeginEvent),
     /// Collab interaction: close end.
     CollabCloseEnd(CollabCloseEndEvent),
+    /// Collab interaction: resume begin.
+    CollabResumeBegin(CollabResumeBeginEvent),
+    /// Collab interaction: resume end.
+    CollabResumeEnd(CollabResumeEndEvent),
 }
 
 impl From<CollabAgentSpawnBeginEvent> for EventMsg {
@@ -926,6 +936,18 @@ impl From<CollabCloseBeginEvent> for EventMsg {
 impl From<CollabCloseEndEvent> for EventMsg {
     fn from(event: CollabCloseEndEvent) -> Self {
         EventMsg::CollabCloseEnd(event)
+    }
+}
+
+impl From<CollabResumeBeginEvent> for EventMsg {
+    fn from(event: CollabResumeBeginEvent) -> Self {
+        EventMsg::CollabResumeBegin(event)
+    }
+}
+
+impl From<CollabResumeEndEvent> for EventMsg {
+    fn from(event: CollabResumeEndEvent) -> Self {
+        EventMsg::CollabResumeEnd(event)
     }
 }
 
@@ -2246,6 +2268,13 @@ pub struct SkillsListEntry {
     pub errors: Vec<SkillErrorInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SessionNetworkProxyRuntime {
+    pub http_addr: String,
+    pub socks_addr: String,
+    pub admin_addr: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
@@ -2286,6 +2315,11 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    /// Runtime proxy bind addresses, when the managed proxy was started for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2476,6 +2510,29 @@ pub struct CollabCloseEndEvent {
     pub status: AgentStatus,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabResumeBeginEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct CollabResumeEndEvent {
+    /// Identifier for the collab tool call.
+    pub call_id: String,
+    /// Thread ID of the sender.
+    pub sender_thread_id: ThreadId,
+    /// Thread ID of the receiver.
+    pub receiver_thread_id: ThreadId,
+    /// Last known status of the receiver agent reported to the sender agent after
+    /// resume.
+    pub status: AgentStatus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2654,6 +2711,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(rollout_file.path().to_path_buf()),
             }),
         };

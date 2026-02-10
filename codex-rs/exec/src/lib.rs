@@ -103,6 +103,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd,
         skip_git_repo_check,
         add_dir,
+        ephemeral,
         color,
         last_message_file,
         json: json_mode,
@@ -254,7 +255,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
-        ephemeral: None,
+        ephemeral: ephemeral.then_some(true),
         additional_writable_roots: add_dir,
     };
 
@@ -303,6 +304,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             last_message_file.clone(),
         )),
     };
+    let required_mcp_servers: HashSet<String> = config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter(|(_, server)| server.enabled && server.required)
+        .map(|(name, _)| name.clone())
+        .collect();
 
     if oss {
         // We're in the oss section, so provider_id should be Some
@@ -515,12 +523,21 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    let mut shutdown_requested = false;
     while let Some(envelope) = rx.recv().await {
         let ThreadEventEnvelope {
             thread_id,
             thread,
             event,
         } = envelope;
+        if matches!(event.msg, EventMsg::Error(_)) {
+            error_seen = true;
+        }
+        if shutdown_requested
+            && !matches!(&event.msg, EventMsg::ShutdownComplete | EventMsg::Error(_))
+        {
+            continue;
+        }
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
             thread
@@ -531,8 +548,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 })
                 .await?;
         }
-        if matches!(event.msg, EventMsg::Error(_)) {
+        if let EventMsg::McpStartupUpdate(update) = &event.msg
+            && required_mcp_servers.contains(&update.server)
+            && let codex_core::protocol::McpStartupStatus::Failed { error } = &update.status
+        {
             error_seen = true;
+            eprintln!(
+                "Required MCP server '{}' failed to initialize: {error}",
+                update.server
+            );
+            if !shutdown_requested {
+                thread.submit(Op::Shutdown).await?;
+                shutdown_requested = true;
+            }
         }
         if thread_id != primary_thread_id && matches!(&event.msg, EventMsg::TurnComplete(_)) {
             continue;
@@ -544,7 +572,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                thread.submit(Op::Shutdown).await?;
+                if !shutdown_requested {
+                    thread.submit(Op::Shutdown).await?;
+                    shutdown_requested = true;
+                }
             }
             CodexStatus::Shutdown if thread_id == primary_thread_id => break,
             CodexStatus::Shutdown => continue,
@@ -606,7 +637,7 @@ async fn resolve_resume_path(
             Some(config.cwd.as_path())
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            config,
             1,
             None,
             codex_core::ThreadSortKey::UpdatedAt,

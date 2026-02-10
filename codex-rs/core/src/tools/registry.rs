@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::protocol::SandboxPolicy;
+use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -73,19 +75,33 @@ impl ToolRegistry {
         let otel = invocation.turn.otel_manager.clone();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
+        let metric_tags = [
+            (
+                "sandbox",
+                sandbox_tag(
+                    &invocation.turn.sandbox_policy,
+                    invocation.turn.windows_sandbox_level,
+                ),
+            ),
+            (
+                "sandbox_policy",
+                sandbox_policy_tag(&invocation.turn.sandbox_policy),
+            ),
+        ];
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
             None => {
                 let message =
                     unsupported_tool_call_message(&invocation.payload, tool_name.as_ref());
-                otel.tool_result(
+                otel.tool_result_with_tags(
                     tool_name.as_ref(),
                     &call_id_owned,
                     log_payload.as_ref(),
                     Duration::ZERO,
                     false,
                     &message,
+                    &metric_tags,
                 );
                 return Err(FunctionCallError::RespondToModel(message));
             }
@@ -93,13 +109,14 @@ impl ToolRegistry {
 
         if !handler.matches_kind(&invocation.payload) {
             let message = format!("tool {tool_name} invoked with incompatible payload");
-            otel.tool_result(
+            otel.tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
                 Duration::ZERO,
                 false,
                 &message,
+                &metric_tags,
             );
             return Err(FunctionCallError::Fatal(message));
         }
@@ -107,10 +124,11 @@ impl ToolRegistry {
         let output_cell = tokio::sync::Mutex::new(None);
 
         let result = otel
-            .log_tool_result(
+            .log_tool_result_with_tags(
                 tool_name.as_ref(),
                 &call_id_owned,
                 log_payload.as_ref(),
+                &metric_tags,
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
@@ -229,5 +247,14 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
+    }
+}
+
+fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
+    match policy {
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
+        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
     }
 }

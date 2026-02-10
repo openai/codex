@@ -1,3 +1,4 @@
+use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,8 +8,8 @@ use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceTemplate;
@@ -261,7 +262,8 @@ async fn handle_list_resources(
 
     let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| PaginatedRequestParam {
+            let params = cursor.clone().map(|value| PaginatedRequestParams {
+                meta: None,
                 cursor: Some(value),
             });
             let result = session
@@ -296,12 +298,10 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -309,7 +309,7 @@ async fn handle_list_resources(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -368,7 +368,8 @@ async fn handle_list_resource_templates(
 
     let payload_result: Result<ListResourceTemplatesPayload, FunctionCallError> = async {
         if let Some(server_name) = server.clone() {
-            let params = cursor.clone().map(|value| PaginatedRequestParam {
+            let params = cursor.clone().map(|value| PaginatedRequestParams {
+                meta: None,
                 cursor: Some(value),
             });
             let result = session
@@ -405,12 +406,10 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -418,7 +417,7 @@ async fn handle_list_resource_templates(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -477,7 +476,13 @@ async fn handle_read_resource(
 
     let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
         let result = session
-            .read_resource(&server, ReadResourceRequestParam { uri: uri.clone() })
+            .read_resource(
+                &server,
+                ReadResourceRequestParams {
+                    meta: None,
+                    uri: uri.clone(),
+                },
+            )
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
@@ -494,12 +499,10 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function {
-                    content, success, ..
-                } = &output
-                else {
+                let ToolOutput::Function { body, success } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
+                let content = body.to_text().unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -507,7 +510,7 @@ async fn handle_read_resource(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(content, *success)),
+                    Ok(call_tool_result_from_content(&content, *success)),
                 )
                 .await;
                 Ok(output)
@@ -622,8 +625,7 @@ where
     })?;
 
     Ok(ToolOutput::Function {
-        content,
-        content_items: None,
+        body: FunctionCallOutputBody::Text(content),
         success: Some(true),
     })
 }
@@ -695,6 +697,7 @@ mod tests {
             title: None,
             description: None,
             mime_type: None,
+            icons: None,
         }
         .no_annotation()
     }

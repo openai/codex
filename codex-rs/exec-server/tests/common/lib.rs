@@ -9,7 +9,7 @@ use rmcp::Service;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::ClientInfo;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
@@ -91,6 +91,7 @@ where
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
+        use_linux_sandbox_bwrap: false,
     };
     send_sandbox_state_update(sandbox_state, service).await
 }
@@ -118,6 +119,7 @@ where
         },
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),
+        use_linux_sandbox_bwrap: false,
     };
     send_sandbox_state_update(sandbox_state, service).await
 }
@@ -140,7 +142,7 @@ where
 
 pub struct InteractiveClient {
     pub elicitations_to_accept: HashSet<String>,
-    pub elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>>,
+    pub elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>>,
 }
 
 impl ClientHandler for InteractiveClient {
@@ -154,7 +156,7 @@ impl ClientHandler for InteractiveClient {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         _context: rmcp::service::RequestContext<RoleClient>,
     ) -> impl std::future::Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_
     {

@@ -96,6 +96,10 @@ popup so gating stays in sync.
 
 There are multiple submission paths, but they share the same core rules:
 
+When steer mode is enabled, `Tab` requests queuing if a task is already running; otherwise it
+submits immediately. `Enter` always submits immediately in this mode. `Tab` does not submit when
+the input starts with `!` (shell command).
+
 ### Normal submit/queue path
 
 `handle_submission` calls `prepare_submission_text` for both submit and queue. That method:
@@ -122,6 +126,56 @@ positional args, Enter auto-submits without calling `prepare_submission_text`. T
 - Uses expanded text elements for prompt expansion.
 - Prunes attachments based on expanded placeholders.
 - Clears pending pastes after a successful auto-submit.
+
+## History navigation (Up/Down) and backtrack prefill
+
+`ChatComposerHistory` merges two kinds of history:
+
+- **Persistent history** (cross-session, fetched from core on demand): text-only.
+- **Local history** (this UI session): full draft state.
+
+Local history entries capture:
+
+- raw text (including placeholders),
+- `TextElement` ranges for placeholders,
+- local image paths,
+- pending large-paste payloads (for drafts).
+
+Persistent history entries only restore text. They intentionally do **not** rehydrate attachments
+or pending paste payloads.
+
+For non-empty drafts, Up/Down navigation is only treated as history recall when the current text
+matches the last recalled history entry and the cursor is at a boundary (start or end of the
+line). This keeps multiline cursor movement intact while preserving shell-like history traversal.
+
+### Draft recovery (Ctrl+C)
+
+Ctrl+C clears the composer but stashes the full draft state (text elements, image paths, and
+pending paste payloads) into local history. Pressing Up immediately restores that draft, including
+image placeholders and large-paste placeholders with their payloads.
+
+### Submitted message recall
+
+After a successful submission, the local history entry stores the submitted text and any element
+ranges and local image paths. Pending paste payloads are cleared during submission, so large-paste
+placeholders are expanded into their full text before being recorded. This means:
+
+- Up/Down recall of a submitted message restores image placeholders and their local paths.
+- Recalled entries place the cursor at end-of-line to match typical shell history editing.
+- Large-paste placeholders are not expected in recalled submitted history; the text is the
+  expanded paste content.
+
+### Backtrack prefill
+
+Backtrack selections read `UserHistoryCell` data from the transcript. The composer prefill now
+reuses the selected message’s text elements and local image paths, so image placeholders and
+attachments rehydrate when rolling back to a prior user message.
+
+### External editor edits
+
+When the composer content is replaced from an external editor, the composer rebuilds text elements
+and keeps only attachments whose placeholders still appear in the new text. Image placeholders are
+then normalized to `[Image #1]..[Image #N]` to keep attachment mapping consistent after edits.
 
 ## Paste burst: concepts and assumptions
 

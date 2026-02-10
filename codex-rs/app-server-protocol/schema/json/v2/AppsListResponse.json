@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "AppInfo": {
+      "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
         "description": {
           "type": [
@@ -51,6 +52,7 @@
       "type": "object"
     }
   },
+  "description": "EXPERIMENTAL - app list response.",
   "properties": {
     "data": {
       "items": {

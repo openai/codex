@@ -213,6 +213,19 @@ async fn run_command_under_sandbox(
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
+    // This proxy should only live for the lifetime of the child process.
+    let network_proxy = match config.network.as_ref() {
+        Some(spec) => Some(
+            spec.start_proxy()
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
+        ),
+        None => None,
+    };
+    let network = network_proxy
+        .as_ref()
+        .map(codex_core::config::StartedNetworkProxy::proxy);
+
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
@@ -222,22 +235,27 @@ async fn run_command_under_sandbox(
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
+                network.as_ref(),
                 env,
             )
             .await?
         }
         SandboxType::Landlock => {
+            use codex_core::features::Feature;
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
+            let use_bwrap_sandbox = config.features.enabled(Feature::UseLinuxSandboxBwrap);
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
+                use_bwrap_sandbox,
                 stdio_policy,
+                network.as_ref(),
                 env,
             )
             .await?

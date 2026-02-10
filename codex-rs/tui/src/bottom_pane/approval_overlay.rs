@@ -16,7 +16,6 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use codex_core::features::Feature;
 use codex_core::features::Features;
 use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::ExecPolicyAmendment;
@@ -105,14 +104,14 @@ impl ApprovalOverlay {
     fn build_options(
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
-        features: &Features,
+        _features: &Features,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
                 proposed_execpolicy_amendment,
                 ..
             } => (
-                exec_options(proposed_execpolicy_amendment.clone(), features),
+                exec_options(proposed_execpolicy_amendment.clone()),
                 "Would you like to run the following command?".to_string(),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
@@ -196,6 +195,7 @@ impl ApprovalOverlay {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
+            turn_id: None,
             decision,
         }));
     }
@@ -447,10 +447,7 @@ impl ApprovalOption {
     }
 }
 
-fn exec_options(
-    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
-    features: &Features,
-) -> Vec<ApprovalOption> {
+fn exec_options(proposed_execpolicy_amendment: Option<ExecPolicyAmendment>) -> Vec<ApprovalOption> {
     vec![ApprovalOption {
         label: "Yes, proceed".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -458,29 +455,23 @@ fn exec_options(
         additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
     }]
     .into_iter()
-    .chain(
-        proposed_execpolicy_amendment
-            .filter(|_| features.enabled(Feature::ExecPolicy))
-            .and_then(|prefix| {
-                let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
-                if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
-                    return None;
-                }
+    .chain(proposed_execpolicy_amendment.and_then(|prefix| {
+        let rendered_prefix = strip_bash_lc_and_escape(prefix.command());
+        if rendered_prefix.contains('\n') || rendered_prefix.contains('\r') {
+            return None;
+        }
 
-                Some(ApprovalOption {
-                    label: format!(
-                        "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
-                    ),
-                    decision: ApprovalDecision::Review(
-                        ReviewDecision::ApprovedExecpolicyAmendment {
-                            proposed_execpolicy_amendment: prefix,
-                        },
-                    ),
-                    display_shortcut: None,
-                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-                })
+        Some(ApprovalOption {
+            label: format!(
+                "Yes, and don't ask again for commands that start with `{rendered_prefix}`"
+            ),
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: prefix,
             }),
-    )
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+        })
+    }))
     .chain([ApprovalOption {
         label: "No, and tell Codex what to do differently".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Abort),
@@ -617,32 +608,6 @@ mod tests {
             saw_op,
             "expected approval decision to emit an op with command prefix"
         );
-    }
-
-    #[test]
-    fn exec_prefix_option_hidden_when_execpolicy_disabled() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(
-            ApprovalRequest::Exec {
-                id: "test".to_string(),
-                command: vec!["echo".to_string()],
-                reason: None,
-                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                    "echo".to_string(),
-                ])),
-            },
-            tx,
-            {
-                let mut features = Features::with_defaults();
-                features.disable(Feature::ExecPolicy);
-                features
-            },
-        );
-        assert_eq!(view.options.len(), 2);
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
-        assert!(!view.is_complete());
-        assert!(rx.try_recv().is_err());
     }
 
     #[test]

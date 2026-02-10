@@ -26,8 +26,16 @@ fn is_word_separator(ch: char) -> bool {
 
 #[derive(Debug, Clone)]
 struct TextElement {
+    id: u64,
     range: Range<usize>,
-    id: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TextElementSnapshot {
+    pub(crate) id: u64,
+    pub(crate) range: Range<usize>,
+    pub(crate) text: String,
 }
 
 #[derive(Debug)]
@@ -37,6 +45,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    next_element_id: u64,
     kill_buffer: String,
 }
 
@@ -60,6 +69,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            next_element_id: 1,
             kill_buffer: String::new(),
         }
     }
@@ -89,9 +99,11 @@ impl TextArea {
                 if start >= end {
                     continue;
                 }
+                let id = self.next_element_id();
                 self.elements.push(TextElement {
+                    id,
                     range: start..end,
-                    id: None,
+                    name: None,
                 });
             }
             self.elements.sort_by_key(|e| e.range.start);
@@ -776,6 +788,28 @@ impl TextArea {
             .collect()
     }
 
+    pub(crate) fn text_element_snapshots(&self) -> Vec<TextElementSnapshot> {
+        self.elements
+            .iter()
+            .filter_map(|element| {
+                self.text
+                    .get(element.range.clone())
+                    .map(|text| TextElementSnapshot {
+                        id: element.id,
+                        range: element.range.clone(),
+                        text: text.to_string(),
+                    })
+            })
+            .collect()
+    }
+
+    pub(crate) fn element_id_for_exact_range(&self, range: Range<usize>) -> Option<u64> {
+        self.elements
+            .iter()
+            .find(|element| element.range == range)
+            .map(|element| element.id)
+    }
+
     /// Renames a single text element in-place, keeping it atomic.
     ///
     /// Use this when the element payload is an identifier (e.g. a placeholder) that must be
@@ -845,13 +879,14 @@ impl TextArea {
         true
     }
 
-    pub fn insert_element(&mut self, text: &str) {
+    pub fn insert_element(&mut self, text: &str) -> u64 {
         let start = self.clamp_pos_for_insertion(self.cursor_pos);
         self.insert_str_at(start, text);
         let end = start + text.len();
-        self.add_element(start..end);
+        let id = self.add_element(start..end);
         // Place cursor at end of inserted element
         self.set_cursor(end);
+        id
     }
 
     pub fn insert_named_element(&mut self, text: &str, id: String) {
@@ -867,11 +902,11 @@ impl TextArea {
         if let Some(idx) = self
             .elements
             .iter()
-            .position(|e| e.id.as_deref() == Some(id))
+            .position(|e| e.name.as_deref() == Some(id))
         {
             let range = self.elements[idx].range.clone();
             self.replace_range_raw(range, text);
-            self.elements.retain(|e| e.id.as_deref() != Some(id));
+            self.elements.retain(|e| e.name.as_deref() != Some(id));
             true
         } else {
             false
@@ -885,7 +920,7 @@ impl TextArea {
         if let Some(elem_idx) = self
             .elements
             .iter()
-            .position(|e| e.id.as_deref() == Some(id))
+            .position(|e| e.name.as_deref() == Some(id))
         {
             let old_range = self.elements[elem_idx].range.clone();
             let start = old_range.start;
@@ -904,45 +939,48 @@ impl TextArea {
     pub fn named_element_range(&self, id: &str) -> Option<std::ops::Range<usize>> {
         self.elements
             .iter()
-            .find(|e| e.id.as_deref() == Some(id))
+            .find(|e| e.name.as_deref() == Some(id))
             .map(|e| e.range.clone())
     }
 
-    fn add_element_with_id(&mut self, range: Range<usize>, id: Option<String>) {
-        let elem = TextElement { range, id };
+    fn add_element_with_id(&mut self, range: Range<usize>, name: Option<String>) -> u64 {
+        let id = self.next_element_id();
+        let elem = TextElement { id, range, name };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
+        id
     }
 
-    fn add_element(&mut self, range: Range<usize>) {
-        self.add_element_with_id(range, None);
+    fn add_element(&mut self, range: Range<usize>) -> u64 {
+        self.add_element_with_id(range, None)
     }
 
     /// Mark an existing text range as an atomic element without changing the text.
     ///
     /// This is used to convert already-typed tokens (like `/plan`) into elements
     /// so they render and edit atomically. Overlapping or duplicate ranges are ignored.
-    pub fn add_element_range(&mut self, range: Range<usize>) {
+    pub fn add_element_range(&mut self, range: Range<usize>) -> Option<u64> {
         let start = self.clamp_pos_to_char_boundary(range.start.min(self.text.len()));
         let end = self.clamp_pos_to_char_boundary(range.end.min(self.text.len()));
         if start >= end {
-            return;
+            return None;
         }
         if self
             .elements
             .iter()
             .any(|e| e.range.start == start && e.range.end == end)
         {
-            return;
+            return None;
         }
         if self
             .elements
             .iter()
             .any(|e| start < e.range.end && end > e.range.start)
         {
-            return;
+            return None;
         }
-        self.add_element_with_id(start..end, None);
+        let id = self.add_element(start..end);
+        Some(id)
     }
 
     pub fn remove_element_range(&mut self, range: Range<usize>) -> bool {
@@ -957,6 +995,11 @@ impl TextArea {
         len_before != self.elements.len()
     }
 
+    fn next_element_id(&mut self) -> u64 {
+        let id = self.next_element_id;
+        self.next_element_id = self.next_element_id.saturating_add(1);
+        id
+    }
     fn find_element_containing(&self, pos: usize) -> Option<usize> {
         self.elements
             .iter()

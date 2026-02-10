@@ -36,6 +36,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         cwd: tmp.path().to_path_buf(),
         expiration: 1000.into(),
         env: HashMap::new(),
+        network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
@@ -44,7 +45,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
 
     let policy = SandboxPolicy::new_read_only_policy();
 
-    process_exec_tool_call(params, &policy, tmp.path(), &None, None).await
+    process_exec_tool_call(params, &policy, tmp.path(), &None, false, None).await
 }
 
 /// Command succeeds with exit code 0 normally

@@ -20,7 +20,7 @@ use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
 use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_id_token;
+use codex_core::token_data::parse_chatgpt_jwt_claims;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
@@ -548,7 +548,7 @@ pub(crate) async fn persist_tokens_async(
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut tokens = TokenData {
-            id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
+            id_token: parse_chatgpt_jwt_claims(&id_token).map_err(io::Error::other)?,
             access_token,
             refresh_token,
             account_id: None,
