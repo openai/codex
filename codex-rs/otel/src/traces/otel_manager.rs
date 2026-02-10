@@ -738,7 +738,7 @@ impl OtelManager {
 
     fn responses_type(event: &ResponseEvent) -> String {
         match event {
-            ResponseEvent::Created => "created".into(),
+            ResponseEvent::Created { .. } => "created".into(),
             ResponseEvent::OutputItemDone(item) => OtelManager::responses_item_type(item),
             ResponseEvent::OutputItemAdded(item) => OtelManager::responses_item_type(item),
             ResponseEvent::Completed { .. } => "completed".into(),

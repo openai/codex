@@ -4894,7 +4894,28 @@ async fn try_run_sampling_request(
             .record_responses(&handle_responses, &event);
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created { response_id, model } => {
+                // If the server silently routes to a different model than requested, surface it.
+                // This is important for reproducibility and debugging (see openai/codex#11189).
+                if let Some(served) = model {
+                    let requested = turn_context.model_info.slug.as_str();
+                    if served != requested {
+                        let mut message = format!(
+                            "Requested model `{requested}`, but server served `{served}`."
+                        );
+                        if let Some(id) = response_id.as_deref() {
+                            message.push_str(&format!(" (response id: {id})"));
+                        }
+                        message.push_str(" This is usually a server-side routing/fallback issue.");
+                        tracing::warn!("{message}");
+                        sess.send_event(
+                            &turn_context,
+                            EventMsg::Warning(WarningEvent { message }),
+                        )
+                        .await;
+                    }
+                }
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 if let Some(state) = plan_mode_state.as_mut() {

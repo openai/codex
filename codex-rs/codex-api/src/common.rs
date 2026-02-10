@@ -53,7 +53,13 @@ pub struct MemorySummarizeOutput {
 
 #[derive(Debug)]
 pub enum ResponseEvent {
-    Created,
+    /// The server accepted the request and created a response object.
+    ///
+    /// Note: some test fixtures omit these fields; treat them as best-effort.
+    Created {
+        response_id: Option<String>,
+        model: Option<String>,
+    },
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,

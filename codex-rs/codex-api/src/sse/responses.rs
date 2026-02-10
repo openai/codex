@@ -218,8 +218,16 @@ pub fn process_responses_event(
             }
         }
         "response.created" => {
-            if event.response.is_some() {
-                return Ok(Some(ResponseEvent::Created {}));
+            if let Some(resp_val) = event.response {
+                let response_id = resp_val
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let model = resp_val
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                return Ok(Some(ResponseEvent::Created { response_id, model }));
             }
         }
         "response.failed" => {
@@ -773,7 +781,7 @@ mod tests {
         }
 
         fn is_created(ev: &ResponseEvent) -> bool {
-            matches!(ev, ResponseEvent::Created)
+            matches!(ev, ResponseEvent::Created { .. })
         }
         fn is_output(ev: &ResponseEvent) -> bool {
             matches!(ev, ResponseEvent::OutputItemDone(_))
