@@ -914,18 +914,8 @@ impl ChatComposer {
         if self.is_empty() {
             return None;
         }
-        let mut mapping: HashMap<String, String> = HashMap::new();
-        for (idx, image) in self.attached_images.iter().enumerate() {
-            let normalized = local_image_label_text(idx + 1);
-            if image.placeholder != normalized {
-                mapping.insert(image.placeholder.clone(), normalized);
-            }
-        }
-        let (previous, text_elements) = remap_text_elements_and_placeholders(
-            self.current_text(),
-            self.textarea.text_elements(),
-            &mapping,
-        );
+        let previous = self.current_text();
+        let text_elements = self.textarea.text_elements();
         let local_image_paths = self
             .attached_images
             .iter()
@@ -3763,56 +3753,6 @@ fn parse_image_placeholder_number(text: &str) -> Option<usize> {
     (number > 0).then_some(number)
 }
 
-fn remap_text_elements_and_placeholders(
-    text: String,
-    mut text_elements: Vec<TextElement>,
-    mapping: &HashMap<String, String>,
-) -> (String, Vec<TextElement>) {
-    if mapping.is_empty() || text_elements.is_empty() {
-        return (text, text_elements);
-    }
-
-    text_elements.sort_by_key(|elem| elem.byte_range.start);
-    let mut rebuilt = String::with_capacity(text.len());
-    let mut rebuilt_elements = Vec::with_capacity(text_elements.len());
-    let mut cursor = 0usize;
-
-    for mut elem in text_elements {
-        let start = elem.byte_range.start.min(text.len());
-        let end = elem.byte_range.end.min(text.len());
-        if start > end {
-            continue;
-        }
-
-        if let Some(segment) = text.get(cursor..start) {
-            rebuilt.push_str(segment);
-        }
-
-        let original = text.get(start..end).unwrap_or("");
-        let placeholder = elem.placeholder(&text);
-        let replacement = placeholder
-            .and_then(|ph| mapping.get(ph))
-            .map(String::as_str)
-            .unwrap_or(original);
-        let rebuilt_start = rebuilt.len();
-        rebuilt.push_str(replacement);
-        let rebuilt_end = rebuilt.len();
-
-        if let Some(remapped) = placeholder.and_then(|ph| mapping.get(ph)) {
-            elem.set_placeholder(Some(remapped.clone()));
-        }
-        elem.byte_range = (rebuilt_start..rebuilt_end).into();
-        rebuilt_elements.push(elem);
-        cursor = end;
-    }
-
-    if let Some(segment) = text.get(cursor..) {
-        rebuilt.push_str(segment);
-    }
-
-    (rebuilt, rebuilt_elements)
-}
-
 fn image_placeholders_in_element_order(text: &str, text_elements: &[TextElement]) -> Vec<String> {
     let mut ordered = text_elements.to_vec();
     ordered.sort_by_key(|elem| elem.byte_range.start);
@@ -4506,7 +4446,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_for_ctrl_c_normalizes_remote_prefixed_image_draft() {
+    fn clear_for_ctrl_c_preserves_remote_offset_image_labels() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -4525,25 +4465,63 @@ mod tests {
         )];
         let local_image_path = PathBuf::from("/tmp/local-draft.png");
         composer.set_text_content(text, text_elements, vec![local_image_path.clone()]);
-
+        let expected_text = composer.current_text();
+        let expected_elements = composer.text_elements();
+        assert_eq!(expected_text, "[Image #2] draft");
         assert_eq!(
-            composer.clear_for_ctrl_c(),
-            Some("[Image #1] draft".to_string())
+            expected_elements[0].placeholder(&expected_text),
+            Some("[Image #2]")
         );
+
+        assert_eq!(composer.clear_for_ctrl_c(), Some(expected_text.clone()));
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
             Some(HistoryEntry::with_pending_and_remote(
-                "[Image #1] draft".to_string(),
-                vec![TextElement::new(
-                    (0.."[Image #1]".len()).into(),
-                    Some("[Image #1]".to_string())
-                )],
+                expected_text,
+                expected_elements,
                 vec![local_image_path],
                 Vec::new(),
                 vec![remote_image_url],
             ))
         );
+    }
+
+    #[test]
+    fn apply_history_entry_relabels_legacy_local_placeholders_after_remote_prefix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let remote_image_url = "https://example.com/one.png".to_string();
+        let local_image_path = PathBuf::from("/tmp/local-draft.png");
+        composer.apply_history_entry(HistoryEntry::with_pending_and_remote(
+            "[Image #1] draft".to_string(),
+            vec![TextElement::new(
+                (0.."[Image #1]".len()).into(),
+                Some("[Image #1]".to_string()),
+            )],
+            vec![local_image_path.clone()],
+            Vec::new(),
+            vec![remote_image_url.clone()],
+        ));
+
+        let restored_text = composer.current_text();
+        assert_eq!(restored_text, "[Image #2] draft");
+        let restored_elements = composer.text_elements();
+        assert_eq!(restored_elements.len(), 1);
+        assert_eq!(
+            restored_elements[0].placeholder(&restored_text),
+            Some("[Image #2]")
+        );
+        assert_eq!(composer.local_image_paths(), vec![local_image_path]);
+        assert_eq!(composer.remote_image_urls(), vec![remote_image_url]);
     }
 
     /// Behavior: `?` toggles the shortcut overlay only when the composer is otherwise empty. After
