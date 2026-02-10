@@ -28,6 +28,7 @@ use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -95,7 +96,8 @@ mod spawn {
 
     #[derive(Debug, Deserialize)]
     struct SpawnAgentArgs {
-        message: String,
+        message: Option<String>,
+        items: Option<Vec<UserInput>>,
         agent_type: Option<AgentRole>,
     }
 
@@ -112,12 +114,8 @@ mod spawn {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
         let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
-        let prompt = args.message;
-        if prompt.trim().is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "Empty message can't be sent to an agent".to_string(),
-            ));
-        }
+        let input_items = parse_collab_input(args.message, args.items)?;
+        let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         if exceeds_thread_spawn_depth_limit(child_depth) {
@@ -150,7 +148,7 @@ mod spawn {
             .agent_control
             .spawn_agent(
                 config,
-                prompt.clone(),
+                input_items,
                 Some(thread_spawn_source(session.conversation_id, child_depth)),
             )
             .await
@@ -198,7 +196,8 @@ mod send_input {
     #[derive(Debug, Deserialize)]
     struct SendInputArgs {
         id: String,
-        message: String,
+        message: Option<String>,
+        items: Option<Vec<UserInput>>,
         #[serde(default)]
         interrupt: bool,
     }
@@ -216,12 +215,8 @@ mod send_input {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
-        let prompt = args.message;
-        if prompt.trim().is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "Empty message can't be sent to an agent".to_string(),
-            ));
-        }
+        let input_items = parse_collab_input(args.message, args.items)?;
+        let prompt = input_preview(&input_items);
         if args.interrupt {
             session
                 .services
@@ -245,7 +240,7 @@ mod send_input {
         let result = session
             .services
             .agent_control
-            .send_prompt(receiver_thread_id, prompt.clone())
+            .send_input(receiver_thread_id, input_items)
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session
@@ -738,6 +733,57 @@ fn thread_spawn_source(parent_thread_id: ThreadId, depth: i32) -> SessionSource 
     })
 }
 
+fn parse_collab_input(
+    message: Option<String>,
+    items: Option<Vec<UserInput>>,
+) -> Result<Vec<UserInput>, FunctionCallError> {
+    match (message, items) {
+        (Some(_), Some(_)) => Err(FunctionCallError::RespondToModel(
+            "Provide either message or items, but not both".to_string(),
+        )),
+        (None, None) => Err(FunctionCallError::RespondToModel(
+            "Provide one of: message or items".to_string(),
+        )),
+        (Some(message), None) => {
+            if message.trim().is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "Empty message can't be sent to an agent".to_string(),
+                ));
+            }
+            Ok(vec![UserInput::Text {
+                text: message,
+                text_elements: Vec::new(),
+            }])
+        }
+        (None, Some(items)) => {
+            if items.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "Items can't be empty".to_string(),
+                ));
+            }
+            Ok(items)
+        }
+    }
+}
+
+fn input_preview(items: &[UserInput]) -> String {
+    let parts: Vec<String> = items
+        .iter()
+        .map(|item| match item {
+            UserInput::Text { text, .. } => text.clone(),
+            UserInput::Image { .. } => "[image]".to_string(),
+            UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
+            UserInput::Skill { name, path } => {
+                format!("[skill:${name}]({})", path.display())
+            }
+            UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
+            _ => "[input]".to_string(),
+        })
+        .collect();
+
+    parts.join("\n")
+}
+
 fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
@@ -916,6 +962,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "hello",
+                "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("message+items should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "Provide either message or items, but not both".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn spawn_agent_errors_when_manager_dropped() {
         let (session, turn) = make_session_and_context().await;
         let invocation = invocation(
@@ -977,6 +1046,30 @@ mod tests {
             err,
             FunctionCallError::RespondToModel(
                 "Empty message can't be sent to an agent".to_string()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn send_input_rejects_when_message_and_items_are_both_set() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({
+                "id": ThreadId::new().to_string(),
+                "message": "hello",
+                "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("message+items should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(
+                "Provide either message or items, but not both".to_string()
             )
         );
     }
@@ -1051,6 +1144,57 @@ mod tests {
         assert_eq!(ops_for_agent.len(), 2);
         assert!(matches!(ops_for_agent[0], Op::Interrupt));
         assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn send_input_accepts_structured_items() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.config.as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_input",
+            function_payload(json!({
+                "id": agent_id.to_string(),
+                "items": [
+                    {"type": "mention", "name": "drive", "path": "app://google_drive"},
+                    {"type": "text", "text": "read the folder"}
+                ]
+            })),
+        );
+        CollabHandler
+            .handle(invocation)
+            .await
+            .expect("send_input should succeed");
+
+        let expected = Op::UserInput {
+            items: vec![
+                UserInput::Mention {
+                    name: "drive".to_string(),
+                    path: "app://google_drive".to_string(),
+                },
+                UserInput::Text {
+                    text: "read the folder".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+        };
+        let captured = manager
+            .captured_ops()
+            .into_iter()
+            .find(|(id, op)| *id == agent_id && *op == expected);
+        assert_eq!(captured, Some((agent_id, expected)));
 
         let _ = thread
             .thread
