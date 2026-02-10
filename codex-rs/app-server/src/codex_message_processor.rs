@@ -1557,7 +1557,7 @@ impl CodexMessageProcessor {
                         message: format!("failed to start managed network proxy: {err}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request, error).await;
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             },

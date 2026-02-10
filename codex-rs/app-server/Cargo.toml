@@ -30,12 +30,8 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-futures = { workspace = true }
-owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -61,6 +57,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 core_test_support = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
