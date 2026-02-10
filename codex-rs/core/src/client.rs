@@ -852,10 +852,10 @@ impl ModelClientSession {
             }
         });
 
-        return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
+        Ok(WebsocketStreamOutcome::Stream(map_response_stream(
             stream_result,
             otel_manager.clone(),
-        )));
+        )))
     }
 
     /// Builds request and SSE telemetry for streaming API calls.
