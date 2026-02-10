@@ -193,6 +193,30 @@ mod tests {
     }
 
     #[test]
+    fn base_policy_allows_node_cpu_sysctls() {
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"machdep.cpu.brand_string\")"),
+            "base policy must allow CPU brand lookup for os.cpus()"
+        );
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
+            "base policy must allow hardware model lookup for os.cpus()"
+        );
+    }
+
+    #[test]
+    fn base_policy_allows_preexisting_tty_data_writes() {
+        let expected = r#"(allow file-write-data
+  (require-all
+    (regex #"^/dev/ttys[0-9]+")
+    (vnode-type CHARACTER-DEVICE)))"#;
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains(expected),
+            "base policy must allow file-write-data on preexisting tty devices"
+        );
+    }
+
+    #[test]
     fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         // Create a temporary workspace with two writable roots: one containing
         // top-level .git and .codex directories and one without them.

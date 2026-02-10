@@ -41,6 +41,7 @@
   (sysctl-name "hw.l3cachesize_compat")
   (sysctl-name "hw.logicalcpu_max")
   (sysctl-name "hw.machine")
+  (sysctl-name "hw.model")
   (sysctl-name "hw.memsize")
   (sysctl-name "hw.ncpu")
   (sysctl-name "hw.nperflevels")
@@ -53,8 +54,11 @@
   (sysctl-name "hw.pagesize")
   (sysctl-name "hw.physicalcpu")
   (sysctl-name "hw.physicalcpu_max")
+  (sysctl-name "hw.logicalcpu")
+  (sysctl-name "hw.cpufrequency")
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")
+  (sysctl-name "machdep.cpu.brand_string")
   (sysctl-name "kern.argmax")
   (sysctl-name "kern.hostname")
   (sysctl-name "kern.maxfilesperproc")
@@ -104,6 +108,10 @@
   (require-all
     (regex #"^/dev/ttys[0-9]+")
     (extension "com.apple.sandbox.pty")))
-; PTYs created before entering seatbelt may lack the extension; allow ioctl
-; on those slave ttys so interactive shells detect a TTY and remain functional.
+; PTYs created before entering seatbelt may lack the extension; allow writes and
+; ioctl on those slave ttys so interactive shells remain functional.
+(allow file-write-data
+  (require-all
+    (regex #"^/dev/ttys[0-9]+")
+    (vnode-type CHARACTER-DEVICE)))
 (allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
