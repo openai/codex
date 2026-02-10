@@ -821,7 +821,7 @@ mod tests {
         }];
         let footer_note = Line::from(vec![
             "Note: ".dim(),
-            "Use /setup-elevated-sandbox".cyan(),
+            "Use /setup-default-sandbox".cyan(),
             " to allow network access.".dim(),
         ]);
         let view = ListSelectionView::new(

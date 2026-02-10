@@ -162,6 +162,34 @@ pub fn run_elevated_setup(
     anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
 }
 
+#[cfg(target_os = "windows")]
+pub fn run_legacy_setup_preflight(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+) -> anyhow::Result<()> {
+    codex_windows_sandbox::run_windows_sandbox_legacy_preflight(
+        policy,
+        policy_cwd,
+        codex_home,
+        command_cwd,
+        env_map,
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn run_legacy_setup_preflight(
+    _policy: &SandboxPolicy,
+    _policy_cwd: &Path,
+    _command_cwd: &Path,
+    _env_map: &HashMap<String, String>,
+    _codex_home: &Path,
+) -> anyhow::Result<()> {
+    anyhow::bail!("legacy Windows sandbox setup is only supported on Windows")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
