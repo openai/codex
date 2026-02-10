@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
@@ -11,6 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
@@ -24,22 +26,40 @@ pub(crate) fn spawn_agent(
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
+        let mut start_thread = Box::pin(server.start_thread(config));
+        let mut startup_buffered_ops = VecDeque::new();
         let NewThread {
             thread,
             session_configured,
             ..
-        } = match server.start_thread(config).await {
-            Ok(v) => v,
-            Err(err) => {
-                let message = format!("Failed to initialize codex: {err}");
-                tracing::error!("{message}");
-                app_event_tx_clone.send(AppEvent::CodexEvent(Event {
-                    id: "".to_string(),
-                    msg: EventMsg::Error(err.to_error_event(None)),
-                }));
-                app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
-                tracing::error!("failed to initialize codex: {err}");
-                return;
+        } = loop {
+            tokio::select! {
+                start_result = &mut start_thread => {
+                    match start_result {
+                        Ok(v) => break v,
+                        Err(err) => {
+                            let message = format!("Failed to initialize codex: {err}");
+                            tracing::error!("{message}");
+                            app_event_tx_clone.send(AppEvent::CodexEvent(Event {
+                                id: "".to_string(),
+                                msg: EventMsg::Error(err.to_error_event(None)),
+                            }));
+                            app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
+                            tracing::error!("failed to initialize codex: {err}");
+                            return;
+                        }
+                    }
+                }
+                Some(op) = codex_op_rx.recv() => {
+                    if matches!(op, Op::Shutdown) {
+                        app_event_tx_clone.send(AppEvent::Exit(ExitMode::Immediate));
+                        return;
+                    }
+                    startup_buffered_ops.push_back(op);
+                }
+                else => {
+                    return;
+                }
             }
         };
 
@@ -53,6 +73,12 @@ pub(crate) fn spawn_agent(
 
         let thread_clone = thread.clone();
         tokio::spawn(async move {
+            for op in startup_buffered_ops {
+                let id = thread_clone.submit(op).await;
+                if let Err(e) = id {
+                    tracing::error!("failed to submit buffered op: {e}");
+                }
+            }
             while let Some(op) = codex_op_rx.recv().await {
                 let id = thread_clone.submit(op).await;
                 if let Err(e) = id {

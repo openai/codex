@@ -265,6 +265,7 @@ impl ManagedClient {
 #[derive(Clone)]
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    startup_timeout: Duration,
 }
 
 impl AsyncManagedClient {
@@ -277,6 +278,9 @@ impl AsyncManagedClient {
         elicitation_requests: ElicitationRequestManager,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
+        let startup_timeout = config
+            .startup_timeout_sec
+            .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         let fut = async move {
             if let Err(error) = validate_mcp_server_name(&server_name) {
                 return Err(error.into());
@@ -287,7 +291,7 @@ impl AsyncManagedClient {
             match start_server_task(
                 server_name,
                 client,
-                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                Some(startup_timeout),
                 config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
                 tool_filter,
                 tx_event,
@@ -302,11 +306,21 @@ impl AsyncManagedClient {
         };
         Self {
             client: fut.boxed().shared(),
+            startup_timeout,
         }
     }
 
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
+    }
+
+    async fn client_with_startup_timeout(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        match tokio::time::timeout(self.startup_timeout, self.client()).await {
+            Ok(result) => result,
+            Err(_) => Err(StartupOutcomeError::Failed {
+                error: startup_wait_timeout_message(self.startup_timeout),
+            }),
+        }
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -447,7 +461,7 @@ impl McpConnectionManager {
         self.clients
             .get(name)
             .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
+            .client_with_startup_timeout()
             .await
             .context("failed to get client")
     }
@@ -488,7 +502,7 @@ impl McpConnectionManager {
                 continue;
             };
 
-            match async_managed_client.client().await {
+            match async_managed_client.client_with_startup_timeout().await {
                 Ok(_) => {}
                 Err(error) => failures.push(McpStartupFailure {
                     server: server_name.clone(),
@@ -505,7 +519,13 @@ impl McpConnectionManager {
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for (server_name, managed_client) in &self.clients {
-            let client = managed_client.client().await.ok();
+            let client = match managed_client.client_with_startup_timeout().await {
+                Ok(client) => Some(client),
+                Err(err) => {
+                    warn!("Failed to get MCP client for server '{server_name}': {err:#}");
+                    None
+                }
+            };
             if let Some(client) = client {
                 let rmcp_client = client.client;
                 let tool_timeout = client.tool_timeout;
@@ -540,7 +560,11 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client_with_startup_timeout().await
+            else {
+                warn!(
+                    "Failed to get MCP client for server '{server_name}' while listing resources"
+                );
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -606,7 +630,11 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client_with_startup_timeout().await
+            else {
+                warn!(
+                    "Failed to get MCP client for server '{server_name_cloned}' while listing resource templates"
+                );
                 continue;
             };
             let client = managed_client.client.clone();
@@ -1198,6 +1226,20 @@ fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
     }
 }
 
+fn startup_wait_timeout_message(startup_timeout: Duration) -> String {
+    if startup_timeout >= Duration::from_secs(1) {
+        let seconds = startup_timeout.as_secs();
+        format!(
+            "MCP startup timed out after {seconds} seconds while waiting for server initialization"
+        )
+    } else {
+        let milliseconds = startup_timeout.as_millis();
+        format!(
+            "MCP startup timed out after {milliseconds} ms while waiting for server initialization"
+        )
+    }
+}
+
 #[cfg(test)]
 mod mcp_init_error_display_tests {}
 
@@ -1205,6 +1247,7 @@ mod mcp_init_error_display_tests {}
 mod tests {
     use super::*;
     use codex_protocol::protocol::McpAuthStatus;
+    use futures::future::pending;
     use rmcp::model::JsonObject;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -1226,6 +1269,49 @@ mod tests {
             connector_id: None,
             connector_name: None,
         }
+    }
+
+    fn pending_async_managed_client(startup_timeout: Duration) -> AsyncManagedClient {
+        AsyncManagedClient {
+            client: pending::<Result<ManagedClient, StartupOutcomeError>>()
+                .boxed()
+                .shared(),
+            startup_timeout,
+        }
+    }
+
+    #[tokio::test]
+    async fn required_startup_failures_times_out_pending_server() {
+        let mut manager = McpConnectionManager::default();
+        manager.clients.insert(
+            "slow".to_string(),
+            pending_async_managed_client(Duration::from_millis(5)),
+        );
+
+        let failures = manager
+            .required_startup_failures(&["slow".to_string()])
+            .await;
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].server, "slow");
+        assert!(
+            failures[0].error.contains(
+                "MCP startup timed out after 5 ms while waiting for server initialization"
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn list_all_tools_skips_pending_server_after_timeout() {
+        let mut manager = McpConnectionManager::default();
+        manager.clients.insert(
+            "slow".to_string(),
+            pending_async_managed_client(Duration::from_millis(5)),
+        );
+
+        let tools = manager.list_all_tools().await;
+
+        assert!(tools.is_empty());
     }
 
     #[test]
