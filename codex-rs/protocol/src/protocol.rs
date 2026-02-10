@@ -1587,6 +1587,9 @@ pub enum SessionSource {
     #[default]
     VSCode,
     Exec,
+    #[serde(rename = "desktop_app")]
+    #[ts(rename = "desktop_app")]
+    DesktopApp,
     Mcp,
     SubAgent(SubAgentSource),
     #[serde(other)]
@@ -1612,6 +1615,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Cli => f.write_str("cli"),
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
+            SessionSource::DesktopApp => f.write_str("desktop_app"),
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),

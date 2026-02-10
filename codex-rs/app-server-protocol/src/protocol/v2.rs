@@ -782,6 +782,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Cli => SessionSource::Cli,
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
+            CoreSessionSource::DesktopApp => SessionSource::AppServer,
             CoreSessionSource::Mcp => SessionSource::AppServer,
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,

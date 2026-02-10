@@ -41,6 +41,7 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::default_client::originator;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
@@ -153,10 +154,11 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        let session_source = session_source_for_originator(originator().value.as_str());
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
-            SessionSource::VSCode,
+            session_source,
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
@@ -433,5 +435,44 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+}
+
+fn session_source_for_originator(originator_name: &str) -> SessionSource {
+    match originator_name {
+        "codex_vscode" => SessionSource::VSCode,
+        name if name.starts_with("Codex ") => SessionSource::DesktopApp,
+        _ => SessionSource::VSCode,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_source_for_originator;
+    use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn maps_vscode_originator_to_vscode_source() {
+        assert_eq!(
+            session_source_for_originator("codex_vscode"),
+            SessionSource::VSCode
+        );
+    }
+
+    #[test]
+    fn maps_codex_desktop_originator_to_app_server_source() {
+        assert_eq!(
+            session_source_for_originator("Codex Desktop"),
+            SessionSource::DesktopApp
+        );
+    }
+
+    #[test]
+    fn defaults_unknown_originator_to_vscode_source() {
+        assert_eq!(
+            session_source_for_originator("some_other_originator"),
+            SessionSource::VSCode
+        );
     }
 }
