@@ -353,9 +353,9 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::open_if_present(
-                        config.codex_home.as_path(),
-                        config.model_provider_id.as_str(),
+                    let state_db_ctx = state_db::get_state_db(
+                        &config,
+                        None
                     )
                     .await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")

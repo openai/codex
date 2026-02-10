@@ -1357,14 +1357,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
+                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
