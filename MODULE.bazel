@@ -96,6 +96,11 @@ crate.annotation(
     ],
 )
 
+crate.annotation(
+    crate = "rama-macros",
+    rustc_flags = ["-Cstrip=none"],
+)
+
 inject_repo(crate, "zstd")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
