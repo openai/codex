@@ -28,12 +28,21 @@ pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> Collec
 }
 
 pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
+    let messages = input
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+
     input
         .iter()
         .filter_map(|item| match item {
             UserInput::Mention { path, .. } => Some(path.clone()),
             _ => None,
         })
+        .chain(collect_tool_mentions_from_messages(&messages).paths)
         .filter(|path| tool_kind_for_path(path.as_str()) == ToolMentionKind::App)
         .filter_map(|path| app_id_from_path(path.as_str()).map(str::to_string))
         .collect()
