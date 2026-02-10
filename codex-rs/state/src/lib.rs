@@ -37,6 +37,7 @@ pub use runtime::STATE_DB_FILENAME;
 pub use runtime::STATE_DB_VERSION;
 pub use runtime::Stage1JobClaim;
 pub use runtime::Stage1JobClaimOutcome;
+pub use runtime::Stage1StartupClaimParams;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
 

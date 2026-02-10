@@ -77,6 +77,16 @@ pub struct Stage1JobClaim {
     pub ownership_token: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Stage1StartupClaimParams<'a> {
+    pub scan_limit: usize,
+    pub max_claimed: usize,
+    pub max_age_days: i64,
+    pub min_rollout_idle_hours: i64,
+    pub allowed_sources: &'a [String],
+    pub lease_seconds: i64,
+}
+
 /// Scope row used to queue phase-2 consolidation work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingScopeConsolidation {
@@ -922,6 +932,7 @@ mod tests {
     use super::STATE_DB_FILENAME;
     use super::STATE_DB_VERSION;
     use super::Stage1JobClaimOutcome;
+    use super::Stage1StartupClaimParams;
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
@@ -1095,7 +1106,7 @@ mod tests {
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner_a, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
             .await
             .expect("claim stage1 job");
         let ownership_token = match claim {
@@ -1112,13 +1123,13 @@ mod tests {
         );
 
         let up_to_date = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
             .await
             .expect("claim stage1 up-to-date");
         assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
         let needs_rerun = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 101, 3600)
+            .try_claim_stage1_job(thread_id, owner_b, 101, 3600, 64)
             .await
             .expect("claim stage1 newer source");
         assert!(
@@ -1146,13 +1157,13 @@ mod tests {
             .expect("upsert thread");
 
         let claim_a = runtime
-            .try_claim_stage1_job(thread_id, owner_a, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner_a, 100, 3600, 64)
             .await
             .expect("claim a");
         assert!(matches!(claim_a, Stage1JobClaimOutcome::Claimed { .. }));
 
         let claim_b_fresh = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
             .await
             .expect("claim b fresh");
         assert_eq!(claim_b_fresh, Stage1JobClaimOutcome::SkippedRunning);
@@ -1164,7 +1175,7 @@ mod tests {
             .expect("force stale lease");
 
         let claim_b_stale = runtime
-            .try_claim_stage1_job(thread_id, owner_b, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
             .await
             .expect("claim b stale");
         assert!(matches!(
@@ -1176,20 +1187,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_stage1_jobs_filters_by_age_and_current_thread() {
+    async fn claim_stage1_jobs_filters_by_age_idle_and_current_thread() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
             .expect("initialize runtime");
 
         let now = Utc::now();
-        let recent_at = now - Duration::seconds(10);
+        let fresh_at = now - Duration::hours(1);
+        let just_under_idle_at = now - Duration::hours(12) + Duration::minutes(1);
+        let eligible_idle_at = now - Duration::hours(12) - Duration::minutes(1);
         let old_at = now - Duration::days(31);
 
         let current_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
-        let recent_thread_id =
-            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("recent thread id");
+        let fresh_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("fresh thread id");
+        let just_under_idle_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("just under idle thread id");
+        let eligible_idle_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("eligible idle thread id");
         let old_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("old thread id");
 
@@ -1202,11 +1219,35 @@ mod tests {
             .await
             .expect("upsert current");
 
-        let mut recent =
-            test_thread_metadata(&codex_home, recent_thread_id, codex_home.join("recent"));
-        recent.created_at = recent_at;
-        recent.updated_at = recent_at;
-        runtime.upsert_thread(&recent).await.expect("upsert recent");
+        let mut fresh =
+            test_thread_metadata(&codex_home, fresh_thread_id, codex_home.join("fresh"));
+        fresh.created_at = fresh_at;
+        fresh.updated_at = fresh_at;
+        runtime.upsert_thread(&fresh).await.expect("upsert fresh");
+
+        let mut just_under_idle = test_thread_metadata(
+            &codex_home,
+            just_under_idle_thread_id,
+            codex_home.join("just-under-idle"),
+        );
+        just_under_idle.created_at = just_under_idle_at;
+        just_under_idle.updated_at = just_under_idle_at;
+        runtime
+            .upsert_thread(&just_under_idle)
+            .await
+            .expect("upsert just-under-idle");
+
+        let mut eligible_idle = test_thread_metadata(
+            &codex_home,
+            eligible_idle_thread_id,
+            codex_home.join("eligible-idle"),
+        );
+        eligible_idle.created_at = eligible_idle_at;
+        eligible_idle.updated_at = eligible_idle_at;
+        runtime
+            .upsert_thread(&eligible_idle)
+            .await
+            .expect("upsert eligible-idle");
 
         let mut old = test_thread_metadata(&codex_home, old_thread_id, codex_home.join("old"));
         old.created_at = old_at;
@@ -1217,17 +1258,147 @@ mod tests {
         let claims = runtime
             .claim_stage1_jobs_for_startup(
                 current_thread_id,
-                10,
-                5,
-                30,
-                allowed_sources.as_slice(),
-                3600,
+                Stage1StartupClaimParams {
+                    scan_limit: 1,
+                    max_claimed: 5,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
             )
             .await
             .expect("claim stage1 jobs");
 
         assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].thread.id, recent_thread_id);
+        assert_eq!(claims[0].thread.id, eligible_idle_thread_id);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_enforces_global_running_cap() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                current_thread_id,
+                codex_home.join("current"),
+            ))
+            .await
+            .expect("upsert current");
+
+        let now = Utc::now();
+        let started_at = now.timestamp();
+        let lease_until = started_at + 3600;
+        let eligible_at = now - Duration::hours(13);
+        let existing_running = 10usize;
+        let total_candidates = 80usize;
+
+        for idx in 0..total_candidates {
+            let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+            let mut metadata = test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join(format!("thread-{idx}")),
+            );
+            metadata.created_at = eligible_at - Duration::seconds(idx as i64);
+            metadata.updated_at = eligible_at - Duration::seconds(idx as i64);
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("upsert thread");
+
+            if idx < existing_running {
+                sqlx::query(
+                    r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, NULL)
+                    "#,
+                )
+                .bind("memory_stage1")
+                .bind(thread_id.to_string())
+                .bind(current_thread_id.to_string())
+                .bind(Uuid::new_v4().to_string())
+                .bind(started_at)
+                .bind(lease_until)
+                .bind(3)
+                .bind(metadata.updated_at.timestamp())
+                .execute(runtime.pool.as_ref())
+                .await
+                .expect("seed running stage1 job");
+            }
+        }
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 200,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs");
+        assert_eq!(claims.len(), 54);
+
+        let running_count = sqlx::query(
+            r#"
+SELECT COUNT(*) AS count
+FROM jobs
+WHERE kind = 'memory_stage1'
+  AND status = 'running'
+  AND lease_until IS NOT NULL
+  AND lease_until > ?
+            "#,
+        )
+        .bind(Utc::now().timestamp())
+        .fetch_one(runtime.pool.as_ref())
+        .await
+        .expect("count running stage1 jobs")
+        .try_get::<i64, _>("count")
+        .expect("running count value");
+        assert_eq!(running_count, 64);
+
+        let more_claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 200,
+                    max_claimed: 64,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 jobs with cap reached");
+        assert_eq!(more_claims.len(), 0);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1248,7 +1419,7 @@ mod tests {
             .expect("upsert thread");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
             .await
             .expect("claim stage1");
         let ownership_token = match claim {
@@ -1395,7 +1566,7 @@ mod tests {
             .expect("upsert thread");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600)
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
             .await
             .expect("claim stage1");
         let ownership_token = match claim {
@@ -1459,7 +1630,7 @@ mod tests {
             .expect("upsert thread b");
 
         let claim_a = runtime
-            .try_claim_stage1_job(thread_a, owner, 100, 3600)
+            .try_claim_stage1_job(thread_a, owner, 100, 3600, 64)
             .await
             .expect("claim stage1 a");
         let token_a = match claim_a {
@@ -1475,7 +1646,7 @@ mod tests {
         );
 
         let claim_b = runtime
-            .try_claim_stage1_job(thread_b, owner, 101, 3600)
+            .try_claim_stage1_job(thread_b, owner, 101, 3600, 64)
             .await
             .expect("claim stage1 b");
         let token_b = match claim_b {

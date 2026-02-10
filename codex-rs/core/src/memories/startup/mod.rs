@@ -156,11 +156,14 @@ pub(super) async fn run_memories_startup_pipeline(
     let claimed_candidates = match state_db
         .claim_stage1_jobs_for_startup(
             session.conversation_id,
-            PHASE_ONE_THREAD_SCAN_LIMIT,
-            super::MAX_ROLLOUTS_PER_STARTUP,
-            super::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
-            allowed_sources.as_slice(),
-            super::PHASE_ONE_JOB_LEASE_SECONDS,
+            codex_state::Stage1StartupClaimParams {
+                scan_limit: PHASE_ONE_THREAD_SCAN_LIMIT,
+                max_claimed: super::MAX_ROLLOUTS_PER_STARTUP,
+                max_age_days: super::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
+                min_rollout_idle_hours: super::PHASE_ONE_MIN_ROLLOUT_IDLE_HOURS,
+                allowed_sources: allowed_sources.as_slice(),
+                lease_seconds: super::PHASE_ONE_JOB_LEASE_SECONDS,
+            },
         )
         .await
     {
