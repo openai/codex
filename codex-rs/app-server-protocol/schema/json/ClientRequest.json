@@ -42,6 +42,13 @@
             "integer",
             "null"
           ]
+        },
+        "threadId": {
+          "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

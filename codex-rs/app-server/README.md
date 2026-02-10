@@ -722,6 +722,7 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 { "method": "app/list", "id": 50, "params": {
     "cursor": null,
     "limit": 50,
+    "threadId": "thr_123",
     "forceRefetch": false
 } }
 { "id": 50, "result": {
@@ -740,6 +741,8 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
     "nextCursor": null
 } }
 ```
+
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
 
 `app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
 

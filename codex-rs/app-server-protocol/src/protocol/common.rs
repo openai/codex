@@ -1108,6 +1108,27 @@ mod tests {
     }
 
     #[test]
+    fn serialize_list_apps() -> Result<()> {
+        let request = ClientRequest::AppsList {
+            request_id: RequestId::Integer(8),
+            params: v2::AppsListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "app/list",
+                "id": 8,
+                "params": {
+                    "cursor": null,
+                    "limit": null,
+                    "threadId": null
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_list_experimental_features() -> Result<()> {
         let request = ClientRequest::ExperimentalFeatureList {
             request_id: RequestId::Integer(8),

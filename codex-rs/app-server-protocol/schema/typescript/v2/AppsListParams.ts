@@ -15,6 +15,10 @@ cursor?: string | null,
  */
 limit?: number | null, 
 /**
+ * Optional thread id used to evaluate app feature gating from that thread's config.
+ */
+threadId?: string | null, 
+/**
  * When true, bypass app caches and fetch the latest data from sources.
  */
 forceRefetch?: boolean, };

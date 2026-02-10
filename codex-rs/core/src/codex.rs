@@ -488,6 +488,10 @@ impl Codex {
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
+
+    pub(crate) fn enabled(&self, feature: Feature) -> bool {
+        self.session.enabled(feature)
+    }
 }
 
 /// Context for an initialized model agent

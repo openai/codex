@@ -4368,13 +4368,29 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let config = match self.load_latest_config().await {
+        let mut config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+
+        if let Some(thread_id) = params.thread_id.as_deref() {
+            let (_, thread) = match self.load_thread(thread_id).await {
+                Ok(result) => result,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            if thread.enabled(Feature::Apps) {
+                config.features.enable(Feature::Apps);
+            } else {
+                config.features.disable(Feature::Apps);
+            }
+        }
 
         if !config.features.enabled(Feature::Apps) {
             self.outgoing
@@ -4405,6 +4421,7 @@ impl CodexMessageProcessor {
         let AppsListParams {
             cursor,
             limit,
+            thread_id: _,
             force_refetch,
         } = params;
         let start = match cursor {
