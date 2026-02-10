@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::openai_models::InputModality;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -16,22 +17,14 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::local_image_content_items_with_label_number;
 
-pub struct ViewImageHandler {
-    supports_image_input: bool,
-}
+pub struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
 
 impl ViewImageHandler {
-    pub fn new(supports_image_input: bool) -> Self {
-        Self {
-            supports_image_input,
-        }
-    }
-
-    fn ensure_supported(&self) -> Result<(), FunctionCallError> {
-        if self.supports_image_input {
+    fn ensure_supported(&self, model_supports_image_input: bool) -> Result<(), FunctionCallError> {
+        if model_supports_image_input {
             Ok(())
         } else {
             Err(FunctionCallError::RespondToModel(
@@ -53,7 +46,8 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        self.ensure_supported()?;
+        let model_supports_image_input = invocation.turn.model_info.input_modalities.contains(&InputModality::Image);
+        self.ensure_supported(model_supports_image_input)?;
 
         let ToolInvocation {
             session,

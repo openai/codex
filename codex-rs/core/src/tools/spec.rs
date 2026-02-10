@@ -17,7 +17,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,7 +30,6 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
-    pub supports_image_input: bool,
     pub search_tool: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
@@ -87,7 +85,6 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            supports_image_input: model_info.input_modalities.contains(&InputModality::Image),
             search_tool: include_search_tool,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
@@ -1370,7 +1367,7 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let view_image_handler = Arc::new(ViewImageHandler::new(config.supports_image_input));
+    let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
