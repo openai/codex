@@ -24,7 +24,6 @@ use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
 use crate::rollout::list::read_head_for_summary;
-use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;

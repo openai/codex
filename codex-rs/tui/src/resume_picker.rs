@@ -78,7 +78,6 @@ impl SessionPickerAction {
 
 #[derive(Clone)]
 struct PageLoadRequest {
-    codex_home: PathBuf,
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
@@ -145,9 +144,11 @@ async fn run_session_picker(
         std::env::current_dir().ok()
     };
 
+    let config = config.clone();
     let loader_tx = bg_tx.clone();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
+        let config = config.clone();
         tokio::spawn(async move {
             let provider_filter = vec![request.default_provider.clone()];
             let page = RolloutRecorder::list_threads(
@@ -486,7 +487,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: None,
             request_token,
             search_token,
@@ -757,7 +757,6 @@ impl PickerState {
         self.request_frame();
 
         (self.page_loader)(PageLoadRequest {
-            codex_home: self.codex_home.clone(),
             cursor: Some(cursor),
             request_token,
             search_token,
@@ -1311,13 +1310,7 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::ThreadId;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::RolloutLine;
-    use codex_protocol::protocol::SessionMeta;
-    use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::UserMessageEvent;
+
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
@@ -1367,6 +1360,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn set_rollout_mtime(path: &Path, updated_at: DateTime<Utc>) {
         let times = FileTimes::new().set_modified(updated_at.into());
         OpenOptions::new()

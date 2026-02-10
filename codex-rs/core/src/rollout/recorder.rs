@@ -151,7 +151,7 @@ impl RolloutRecorder {
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
-            config: &Config,
+            config,
             page_size,
             cursor,
             sort_key,

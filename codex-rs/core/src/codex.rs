@@ -353,11 +353,7 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(
-                        &config,
-                        None
-                    )
-                    .await;
+                    let state_db_ctx = state_db::get_state_db(&config, None).await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
