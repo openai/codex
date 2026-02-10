@@ -1370,7 +1370,7 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let view_image_handler = Arc::new(ViewImageHandler);
+    let view_image_handler = Arc::new(ViewImageHandler::new(config.supports_image_input));
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1498,10 +1498,8 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    if config.supports_image_input {
-        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-        builder.register_handler("view_image", view_image_handler);
-    }
+    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -2077,7 +2075,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_multimodal_models_exclude_view_image() {
+    fn test_non_multimodal_models_include_view_image() {
         let config = test_config();
         let mut model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
         model_info.input_modalities = vec![InputModality::Text];
@@ -2091,11 +2089,11 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
         assert!(
-            !tools
+            tools
                 .iter()
                 .map(|t| t.spec.name())
                 .any(|name| name == VIEW_IMAGE_TOOL_NAME),
-            "view_image should be excluded for non-multimodal models"
+            "view_image should be present for non-multimodal models"
         );
     }
 
