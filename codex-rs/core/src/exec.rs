@@ -210,7 +210,7 @@ pub async fn process_exec_tool_call(
     };
 
     let manager = SandboxManager::new();
-    let exec_env = manager
+    let exec_req = manager
         .transform(crate::sandboxing::SandboxTransformRequest {
             spec,
             policy: sandbox_policy,
@@ -225,7 +225,7 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_env, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_req, sandbox_policy, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(

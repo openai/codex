@@ -88,12 +88,15 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let has_managed_network_requirements = turn_ctx
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let has_managed_network_requirements = is_managed_network_enabled(
+            turn_ctx
+                .config
+                .config_layer_stack
+                .requirements_toml()
+                .network
+                .as_ref()
+                .and_then(|network| network.enabled),
+        );
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
@@ -160,13 +163,8 @@ impl ToolOrchestrator {
                     }
                 }
 
-                let escalated_sandbox = if has_managed_network_requirements {
-                    initial_sandbox
-                } else {
-                    crate::exec::SandboxType::None
-                };
                 let escalated_attempt = SandboxAttempt {
-                    sandbox: escalated_sandbox,
+                    sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
@@ -188,4 +186,20 @@ fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
     // Keep approval reason terse and stable for UX/tests, but accept the
     // output so we can evolve heuristics later without touching call sites.
     "command failed; retry without sandbox?".to_string()
+}
+
+fn is_managed_network_enabled(enabled: Option<bool>) -> bool {
+    matches!(enabled, Some(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_managed_network_enabled;
+
+    #[test]
+    fn managed_network_requires_explicit_true() {
+        assert!(is_managed_network_enabled(Some(true)));
+        assert!(!is_managed_network_enabled(Some(false)));
+        assert!(!is_managed_network_enabled(None));
+    }
 }

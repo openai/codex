@@ -158,12 +158,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
-        let env = req.env.clone();
-
         let spec = build_command_spec(
             &command,
             &req.cwd,
-            &env,
+            &req.env,
             req.timeout_ms.into(),
             req.sandbox_permissions,
             req.justification.clone(),
