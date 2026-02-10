@@ -6,7 +6,8 @@ use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
 use super::storage::wipe_consolidation_outputs;
 use crate::memories::layout::ensure_layout;
-use crate::memories::layout::memory_root_for_cwd;
+use crate::memories::layout::memory_root;
+use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
 use crate::memories::layout::raw_memories_file;
 use crate::memories::layout::rollout_summaries_dir;
 use chrono::TimeZone;
@@ -21,46 +22,37 @@ use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
 #[test]
-fn memory_root_varies_by_cwd() {
+fn memory_root_uses_shared_global_path() {
     let dir = tempdir().expect("tempdir");
     let codex_home = dir.path().join("codex");
-    let cwd_a = dir.path().join("workspace-a");
-    let cwd_b = dir.path().join("workspace-b");
-
-    std::fs::create_dir_all(&cwd_a).expect("mkdir a");
-    std::fs::create_dir_all(&cwd_b).expect("mkdir b");
-
-    let root_a = memory_root_for_cwd(&codex_home, &cwd_a);
-    let root_b = memory_root_for_cwd(&codex_home, &cwd_b);
-    assert!(root_a.starts_with(codex_home.join("memories")));
-    assert!(root_b.starts_with(codex_home.join("memories")));
-    assert!(root_a.ends_with("memory"));
-    assert!(root_b.ends_with("memory"));
-    assert_ne!(root_a, root_b);
-
-    let bucket_a = root_a
-        .parent()
-        .and_then(std::path::Path::file_name)
-        .and_then(std::ffi::OsStr::to_str)
-        .expect("cwd bucket");
-    assert_eq!(bucket_a.len(), 16);
-    assert!(bucket_a.chars().all(|ch| ch.is_ascii_hexdigit()));
+    assert_eq!(memory_root(&codex_home), codex_home.join("memories"));
 }
 
-#[test]
-fn memory_root_encoding_avoids_component_collisions() {
+#[tokio::test]
+async fn migrate_legacy_user_memory_root_if_needed_copies_contents() {
     let dir = tempdir().expect("tempdir");
     let codex_home = dir.path().join("codex");
+    let legacy_root = codex_home.join("memories").join("user").join("memory");
+    tokio::fs::create_dir_all(legacy_root.join("rollout_summaries"))
+        .await
+        .expect("create legacy rollout summaries dir");
+    tokio::fs::write(
+        legacy_root.join("rollout_summaries").join("thread.md"),
+        "summary",
+    )
+    .await
+    .expect("write legacy rollout summary");
+    tokio::fs::write(legacy_root.join("raw_memories.md"), "raw")
+        .await
+        .expect("write legacy raw memories");
 
-    let cwd_question = dir.path().join("workspace?one");
-    let cwd_hash = dir.path().join("workspace#one");
+    migrate_legacy_user_memory_root_if_needed(&codex_home)
+        .await
+        .expect("migrate legacy memory root");
 
-    let root_question = memory_root_for_cwd(&codex_home, &cwd_question);
-    let root_hash = memory_root_for_cwd(&codex_home, &cwd_hash);
-
-    assert_ne!(root_question, root_hash);
-    assert!(!root_question.display().to_string().contains("workspace"));
-    assert!(!root_hash.display().to_string().contains("workspace"));
+    let root = memory_root(&codex_home);
+    assert!(root.join("rollout_summaries").join("thread.md").is_file());
+    assert!(root.join("raw_memories.md").is_file());
 }
 
 #[test]

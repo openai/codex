@@ -7,10 +7,9 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::memories::layout::memory_root_for_cwd;
-use crate::memories::layout::memory_root_for_user;
+use crate::memories::layout::memory_root;
+use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
 use crate::memories::scope::MEMORY_SCOPE_KEY_USER;
-use crate::memories::scope::MEMORY_SCOPE_KIND_CWD;
 use crate::memories::scope::MEMORY_SCOPE_KIND_USER;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
@@ -61,7 +60,7 @@ pub(super) struct MemoryScopeTarget {
 
 /// Converts a pending scope consolidation row into a concrete filesystem target for phase 2.
 ///
-/// Unsupported scope kinds or malformed user-scope keys are ignored.
+/// Unsupported scope kinds or malformed keys are ignored.
 pub(super) fn memory_scope_target_for_pending_scope(
     config: &Config,
     pending_scope: codex_state::PendingScopeConsolidation,
@@ -70,14 +69,6 @@ pub(super) fn memory_scope_target_for_pending_scope(
     let scope_key = pending_scope.scope_key;
 
     match scope_kind.as_str() {
-        MEMORY_SCOPE_KIND_CWD => {
-            let cwd = PathBuf::from(&scope_key);
-            Some(MemoryScopeTarget {
-                scope_kind: MEMORY_SCOPE_KIND_CWD,
-                scope_key,
-                memory_root: memory_root_for_cwd(&config.codex_home, &cwd),
-            })
-        }
         MEMORY_SCOPE_KIND_USER => {
             if scope_key != MEMORY_SCOPE_KEY_USER {
                 warn!(
@@ -89,7 +80,7 @@ pub(super) fn memory_scope_target_for_pending_scope(
             Some(MemoryScopeTarget {
                 scope_kind: MEMORY_SCOPE_KIND_USER,
                 scope_key,
-                memory_root: memory_root_for_user(&config.codex_home),
+                memory_root: memory_root(&config.codex_home),
             })
         }
         _ => {
@@ -139,6 +130,10 @@ pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> CodexResult<()> {
+    if let Err(err) = migrate_legacy_user_memory_root_if_needed(&config.codex_home).await {
+        warn!("failed migrating legacy shared memory root: {err}");
+    }
+
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable for memories startup pipeline; skipping");
         return Ok(());
@@ -302,23 +297,12 @@ async fn list_consolidation_scopes(
 mod tests {
     use super::*;
     use crate::config::test_config;
-    use std::path::PathBuf;
 
     /// Verifies that phase-2 pending scope rows are translated only for supported scopes.
     #[test]
     fn pending_scope_mapping_accepts_supported_scopes_only() {
         let mut config = test_config();
-        config.codex_home = PathBuf::from("/tmp/memory-startup-test-home");
-
-        let cwd_target = memory_scope_target_for_pending_scope(
-            &config,
-            codex_state::PendingScopeConsolidation {
-                scope_kind: MEMORY_SCOPE_KIND_CWD.to_string(),
-                scope_key: "/tmp/project-a".to_string(),
-            },
-        )
-        .expect("cwd scope should map");
-        assert_eq!(cwd_target.scope_kind, MEMORY_SCOPE_KIND_CWD);
+        config.codex_home = "/tmp/memory-startup-test-home".into();
 
         let user_target = memory_scope_target_for_pending_scope(
             &config,
@@ -336,6 +320,17 @@ mod tests {
                 codex_state::PendingScopeConsolidation {
                     scope_kind: MEMORY_SCOPE_KIND_USER.to_string(),
                     scope_key: "unexpected-user-key".to_string(),
+                },
+            )
+            .is_none()
+        );
+
+        assert!(
+            memory_scope_target_for_pending_scope(
+                &config,
+                codex_state::PendingScopeConsolidation {
+                    scope_kind: "cwd".to_string(),
+                    scope_key: "/tmp/project-a".to_string(),
                 },
             )
             .is_none()

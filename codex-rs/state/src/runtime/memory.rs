@@ -6,34 +6,26 @@ use chrono::Duration;
 use sqlx::Executor;
 use sqlx::QueryBuilder;
 use sqlx::Sqlite;
-use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
-const JOB_KIND_MEMORY_CONSOLIDATE_CWD: &str = "memory_consolidate_cwd";
 const JOB_KIND_MEMORY_CONSOLIDATE_USER: &str = "memory_consolidate_user";
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
 fn job_kind_for_scope(scope_kind: &str) -> Option<&'static str> {
-    match scope_kind {
-        MEMORY_SCOPE_KIND_CWD => Some(JOB_KIND_MEMORY_CONSOLIDATE_CWD),
-        MEMORY_SCOPE_KIND_USER => Some(JOB_KIND_MEMORY_CONSOLIDATE_USER),
-        _ => None,
+    if scope_kind == MEMORY_SCOPE_KIND_USER {
+        Some(JOB_KIND_MEMORY_CONSOLIDATE_USER)
+    } else {
+        None
     }
 }
 
 fn scope_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
-    match job_kind {
-        JOB_KIND_MEMORY_CONSOLIDATE_CWD => Some(MEMORY_SCOPE_KIND_CWD),
-        JOB_KIND_MEMORY_CONSOLIDATE_USER => Some(MEMORY_SCOPE_KIND_USER),
-        _ => None,
+    if job_kind == JOB_KIND_MEMORY_CONSOLIDATE_USER {
+        Some(MEMORY_SCOPE_KIND_USER)
+    } else {
+        None
     }
-}
-
-fn normalize_cwd_for_scope_matching(cwd: &str) -> Option<PathBuf> {
-    Path::new(cwd).canonicalize().ok()
 }
 
 impl StateRuntime {
@@ -156,7 +148,7 @@ WHERE thread_id = ?
     pub async fn list_stage1_outputs_for_scope(
         &self,
         scope_kind: &str,
-        scope_key: &str,
+        _scope_key: &str,
         n: usize,
     ) -> anyhow::Result<Vec<Stage1Output>> {
         if n == 0 {
@@ -164,58 +156,6 @@ WHERE thread_id = ?
         }
 
         let rows = match scope_kind {
-            MEMORY_SCOPE_KIND_CWD => {
-                let exact_rows = sqlx::query(
-                    r#"
-SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at
-FROM stage1_outputs AS so
-JOIN threads AS t ON t.id = so.thread_id
-WHERE t.cwd = ?
-ORDER BY so.source_updated_at DESC, so.thread_id DESC
-LIMIT ?
-                    "#,
-                )
-                .bind(scope_key)
-                .bind(n as i64)
-                .fetch_all(self.pool.as_ref())
-                .await?;
-
-                if let Some(normalized_scope_key) = normalize_cwd_for_scope_matching(scope_key) {
-                    let mut rows = Vec::new();
-                    let mut selected_thread_ids = HashSet::new();
-                    let candidate_rows = sqlx::query(
-                        r#"
-SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at, t.cwd AS thread_cwd
-FROM stage1_outputs AS so
-JOIN threads AS t ON t.id = so.thread_id
-ORDER BY so.source_updated_at DESC, so.thread_id DESC
-                        "#,
-                    )
-                    .fetch_all(self.pool.as_ref())
-                    .await?;
-
-                    for row in candidate_rows {
-                        if rows.len() >= n {
-                            break;
-                        }
-                        let thread_id: String = row.try_get("thread_id")?;
-                        if selected_thread_ids.contains(&thread_id) {
-                            continue;
-                        }
-                        let thread_cwd: String = row.try_get("thread_cwd")?;
-                        if let Some(normalized_thread_cwd) =
-                            normalize_cwd_for_scope_matching(&thread_cwd)
-                            && normalized_thread_cwd == normalized_scope_key
-                        {
-                            selected_thread_ids.insert(thread_id);
-                            rows.push(row);
-                        }
-                    }
-                    if rows.is_empty() { exact_rows } else { rows }
-                } else {
-                    exact_rows
-                }
-            }
             MEMORY_SCOPE_KIND_USER => {
                 sqlx::query(
                     r#"
@@ -224,7 +164,7 @@ FROM stage1_outputs AS so
 JOIN threads AS t ON t.id = so.thread_id
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
-                    "#,
+                "#,
                 )
                 .bind(n as i64)
                 .fetch_all(self.pool.as_ref())
@@ -468,37 +408,13 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .execute(&mut *tx)
         .await?;
 
-        if let Some(thread_row) = sqlx::query(
-            r#"
-SELECT cwd
-FROM threads
-WHERE id = ?
-            "#,
+        enqueue_scope_consolidation_with_executor(
+            &mut *tx,
+            MEMORY_SCOPE_KIND_USER,
+            MEMORY_SCOPE_KEY_USER,
+            source_updated_at,
         )
-        .bind(thread_id.as_str())
-        .fetch_optional(&mut *tx)
-        .await?
-        {
-            let cwd: String = thread_row.try_get("cwd")?;
-            let normalized_cwd = normalize_cwd_for_scope_matching(&cwd)
-                .unwrap_or_else(|| PathBuf::from(&cwd))
-                .display()
-                .to_string();
-            enqueue_scope_consolidation_with_executor(
-                &mut *tx,
-                MEMORY_SCOPE_KIND_CWD,
-                &normalized_cwd,
-                source_updated_at,
-            )
-            .await?;
-            enqueue_scope_consolidation_with_executor(
-                &mut *tx,
-                MEMORY_SCOPE_KIND_USER,
-                MEMORY_SCOPE_KEY_USER,
-                source_updated_at,
-            )
-            .await?;
-        }
+        .await?;
 
         tx.commit().await?;
         Ok(true)
@@ -570,7 +486,7 @@ WHERE kind = ? AND job_key = ?
             r#"
 SELECT kind, job_key
 FROM jobs
-WHERE kind IN (?, ?)
+WHERE kind = ?
   AND input_watermark IS NOT NULL
   AND input_watermark > COALESCE(last_success_watermark, 0)
   AND retry_remaining > 0
@@ -580,7 +496,6 @@ ORDER BY input_watermark DESC, kind ASC, job_key ASC
 LIMIT ?
             "#,
         )
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_CWD)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_USER)
         .bind(now)
         .bind(now)

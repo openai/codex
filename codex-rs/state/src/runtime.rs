@@ -39,7 +39,6 @@ use uuid::Uuid;
 pub const STATE_DB_FILENAME: &str = "state";
 pub const STATE_DB_VERSION: u32 = 4;
 
-const MEMORY_SCOPE_KIND_CWD: &str = "cwd";
 const MEMORY_SCOPE_KIND_USER: &str = "user";
 const MEMORY_SCOPE_KEY_USER: &str = "user";
 
@@ -90,7 +89,7 @@ pub struct Stage1StartupClaimParams<'a> {
 /// Scope row used to queue phase-2 consolidation work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingScopeConsolidation {
-    /// Scope family (`cwd` or `user`).
+    /// Scope family (`user`).
     pub scope_kind: String,
     /// Scope identifier keyed by `scope_kind`.
     pub scope_key: String,
@@ -1473,7 +1472,7 @@ WHERE kind = 'memory_stage1'
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .enqueue_scope_consolidation("cwd", "/tmp/project-a", 100)
+            .enqueue_scope_consolidation("user", "user", 100)
             .await
             .expect("enqueue scope");
 
@@ -1484,13 +1483,13 @@ WHERE kind = 'memory_stage1'
         assert_eq!(
             scopes,
             vec![PendingScopeConsolidation {
-                scope_kind: "cwd".to_string(),
-                scope_key: "/tmp/project-a".to_string(),
+                scope_kind: "user".to_string(),
+                scope_key: "user".to_string(),
             }]
         );
 
         let claim = runtime
-            .try_claim_phase2_job("cwd", "/tmp/project-a", owner, 3600)
+            .try_claim_phase2_job("user", "user", owner, 3600)
             .await
             .expect("claim phase2");
         let (ownership_token, input_watermark) = match claim {
@@ -1503,8 +1502,8 @@ WHERE kind = 'memory_stage1'
         assert!(
             runtime
                 .mark_phase2_job_succeeded(
-                    "cwd",
-                    "/tmp/project-a",
+                    "user",
+                    "user",
                     ownership_token.as_str(),
                     input_watermark,
                 )
@@ -1514,18 +1513,18 @@ WHERE kind = 'memory_stage1'
         );
 
         let claim_up_to_date = runtime
-            .try_claim_phase2_job("cwd", "/tmp/project-a", owner, 3600)
+            .try_claim_phase2_job("user", "user", owner, 3600)
             .await
             .expect("claim phase2 up-to-date");
         assert_eq!(claim_up_to_date, Phase2JobClaimOutcome::SkippedNotDirty);
 
         runtime
-            .enqueue_scope_consolidation("cwd", "/tmp/project-a", 101)
+            .enqueue_scope_consolidation("user", "user", 101)
             .await
             .expect("enqueue scope again");
 
         let claim_rerun = runtime
-            .try_claim_phase2_job("cwd", "/tmp/project-a", owner, 3600)
+            .try_claim_phase2_job("user", "user", owner, 3600)
             .await
             .expect("claim phase2 rerun");
         assert!(
@@ -1537,38 +1536,36 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn list_stage1_outputs_for_cwd_scope_matches_canonical_equivalent_paths() {
+    async fn list_stage1_outputs_for_user_scope_returns_latest_outputs() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
             .expect("initialize runtime");
 
-        let workspace = codex_home.join("workspace");
-        tokio::fs::create_dir_all(&workspace)
-            .await
-            .expect("create workspace");
-        let non_normalized_cwd = workspace.join("..").join("workspace");
-        let canonical_scope_key = workspace
-            .canonicalize()
-            .expect("canonicalize workspace")
-            .display()
-            .to_string();
-
-        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         runtime
             .upsert_thread(&test_thread_metadata(
                 &codex_home,
-                thread_id,
-                non_normalized_cwd,
+                thread_id_a,
+                codex_home.join("workspace-a"),
             ))
             .await
-            .expect("upsert thread");
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
 
         let claim = runtime
-            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .try_claim_stage1_job(thread_id_a, owner, 100, 3600, 64)
             .await
-            .expect("claim stage1");
+            .expect("claim stage1 a");
         let ownership_token = match claim {
             Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
             other => panic!("unexpected stage1 claim outcome: {other:?}"),
@@ -1576,56 +1573,77 @@ WHERE kind = 'memory_stage1'
         assert!(
             runtime
                 .mark_stage1_job_succeeded(
-                    thread_id,
+                    thread_id_a,
                     ownership_token.as_str(),
                     100,
-                    "raw memory",
-                    "summary",
+                    "raw memory a",
+                    "summary a",
                 )
                 .await
-                .expect("mark stage1 succeeded"),
-            "stage1 success should persist output"
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output a"
+        );
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_b,
+                    ownership_token.as_str(),
+                    101,
+                    "raw memory b",
+                    "summary b",
+                )
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output b"
         );
 
         let outputs = runtime
-            .list_stage1_outputs_for_scope("cwd", canonical_scope_key.as_str(), 10)
+            .list_stage1_outputs_for_scope("user", "user", 10)
             .await
-            .expect("list stage1 outputs for canonical cwd scope");
-        assert_eq!(outputs.len(), 1);
-        assert_eq!(outputs[0].thread_id, thread_id);
-        assert_eq!(outputs[0].summary, "summary");
+            .expect("list stage1 outputs for user scope");
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].thread_id, thread_id_b);
+        assert_eq!(outputs[0].summary, "summary b");
+        assert_eq!(outputs[1].thread_id, thread_id_a);
+        assert_eq!(outputs[1].summary, "summary a");
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]
-    async fn mark_stage1_job_succeeded_normalizes_cwd_scope_job_key() {
+    async fn mark_stage1_job_succeeded_enqueues_single_user_scope() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
             .expect("initialize runtime");
-
-        let workspace = codex_home.join("workspace");
-        tokio::fs::create_dir_all(&workspace)
-            .await
-            .expect("create workspace");
-        let canonical_scope_key = workspace
-            .canonicalize()
-            .expect("canonicalize workspace")
-            .display()
-            .to_string();
-        let cwd_alias = workspace.join(".");
 
         let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
         let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, thread_a, workspace))
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_a,
+                codex_home.join("workspace-a"),
+            ))
             .await
             .expect("upsert thread a");
         runtime
-            .upsert_thread(&test_thread_metadata(&codex_home, thread_b, cwd_alias))
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_b,
+                codex_home.join("workspace-b"),
+            ))
             .await
             .expect("upsert thread b");
 
@@ -1665,13 +1683,13 @@ WHERE kind = 'memory_stage1'
             .list_pending_scope_consolidations(10)
             .await
             .expect("list pending scopes");
-        let cwd_scopes = pending_scopes
-            .iter()
-            .filter(|scope| scope.scope_kind == "cwd")
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(cwd_scopes.len(), 1);
-        assert_eq!(cwd_scopes[0].scope_key, canonical_scope_key);
+        assert_eq!(
+            pending_scopes,
+            vec![PendingScopeConsolidation {
+                scope_kind: "user".to_string(),
+                scope_key: "user".to_string(),
+            }]
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1685,28 +1703,28 @@ WHERE kind = 'memory_stage1'
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .enqueue_scope_consolidation("cwd", "scope-running", 200)
+            .enqueue_scope_consolidation("user", "scope-running", 200)
             .await
             .expect("enqueue running scope");
         runtime
-            .enqueue_scope_consolidation("cwd", "scope-backoff", 199)
+            .enqueue_scope_consolidation("user", "scope-backoff", 199)
             .await
             .expect("enqueue backoff scope");
         runtime
-            .enqueue_scope_consolidation("cwd", "scope-exhausted", 198)
+            .enqueue_scope_consolidation("user", "scope-exhausted", 198)
             .await
             .expect("enqueue exhausted scope");
         runtime
-            .enqueue_scope_consolidation("cwd", "scope-claimable-a", 90)
+            .enqueue_scope_consolidation("user", "scope-claimable-a", 90)
             .await
             .expect("enqueue claimable scope a");
         runtime
-            .enqueue_scope_consolidation("cwd", "scope-claimable-b", 89)
+            .enqueue_scope_consolidation("user", "scope-claimable-b", 89)
             .await
             .expect("enqueue claimable scope b");
 
         let running_claim = runtime
-            .try_claim_phase2_job("cwd", "scope-running", owner, 3600)
+            .try_claim_phase2_job("user", "scope-running", owner, 3600)
             .await
             .expect("claim running scope");
         assert!(
@@ -1715,7 +1733,7 @@ WHERE kind = 'memory_stage1'
         );
 
         let backoff_claim = runtime
-            .try_claim_phase2_job("cwd", "scope-backoff", owner, 3600)
+            .try_claim_phase2_job("user", "scope-backoff", owner, 3600)
             .await
             .expect("claim backoff scope");
         let backoff_token = match backoff_claim {
@@ -1727,7 +1745,7 @@ WHERE kind = 'memory_stage1'
         assert!(
             runtime
                 .mark_phase2_job_failed(
-                    "cwd",
+                    "user",
                     "scope-backoff",
                     backoff_token.as_str(),
                     "temporary failure",
@@ -1739,7 +1757,7 @@ WHERE kind = 'memory_stage1'
         );
 
         sqlx::query("UPDATE jobs SET retry_remaining = 0 WHERE kind = ? AND job_key = ?")
-            .bind("memory_consolidate_cwd")
+            .bind("memory_consolidate_user")
             .bind("scope-exhausted")
             .execute(runtime.pool.as_ref())
             .await
@@ -1753,11 +1771,11 @@ WHERE kind = 'memory_stage1'
             pending,
             vec![
                 PendingScopeConsolidation {
-                    scope_kind: "cwd".to_string(),
+                    scope_kind: "user".to_string(),
                     scope_key: "scope-claimable-a".to_string(),
                 },
                 PendingScopeConsolidation {
-                    scope_kind: "cwd".to_string(),
+                    scope_kind: "user".to_string(),
                     scope_key: "scope-claimable-b".to_string(),
                 },
             ]
