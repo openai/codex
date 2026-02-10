@@ -3706,6 +3706,10 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
         false,
     );
     chat.add_connectors_output();
+    assert!(
+        chat.connectors_prefetch_in_flight,
+        "expected /apps to trigger a forced connectors refresh"
+    );
 
     let before = render_bottom_popup(&chat, 80);
     assert!(

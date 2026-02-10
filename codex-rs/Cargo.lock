@@ -2232,6 +2232,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "webbrowser",
  "which",
  "windows-sys 0.52.0",
  "winsplit",

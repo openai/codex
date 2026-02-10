@@ -96,6 +96,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         )
         .await;
 
+    if force_refetch {
+        mcp_connection_manager
+            .hard_refresh_codex_apps_tools_cache()
+            .await?;
+    }
+
     let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         mcp_connection_manager
