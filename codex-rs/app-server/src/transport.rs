@@ -1,8 +1,12 @@
+use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
+use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCRequest;
 use futures::SinkExt;
 use futures::StreamExt;
 use owo_colors::OwoColorize;
@@ -140,15 +144,27 @@ pub(crate) enum TransportEvent {
 }
 
 pub(crate) struct ConnectionState {
-    pub(crate) writer: mpsc::Sender<OutgoingMessage>,
     pub(crate) session: ConnectionSessionState,
 }
 
 impl ConnectionState {
+    pub(crate) fn new() -> Self {
+        Self {
+            session: ConnectionSessionState::default(),
+        }
+    }
+}
+
+pub(crate) struct OutboundConnectionState {
+    pub(crate) writer: mpsc::Sender<OutgoingMessage>,
+    pub(crate) initialized: bool,
+}
+
+impl OutboundConnectionState {
     pub(crate) fn new(writer: mpsc::Sender<OutgoingMessage>) -> Self {
         Self {
             writer,
-            session: ConnectionSessionState::default(),
+            initialized: false,
         }
     }
 }
@@ -159,6 +175,7 @@ pub(crate) async fn start_stdio_connection(
 ) -> IoResult<()> {
     let connection_id = ConnectionId(0);
     let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let writer_tx_for_reader = writer_tx.clone();
     transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
@@ -178,11 +195,10 @@ pub(crate) async fn start_stdio_connection(
                 Ok(Some(line)) => {
                     if !forward_incoming_message(
                         &transport_event_tx_for_reader,
+                        &writer_tx_for_reader,
                         connection_id,
                         &line,
-                    )
-                    .await
-                    {
+                    ) {
                         break;
                     }
                 }
@@ -267,6 +283,7 @@ async fn run_websocket_connection(
     };
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let writer_tx_for_reader = writer_tx.clone();
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
@@ -295,7 +312,12 @@ async fn run_websocket_connection(
             incoming_message = websocket_reader.next() => {
                 match incoming_message {
                     Some(Ok(WebSocketMessage::Text(text))) => {
-                        if !forward_incoming_message(&transport_event_tx, connection_id, &text).await {
+                        if !forward_incoming_message(
+                            &transport_event_tx,
+                            &writer_tx_for_reader,
+                            connection_id,
+                            &text,
+                        ) {
                             break;
                         }
                     }
@@ -324,24 +346,63 @@ async fn run_websocket_connection(
         .await;
 }
 
-async fn forward_incoming_message(
+fn forward_incoming_message(
     transport_event_tx: &mpsc::Sender<TransportEvent>,
+    writer: &mpsc::Sender<OutgoingMessage>,
     connection_id: ConnectionId,
     payload: &str,
 ) -> bool {
     match serde_json::from_str::<JSONRPCMessage>(payload) {
-        Ok(message) => transport_event_tx
-            .send(TransportEvent::IncomingMessage {
-                connection_id,
-                message,
-            })
-            .await
-            .is_ok(),
+        Ok(message) => enqueue_incoming_message(transport_event_tx, writer, connection_id, message),
         Err(err) => {
             error!("Failed to deserialize JSONRPCMessage: {err}");
             true
         }
     }
+}
+
+fn enqueue_incoming_message(
+    transport_event_tx: &mpsc::Sender<TransportEvent>,
+    writer: &mpsc::Sender<OutgoingMessage>,
+    connection_id: ConnectionId,
+    message: JSONRPCMessage,
+) -> bool {
+    let event = TransportEvent::IncomingMessage {
+        connection_id,
+        message,
+    };
+    match transport_event_tx.try_send(event) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+        Err(mpsc::error::TrySendError::Full(TransportEvent::IncomingMessage {
+            connection_id,
+            message: JSONRPCMessage::Request(request),
+        })) => {
+            if writer
+                .try_send(overloaded_error_for_request(request))
+                .is_err()
+            {
+                warn!("failed to enqueue overload response for connection: {connection_id:?}");
+            }
+            true
+        }
+        Err(mpsc::error::TrySendError::Full(TransportEvent::IncomingMessage { .. })) => {
+            warn!("dropping non-request incoming message because processor queue is full");
+            true
+        }
+        Err(mpsc::error::TrySendError::Full(_)) => true,
+    }
+}
+
+fn overloaded_error_for_request(request: JSONRPCRequest) -> OutgoingMessage {
+    OutgoingMessage::Error(OutgoingError {
+        id: request.id,
+        error: JSONRPCErrorError {
+            code: OVERLOADED_ERROR_CODE,
+            message: "Server overloaded; retry later.".to_string(),
+            data: None,
+        },
+    })
 }
 
 fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<String> {
@@ -362,7 +423,7 @@ fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<Strin
 }
 
 pub(crate) async fn route_outgoing_envelope(
-    connections: &mut HashMap<ConnectionId, ConnectionState>,
+    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     envelope: OutgoingEnvelope,
 ) {
     match envelope {
@@ -385,7 +446,7 @@ pub(crate) async fn route_outgoing_envelope(
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.session.initialized {
+                    if connection_state.initialized {
                         Some(*connection_id)
                     } else {
                         None
@@ -416,7 +477,9 @@ pub(crate) fn has_initialized_connections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_code::OVERLOADED_ERROR_CODE;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn app_server_transport_parses_stdio_listen_url() {
@@ -454,6 +517,69 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_incoming_request_returns_overload_error_when_queue_is_full() {
+        let connection_id = ConnectionId(42);
+        let (transport_event_tx, mut transport_event_rx) = mpsc::channel(1);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let first_message =
+            JSONRPCMessage::Notification(codex_app_server_protocol::JSONRPCNotification {
+                method: "initialized".to_string(),
+                params: None,
+            });
+        transport_event_tx
+            .send(TransportEvent::IncomingMessage {
+                connection_id,
+                message: first_message.clone(),
+            })
+            .await
+            .expect("queue should accept first message");
+
+        let request = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
+            id: codex_app_server_protocol::RequestId::Integer(7),
+            method: "config/read".to_string(),
+            params: Some(json!({ "includeLayers": false })),
+        });
+        assert!(enqueue_incoming_message(
+            &transport_event_tx,
+            &writer_tx,
+            connection_id,
+            request
+        ));
+
+        let queued_event = transport_event_rx
+            .recv()
+            .await
+            .expect("first event should stay queued");
+        match queued_event {
+            TransportEvent::IncomingMessage {
+                connection_id: queued_connection_id,
+                message,
+            } => {
+                assert_eq!(queued_connection_id, connection_id);
+                assert_eq!(message, first_message);
+            }
+            _ => panic!("expected queued incoming message"),
+        }
+
+        let overload = writer_rx
+            .recv()
+            .await
+            .expect("request should receive overload error");
+        let overload_json = serde_json::to_value(overload).expect("serialize overload error");
+        assert_eq!(
+            overload_json,
+            json!({
+                "id": 7,
+                "error": {
+                    "code": OVERLOADED_ERROR_CODE,
+                    "message": "Server overloaded; retry later."
+                }
+            })
         );
     }
 }

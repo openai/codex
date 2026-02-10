@@ -21,6 +21,7 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
+use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::has_initialized_connections;
 use crate::transport::route_outgoing_envelope;
@@ -37,6 +38,7 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -60,6 +62,29 @@ mod outgoing_message;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
+
+/// Control-plane messages from the processor/transport side to the outbound router task.
+///
+/// `run_main_with_transport` now uses two loops/tasks:
+/// - processor loop: handles incoming JSON-RPC and request dispatch
+/// - outbound loop: performs potentially slow writes to per-connection writers
+///
+/// `OutboundControlEvent` keeps those loops coordinated without sharing mutable
+/// connection state directly. In particular, the outbound loop needs to know:
+/// - when a connection opens/closes so it can route messages correctly
+/// - when a connection becomes initialized so broadcast semantics remain unchanged
+enum OutboundControlEvent {
+    /// Register a new writer for an opened connection.
+    Opened {
+        connection_id: ConnectionId,
+        writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        ready: oneshot::Sender<()>,
+    },
+    /// Remove state for a closed/disconnected connection.
+    Closed { connection_id: ConnectionId },
+    /// Mark the connection as initialized, enabling broadcast delivery.
+    Initialized { connection_id: ConnectionId },
+}
 
 fn config_warning_from_error(
     summary: impl Into<String>,
@@ -197,6 +222,8 @@ pub async fn run_main_with_transport(
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
+    let (outbound_control_tx, mut outbound_control_rx) =
+        mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);
 
     let mut stdio_handles = Vec::<JoinHandle<()>>::new();
     let mut websocket_accept_handle = None;
@@ -336,8 +363,47 @@ pub async fn run_main_with_transport(
         }
     }
 
+    let outbound_handle = tokio::spawn(async move {
+        let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
+        loop {
+            tokio::select! {
+                envelope = outgoing_rx.recv() => {
+                    let Some(envelope) = envelope else {
+                        break;
+                    };
+                    route_outgoing_envelope(&mut outbound_connections, envelope).await;
+                }
+                event = outbound_control_rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    match event {
+                        OutboundControlEvent::Opened {
+                            connection_id,
+                            writer,
+                            ready,
+                        } => {
+                            outbound_connections.insert(connection_id, OutboundConnectionState::new(writer));
+                            let _ = ready.send(());
+                        }
+                        OutboundControlEvent::Closed { connection_id } => {
+                            outbound_connections.remove(&connection_id);
+                        }
+                        OutboundControlEvent::Initialized { connection_id } => {
+                            if let Some(connection_state) = outbound_connections.get_mut(&connection_id) {
+                                connection_state.initialized = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        info!("outbound router task exited (channel closed)");
+    });
+
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let outbound_control_tx = outbound_control_tx;
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let mut processor = MessageProcessor::new(MessageProcessorArgs {
@@ -362,9 +428,31 @@ pub async fn run_main_with_transport(
                         };
                         match event {
                             TransportEvent::ConnectionOpened { connection_id, writer } => {
-                                connections.insert(connection_id, ConnectionState::new(writer));
+                                let (ready_tx, ready_rx) = oneshot::channel();
+                                if outbound_control_tx
+                                    .send(OutboundControlEvent::Opened {
+                                        connection_id,
+                                        writer: writer.clone(),
+                                        ready: ready_tx,
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                if ready_rx.await.is_err() {
+                                    break;
+                                }
+                                connections.insert(connection_id, ConnectionState::new());
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
+                                if outbound_control_tx
+                                    .send(OutboundControlEvent::Closed { connection_id })
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
                                 connections.remove(&connection_id);
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
@@ -377,6 +465,7 @@ pub async fn run_main_with_transport(
                                             warn!("dropping request from unknown connection: {:?}", connection_id);
                                             continue;
                                         };
+                                        let was_initialized = connection_state.session.initialized;
                                         processor
                                             .process_request(
                                                 connection_id,
@@ -384,6 +473,14 @@ pub async fn run_main_with_transport(
                                                 &mut connection_state.session,
                                             )
                                             .await;
+                                        if !was_initialized && connection_state.session.initialized {
+                                            let send_result = outbound_control_tx
+                                                .send(OutboundControlEvent::Initialized { connection_id })
+                                                .await;
+                                            if send_result.is_err() {
+                                                break;
+                                            }
+                                        }
                                     }
                                     JSONRPCMessage::Response(response) => {
                                         processor.process_response(response).await;
@@ -397,12 +494,6 @@ pub async fn run_main_with_transport(
                                 }
                             }
                         }
-                    }
-                    envelope = outgoing_rx.recv() => {
-                        let Some(envelope) = envelope else {
-                            break;
-                        };
-                        route_outgoing_envelope(&mut connections, envelope).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
@@ -433,6 +524,7 @@ pub async fn run_main_with_transport(
     drop(transport_event_tx);
 
     let _ = processor_handle.await;
+    let _ = outbound_handle.await;
 
     if let Some(handle) = websocket_accept_handle {
         handle.abort();
