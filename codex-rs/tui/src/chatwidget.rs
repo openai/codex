@@ -4361,15 +4361,19 @@ impl ChatWidget {
         {
             self.agent_turn_markdowns.pop();
         }
-        if self.agent_turn_markdowns.is_empty()
-            && let Some(fallback) = transcript_fallback
-                .map(|fallback| fallback.trim().to_string())
-                .filter(|fallback| !fallback.is_empty())
+        if let Some(fallback) = transcript_fallback
+            .map(|fallback| fallback.trim().to_string())
+            .filter(|fallback| !fallback.is_empty())
         {
-            self.agent_turn_markdowns.push(AgentTurnMarkdown {
-                ordinal: remaining_turn_count,
-                markdown: fallback,
-            });
+            if let Some(last) = self.agent_turn_markdowns.last_mut() {
+                last.ordinal = remaining_turn_count;
+                last.markdown = fallback;
+            } else {
+                self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                    ordinal: remaining_turn_count,
+                    markdown: fallback,
+                });
+            }
         }
         self.completed_turn_count = self.completed_turn_count.min(remaining_turn_count);
         self.last_agent_markdown = self

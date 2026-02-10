@@ -457,6 +457,37 @@ async fn copy_history_is_bounded_to_recent_agent_messages() {
 }
 
 #[tokio::test]
+async fn truncate_copy_history_prefers_transcript_fallback_when_nonempty() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant-1".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "assistant-2".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "second".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "assistant-3".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "third".to_string(),
+        }),
+    });
+
+    chat.truncate_agent_turn_markdowns_to_turn_count(1, Some("second".to_string()));
+
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+    assert_eq!(chat.agent_turn_markdowns[0].ordinal, 1);
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "second");
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("second"));
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 

@@ -3618,6 +3618,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_resume_style_multi_agent_updates_keeps_last_agent_before_selected_user() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: "session".to_string(),
+            msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
+        });
+
+        // Simulate resumed history where a single user turn contains multiple agent updates.
+        let first_turn_updates = vec![
+            "I'll do this in three steps: inspect commits on your current branch to isolate the Alt+C hotkey change, create a new worktree/branch from `upstream/main`, and then apply only that feature there. I'm starting by checking remotes, branch state, and recent commits.",
+            "I found local uncommitted edits in two TUI files, so I'll avoid touching them and work from committed history. Next I'm fetching upstream/main and identifying exactly which commit(s) represent the Alt+C hotkey feature.",
+            "I committed the extracted Alt+C-only implementation on the new branch after formatting and full codex-tui test validation. I'm now collecting the exact worktree path, branch, and commit hash for you.",
+        ];
+
+        for (idx, message) in first_turn_updates.iter().enumerate() {
+            app.chat_widget.handle_codex_event(Event {
+                id: format!("agent-pre-hi-{idx}"),
+                msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                    message: (*message).to_string(),
+                }),
+            });
+        }
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-hi".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "hi".to_string(),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "Can you create a new worktree and branch from upstream/main and apply only the Alt+C hotkey feature?".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(first_turn_updates[0].to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(first_turn_updates[1].to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(first_turn_updates[2].to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "hi".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("hi".to_string())], true))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(app.chat_widget.last_agent_markdown_text(), Some("hi"));
+
+        // Roll back to the second user message ("hi"), preserving only the first user turn.
+        app.apply_backtrack_rollback(crate::app_backtrack::BacktrackSelection {
+            nth_user_message: 1,
+            prefill: "hi".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        });
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            codex_core::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        ));
+
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some(first_turn_updates[2]),
+        );
+    }
+
+    #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
