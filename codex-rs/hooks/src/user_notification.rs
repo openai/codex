@@ -29,15 +29,20 @@ enum UserNotification {
 }
 
 pub fn legacy_notify_json(hook_event: &HookEvent, cwd: &Path) -> Result<String, serde_json::Error> {
-    serde_json::to_string(&match hook_event {
-        HookEvent::AfterAgent { event } => UserNotification::AgentTurnComplete {
-            thread_id: event.thread_id.to_string(),
-            turn_id: event.turn_id.clone(),
-            cwd: cwd.display().to_string(),
-            input_messages: event.input_messages.clone(),
-            last_assistant_message: event.last_assistant_message.clone(),
-        },
-    })
+    match hook_event {
+        HookEvent::AfterAgent { event } => {
+            serde_json::to_string(&UserNotification::AgentTurnComplete {
+                thread_id: event.thread_id.to_string(),
+                turn_id: event.turn_id.clone(),
+                cwd: cwd.display().to_string(),
+                input_messages: event.input_messages.clone(),
+                last_assistant_message: event.last_assistant_message.clone(),
+            })
+        }
+        _ => Err(serde_json::Error::io(std::io::Error::other(
+            "legacy notify payload is only supported for after_agent",
+        ))),
+    }
 }
 
 pub fn notify_hook(argv: Vec<String>) -> Hook {

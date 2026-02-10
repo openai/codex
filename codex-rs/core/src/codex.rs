@@ -46,6 +46,7 @@ use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
+use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -1094,7 +1095,9 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
@@ -6260,7 +6263,9 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
@@ -6397,7 +6402,9 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
