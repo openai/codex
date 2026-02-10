@@ -37,7 +37,7 @@ const DEFAULT_AGENT_JOB_CONCURRENCY: usize = 16;
 const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);
-const RUNNING_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
+const DEFAULT_AGENT_JOB_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
 
 #[derive(Debug, Deserialize)]
 struct SpawnAgentsOnCsvArgs {
@@ -562,6 +562,11 @@ async fn run_agent_job_loop(
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
     let mut progress_emitter = JobProgressEmitter::new();
+    let job = db
+        .get_agent_job(job_id.as_str())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
+    let runtime_timeout = job_runtime_timeout(&job);
     recover_running_items(
         session.clone(),
         db.clone(),
@@ -958,7 +963,7 @@ fn ensure_unique_headers(headers: &[String]) -> Result<(), FunctionCallError> {
 fn job_runtime_timeout(job: &codex_state::AgentJob) -> Duration {
     job.max_runtime_seconds
         .map(Duration::from_secs)
-        .unwrap_or(RUNNING_ITEM_TIMEOUT)
+        .unwrap_or(DEFAULT_AGENT_JOB_ITEM_TIMEOUT)
 }
 
 fn started_at_from_item(item: &codex_state::AgentJobItem) -> Instant {

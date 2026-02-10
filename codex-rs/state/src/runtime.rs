@@ -1423,7 +1423,6 @@ WHERE job_id = ?
                 .unwrap_or_default(),
             failed_items: usize::try_from(failed_items.unwrap_or_default()).unwrap_or_default(),
         })
->>>>>>> 778abb6eb (Agent jobs + progress line fixes)
     }
 
     async fn ensure_backfill_state_row(&self) -> anyhow::Result<()> {
