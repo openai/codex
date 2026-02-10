@@ -1,0 +1,12 @@
+diff --git a/runtimes/mingw/crt_sources.bzl b/runtimes/mingw/crt_sources.bzl
+index 744f076..1a8a204 100644
+--- a/runtimes/mingw/crt_sources.bzl
++++ b/runtimes/mingw/crt_sources.bzl
+@@ -336,6 +336,7 @@ MINGWEX_TEXTUAL_SRCS = [
+ ]
+ 
+ MINGWEX_X86_SRCS = [
++    "cfguard/guard_dispatch.S",
+     "math/cbrtl.c",
+     "math/erfl.c",
+     "math/fdiml.c",

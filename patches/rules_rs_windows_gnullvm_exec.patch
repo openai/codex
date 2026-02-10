@@ -1,0 +1,115 @@
+diff --git a/rs/experimental/platforms/triples.bzl b/rs/experimental/platforms/triples.bzl
+index d4892e922..e4a3cd534 100644
+--- a/rs/experimental/platforms/triples.bzl
++++ b/rs/experimental/platforms/triples.bzl
+@@ -30,6 +30,7 @@ SUPPORTED_EXEC_TRIPLES = [
+     "x86_64-unknown-linux-gnu",
+     "aarch64-unknown-linux-gnu",
+     "x86_64-pc-windows-msvc",
++    "x86_64-pc-windows-gnullvm",
+     "aarch64-pc-windows-msvc",
+     "x86_64-apple-darwin",
+     "aarch64-apple-darwin",
+diff --git a/rs/experimental/toolchains/declare_toolchains.bzl b/rs/experimental/toolchains/declare_toolchains.bzl
+index 377e758eb..ab2908d14 100644
+--- a/rs/experimental/toolchains/declare_toolchains.bzl
++++ b/rs/experimental/toolchains/declare_toolchains.bzl
+@@ -12,6 +12,11 @@ def _channel(version):
+         return "beta"
+     return "stable"
+ 
++def _exec_triple_suffix(exec_triple):
++    if exec_triple.system == "windows":
++        return "{}_{}_{}".format(exec_triple.system, exec_triple.arch, exec_triple.abi)
++    return "{}_{}".format(exec_triple.system, exec_triple.arch)
++
+ def declare_toolchains(
+         *,
+         version,
+@@ -26,13 +31,12 @@ def declare_toolchains(
+     # Rustfmt
+     for triple in execs:
+         exec_triple = _parse_triple(triple)
+-        triple_suffix = exec_triple.system + "_" + exec_triple.arch
++        triple_suffix = _exec_triple_suffix(exec_triple)
+ 
+         repo_label = "@rust_toolchain_artifacts_{}_{}//:".format(triple_suffix, version_key)
+ 
+-        rustfmt_toolchain_name = "{}_{}_{}_rustfmt_toolchain".format(
+-            exec_triple.system,
+-            exec_triple.arch,
++        rustfmt_toolchain_name = "{}_{}_rustfmt_toolchain".format(
++            triple_suffix,
+             version_key,
+         )
+ 
+@@ -46,11 +50,8 @@ def declare_toolchains(
+         )
+ 
+         native.toolchain(
+-            name = "{}_{}_rustfmt_{}".format(exec_triple.system, exec_triple.arch, version_key),
+-            exec_compatible_with = [
+-                "@platforms//os:" + exec_triple.system,
+-                "@platforms//cpu:" + exec_triple.arch,
+-            ],
++            name = "{}_rustfmt_{}".format(triple_suffix, version_key),
++            exec_compatible_with = triple_to_constraint_set(triple),
+             target_compatible_with = [],
+             target_settings = [
+                 "@rules_rust//rust/toolchain/channel:" + channel,
+@@ -63,13 +64,12 @@ def declare_toolchains(
+     # Rustc
+     for triple in execs:
+         exec_triple = _parse_triple(triple)
+-        triple_suffix = exec_triple.system + "_" + exec_triple.arch
++        triple_suffix = _exec_triple_suffix(exec_triple)
+ 
+         repo_label = "@rust_toolchain_artifacts_{}_{}//:".format(triple_suffix, version_key)
+ 
+-        rust_toolchain_name = "{}_{}_{}_rust_toolchain".format(
+-            exec_triple.system,
+-            exec_triple.arch,
++        rust_toolchain_name = "{}_{}_rust_toolchain".format(
++            triple_suffix,
+             version_key,
+         )
+ 
+@@ -130,11 +130,8 @@ def declare_toolchains(
+             target_key = sanitize_triple(target_triple)
+ 
+             native.toolchain(
+-                name = "{}_{}_to_{}_{}".format(exec_triple.system, exec_triple.arch, target_key, version_key),
+-                exec_compatible_with = [
+-                    "@platforms//os:" + exec_triple.system,
+-                    "@platforms//cpu:" + exec_triple.arch,
+-                ],
++                name = "{}_to_{}_{}".format(triple_suffix, target_key, version_key),
++                exec_compatible_with = triple_to_constraint_set(triple),
+                 target_compatible_with = triple_to_constraint_set(target_triple),
+                 target_settings = [
+                     "@rules_rust//rust/toolchain/channel:" + channel,
+diff --git a/rs/experimental/toolchains/module_extension.bzl b/rs/experimental/toolchains/module_extension.bzl
+index 04477fefa..55fe0fce0 100644
+--- a/rs/experimental/toolchains/module_extension.bzl
++++ b/rs/experimental/toolchains/module_extension.bzl
+@@ -37,6 +37,11 @@ def _normalize_arch_name(arch):
+         return "aarch64"
+     return arch
+ 
++def _exec_triple_suffix(exec_triple):
++    if exec_triple.system == "windows":
++        return "{}_{}_{}".format(exec_triple.system, exec_triple.arch, exec_triple.abi)
++    return "{}_{}".format(exec_triple.system, exec_triple.arch)
++
+ def _sanitize_path_fragment(path):
+     return path.replace("/", "_").replace(":", "_")
+ 
+@@ -230,7 +235,7 @@ def _toolchains_impl(mctx):
+             if cargo_sha == None:
+                 fail("Could not determine cargo sha for {}".format(triple))
+ 
+-            triple_suffix = exec_triple.system + "_" + exec_triple.arch
++            triple_suffix = _exec_triple_suffix(exec_triple)
+ 
+             rust_toolchain_artifacts(
+                 name = "rust_toolchain_artifacts_{}_{}".format(triple_suffix, version_key),

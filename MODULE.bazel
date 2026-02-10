@@ -4,6 +4,7 @@ single_version_override(
     module_name = "toolchains_llvm_bootstrapped",
     patch_strip = 1,
     patches = [
+        "//patches:toolchains_llvm_bootstrapped_mingw_cfguard.patch",
         "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
     ],
 )
@@ -39,6 +40,10 @@ bazel_dep(name = "rules_rs", version = "0.0.23")
 archive_override(
     module_name = "rules_rs",
     integrity = "sha256-C5nTK7oyhrP+qWGx+AXHlWk4hz6PlC2F9sTvO/gM77g=",
+    patch_strip = 1,
+    patches = [
+        "//patches:rules_rs_windows_gnullvm_exec.patch",
+    ],
     strip_prefix = "rules_rs-7a47423f9f52de881b82beda8b1d8a76968775aa",
     url = "https://github.com/dzbarsky/rules_rs/archive/7a47423f9f52de881b82beda8b1d8a76968775aa.tar.gz",
 )
