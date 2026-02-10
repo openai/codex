@@ -42,7 +42,9 @@ pub struct LandlockCommand {
 
     /// Internal compatibility flag.
     ///
-    /// Proxy environment variables do not disable restricted-network sandboxing.
+    /// By default, proxy environment variables do not disable
+    /// restricted-network sandboxing.
+    /// If set, proxy configuration can disable restricted-network sandboxing.
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
