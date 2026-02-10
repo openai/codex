@@ -367,7 +367,6 @@ mod tests {
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
-    use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
     use codex_protocol::openai_models::ModelsResponse;
@@ -457,7 +456,7 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
@@ -510,7 +509,7 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
@@ -556,7 +555,7 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
@@ -624,7 +623,7 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
@@ -692,7 +691,7 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
@@ -700,7 +699,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let mut manager =
+        let manager =
             ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.cache_manager.set_ttl(Duration::ZERO);
 
@@ -753,7 +752,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let mut manager =
+        let manager =
             ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
         manager.local_models = Vec::new();
 
