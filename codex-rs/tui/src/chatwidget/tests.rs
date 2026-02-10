@@ -3516,6 +3516,31 @@ async fn slash_copy_is_available_while_task_running() {
 }
 
 #[tokio::test]
+async fn alt_c_clears_armed_quit_shortcut_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_agent_markdown = Some("assistant reply".to_string());
+    chat.quit_shortcut_expires_at = Some(
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(5))
+            .expect("expiry time"),
+    );
+    chat.quit_shortcut_key = Some(key_hint::ctrl(KeyCode::Char('c')));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+
+    assert_eq!(chat.quit_shortcut_expires_at, None);
+    assert_eq!(chat.quit_shortcut_key, None);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected copy feedback message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last message to clipboard") || rendered.contains("Copy failed:"),
+        "expected copy result message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

@@ -3067,6 +3067,9 @@ impl ChatWidget {
                 kind: KeyEventKind::Press,
                 ..
             } => {
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
                 self.copy_last_agent_markdown();
                 return;
             }
