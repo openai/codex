@@ -60,6 +60,8 @@ pub(crate) struct SandboxTransformRequest<'a> {
     pub spec: CommandSpec,
     pub policy: &'a SandboxPolicy,
     pub sandbox: SandboxType,
+    // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
+    // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
