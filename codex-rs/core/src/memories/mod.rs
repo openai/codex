@@ -8,7 +8,6 @@ mod layout;
 mod prompts;
 mod rollout;
 mod scope;
-mod selection;
 mod stage_one;
 mod startup;
 mod storage;

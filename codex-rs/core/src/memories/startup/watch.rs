@@ -7,10 +7,10 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::super::super::PHASE_TWO_JOB_HEARTBEAT_SECONDS;
-use super::super::super::PHASE_TWO_JOB_LEASE_SECONDS;
-use super::super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
-use super::super::MemoryScopeTarget;
+use super::super::PHASE_TWO_JOB_HEARTBEAT_SECONDS;
+use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
+use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
+use super::MemoryScopeTarget;
 
 pub(super) fn spawn_phase2_completion_task(
     session: &Session,

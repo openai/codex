@@ -1,6 +1,9 @@
 use super::*;
 use crate::Stage1Output;
 use crate::model::Stage1OutputRow;
+use chrono::Duration;
+use sqlx::Executor;
+use sqlx::Sqlite;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_CWD: &str = "memory_consolidate_cwd";
@@ -25,6 +28,63 @@ fn scope_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
 }
 
 impl StateRuntime {
+    pub async fn claim_stage1_jobs_for_startup(
+        &self,
+        current_thread_id: ThreadId,
+        scan_limit: usize,
+        max_claimed: usize,
+        max_age_days: i64,
+        allowed_sources: &[String],
+        lease_seconds: i64,
+    ) -> anyhow::Result<Vec<Stage1JobClaim>> {
+        if scan_limit == 0 || max_claimed == 0 {
+            return Ok(Vec::new());
+        }
+
+        let page = self
+            .list_threads(
+                scan_limit,
+                None,
+                SortKey::UpdatedAt,
+                allowed_sources,
+                None,
+                false,
+            )
+            .await?;
+
+        let cutoff = Utc::now() - Duration::days(max_age_days.max(0));
+        let mut claimed = Vec::new();
+
+        for item in page.items {
+            if claimed.len() >= max_claimed {
+                break;
+            }
+            if item.id == current_thread_id {
+                continue;
+            }
+            if item.updated_at < cutoff {
+                continue;
+            }
+
+            if let Stage1JobClaimOutcome::Claimed { ownership_token } = self
+                .try_claim_stage1_job(
+                    item.id,
+                    current_thread_id,
+                    item.updated_at.timestamp(),
+                    lease_seconds,
+                )
+                .await?
+            {
+                claimed.push(Stage1JobClaim {
+                    thread: item,
+                    ownership_token,
+                });
+            }
+        }
+
+        Ok(claimed)
+    }
+
     pub async fn get_stage1_output(
         &self,
         thread_id: ThreadId,
@@ -42,7 +102,6 @@ WHERE thread_id = ?
 
         row.map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
             .transpose()
-            .map_err(Into::into)
     }
 
     pub async fn list_stage1_outputs_for_scope(
@@ -92,7 +151,6 @@ LIMIT ?
         rows.into_iter()
             .map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
     }
 
     pub async fn try_claim_stage1_job(
@@ -296,6 +354,34 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .execute(&mut *tx)
         .await?;
 
+        if let Some(thread_row) = sqlx::query(
+            r#"
+SELECT cwd
+FROM threads
+WHERE id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?
+        {
+            let cwd: String = thread_row.try_get("cwd")?;
+            enqueue_scope_consolidation_with_executor(
+                &mut *tx,
+                MEMORY_SCOPE_KIND_CWD,
+                &cwd,
+                source_updated_at,
+            )
+            .await?;
+            enqueue_scope_consolidation_with_executor(
+                &mut *tx,
+                MEMORY_SCOPE_KIND_USER,
+                MEMORY_SCOPE_KEY_USER,
+                source_updated_at,
+            )
+            .await?;
+        }
+
         tx.commit().await?;
         Ok(true)
     }
@@ -344,48 +430,13 @@ WHERE kind = ? AND job_key = ?
         scope_key: &str,
         input_watermark: i64,
     ) -> anyhow::Result<()> {
-        let Some(job_kind) = job_kind_for_scope(scope_kind) else {
-            return Ok(());
-        };
-
-        sqlx::query(
-            r#"
-INSERT INTO jobs (
-    kind,
-    job_key,
-    status,
-    worker_id,
-    ownership_token,
-    started_at,
-    finished_at,
-    lease_until,
-    retry_at,
-    retry_remaining,
-    last_error,
-    input_watermark,
-    last_success_watermark
-) VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, ?, 0)
-ON CONFLICT(kind, job_key) DO UPDATE SET
-    status = CASE
-        WHEN jobs.status = 'running' THEN 'running'
-        ELSE 'pending'
-    END,
-    retry_at = CASE
-        WHEN jobs.status = 'running' THEN jobs.retry_at
-        ELSE NULL
-    END,
-    retry_remaining = max(jobs.retry_remaining, excluded.retry_remaining),
-    input_watermark = max(COALESCE(jobs.input_watermark, 0), excluded.input_watermark)
-            "#,
+        enqueue_scope_consolidation_with_executor(
+            self.pool.as_ref(),
+            scope_kind,
+            scope_key,
+            input_watermark,
         )
-        .bind(job_kind)
-        .bind(scope_key)
-        .bind(DEFAULT_RETRY_REMAINING)
-        .bind(input_watermark)
-        .execute(self.pool.as_ref())
-        .await?;
-
-        Ok(())
+        .await
     }
 
     pub async fn list_pending_scope_consolidations(
@@ -640,4 +691,57 @@ WHERE kind = ? AND job_key = ?
 
         Ok(rows_affected > 0)
     }
+}
+
+async fn enqueue_scope_consolidation_with_executor<'e, E>(
+    executor: E,
+    scope_kind: &str,
+    scope_key: &str,
+    input_watermark: i64,
+) -> anyhow::Result<()>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let Some(job_kind) = job_kind_for_scope(scope_kind) else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        r#"
+INSERT INTO jobs (
+    kind,
+    job_key,
+    status,
+    worker_id,
+    ownership_token,
+    started_at,
+    finished_at,
+    lease_until,
+    retry_at,
+    retry_remaining,
+    last_error,
+    input_watermark,
+    last_success_watermark
+) VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, ?, NULL, ?, 0)
+ON CONFLICT(kind, job_key) DO UPDATE SET
+    status = CASE
+        WHEN jobs.status = 'running' THEN 'running'
+        ELSE 'pending'
+    END,
+    retry_at = CASE
+        WHEN jobs.status = 'running' THEN jobs.retry_at
+        ELSE NULL
+    END,
+    retry_remaining = max(jobs.retry_remaining, excluded.retry_remaining),
+    input_watermark = max(COALESCE(jobs.input_watermark, 0), excluded.input_watermark)
+        "#,
+    )
+    .bind(job_kind)
+    .bind(scope_key)
+    .bind(DEFAULT_RETRY_REMAINING)
+    .bind(input_watermark)
+    .execute(executor)
+    .await?;
+
+    Ok(())
 }

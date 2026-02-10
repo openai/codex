@@ -24,13 +24,6 @@ pub(super) fn memory_root_for_cwd(codex_home: &Path, cwd: &Path) -> PathBuf {
     codex_home.join("memories").join(bucket).join(MEMORY_SUBDIR)
 }
 
-/// Returns the DB scope key for a cwd-scoped memory entry.
-///
-/// This uses the same normalization/fallback behavior as cwd bucket derivation.
-pub(super) fn memory_scope_key_for_cwd(cwd: &Path) -> String {
-    normalize_cwd_for_memory(cwd).display().to_string()
-}
-
 /// Returns the on-disk user-shared memory root directory.
 pub(super) fn memory_root_for_user(codex_home: &Path) -> PathBuf {
     codex_home

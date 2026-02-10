@@ -18,21 +18,21 @@ use crate::memories::rollout::serialize_filtered_rollout_response_items;
 use crate::memories::stage_one::RAW_MEMORY_PROMPT;
 use crate::memories::stage_one::parse_stage_one_output;
 use crate::memories::stage_one::stage_one_output_schema;
-use crate::memories::types::RolloutCandidate;
 use crate::memories::types::StageOneOutput;
+use std::path::Path;
 
 pub(super) async fn extract_stage_one_output(
     session: &Session,
-    candidate: &RolloutCandidate,
+    rollout_path: &Path,
     stage_one_context: &StageOneRequestContext,
 ) -> Result<StageOneOutput, &'static str> {
     let (rollout_items, _thread_id, parse_errors) =
-        match RolloutRecorder::load_rollout_items(&candidate.rollout_path).await {
+        match RolloutRecorder::load_rollout_items(rollout_path).await {
             Ok(result) => result,
             Err(err) => {
                 warn!(
                     "failed to load rollout {} for memories: {err}",
-                    candidate.rollout_path.display()
+                    rollout_path.display()
                 );
                 return Err("failed to load rollout");
             }
@@ -40,7 +40,7 @@ pub(super) async fn extract_stage_one_output(
     if parse_errors > 0 {
         warn!(
             "rollout {} had {parse_errors} parse errors while preparing stage-1 memory input",
-            candidate.rollout_path.display()
+            rollout_path.display()
         );
     }
 
@@ -52,7 +52,7 @@ pub(super) async fn extract_stage_one_output(
         Err(err) => {
             warn!(
                 "failed to prepare filtered rollout payload {} for memories: {err}",
-                candidate.rollout_path.display()
+                rollout_path.display()
             );
             return Err("failed to serialize filtered rollout");
         }
@@ -63,7 +63,7 @@ pub(super) async fn extract_stage_one_output(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: build_stage_one_input_message(&candidate.rollout_path, &rollout_contents),
+                text: build_stage_one_input_message(rollout_path, &rollout_contents),
             }],
             end_turn: None,
             phase: None,
@@ -93,7 +93,7 @@ pub(super) async fn extract_stage_one_output(
         Err(err) => {
             warn!(
                 "stage-1 memory request failed for rollout {}: {err}",
-                candidate.rollout_path.display()
+                rollout_path.display()
             );
             return Err("stage-1 memory request failed");
         }
@@ -104,7 +104,7 @@ pub(super) async fn extract_stage_one_output(
         Err(err) => {
             warn!(
                 "failed while waiting for stage-1 memory response for rollout {}: {err}",
-                candidate.rollout_path.display()
+                rollout_path.display()
             );
             return Err("stage-1 memory response stream failed");
         }
@@ -115,7 +115,7 @@ pub(super) async fn extract_stage_one_output(
         Err(err) => {
             warn!(
                 "invalid stage-1 memory payload for rollout {}: {err}",
-                candidate.rollout_path.display()
+                rollout_path.display()
             );
             Err("invalid stage-1 memory payload")
         }

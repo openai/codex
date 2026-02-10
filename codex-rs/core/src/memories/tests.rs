@@ -1,15 +1,12 @@
 use super::rollout::StageOneResponseItemKinds;
 use super::rollout::StageOneRolloutFilter;
 use super::rollout::serialize_filtered_rollout_response_items;
-use super::selection::select_rollout_candidates_from_db;
 use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_memory_summary_from_memories;
 use super::storage::sync_raw_memories_from_memories;
 use super::storage::wipe_consolidation_outputs;
-use crate::memories::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS;
 use crate::memories::layout::ensure_layout;
 use crate::memories::layout::memory_root_for_cwd;
-use crate::memories::layout::memory_scope_key_for_cwd;
 use crate::memories::layout::memory_summary_file;
 use crate::memories::layout::raw_memories_dir;
 use chrono::TimeZone;
@@ -20,42 +17,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
-use codex_state::ThreadMetadata;
 use pretty_assertions::assert_eq;
-use std::path::PathBuf;
 use tempfile::tempdir;
-
-fn thread_metadata(
-    thread_id: ThreadId,
-    path: PathBuf,
-    cwd: PathBuf,
-    title: &str,
-    updated_at_secs: i64,
-) -> ThreadMetadata {
-    let updated_at = Utc
-        .timestamp_opt(updated_at_secs, 0)
-        .single()
-        .expect("timestamp");
-    ThreadMetadata {
-        id: thread_id,
-        rollout_path: path,
-        created_at: updated_at,
-        updated_at,
-        source: "cli".to_string(),
-        model_provider: "openai".to_string(),
-        cwd,
-        cli_version: "test".to_string(),
-        title: title.to_string(),
-        sandbox_policy: "read_only".to_string(),
-        approval_mode: "on_request".to_string(),
-        tokens_used: 0,
-        first_user_message: None,
-        archived_at: None,
-        git_branch: None,
-        git_sha: None,
-        git_origin_url: None,
-    }
-}
 
 #[test]
 fn memory_root_varies_by_cwd() {
@@ -98,22 +61,6 @@ fn memory_root_encoding_avoids_component_collisions() {
     assert_ne!(root_question, root_hash);
     assert!(!root_question.display().to_string().contains("workspace"));
     assert!(!root_hash.display().to_string().contains("workspace"));
-}
-
-#[test]
-fn memory_scope_key_uses_normalized_cwd() {
-    let dir = tempdir().expect("tempdir");
-    let workspace = dir.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
-    std::fs::create_dir_all(workspace.join("nested")).expect("mkdir nested");
-
-    let alias = workspace.join("nested").join("..");
-    let normalized = workspace
-        .canonicalize()
-        .expect("canonical workspace path should resolve");
-    let alias_key = memory_scope_key_for_cwd(&alias);
-    let normalized_key = memory_scope_key_for_cwd(&normalized);
-    assert_eq!(alias_key, normalized_key);
 }
 
 #[test]
@@ -222,61 +169,6 @@ fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
 
     assert_eq!(parsed.len(), 1);
     assert!(matches!(parsed[0], ResponseItem::Message { .. }));
-}
-
-#[test]
-fn select_rollout_candidates_filters_by_age_window() {
-    let dir = tempdir().expect("tempdir");
-    let cwd_a = dir.path().join("workspace-a");
-    let cwd_b = dir.path().join("workspace-b");
-    std::fs::create_dir_all(&cwd_a).expect("mkdir cwd a");
-    std::fs::create_dir_all(&cwd_b).expect("mkdir cwd b");
-
-    let now = Utc::now().timestamp();
-    let current_thread_id = ThreadId::default();
-    let recent_thread_id = ThreadId::default();
-    let old_thread_id = ThreadId::default();
-    let recent_two_thread_id = ThreadId::default();
-
-    let current = thread_metadata(
-        current_thread_id,
-        dir.path().join("current.jsonl"),
-        cwd_a.clone(),
-        "current",
-        now,
-    );
-    let recent = thread_metadata(
-        recent_thread_id,
-        dir.path().join("recent.jsonl"),
-        cwd_a,
-        "recent",
-        now - 10,
-    );
-    let old = thread_metadata(
-        old_thread_id,
-        dir.path().join("old.jsonl"),
-        cwd_b.clone(),
-        "old",
-        now - (PHASE_ONE_MAX_ROLLOUT_AGE_DAYS + 1) * 24 * 60 * 60,
-    );
-    let recent_two = thread_metadata(
-        recent_two_thread_id,
-        dir.path().join("recent-two.jsonl"),
-        cwd_b,
-        "recent-two",
-        now - 20,
-    );
-
-    let candidates = select_rollout_candidates_from_db(
-        &[current, recent, old, recent_two],
-        current_thread_id,
-        5,
-        PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
-    );
-
-    assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0].thread_id, recent_thread_id);
-    assert_eq!(candidates[1].thread_id, recent_two_thread_id);
 }
 
 #[tokio::test]

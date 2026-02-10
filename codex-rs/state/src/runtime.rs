@@ -41,6 +41,7 @@ pub const STATE_DB_VERSION: u32 = 4;
 
 const MEMORY_SCOPE_KIND_CWD: &str = "cwd";
 const MEMORY_SCOPE_KIND_USER: &str = "user";
+const MEMORY_SCOPE_KEY_USER: &str = "user";
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
@@ -67,6 +68,13 @@ pub enum Stage1JobClaimOutcome {
     SkippedRetryBackoff,
     /// The job has exhausted retries and should not be retried automatically.
     SkippedRetryExhausted,
+}
+
+/// Claimed stage-1 job with thread metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stage1JobClaim {
+    pub thread: ThreadMetadata,
+    pub ownership_token: String,
 }
 
 /// Scope row used to queue phase-2 consolidation work.
@@ -918,6 +926,7 @@ mod tests {
     use super::ThreadMetadata;
     use super::state_db_filename;
     use chrono::DateTime;
+    use chrono::Duration;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
@@ -1162,6 +1171,63 @@ mod tests {
             claim_b_stale,
             Stage1JobClaimOutcome::Claimed { .. }
         ));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn claim_stage1_jobs_filters_by_age_and_current_thread() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let now = Utc::now();
+        let recent_at = now - Duration::seconds(10);
+        let old_at = now - Duration::days(31);
+
+        let current_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("current thread id");
+        let recent_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("recent thread id");
+        let old_thread_id =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("old thread id");
+
+        let mut current =
+            test_thread_metadata(&codex_home, current_thread_id, codex_home.join("current"));
+        current.created_at = now;
+        current.updated_at = now;
+        runtime
+            .upsert_thread(&current)
+            .await
+            .expect("upsert current");
+
+        let mut recent =
+            test_thread_metadata(&codex_home, recent_thread_id, codex_home.join("recent"));
+        recent.created_at = recent_at;
+        recent.updated_at = recent_at;
+        runtime.upsert_thread(&recent).await.expect("upsert recent");
+
+        let mut old = test_thread_metadata(&codex_home, old_thread_id, codex_home.join("old"));
+        old.created_at = old_at;
+        old.updated_at = old_at;
+        runtime.upsert_thread(&old).await.expect("upsert old");
+
+        let allowed_sources = vec!["cli".to_string()];
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                10,
+                5,
+                30,
+                allowed_sources.as_slice(),
+                3600,
+            )
+            .await
+            .expect("claim stage1 jobs");
+
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].thread.id, recent_thread_id);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

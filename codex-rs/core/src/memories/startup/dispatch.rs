@@ -8,15 +8,15 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::super::super::MAX_RAW_MEMORIES_PER_SCOPE;
-use super::super::super::MEMORY_CONSOLIDATION_SUBAGENT_LABEL;
-use super::super::super::PHASE_TWO_JOB_LEASE_SECONDS;
-use super::super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
-use super::super::super::prompts::build_consolidation_prompt;
-use super::super::super::storage::rebuild_memory_summary_from_memories;
-use super::super::super::storage::sync_raw_memories_from_memories;
-use super::super::super::storage::wipe_consolidation_outputs;
-use super::super::MemoryScopeTarget;
+use super::super::MAX_RAW_MEMORIES_PER_SCOPE;
+use super::super::MEMORY_CONSOLIDATION_SUBAGENT_LABEL;
+use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
+use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
+use super::super::prompts::build_consolidation_prompt;
+use super::super::storage::rebuild_memory_summary_from_memories;
+use super::super::storage::sync_raw_memories_from_memories;
+use super::super::storage::wipe_consolidation_outputs;
+use super::MemoryScopeTarget;
 use super::watch::spawn_phase2_completion_task;
 
 pub(super) async fn run_memory_consolidation_for_scope(
