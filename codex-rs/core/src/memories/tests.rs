@@ -105,6 +105,7 @@ fn memory_scope_key_uses_normalized_cwd() {
     let dir = tempdir().expect("tempdir");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+    std::fs::create_dir_all(workspace.join("nested")).expect("mkdir nested");
 
     let alias = workspace.join("nested").join("..");
     let normalized = workspace
