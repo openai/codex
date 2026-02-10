@@ -5,7 +5,7 @@
       "support_verbosity": false,
       "default_verbosity": null,
       "apply_patch_tool_type": "freeform",
-      "input_modalities": [
+      "input_modalities": [ 
         "text",
         "image"
       ],
