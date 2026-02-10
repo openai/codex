@@ -293,6 +293,10 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     text: "look at this".to_string(),
                 },
                 ContentItem::InputText {
+                    text: "image content omitted because you do not support image input"
+                        .to_string(),
+                },
+                ContentItem::InputText {
                     text: "caption".to_string(),
                 },
             ],
@@ -310,6 +314,10 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "image result".to_string(),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "image content omitted because you do not support image input"
+                        .to_string(),
                 },
             ]),
         },

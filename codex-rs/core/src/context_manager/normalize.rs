@@ -10,6 +10,9 @@ use codex_protocol::openai_models::InputModality;
 use crate::util::error_or_panic;
 use tracing::info;
 
+const IMAGE_CONTENT_OMITTED_PLACEHOLDER: &str =
+    "image content omitted because you do not support image input";
+
 pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
     // Collect synthetic outputs to insert immediately after their calls.
     // Store the insertion position (index of call) alongside the item so
@@ -229,12 +232,35 @@ pub(crate) fn strip_images_when_unsupported(
     for item in items.iter_mut() {
         match item {
             ResponseItem::Message { content, .. } => {
-                content.retain(|c| !matches!(c, ContentItem::InputImage { .. }));
+                let mut normalized_content = Vec::with_capacity(content.len());
+                for content_item in content.iter() {
+                    match content_item {
+                        ContentItem::InputImage { .. } => {
+                            normalized_content.push(ContentItem::InputText {
+                                text: IMAGE_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                            });
+                        }
+                        _ => normalized_content.push(content_item.clone()),
+                    }
+                }
+                *content = normalized_content;
             }
             ResponseItem::FunctionCallOutput { output, .. } => {
                 if let Some(content_items) = output.content_items_mut() {
-                    content_items
-                        .retain(|c| !matches!(c, FunctionCallOutputContentItem::InputImage { .. }));
+                    let mut normalized_content_items = Vec::with_capacity(content_items.len());
+                    for content_item in content_items.iter() {
+                        match content_item {
+                            FunctionCallOutputContentItem::InputImage { .. } => {
+                                normalized_content_items.push(
+                                    FunctionCallOutputContentItem::InputText {
+                                        text: IMAGE_CONTENT_OMITTED_PLACEHOLDER.to_string(),
+                                    },
+                                );
+                            }
+                            _ => normalized_content_items.push(content_item.clone()),
+                        }
+                    }
+                    *content_items = normalized_content_items;
                 }
             }
             _ => {}

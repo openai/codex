@@ -353,6 +353,12 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     assert!(
         second_user_texts
             .iter()
+            .any(|text| text == "image content omitted because you do not support image input"),
+        "second request should include the image-omitted placeholder text"
+    );
+    assert!(
+        second_user_texts
+            .iter()
             .any(|text| text == &codex_protocol::models::image_open_tag_text()),
         "second request should preserve the image open tag text"
     );
