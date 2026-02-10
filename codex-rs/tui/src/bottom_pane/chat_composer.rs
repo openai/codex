@@ -696,7 +696,7 @@ impl ChatComposer {
     /// Replace the composer content with text from an external editor.
     /// Clears pending paste placeholders and keeps only attachments whose
     /// placeholder labels still appear in the new text. Image placeholders
-    /// are renumbered to `[Image #M]..[Image #N]` (where `M` is the number of
+    /// are renumbered to `[Image #M+1]..[Image #N]` (where `M` is the number of
     /// remote images). Cursor is placed at the end after rebuilding elements.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.pending_pastes.clear();
