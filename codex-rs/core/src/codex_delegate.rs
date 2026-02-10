@@ -60,7 +60,8 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_session.services.agent_control.clone(),
         Vec::new(),
     )
-    .await?;
+    .or_cancel(&cancel_token)
+    .await??;
     let codex = Arc::new(codex);
 
     // Use a child token so parent cancel cascades but we can scope it to this task

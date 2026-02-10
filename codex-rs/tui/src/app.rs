@@ -554,6 +554,9 @@ pub(crate) struct App {
     /// Ignore the next ShutdownComplete event when we're intentionally
     /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
+    /// Set after first quit request so a repeated shutdown-first request can
+    /// escalate to immediate process exit if shutdown completion stalls.
+    shutdown_first_requested: bool,
 
     windows_sandbox: WindowsSandboxState,
 
@@ -1128,6 +1131,7 @@ impl App {
             feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            shutdown_first_requested: false,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -1559,7 +1563,11 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::ShutdownFirst => {
+                    if let Some(control) = self.handle_shutdown_first_exit() {
+                        return Ok(control);
+                    }
+                }
                 ExitMode::Immediate => {
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
@@ -2291,6 +2299,16 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    fn handle_shutdown_first_exit(&mut self) -> Option<AppRunControl> {
+        if self.shutdown_first_requested {
+            Some(AppRunControl::Exit(ExitReason::UserRequested))
+        } else {
+            self.shutdown_first_requested = true;
+            self.chat_widget.submit_op(Op::Shutdown);
+            None
+        }
+    }
+
     fn handle_codex_event_now(&mut self, event: Event) {
         let needs_refresh = matches!(
             event.msg,
@@ -2745,6 +2763,7 @@ mod tests {
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            shutdown_first_requested: false,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -2799,6 +2818,7 @@ mod tests {
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                shutdown_first_requested: false,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 active_thread_id: None,
@@ -3160,6 +3180,30 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_escalates_on_second_request() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let first = app.handle_shutdown_first_exit();
+        assert!(
+            first.is_none(),
+            "first shutdown-first should send Op::Shutdown"
+        );
+        match op_rx.try_recv() {
+            Ok(Op::Shutdown) => {}
+            Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
+            Err(err) => panic!("expected shutdown op to be sent, got {err:?}"),
+        }
+
+        let second = app.handle_shutdown_first_exit();
+        match second {
+            Some(AppRunControl::Exit(ExitReason::UserRequested)) => {}
+            Some(other) => panic!("expected immediate user-requested exit, got {other:?}"),
+            None => panic!("expected second shutdown-first to escalate to immediate exit"),
+        }
+        assert_eq!(op_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[tokio::test]

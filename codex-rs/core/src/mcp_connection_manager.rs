@@ -324,7 +324,7 @@ impl AsyncManagedClient {
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let managed = self.client().await?;
+        let managed = self.client_with_startup_timeout().await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
@@ -392,7 +392,7 @@ impl McpConnectionManager {
             let auth_entry = auth_entries.get(&server_name).cloned();
             let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
-                let outcome = async_managed_client.client().await;
+                let outcome = async_managed_client.client_with_startup_timeout().await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
