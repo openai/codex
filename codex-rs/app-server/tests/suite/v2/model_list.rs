@@ -53,7 +53,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             model: "gpt-5.2-codex".to_string(),
             upgrade: None,
             display_name: "gpt-5.2-codex".to_string(),
-            description: "Latest frontier agentic coding model.".to_string(),
+            description: "Frontier agentic coding model.".to_string(),
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -109,28 +109,6 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             is_default: false,
         },
         Model {
-            id: "gpt-5.1-codex-mini".to_string(),
-            model: "gpt-5.1-codex-mini".to_string(),
-            upgrade: Some("gpt-5.2-codex".to_string()),
-            display_name: "gpt-5.1-codex-mini".to_string(),
-            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
-            supported_reasoning_efforts: vec![
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::Medium,
-                    description: "Dynamically adjusts reasoning based on the task".to_string(),
-                },
-                ReasoningEffortOption {
-                    reasoning_effort: ReasoningEffort::High,
-                    description: "Maximizes reasoning depth for complex or ambiguous problems"
-                        .to_string(),
-                },
-            ],
-            default_reasoning_effort: ReasoningEffort::Medium,
-            input_modalities: vec![InputModality::Text, InputModality::Image],
-            supports_personality: false,
-            is_default: false,
-        },
-        Model {
             id: "gpt-5.2".to_string(),
             model: "gpt-5.2".to_string(),
             upgrade: Some("gpt-5.2-codex".to_string()),
@@ -158,7 +136,29 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::XHigh,
-                    description: "Extra high reasoning depth for complex problems".to_string(),
+                    description: "Extra high reasoning for complex problems".to_string(),
+                },
+            ],
+            default_reasoning_effort: ReasoningEffort::Medium,
+            input_modalities: vec![InputModality::Text, InputModality::Image],
+            supports_personality: false,
+            is_default: false,
+        },
+        Model {
+            id: "gpt-5.1-codex-mini".to_string(),
+            model: "gpt-5.1-codex-mini".to_string(),
+            upgrade: Some("gpt-5.2-codex".to_string()),
+            display_name: "gpt-5.1-codex-mini".to_string(),
+            description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
+            supported_reasoning_efforts: vec![
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::Medium,
+                    description: "Dynamically adjusts reasoning based on the task".to_string(),
+                },
+                ReasoningEffortOption {
+                    reasoning_effort: ReasoningEffort::High,
+                    description: "Maximizes reasoning depth for complex or ambiguous problems"
+                        .to_string(),
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
@@ -244,7 +244,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(third_response)?;
 
     assert_eq!(third_items.len(), 1);
-    assert_eq!(third_items[0].id, "gpt-5.1-codex-mini");
+    assert_eq!(third_items[0].id, "gpt-5.2");
     let fourth_cursor = third_cursor.ok_or_else(|| anyhow!("cursor for fourth page"))?;
 
     let fourth_request = mcp
@@ -266,7 +266,7 @@ async fn list_models_pagination_works() -> Result<()> {
     } = to_response::<ModelListResponse>(fourth_response)?;
 
     assert_eq!(fourth_items.len(), 1);
-    assert_eq!(fourth_items[0].id, "gpt-5.2");
+    assert_eq!(fourth_items[0].id, "gpt-5.1-codex-mini");
     assert!(fourth_cursor.is_none());
     Ok(())
 }
