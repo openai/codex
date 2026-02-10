@@ -284,7 +284,7 @@ impl<'a> SandboxAttempt<'a> {
         &self,
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
-    ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
+    ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,

@@ -1,7 +1,7 @@
 /*
 Module: sandboxing
 
-Build platform wrappers and produce ExecEnv for execution. Owns low‑level
+Build platform wrappers and produce ExecRequest for execution. Owns low-level
 sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
@@ -41,7 +41,7 @@ pub struct CommandSpec {
 }
 
 #[derive(Debug)]
-pub struct ExecEnv {
+pub struct ExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
@@ -124,7 +124,7 @@ impl SandboxManager {
     pub(crate) fn transform(
         &self,
         request: SandboxTransformRequest<'_>,
-    ) -> Result<ExecEnv, SandboxTransformError> {
+    ) -> Result<ExecRequest, SandboxTransformError> {
         let SandboxTransformRequest {
             mut spec,
             policy,
@@ -198,7 +198,7 @@ impl SandboxManager {
 
         env.extend(sandbox_env);
 
-        Ok(ExecEnv {
+        Ok(ExecRequest {
             command,
             cwd: spec.cwd,
             env,
@@ -218,7 +218,7 @@ impl SandboxManager {
 }
 
 pub async fn execute_env(
-    env: ExecEnv,
+    env: ExecRequest,
     policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {

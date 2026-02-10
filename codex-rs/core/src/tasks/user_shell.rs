@@ -23,7 +23,7 @@ use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
@@ -140,7 +140,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
-    let exec_env = ExecEnv {
+    let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
         env: create_env(

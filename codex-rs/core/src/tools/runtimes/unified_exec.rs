@@ -2,7 +2,7 @@
 Runtime: unified exec
 
 Handles approval + sandbox orchestration for unified exec requests, delegating to
-the process manager to spawn PTYs once an ExecEnv is prepared.
+the process manager to spawn PTYs once an ExecRequest is prepared.
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;

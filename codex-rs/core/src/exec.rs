@@ -26,7 +26,7 @@ use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
 use crate::spawn::SpawnChildRequest;
@@ -219,11 +219,11 @@ pub async fn process_exec_tool_call(
 }
 
 pub(crate) async fn execute_exec_env(
-    env: ExecEnv,
+    env: ExecRequest,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
-    let ExecEnv {
+    let ExecRequest {
         command,
         cwd,
         env,
