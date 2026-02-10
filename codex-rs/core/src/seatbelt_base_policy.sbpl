@@ -94,8 +94,9 @@
   (global-name "com.apple.system.opendirectoryd.libinfo")
 )
 
-; Needed for python multiprocessing on MacOS for the SemLock
+; POSIX IPC - semaphores/shared memory for Python multiprocessing
 (allow ipc-posix-sem)
+(allow ipc-posix-shm)
 
 (allow mach-lookup
   (global-name "com.apple.PowerManagement.control")
