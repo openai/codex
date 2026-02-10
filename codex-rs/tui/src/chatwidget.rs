@@ -672,9 +672,17 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+/// One entry in the bounded copy-history timeline.
+///
+/// Each entry records the raw markdown text of a completed agent response
+/// together with its turn ordinal so that [`ChatWidget::truncate_agent_turn_markdowns_to_turn_count`]
+/// can trim entries whose ordinal exceeds the surviving turn count after a
+/// transcript rollback.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AgentTurnMarkdown {
+    /// Monotonically increasing turn number within this session (1-based).
     ordinal: usize,
+    /// The raw markdown text of the agent response for this turn.
     markdown: String,
 }
 
@@ -1031,6 +1039,15 @@ impl ChatWidget {
         }
     }
 
+    /// Record or update the raw markdown for the current turn's agent response.
+    ///
+    /// If the current turn ordinal already has an entry (because a second
+    /// `AgentMessage` arrived in the same turn), the entry is replaced rather
+    /// than appended — each turn has at most one copy-source entry.
+    ///
+    /// The timeline is bounded to [`MAX_AGENT_COPY_HISTORY`] entries by
+    /// draining the oldest entries on overflow, so memory usage stays bounded
+    /// even in very long sessions.
     fn record_agent_markdown(&mut self, message: &str) {
         if message.is_empty() {
             return;
@@ -1101,6 +1118,8 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        // replay_initial_messages may have set this flag; clear it so the first
+        // live turn doesn't think an AgentMessage has already been recorded.
         self.saw_agent_message_this_turn = false;
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
@@ -1242,6 +1261,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Handle a context-compaction event from the backend.
+    ///
+    /// Unlike the old code path that routed this through `on_agent_message`,
+    /// this handler intentionally does *not* call `record_agent_markdown`.
+    /// The compaction marker is an operational notification, not a response
+    /// the user would want to copy.
     fn on_context_compacted(&mut self) {
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
@@ -1425,6 +1450,11 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.request_redraw();
+        // Use TurnComplete.last_agent_message as a fallback copy source only when
+        // no AgentMessage event arrived during this turn.  Some model providers
+        // deliver the full response only via TurnComplete; others emit both
+        // AgentMessage and TurnComplete.  The `saw_agent_message_this_turn` flag
+        // prevents recording a duplicate entry in the latter case.
         if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
@@ -1432,6 +1462,8 @@ impl ChatWidget {
         {
             self.record_agent_markdown(message);
         }
+        // Advance the turn counter unless the turn never actually ran *and* we
+        // already counted it via the AgentMessage path above.
         let should_advance_completed_turn_count =
             turn_was_running || !self.saw_agent_message_this_turn;
         if should_advance_completed_turn_count {
@@ -4021,6 +4053,9 @@ impl ChatWidget {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // During replay (initial_messages) or resumed sessions, AgentMessage events
+                // arrive without a preceding TurnStarted, so agent_turn_running is false.
+                // Treat these as self-contained completed turns for copy-history purposes.
                 let count_as_completed_turn = !self.agent_turn_running && !message.is_empty();
                 self.record_agent_markdown(&message);
                 if count_as_completed_turn {
@@ -4329,6 +4364,10 @@ impl ChatWidget {
     }
 
     /// Copy the last agent response (raw markdown) to the system clipboard.
+    ///
+    /// Triggered by Alt+C or `/copy`.  Always produces a visible history cell:
+    /// an info event on success, or an error event on failure or when no agent
+    /// response is available yet.
     pub(crate) fn copy_last_agent_markdown(&mut self) {
         match &self.last_agent_markdown {
             Some(markdown) if !markdown.is_empty() => {
@@ -4349,6 +4388,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Align the copy-history timeline with a transcript rollback.
+    ///
+    /// Removes entries whose turn ordinal exceeds `remaining_turn_count`, then
+    /// patches the surviving tail with `transcript_fallback` if provided.  The
+    /// fallback is needed because the bounded history (256 entries) may have
+    /// already evicted the entry that corresponds to the surviving turn, in
+    /// which case the caller reconstructs it from the transcript cells via
+    /// [`last_agent_markdown_from_transcript`](crate::app_backtrack::last_agent_markdown_from_transcript).
+    ///
+    /// Called from [`App::trim_transcript_for_backtrack`](crate::app::App).
     pub(crate) fn truncate_agent_turn_markdowns_to_turn_count(
         &mut self,
         remaining_turn_count: usize,

@@ -510,7 +510,14 @@ impl App {
         })
     }
 
-    /// Trim `transcript_cells` to preserve only content before the selected user message.
+    /// Trim `transcript_cells` to preserve only content before the selected user message,
+    /// then synchronise the copy-history timeline to match.
+    ///
+    /// After truncating, the number of surviving user-message cells gives the
+    /// remaining turn count.  The copy-history entries with a higher ordinal are
+    /// discarded.  Because the copy history is bounded (256 entries) it may no
+    /// longer contain the entry for the last surviving turn; in that case we
+    /// reconstruct it from the transcript cells themselves.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
         let remaining_turns = user_count(&self.transcript_cells);
@@ -565,6 +572,21 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
+/// Reconstruct the raw markdown of the last agent response from transcript cells.
+///
+/// This is the fallback path used when the bounded copy-history no longer
+/// contains the entry for the target turn after a deep rollback.  It walks the
+/// transcript cells backwards to find the last `AgentMessageCell` group
+/// (consecutive cells where subsequent entries are stream-continuations of the
+/// first), then joins their `plain_text()` output.
+///
+/// Info-event cells (e.g. "Context compacted" markers) are skipped because
+/// they are not agent responses.
+///
+/// The reconstruction is lossy: `plain_text()` flattens styled `Span`s back to
+/// plain strings, so any markdown syntax that was consumed during rendering
+/// (bold markers, fenced-code delimiters that became styled regions, etc.) may
+/// differ from the original protocol-level markdown.
 fn last_agent_markdown_from_transcript(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> Option<String> {

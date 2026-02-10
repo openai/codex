@@ -1,6 +1,30 @@
+//! Cross-platform clipboard write for the TUI copy feature.
+//!
+//! The single entry point is [`copy_to_clipboard`], which selects a backend
+//! based on the runtime environment:
+//!
+//! * **SSH sessions** (`SSH_TTY` / `SSH_CONNECTION` set) — write an OSC 52
+//!   escape sequence so the text reaches the *local* terminal emulator's
+//!   clipboard, not the remote X11/Wayland clipboard the user cannot access.
+//! * **Local sessions** — try `arboard` (native OS clipboard) first, then fall
+//!   back to OSC 52 if that fails (e.g. headless Linux without a display
+//!   server).
+//!
+//! OSC 52 is written to `/dev/tty` when available to avoid interleaving with
+//! ratatui's raw-mode stdout buffer.  If `/dev/tty` cannot be opened the
+//! sequence is written to stdout as a last resort.
+//!
+//! On macOS, `arboard` triggers `NSLog` noise on stderr; we suppress it by
+//! temporarily redirecting fd 2 to `/dev/null` under a process-wide mutex.
+
 use base64::Engine;
 use std::io::Write;
 
+/// Hard upper bound on the raw (pre-base64) payload sent via OSC 52.
+///
+/// Most terminal emulators silently truncate or ignore sequences larger than
+/// ~100 kB.  We reject early with a clear error rather than producing a
+/// silently truncated clipboard.
 const OSC52_MAX_RAW_BYTES: usize = 100_000;
 #[cfg(target_os = "macos")]
 static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
@@ -18,6 +42,11 @@ pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), String> {
     copy_to_clipboard_with(text, is_ssh_session(), osc52_copy, arboard_copy)
 }
 
+/// Strategy implementation with injectable backends for testability.
+///
+/// When `ssh_session` is true the native backend is never attempted because it
+/// would write to the remote machine's clipboard.  When false, the native
+/// backend is tried first and OSC 52 is used only as a fallback.
 fn copy_to_clipboard_with(
     text: &str,
     ssh_session: bool,
@@ -134,6 +163,11 @@ impl SuppressStderr {
 }
 
 /// Write text to the clipboard via the OSC 52 terminal escape sequence.
+///
+/// Prefers `/dev/tty` over stdout so the escape reaches the terminal even when
+/// stdout is captured by ratatui's alternate-screen buffer.  Falls back to
+/// stdout if `/dev/tty` is unavailable (e.g. inside a container without a
+/// controlling terminal).
 fn osc52_copy(text: &str) -> Result<(), String> {
     let sequence = osc52_sequence(text)?;
     #[cfg(unix)]
@@ -154,6 +188,7 @@ fn osc52_copy(text: &str) -> Result<(), String> {
     write_osc52_to_writer(std::io::stdout().lock(), &sequence)
 }
 
+/// Write a pre-formatted OSC 52 sequence to an arbitrary writer.
 fn write_osc52_to_writer(mut writer: impl Write, sequence: &str) -> Result<(), String> {
     writer
         .write_all(sequence.as_bytes())
@@ -163,6 +198,7 @@ fn write_osc52_to_writer(mut writer: impl Write, sequence: &str) -> Result<(), S
         .map_err(|e| format!("failed to flush OSC 52: {e}"))
 }
 
+/// Build the raw OSC 52 escape: `ESC ] 52 ; c ; <base64> BEL`.
 fn osc52_sequence(text: &str) -> Result<String, String> {
     let raw_bytes = text.len();
     if raw_bytes > OSC52_MAX_RAW_BYTES {
