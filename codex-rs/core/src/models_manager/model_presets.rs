@@ -16,7 +16,7 @@ fn builtin_model_presets_from_models_json() -> Vec<ModelPreset> {
             .into_iter()
             .map(ModelPreset::from)
             .collect(),
-        Err(error) => vec![],
+        Err(..) => vec![],
     }
 }
 
