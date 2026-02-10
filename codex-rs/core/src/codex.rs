@@ -5350,8 +5350,9 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
+        let reconstruction_turn = session.new_default_turn().await;
         let reconstructed = session
-            .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+            .reconstruct_history_from_rollout(reconstruction_turn.as_ref(), &rollout_items)
             .await;
 
         assert_eq!(expected, reconstructed);
