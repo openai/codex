@@ -157,6 +157,115 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_operations_happy_path_replaces_history_for_followups() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "AFTER_COMPACT_REPLY"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let operation_id = "op_compact_happy_1";
+    let submit_mock =
+        responses::mount_compact_operation_submit_once(harness.server(), operation_id).await;
+    let poll_pending_mock =
+        responses::mount_compact_operation_poll_pending_once(harness.server(), operation_id).await;
+    let poll_done_mock = responses::mount_compact_operation_poll_done_once(
+        harness.server(),
+        operation_id,
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+    let legacy_compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "after compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let submit_request = submit_mock.single_request();
+    assert_eq!(submit_request.path(), "/v1/responses/compact/operations");
+    assert_eq!(poll_pending_mock.requests().len(), 1);
+    assert_eq!(poll_done_mock.requests().len(), 1);
+    assert_eq!(legacy_compact_mock.requests().len(), 0);
+
+    let follow_up_body = responses_mock
+        .requests()
+        .last()
+        .expect("follow-up request missing")
+        .body_json()
+        .to_string();
+    assert!(
+        follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"),
+        "expected follow-up request to use compacted history"
+    );
+    assert!(
+        follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
+        "expected follow-up request to include compaction summary item"
+    );
+    assert!(
+        !follow_up_body.contains("FIRST_REMOTE_REPLY"),
+        "expected follow-up request to drop pre-compaction assistant messages"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_runs_automatically() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

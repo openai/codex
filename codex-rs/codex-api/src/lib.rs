@@ -28,6 +28,7 @@ pub use crate::common::ResponsesApiRequest;
 pub use crate::common::create_text_param_for_request;
 pub use crate::endpoint::aggregate::AggregateStreamExt;
 pub use crate::endpoint::compact::CompactClient;
+pub use crate::endpoint::compact::CompactOperationPollResult;
 pub use crate::endpoint::memories::MemoriesClient;
 pub use crate::endpoint::models::ModelsClient;
 pub use crate::endpoint::responses::ResponsesClient;

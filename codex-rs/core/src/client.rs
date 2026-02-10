@@ -36,6 +36,7 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use codex_api::CompactClient as ApiCompactClient;
+use codex_api::CompactOperationPollResult;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemoryTrace as ApiMemoryTrace;
@@ -83,6 +84,7 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
@@ -105,6 +107,11 @@ pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+const X_CODEX_IDEMPOTENCY_KEY_HEADER: &str = "x-codex-idempotency-key";
+const COMPACT_OPERATION_INITIAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const COMPACT_OPERATION_MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const COMPACT_OPERATION_MAX_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const COMPACT_OPERATION_POLL_DEADLINE: Duration = Duration::from_secs(15 * 60);
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -268,11 +275,83 @@ impl ModelClient {
             instructions: &instructions,
         };
 
+        let body = serde_json::to_value(&payload).map_err(|err| {
+            map_api_error(ApiError::Stream(format!(
+                "failed to encode compaction input: {err}"
+            )))
+        })?;
+
         let extra_headers = self.build_subagent_headers();
-        client
-            .compact_input(&payload, extra_headers)
-            .await
-            .map_err(map_api_error)
+        let mut submit_headers = extra_headers.clone();
+        let compact_id = Uuid::new_v4();
+        let idempotency_key = format!("compact-{compact_id}");
+        let idempotency_header_value = HeaderValue::from_str(&idempotency_key).map_err(|err| {
+            map_api_error(ApiError::Stream(format!(
+                "failed to encode compact idempotency key header: {err}"
+            )))
+        })?;
+        submit_headers.insert(X_CODEX_IDEMPOTENCY_KEY_HEADER, idempotency_header_value);
+
+        let operation_id = match client.submit_compact_operation(body, submit_headers).await {
+            Ok(operation_id) => operation_id,
+            Err(err) if Self::is_compact_operations_endpoint_unsupported(&err) => {
+                return client
+                    .compact_input(&payload, extra_headers)
+                    .await
+                    .map_err(map_api_error);
+            }
+            Err(err) => return Err(map_api_error(err)),
+        };
+
+        let mut poll_interval = COMPACT_OPERATION_INITIAL_POLL_INTERVAL;
+        let deadline = tokio::time::Instant::now() + COMPACT_OPERATION_POLL_DEADLINE;
+
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(map_api_error(ApiError::Stream(
+                    "timeout waiting for compact operation".to_string(),
+                )));
+            }
+
+            let poll_result = client
+                .poll_compact_operation(&operation_id, extra_headers.clone())
+                .await
+                .map_err(map_api_error)?;
+            match poll_result {
+                CompactOperationPollResult::Completed(output) => return Ok(output),
+                CompactOperationPollResult::Pending { poll_after_ms } => {
+                    let poll_after_duration = poll_after_ms
+                        .map(Duration::from_millis)
+                        .map(Self::clamp_compact_operation_poll_interval);
+                    let sleep_duration = poll_after_duration.unwrap_or(poll_interval);
+                    tokio::time::sleep(sleep_duration).await;
+                    poll_interval = poll_after_duration.unwrap_or_else(|| {
+                        Self::clamp_compact_operation_poll_interval(poll_interval.saturating_mul(2))
+                    });
+                }
+            }
+        }
+    }
+
+    fn is_compact_operations_endpoint_unsupported(err: &ApiError) -> bool {
+        match err {
+            ApiError::Api { status, .. } => {
+                *status == HttpStatusCode::NOT_FOUND
+                    || *status == HttpStatusCode::METHOD_NOT_ALLOWED
+            }
+            ApiError::Transport(TransportError::Http { status, .. }) => {
+                *status == HttpStatusCode::NOT_FOUND
+                    || *status == HttpStatusCode::METHOD_NOT_ALLOWED
+            }
+            _ => false,
+        }
+    }
+
+    fn clamp_compact_operation_poll_interval(interval: Duration) -> Duration {
+        interval.clamp(
+            COMPACT_OPERATION_MIN_POLL_INTERVAL,
+            COMPACT_OPERATION_MAX_POLL_INTERVAL,
+        )
     }
 
     /// Builds memory summaries for each provided normalized trace.

@@ -28,6 +28,11 @@ The public interface of this crate is intentionally small and uniform:
     - `instructions: &str` – fully-resolved compaction instructions.
   - Output: `Vec<ResponseItem>`.
   - `CompactClient::compact_input(&CompactionInput, extra_headers)` wraps the JSON encoding and retry/telemetry wiring.
+  - Async operation mode:
+    - `CompactClient::submit_compact_operation(body, extra_headers)` returns `operation_id` from `responses/compact/operations`.
+    - `CompactClient::poll_compact_operation(operation_id, extra_headers)` returns either:
+      - `CompactOperationPollResult::Pending { poll_after_ms }`, or
+      - `CompactOperationPollResult::Completed(Vec<ResponseItem>)`.
 
 - **Memory trace summarize endpoint**
   - Input: `MemoryTraceSummarizeInput` (re-exported as `codex_api::MemoryTraceSummarizeInput`):

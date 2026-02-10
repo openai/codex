@@ -756,6 +756,31 @@ fn compact_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn compact_operation_submit_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact/operations$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
+fn compact_operation_poll_mock(operation_id: &str) -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let path = format!(".*/responses/compact/operations/{operation_id}$");
+    let mock = Mock::given(method("GET"))
+        .and(path_regex(&path))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
+fn compact_operation_pending_payload(operation_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation_id": operation_id,
+        "status": "pending",
+        "poll_after_ms": 1000,
+    })
+}
+
 fn models_mock() -> (MockBuilder, ModelsMock) {
     let models_mock = ModelsMock::new();
     let mock = Mock::given(method("GET"))
@@ -809,6 +834,55 @@ where
 
 pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
     let (mock, response_mock) = compact_mock();
+    mock.respond_with(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(body.clone()),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    response_mock
+}
+
+pub async fn mount_compact_operation_submit_once(
+    server: &MockServer,
+    operation_id: &str,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_operation_submit_mock();
+    mock.respond_with(
+        ResponseTemplate::new(202)
+            .insert_header("content-type", "application/json")
+            .set_body_json(compact_operation_pending_payload(operation_id)),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    response_mock
+}
+
+pub async fn mount_compact_operation_poll_pending_once(
+    server: &MockServer,
+    operation_id: &str,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_operation_poll_mock(operation_id);
+    mock.respond_with(
+        ResponseTemplate::new(202)
+            .insert_header("content-type", "application/json")
+            .set_body_json(compact_operation_pending_payload(operation_id)),
+    )
+    .up_to_n_times(1)
+    .mount(server)
+    .await;
+    response_mock
+}
+
+pub async fn mount_compact_operation_poll_done_once(
+    server: &MockServer,
+    operation_id: &str,
+    body: serde_json::Value,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_operation_poll_mock(operation_id);
     mock.respond_with(
         ResponseTemplate::new(200)
             .insert_header("content-type", "application/json")
