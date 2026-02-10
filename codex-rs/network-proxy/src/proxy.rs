@@ -363,6 +363,18 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
+    pub fn http_addr(&self) -> SocketAddr {
+        self.http_addr
+    }
+
+    pub fn socks_addr(&self) -> SocketAddr {
+        self.socks_addr
+    }
+
+    pub fn admin_addr(&self) -> SocketAddr {
+        self.admin_addr
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
