@@ -39,7 +39,11 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     let mut builder = test_codex();
 
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn("run the echo command").await?;
+    test.submit_turn_with_policy(
+        "run the echo command",
+        test.config.sandbox_policy.get().clone(),
+    )
+    .await?;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 3);
@@ -58,7 +62,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
         .body_json();
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"].as_bool(), Some(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert_eq!(first_turn["type"].as_str(), Some("response.append"));
     assert_eq!(second_turn["type"].as_str(), Some("response.append"));
 
@@ -97,7 +101,8 @@ async fn websocket_first_turn_uses_request_prewarm_and_append() -> Result<()> {
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn("hello").await?;
+    test.submit_turn_with_policy("hello", test.config.sandbox_policy.get().clone())
+        .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -108,7 +113,7 @@ async fn websocket_first_turn_uses_request_prewarm_and_append() -> Result<()> {
         .body_json();
     let turn = connection.get(1).expect("missing turn request").body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"].as_bool(), Some(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert!(
         warmup["tools"]
             .as_array()
@@ -142,7 +147,8 @@ async fn websocket_first_turn_handles_handshake_delay_with_request_prewarm() -> 
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn("hello").await?;
+    test.submit_turn_with_policy("hello", test.config.sandbox_policy.get().clone())
+        .await?;
 
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -153,7 +159,7 @@ async fn websocket_first_turn_handles_handshake_delay_with_request_prewarm() -> 
         .body_json();
     let turn = connection.get(1).expect("missing turn request").body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"].as_bool(), Some(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert!(
         warmup["tools"]
             .as_array()
@@ -191,7 +197,11 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     });
 
     let test = builder.build_with_websocket_server(&server).await?;
-    test.submit_turn("run the echo command").await?;
+    test.submit_turn_with_policy(
+        "run the echo command",
+        test.config.sandbox_policy.get().clone(),
+    )
+    .await?;
 
     let connection = server.single_connection();
     assert_eq!(connection.len(), 3);
@@ -210,7 +220,7 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
         .body_json();
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"].as_bool(), Some(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert_eq!(first_turn["type"].as_str(), Some("response.create"));
     assert_eq!(first_turn["previous_response_id"], Value::Null);
     assert_eq!(second_turn["type"].as_str(), Some("response.create"));

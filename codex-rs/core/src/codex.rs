@@ -1611,14 +1611,30 @@ impl Session {
         let startup_turn_context = self
             .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
             .await;
-        let startup_router = ToolRouter::from_config(
-            &startup_turn_context.tools_config,
-            Some(HashMap::new()),
-            startup_turn_context.dynamic_tools.as_slice(),
-        );
+        let startup_cancellation_token = CancellationToken::new();
+        let startup_router = match built_tools(
+            self,
+            startup_turn_context.as_ref(),
+            &[],
+            &HashSet::new(),
+            None,
+            &startup_cancellation_token,
+        )
+        .await
+        {
+            Ok(router) => router,
+            Err(err) => {
+                warn!("failed to build startup prewarm tools: {err:#}");
+                Arc::new(ToolRouter::from_config(
+                    &startup_turn_context.tools_config,
+                    Some(HashMap::new()),
+                    startup_turn_context.dynamic_tools.as_slice(),
+                ))
+            }
+        };
         let startup_prompt = build_prompt(
             Vec::new(),
-            &startup_router,
+            startup_router.as_ref(),
             startup_turn_context.as_ref(),
             BaseInstructions {
                 text: base_instructions,

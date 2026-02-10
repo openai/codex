@@ -132,7 +132,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         .body_json();
 
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"], serde_json::Value::Bool(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert_eq!(warmup["tools"], serde_json::json!([]));
     assert_eq!(follow_up["type"].as_str(), Some("response.append"));
     assert_eq!(
@@ -197,7 +197,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .expect("missing follow-up request")
         .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["deferred"], serde_json::Value::Bool(true));
+    assert_eq!(warmup["defer"].as_bool(), Some(true));
     assert_eq!(warmup["tools"], serde_json::json!([]));
     assert_eq!(follow_up["type"].as_str(), Some("response.append"));
     assert_eq!(

@@ -78,6 +78,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::debug;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -531,12 +532,19 @@ impl ModelClientSession {
         // Checks whether the current request is an incremental append to the previous request.
         // We only append when non-input request fields are unchanged and `input` is a strict
         // extension of the previous input.
-        let previous_request = self.websocket_last_request.as_ref()?;
+        let Some(previous_request) = self.websocket_last_request.as_ref() else {
+            return None;
+        };
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
         let mut request_without_input = request.clone();
         request_without_input.input.clear();
         if previous_without_input != request_without_input {
+            debug!(
+                ?previous_request,
+                ?request,
+                "websocket append incrementality failed: non-input fields changed",
+            );
             return None;
         }
 
@@ -545,6 +553,11 @@ impl ModelClientSession {
         {
             Some(request.input[previous_len..].to_vec())
         } else {
+            debug!(
+                previous_len,
+                request_len = request.input.len(),
+                "websocket append incrementality failed: input items are not a strict extension",
+            );
             None
         }
     }
@@ -727,7 +740,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
-        deferred: bool,
+        defer: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
 
@@ -747,8 +760,8 @@ impl ModelClientSession {
                 summary,
             )?;
             let mut ws_payload = ResponseCreateWsRequest::from(&request);
-            if deferred {
-                ws_payload.deferred = true;
+            if defer {
+                ws_payload.defer = Some(true);
             }
 
             match self
