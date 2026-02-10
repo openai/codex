@@ -248,11 +248,15 @@ impl ListSelectionView {
         MAX_POPUP_ROWS.min(len.max(1))
     }
 
-    fn apply_filter(&mut self) {
-        let previously_selected = self
-            .state
+    fn selected_actual_idx(&self) -> Option<usize> {
+        self.state
             .selected_idx
             .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied())
+    }
+
+    fn apply_filter(&mut self) {
+        let previously_selected = self
+            .selected_actual_idx()
             .or_else(|| {
                 (!self.is_searchable)
                     .then(|| self.items.iter().position(|item| item.is_current))
@@ -299,10 +303,7 @@ impl ListSelectionView {
 
         // Notify the callback when filtering changes the selected actual item
         // so live preview stays in sync (e.g. typing in the theme picker).
-        let new_actual = self
-            .state
-            .selected_idx
-            .and_then(|vis| self.filtered_indices.get(vis).copied());
+        let new_actual = self.selected_actual_idx();
         if new_actual != previously_selected {
             self.fire_selection_changed();
         }
@@ -357,29 +358,32 @@ impl ListSelectionView {
     }
 
     fn move_up(&mut self) {
+        let before = self.selected_actual_idx();
         let len = self.visible_len();
         self.state.move_up_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
-        self.fire_selection_changed();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
     }
 
     fn move_down(&mut self) {
+        let before = self.selected_actual_idx();
         let len = self.visible_len();
         self.state.move_down_wrap(len);
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
-        self.fire_selection_changed();
+        if self.selected_actual_idx() != before {
+            self.fire_selection_changed();
+        }
     }
 
     fn fire_selection_changed(&self) {
         if let Some(cb) = &self.on_selection_changed
-            && let Some(actual) = self
-                .state
-                .selected_idx
-                .and_then(|vis| self.filtered_indices.get(vis).copied())
+            && let Some(actual) = self.selected_actual_idx()
         {
             cb(actual, &self.app_event_tx);
         }
@@ -1177,6 +1181,35 @@ mod tests {
             Ok(other) => panic!("expected OpenApprovalsPopup cancel event, got {other:?}"),
             Err(err) => panic!("expected cancel callback event, got {err}"),
         }
+    }
+
+    #[test]
+    fn move_down_without_selection_change_does_not_fire_callback() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "Only choice".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                on_selection_changed: Some(Box::new(|_idx, tx: &_| {
+                    tx.send(AppEvent::OpenApprovalsPopup);
+                })),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        while rx.try_recv().is_ok() {}
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+        assert!(
+            rx.try_recv().is_err(),
+            "moving down in a single-item list should not fire on_selection_changed",
+        );
     }
 
     #[test]
