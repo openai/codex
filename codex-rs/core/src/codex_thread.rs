@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
@@ -82,5 +83,9 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    pub fn enabled(&self, feature: Feature) -> bool {
+        self.codex.enabled(feature)
     }
 }

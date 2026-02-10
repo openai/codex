@@ -5,7 +5,6 @@ use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -52,7 +51,6 @@ pub struct PartialNetworkConfig {
 pub fn build_config_state(
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
-    cfg_path: PathBuf,
 ) -> anyhow::Result<ConfigState> {
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
@@ -61,7 +59,6 @@ pub fn build_config_state(
         allow_set,
         deny_set,
         constraints,
-        cfg_path,
         blocked: std::collections::VecDeque::new(),
     })
 }

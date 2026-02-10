@@ -23,5 +23,5 @@ common:macos --config=remote
 common:macos --strategy=remote
 common:macos --strategy=TestRunner=darwin-sandbox,local
 
-# On windows we can not cross-build the tests but run them locally due to what appears to be a Bazel bug
+# On windows we cannot cross-build the tests but run them locally due to what appears to be a Bazel bug
 # (windows vs unix path confusion)

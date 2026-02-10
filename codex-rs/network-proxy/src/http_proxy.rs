@@ -64,6 +64,7 @@ use rama_tls_rustls::client::TlsConnectorLayer;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use tracing::error;
 use tracing::info;
@@ -84,6 +85,28 @@ pub async fn run_http_proxy(
         .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind HTTP proxy: {addr}"))?;
+
+    run_http_proxy_with_listener(state, listener, policy_decider).await
+}
+
+pub async fn run_http_proxy_with_std_listener(
+    state: Arc<NetworkProxyState>,
+    listener: StdTcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<()> {
+    let listener =
+        TcpListener::try_from(listener).context("convert std listener to HTTP proxy listener")?;
+    run_http_proxy_with_listener(state, listener, policy_decider).await
+}
+
+async fn run_http_proxy_with_listener(
+    state: Arc<NetworkProxyState>,
+    listener: TcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<()> {
+    let addr = listener
+        .local_addr()
+        .context("read HTTP proxy listener local addr")?;
 
     let http_service = HttpServer::auto(Executor::new()).service(
         (

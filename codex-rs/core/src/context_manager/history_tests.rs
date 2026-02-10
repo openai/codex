@@ -193,7 +193,11 @@ fn items_after_last_model_generated_tokens_include_user_and_tool_output() {
     );
 
     assert_eq!(
-        history.get_items_after_last_model_generated_tokens(),
+        history
+            .items_after_last_model_generated_item()
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add),
         expected_tokens
     );
 }
@@ -202,7 +206,14 @@ fn items_after_last_model_generated_tokens_include_user_and_tool_output() {
 fn items_after_last_model_generated_tokens_are_zero_without_model_generated_items() {
     let history = create_history_with_items(vec![user_msg("no model output yet")]);
 
-    assert_eq!(history.get_items_after_last_model_generated_tokens(), 0);
+    assert_eq!(
+        history
+            .items_after_last_model_generated_item()
+            .iter()
+            .map(estimate_item_token_count)
+            .fold(0i64, i64::saturating_add),
+        0
+    );
 }
 
 #[test]

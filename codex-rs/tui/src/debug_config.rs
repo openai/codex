@@ -8,11 +8,31 @@ use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::ResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement;
 use codex_core::config_loader::WebSearchModeRequirement;
+use codex_core::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
-pub(crate) fn new_debug_config_output(config: &Config) -> PlainHistoryCell {
-    PlainHistoryCell::new(render_debug_config_lines(&config.config_layer_stack))
+pub(crate) fn new_debug_config_output(
+    config: &Config,
+    session_network_proxy: Option<&SessionNetworkProxyRuntime>,
+) -> PlainHistoryCell {
+    let mut lines = render_debug_config_lines(&config.config_layer_stack);
+
+    if let Some(proxy) = session_network_proxy {
+        lines.push("".into());
+        lines.push("Session runtime:".bold().into());
+        lines.push("  - network_proxy".into());
+        let SessionNetworkProxyRuntime {
+            http_addr,
+            socks_addr,
+            admin_addr,
+        } = proxy;
+        lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
+        lines.push(format!("    - ALL_PROXY   = socks5h://{socks_addr}").into());
+        lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
+    }
+
+    PlainHistoryCell::new(lines)
 }
 
 fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {

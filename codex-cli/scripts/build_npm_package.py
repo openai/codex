@@ -15,14 +15,68 @@ REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 
+CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
+    "codex-linux-x64": {
+        "npm_name": "@openai/codex-linux-x64",
+        "target_triple": "x86_64-unknown-linux-musl",
+        "os": "linux",
+        "cpu": "x64",
+    },
+    "codex-linux-arm64": {
+        "npm_name": "@openai/codex-linux-arm64",
+        "target_triple": "aarch64-unknown-linux-musl",
+        "os": "linux",
+        "cpu": "arm64",
+    },
+    "codex-darwin-x64": {
+        "npm_name": "@openai/codex-darwin-x64",
+        "target_triple": "x86_64-apple-darwin",
+        "os": "darwin",
+        "cpu": "x64",
+    },
+    "codex-darwin-arm64": {
+        "npm_name": "@openai/codex-darwin-arm64",
+        "target_triple": "aarch64-apple-darwin",
+        "os": "darwin",
+        "cpu": "arm64",
+    },
+    "codex-win32-x64": {
+        "npm_name": "@openai/codex-win32-x64",
+        "target_triple": "x86_64-pc-windows-msvc",
+        "os": "win32",
+        "cpu": "x64",
+    },
+    "codex-win32-arm64": {
+        "npm_name": "@openai/codex-win32-arm64",
+        "target_triple": "aarch64-pc-windows-msvc",
+        "os": "win32",
+        "cpu": "arm64",
+    },
+}
+
+PACKAGE_EXPANSIONS: dict[str, list[str]] = {
+    "codex": ["codex", *CODEX_PLATFORM_PACKAGES],
+}
+
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
-    "codex": ["codex", "rg"],
+    "codex": [],
+    "codex-linux-x64": ["codex", "rg"],
+    "codex-linux-arm64": ["codex", "rg"],
+    "codex-darwin-x64": ["codex", "rg"],
+    "codex-darwin-arm64": ["codex", "rg"],
+    "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": ["codex"],
 }
-WINDOWS_ONLY_COMPONENTS: dict[str, list[str]] = {
-    "codex": ["codex-windows-sandbox-setup", "codex-command-runner"],
+
+PACKAGE_TARGET_FILTERS: dict[str, str] = {
+    package_name: package_config["target_triple"]
+    for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
 }
+
+PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
+
 COMPONENT_DEST_DIR: dict[str, str] = {
     "codex": "codex",
     "codex-responses-api-proxy": "codex-responses-api-proxy",
@@ -36,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
         "--package",
-        choices=("codex", "codex-responses-api-proxy", "codex-sdk"),
+        choices=PACKAGE_CHOICES,
         default="codex",
         help="Which npm package to stage (default: codex).",
     )
@@ -98,6 +152,7 @@ def main() -> int:
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
+        target_filter = PACKAGE_TARGET_FILTERS.get(package)
 
         if native_components:
             if vendor_src is None:
@@ -108,7 +163,12 @@ def main() -> int:
                     "pointing to a directory containing pre-installed binaries."
                 )
 
-            copy_native_binaries(vendor_src, staging_dir, package, native_components)
+            copy_native_binaries(
+                vendor_src,
+                staging_dir,
+                native_components,
+                target_filter={target_filter} if target_filter else None,
+            )
 
         if release_version:
             staging_dir_str = str(staging_dir)
@@ -124,6 +184,12 @@ def main() -> int:
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the responses API proxy:\n"
                     f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
+                )
+            elif package in CODEX_PLATFORM_PACKAGES:
+                print(
+                    f"Staged version {version} for release in {staging_dir_str}\n\n"
+                    "Verify native payload contents:\n"
+                    f"    ls {staging_dir_str}/vendor\n\n"
                 )
             else:
                 print(
@@ -160,6 +226,9 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
 
 
 def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+    package_json: dict
+    package_json_path: Path | None = None
+
     if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +242,33 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             shutil.copy2(readme_src, staging_dir / "README.md")
 
         package_json_path = CODEX_CLI_ROOT / "package.json"
+    elif package in CODEX_PLATFORM_PACKAGES:
+        platform_package = CODEX_PLATFORM_PACKAGES[package]
+
+        readme_src = REPO_ROOT / "README.md"
+        if readme_src.exists():
+            shutil.copy2(readme_src, staging_dir / "README.md")
+
+        with open(CODEX_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
+            codex_package_json = json.load(fh)
+
+        package_json = {
+            "name": platform_package["npm_name"],
+            "version": version,
+            "license": codex_package_json.get("license", "Apache-2.0"),
+            "os": [platform_package["os"]],
+            "cpu": [platform_package["cpu"]],
+            "files": ["vendor"],
+            "repository": codex_package_json.get("repository"),
+        }
+
+        engines = codex_package_json.get("engines")
+        if isinstance(engines, dict):
+            package_json["engines"] = engines
+
+        package_manager = codex_package_json.get("packageManager")
+        if isinstance(package_manager, str):
+            package_json["packageManager"] = package_manager
     elif package == "codex-responses-api-proxy":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -190,11 +286,20 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     else:
         raise RuntimeError(f"Unknown package '{package}'.")
 
-    with open(package_json_path, "r", encoding="utf-8") as fh:
-        package_json = json.load(fh)
-    package_json["version"] = version
+    if package_json_path is not None:
+        with open(package_json_path, "r", encoding="utf-8") as fh:
+            package_json = json.load(fh)
+        package_json["version"] = version
 
-    if package == "codex-sdk":
+    if package == "codex":
+        package_json["files"] = ["bin"]
+        package_json["optionalDependencies"] = {
+            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: version
+            for platform_package in PACKAGE_EXPANSIONS["codex"]
+            if platform_package != "codex"
+        }
+
+    elif package == "codex-sdk":
         scripts = package_json.get("scripts")
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
@@ -240,8 +345,8 @@ def stage_codex_sdk_sources(staging_dir: Path) -> None:
 def copy_native_binaries(
     vendor_src: Path,
     staging_dir: Path,
-    package: str,
     components: list[str],
+    target_filter: set[str] | None = None,
 ) -> None:
     vendor_src = vendor_src.resolve()
     if not vendor_src.exists():
@@ -256,15 +361,18 @@ def copy_native_binaries(
         shutil.rmtree(vendor_dest)
     vendor_dest.mkdir(parents=True, exist_ok=True)
 
+    copied_targets: set[str] = set()
+
     for target_dir in vendor_src.iterdir():
         if not target_dir.is_dir():
             continue
 
-        if "windows" in target_dir.name:
-            components_set.update(WINDOWS_ONLY_COMPONENTS.get(package, []))
+        if target_filter is not None and target_dir.name not in target_filter:
+            continue
 
         dest_target_dir = vendor_dest / target_dir.name
         dest_target_dir.mkdir(parents=True, exist_ok=True)
+        copied_targets.add(target_dir.name)
 
         for component in components_set:
             dest_dir_name = COMPONENT_DEST_DIR.get(component)
@@ -281,6 +389,12 @@ def copy_native_binaries(
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)
+
+    if target_filter is not None:
+        missing_targets = sorted(target_filter - copied_targets)
+        if missing_targets:
+            missing_list = ", ".join(missing_targets)
+            raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
 
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:

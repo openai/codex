@@ -175,6 +175,7 @@ export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { SessionConfiguredEvent } from "./SessionConfiguredEvent";
 export type { SessionConfiguredNotification } from "./SessionConfiguredNotification";
+export type { SessionNetworkProxyRuntime } from "./SessionNetworkProxyRuntime";
 export type { SessionSource } from "./SessionSource";
 export type { SetDefaultModelParams } from "./SetDefaultModelParams";
 export type { SetDefaultModelResponse } from "./SetDefaultModelResponse";

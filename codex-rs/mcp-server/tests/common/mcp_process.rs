@@ -361,3 +361,33 @@ impl McpProcess {
         }
     }
 }
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        // These tests spawn a `codex-mcp-server` child process.
+        //
+        // We keep that child alive for the test and rely on Tokio's `kill_on_drop(true)` when this
+        // helper is dropped. Tokio documents kill-on-drop as best-effort: dropping requests
+        // termination, but it does not guarantee the child has fully exited and been reaped before
+        // teardown continues.
+        //
+        // That makes cleanup timing nondeterministic. Leak detection can occasionally observe the
+        // child still alive at teardown and report `LEAK`, which makes the test flaky.
+        //
+        // Drop can't be async, so we do a bounded synchronous cleanup:
+        //
+        // 1. Request termination with `start_kill()`.
+        // 2. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        let _ = self.process.start_kill();
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        while start.elapsed() < timeout {
+            match self.process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return,
+            }
+        }
+    }
+}

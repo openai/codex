@@ -199,7 +199,9 @@ async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
         &[],
-        SHORT_TIMEOUT_MS,
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
     )
     .await;
     let line = output
