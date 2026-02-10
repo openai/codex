@@ -39,9 +39,22 @@ pub(crate) fn set_theme_override(
     name: Option<String>,
     codex_home: Option<PathBuf>,
 ) -> Option<String> {
-    let warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
-    let _ = THEME_OVERRIDE.set(name);
-    let _ = CODEX_HOME.set(codex_home);
+    let mut warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
+    let override_set_ok = THEME_OVERRIDE.set(name.clone()).is_ok();
+    let codex_home_set_ok = CODEX_HOME.set(codex_home.clone()).is_ok();
+    if THEME.get().is_some() {
+        set_syntax_theme(resolve_theme_with_override(
+            name.as_deref(),
+            codex_home.as_deref(),
+        ));
+    }
+    if !override_set_ok || !codex_home_set_ok {
+        let duplicate_msg = "Ignoring duplicate or late syntax theme override persistence; runtime theme was updated from the latest override, but persisted override config can only be initialized once.";
+        tracing::warn!("{duplicate_msg}");
+        if warning.is_none() {
+            warning = Some(duplicate_msg.to_string());
+        }
+    }
     warning
 }
 
@@ -49,6 +62,9 @@ pub(crate) fn set_theme_override(
 /// `.tmTheme` file.  Returns a user-facing warning when it does not.
 pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>) -> Option<String> {
     let name = name?;
+    let custom_theme_path_display = codex_home
+        .map(|home| custom_theme_path(name, home).display().to_string())
+        .unwrap_or_else(|| format!("$CODEX_HOME/themes/{name}.tmTheme"));
     // Bundled themes always resolve.
     if parse_theme_name(name).is_some() {
         return None;
@@ -62,7 +78,7 @@ pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>)
                 return None;
             }
             return Some(format!(
-                "Syntax theme \"{name}\" was found at ~/.codex/themes/{name}.tmTheme \
+                "Syntax theme \"{name}\" was found at {custom_theme_path_display} \
                  but could not be parsed. Falling back to auto-detection."
             ));
         }
@@ -70,7 +86,7 @@ pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>)
     Some(format!(
         "Unknown syntax theme \"{name}\", falling back to auto-detection. \
          Use a bundled name or place a .tmTheme file at \
-         ~/.codex/themes/{name}.tmTheme"
+         {custom_theme_path_display}"
     ))
 }
 
@@ -125,17 +141,17 @@ fn load_custom_theme(name: &str, codex_home: &Path) -> Option<Theme> {
 
 /// Build the theme from current override/auto-detection settings.
 /// Extracted from the old `theme()` init closure so it can be reused.
-fn build_default_theme() -> Theme {
+fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) -> Theme {
     let ts = two_face::theme::extra();
 
     // Honor user-configured theme if valid.
-    if let Some(Some(name)) = THEME_OVERRIDE.get() {
+    if let Some(name) = name {
         // 1. Try bundled theme by kebab-case name.
         if let Some(theme_name) = parse_theme_name(name) {
             return ts.get(theme_name).clone();
         }
-        // 2. Try loading ~/.codex/themes/{name}.tmTheme from disk.
-        if let Some(Some(home)) = CODEX_HOME.get() {
+        // 2. Try loading {CODEX_HOME}/themes/{name}.tmTheme from disk.
+        if let Some(home) = codex_home {
             if let Some(theme) = load_custom_theme(name, home) {
                 return theme;
             }
@@ -149,6 +165,16 @@ fn build_default_theme() -> Theme {
         _ => EmbeddedThemeName::CatppuccinMocha,
     };
     ts.get(name).clone()
+}
+
+/// Build the theme from current override/auto-detection settings.
+/// Extracted from the old `theme()` init closure so it can be reused.
+fn build_default_theme() -> Theme {
+    let name = THEME_OVERRIDE.get().and_then(|name| name.as_deref());
+    let codex_home = CODEX_HOME
+        .get()
+        .and_then(|codex_home| codex_home.as_deref());
+    resolve_theme_with_override(name, codex_home)
 }
 
 fn theme_lock() -> &'static RwLock<Theme> {

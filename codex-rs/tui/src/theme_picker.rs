@@ -204,12 +204,18 @@ pub(crate) fn build_theme_picker_params(
         highlight::set_syntax_theme(original_theme.clone());
     })
         as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>);
+    let themes_dir_display = codex_home_owned
+        .as_ref()
+        .map(|home| home.join("themes"))
+        .unwrap_or_else(|| Path::new("$CODEX_HOME").join("themes"))
+        .display()
+        .to_string();
 
     SelectionViewParams {
         title: Some("Select Syntax Theme".to_string()),
-        subtitle: Some(
-            "Custom .tmTheme files can be added to the ~/.codex/themes directory.".to_string(),
-        ),
+        subtitle: Some(format!(
+            "Custom .tmTheme files can be added to the {themes_dir_display} directory."
+        )),
         footer_hint: Some(standard_popup_hint_line()),
         items,
         is_searchable: true,

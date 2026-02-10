@@ -329,7 +329,9 @@ pub(crate) enum AppEvent {
     StatusLineSetupCancelled,
 
     /// Apply a user-confirmed syntax theme selection.
-    SyntaxThemeSelected { name: String },
+    SyntaxThemeSelected {
+        name: String,
+    },
 }
 
 /// The exit strategy requested by the UI layer.
