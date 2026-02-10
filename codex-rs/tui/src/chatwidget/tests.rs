@@ -225,6 +225,7 @@ async fn resumed_initial_messages_set_last_agent_markdown_for_copy() {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
@@ -239,7 +240,10 @@ async fn resumed_initial_messages_set_last_agent_markdown_for_copy() {
         "expected replayed assistant message to seed copy state",
     );
     assert_eq!(
-        chat.agent_turn_markdowns,
+        chat.agent_turn_markdowns
+            .iter()
+            .map(|entry| entry.markdown.clone())
+            .collect::<Vec<String>>(),
         vec!["assistant reply".to_string()],
         "expected replayed assistant message to seed agent markdown timeline",
     );
@@ -318,7 +322,10 @@ async fn turn_complete_with_last_agent_message_seeds_copy_when_agent_message_is_
         Some("assistant fallback")
     );
     assert_eq!(
-        chat.agent_turn_markdowns,
+        chat.agent_turn_markdowns
+            .iter()
+            .map(|entry| entry.markdown.clone())
+            .collect::<Vec<String>>(),
         vec!["assistant fallback".to_string()]
     );
 }
@@ -349,7 +356,7 @@ async fn turn_complete_does_not_duplicate_when_agent_message_already_recorded() 
 
     assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
     assert_eq!(chat.agent_turn_markdowns.len(), 1);
-    assert_eq!(chat.agent_turn_markdowns[0], "assistant reply");
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "assistant reply");
 }
 
 #[tokio::test]
@@ -406,6 +413,7 @@ async fn session_configured_resets_copy_state_before_replay() {
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: None,
+        network_proxy: None,
         rollout_path: None,
     };
 
@@ -437,7 +445,9 @@ async fn copy_history_is_bounded_to_recent_agent_messages() {
     let expected_last = format!("reply {}", total_messages - 1);
     assert_eq!(chat.agent_turn_markdowns.len(), MAX_AGENT_COPY_HISTORY);
     assert_eq!(
-        chat.agent_turn_markdowns.first().map(String::as_str),
+        chat.agent_turn_markdowns
+            .first()
+            .map(|entry| entry.markdown.as_str()),
         Some(expected_first.as_str())
     );
     assert_eq!(
@@ -1372,7 +1382,6 @@ async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
         last_agent_markdown: None,
         agent_turn_markdowns: Vec::new(),
-        agent_turn_markdown_turn_ordinals: Vec::new(),
         completed_turn_count: 0,
         saw_agent_message_this_turn: false,
     };

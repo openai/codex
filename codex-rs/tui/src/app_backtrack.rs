@@ -601,34 +601,6 @@ fn last_agent_markdown_from_transcript(
 }
 
 #[cfg(test)]
-fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
-    agent_group_positions_iter(cells).count()
-}
-
-#[cfg(test)]
-fn agent_group_positions_iter(
-    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-) -> impl Iterator<Item = usize> + '_ {
-    let session_start_type = TypeId::of::<SessionInfoCell>();
-    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
-
-    let start = cells
-        .iter()
-        .rposition(|cell| type_of(cell) == session_start_type)
-        .map_or(0, |idx| idx + 1);
-
-    cells
-        .iter()
-        .enumerate()
-        .skip(start)
-        .filter_map(move |(idx, cell)| {
-            let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
-            let is_copy_source_group = is_agent && !cell.is_stream_continuation();
-            is_copy_source_group.then_some(idx)
-        })
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
@@ -737,27 +709,35 @@ mod tests {
     }
 
     #[test]
-    fn agent_group_count_counts_only_group_starts() {
+    fn last_agent_markdown_from_transcript_joins_stream_continuation_group() {
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(AgentMessageCell::new(vec![Line::from("first-a")], true))
-                as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(vec![Line::from("first-b")], false))
-                as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "user".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("first-a")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("first-b")], false))
+                as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
                 as Arc<dyn HistoryCell>,
         ];
 
-        assert_eq!(agent_group_count(&cells), 2);
+        assert_eq!(
+            last_agent_markdown_from_transcript(&cells),
+            Some("second".to_string())
+        );
     }
 
     #[test]
-    fn agent_group_count_ignores_context_compacted_marker() {
+    fn last_agent_markdown_from_transcript_ignores_context_compacted_info_marker() {
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "user".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("first")], true))
                 as Arc<dyn HistoryCell>,
             Arc::new(crate::history_cell::new_info_event(
@@ -768,6 +748,9 @@ mod tests {
                 as Arc<dyn HistoryCell>,
         ];
 
-        assert_eq!(agent_group_count(&cells), 2);
+        assert_eq!(
+            last_agent_markdown_from_transcript(&cells),
+            Some("second".to_string())
+        );
     }
 }

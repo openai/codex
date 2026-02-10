@@ -630,9 +630,7 @@ pub(crate) struct ChatWidget {
     /// Raw markdown of the most recently completed agent response.
     last_agent_markdown: Option<String>,
     /// Raw markdown for each completed agent response in this session timeline.
-    agent_turn_markdowns: Vec<String>,
-    /// Turn ordinal for each entry in `agent_turn_markdowns`.
-    agent_turn_markdown_turn_ordinals: Vec<usize>,
+    agent_turn_markdowns: Vec<AgentTurnMarkdown>,
     /// Number of completed turns observed in this session timeline.
     completed_turn_count: usize,
     /// Whether this turn already emitted a full `AgentMessage`.
@@ -672,6 +670,12 @@ pub(crate) struct UserMessage {
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AgentTurnMarkdown {
+    ordinal: usize,
+    markdown: String,
 }
 
 impl From<String> for UserMessage {
@@ -1032,30 +1036,28 @@ impl ChatWidget {
             return;
         }
         let turn_ordinal = self.completed_turn_count.saturating_add(1);
-        let message = message.to_string();
         if self
-            .agent_turn_markdown_turn_ordinals
+            .agent_turn_markdowns
             .last()
-            .copied()
-            .is_some_and(|ordinal| ordinal == turn_ordinal)
+            .is_some_and(|entry| entry.ordinal == turn_ordinal)
         {
             if let Some(last) = self.agent_turn_markdowns.last_mut() {
-                *last = message;
+                last.markdown = message.to_string();
             }
         } else {
-            self.agent_turn_markdowns.push(message);
-            self.agent_turn_markdown_turn_ordinals.push(turn_ordinal);
+            self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                ordinal: turn_ordinal,
+                markdown: message.to_string(),
+            });
         }
         if self.agent_turn_markdowns.len() > MAX_AGENT_COPY_HISTORY {
             let overflow = self.agent_turn_markdowns.len() - MAX_AGENT_COPY_HISTORY;
             self.agent_turn_markdowns.drain(0..overflow);
-            self.agent_turn_markdown_turn_ordinals.drain(0..overflow);
         }
-        debug_assert_eq!(
-            self.agent_turn_markdowns.len(),
-            self.agent_turn_markdown_turn_ordinals.len()
-        );
-        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
+        self.last_agent_markdown = self
+            .agent_turn_markdowns
+            .last()
+            .map(|entry| entry.markdown.clone());
         self.saw_agent_message_this_turn = true;
     }
 
@@ -1063,7 +1065,6 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
-        self.agent_turn_markdown_turn_ordinals.clear();
         self.completed_turn_count = 0;
         self.saw_agent_message_this_turn = false;
         self.bottom_pane
@@ -2743,7 +2744,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
-            agent_turn_markdown_turn_ordinals: Vec::new(),
             completed_turn_count: 0,
             saw_agent_message_this_turn: false,
         };
@@ -2913,7 +2913,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
-            agent_turn_markdown_turn_ordinals: Vec::new(),
             completed_turn_count: 0,
             saw_agent_message_this_turn: false,
         };
@@ -3072,7 +3071,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
-            agent_turn_markdown_turn_ordinals: Vec::new(),
             completed_turn_count: 0,
             saw_agent_message_this_turn: false,
         };
@@ -4357,12 +4355,10 @@ impl ChatWidget {
         transcript_fallback: Option<String>,
     ) {
         while self
-            .agent_turn_markdown_turn_ordinals
+            .agent_turn_markdowns
             .last()
-            .copied()
-            .is_some_and(|ordinal| ordinal > remaining_turn_count)
+            .is_some_and(|entry| entry.ordinal > remaining_turn_count)
         {
-            self.agent_turn_markdown_turn_ordinals.pop();
             self.agent_turn_markdowns.pop();
         }
         if self.agent_turn_markdowns.is_empty()
@@ -4370,12 +4366,16 @@ impl ChatWidget {
                 .map(|fallback| fallback.trim().to_string())
                 .filter(|fallback| !fallback.is_empty())
         {
-            self.agent_turn_markdowns.push(fallback);
-            self.agent_turn_markdown_turn_ordinals
-                .push(remaining_turn_count);
+            self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                ordinal: remaining_turn_count,
+                markdown: fallback,
+            });
         }
         self.completed_turn_count = self.completed_turn_count.min(remaining_turn_count);
-        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
+        self.last_agent_markdown = self
+            .agent_turn_markdowns
+            .last()
+            .map(|entry| entry.markdown.clone());
     }
 
     #[cfg(test)]

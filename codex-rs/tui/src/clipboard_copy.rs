@@ -136,11 +136,29 @@ impl SuppressStderr {
 /// Write text to the clipboard via the OSC 52 terminal escape sequence.
 fn osc52_copy(text: &str) -> Result<(), String> {
     let sequence = osc52_sequence(text)?;
-    let mut stdout = std::io::stdout().lock();
-    stdout
+    #[cfg(unix)]
+    {
+        match std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            Ok(tty) => match write_osc52_to_writer(tty, &sequence) {
+                Ok(()) => return Ok(()),
+                Err(err) => tracing::debug!(
+                    "failed to write OSC 52 to /dev/tty: {err}; falling back to stdout"
+                ),
+            },
+            Err(err) => {
+                tracing::debug!("failed to open /dev/tty for OSC 52: {err}; falling back to stdout")
+            }
+        }
+    }
+
+    write_osc52_to_writer(std::io::stdout().lock(), &sequence)
+}
+
+fn write_osc52_to_writer(mut writer: impl Write, sequence: &str) -> Result<(), String> {
+    writer
         .write_all(sequence.as_bytes())
         .map_err(|e| format!("failed to write OSC 52: {e}"))?;
-    stdout
+    writer
         .flush()
         .map_err(|e| format!("failed to flush OSC 52: {e}"))
 }
@@ -165,6 +183,7 @@ mod tests {
     use super::OSC52_MAX_RAW_BYTES;
     use super::copy_to_clipboard_with;
     use super::osc52_sequence;
+    use super::write_osc52_to_writer;
 
     #[test]
     fn osc52_encoding_roundtrips() {
@@ -190,6 +209,14 @@ mod tests {
                 OSC52_MAX_RAW_BYTES + 1
             ))
         );
+    }
+
+    #[test]
+    fn write_osc52_to_writer_emits_sequence_verbatim() {
+        let sequence = "\u{1b}]52;c;aGVsbG8=\u{7}";
+        let mut output = Vec::new();
+        assert_eq!(write_osc52_to_writer(&mut output, sequence), Ok(()));
+        assert_eq!(output, sequence.as_bytes());
     }
 
     #[test]
