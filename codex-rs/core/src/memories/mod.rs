@@ -26,8 +26,10 @@ pub(crate) const MAX_RAW_MEMORIES_PER_SCOPE: usize = 64;
 pub(crate) const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 /// Lease duration (seconds) for phase-1 job ownership.
 pub(crate) const PHASE_ONE_JOB_LEASE_SECONDS: i64 = 3_600;
-/// Lease duration (seconds) for per-cwd consolidation locks.
-pub(crate) const CONSOLIDATION_LOCK_LEASE_SECONDS: i64 = 600;
+/// Lease duration (seconds) for phase-2 consolidation job ownership.
+pub(crate) const PHASE_TWO_JOB_LEASE_SECONDS: i64 = 3_600;
+/// Heartbeat interval (seconds) for phase-2 running jobs.
+pub(crate) const PHASE_TWO_JOB_HEARTBEAT_SECONDS: u64 = 30;
 pub(crate) const MEMORY_SCOPE_KIND_CWD: &str = "cwd";
 pub(crate) const MEMORY_SCOPE_KIND_USER: &str = "user";
 pub(crate) const MEMORY_SCOPE_KEY_USER: &str = "user";
