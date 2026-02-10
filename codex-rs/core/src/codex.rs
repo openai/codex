@@ -6802,26 +6802,23 @@ mod tests {
                     && content.iter().any(|c| {
                         matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
                     }))
-        }) {
-            if let Some(p) = reconstruction_turn.personality
-                && session.features.enabled(Feature::Personality)
-            {
-                if let Some(personality_message) = reconstruction_turn
-                    .model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
-                {
-                    let msg =
-                        DeveloperInstructions::personality_spec_message(personality_message).into();
-                    let insert_at = initial_context
-                        .iter()
-                        .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    initial_context.insert(insert_at, msg);
-                }
-            }
+        })
+            && let Some(p) = reconstruction_turn.personality
+            && session.features.enabled(Feature::Personality)
+            && let Some(personality_message) = reconstruction_turn
+                .model_info
+                .model_messages
+                .as_ref()
+                .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
+        {
+            let msg =
+                DeveloperInstructions::personality_spec_message(personality_message).into();
+            let insert_at = initial_context
+                .iter()
+                .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            initial_context.insert(insert_at, msg);
         }
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
