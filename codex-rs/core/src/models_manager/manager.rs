@@ -313,20 +313,12 @@ impl ModelsManager {
         merged_presets
     }
 
-    async fn get_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
-        if config.features.enabled(Feature::RemoteModels) {
-            self.remote_models.read().await.clone()
-        } else {
-            Vec::new()
-        }
+    async fn get_remote_models(&self) -> Vec<ModelInfo> {
+        self.remote_models.read().await.clone()
     }
 
-    fn try_get_remote_models(&self, config: &Config) -> Result<Vec<ModelInfo>, TryLockError> {
-        if config.features.enabled(Feature::RemoteModels) {
-            Ok(self.remote_models.try_read()?.clone())
-        } else {
-            Ok(Vec::new())
-        }
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
+        Ok(self.remote_models.try_read()?.clone())
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -471,7 +463,6 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -525,7 +516,6 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
@@ -572,7 +562,6 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
@@ -641,7 +630,6 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
@@ -710,7 +698,6 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
