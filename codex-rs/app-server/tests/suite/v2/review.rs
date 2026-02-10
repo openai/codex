@@ -2,7 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -150,7 +150,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "untrusted")?;

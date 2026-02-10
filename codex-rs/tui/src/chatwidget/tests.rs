@@ -3653,6 +3653,16 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     String::new()
 }
 
+/// Sets up a chat widget, opens the given popup, and returns the rendered popup string.
+/// Use for model/personality selection popup snapshot tests. The model must exist in
+/// models.json (e.g. gpt-5.2-codex for personality, which supports it).
+async fn make_popup_snapshot(model: &str, open_popup: impl FnOnce(&mut ChatWidget)) -> String {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some(model)).await;
+    chat.thread_id = Some(ThreadId::new());
+    open_popup(&mut chat);
+    render_bottom_popup(&chat, 80)
+}
+
 fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     let height = chat.desired_height(width);
     let area = Rect::new(0, 0, width, height);
@@ -3819,21 +3829,13 @@ async fn experimental_features_toggle_saves_on_exit() {
 
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.open_model_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
+    let popup = make_popup_snapshot("gpt-5-codex", |c| c.open_model_popup()).await;
     assert_snapshot!("model_selection_popup", popup);
 }
 
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.open_personality_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
+    let popup = make_popup_snapshot("gpt-5.2-codex", |c| c.open_personality_popup()).await;
     assert_snapshot!("personality_selection_popup", popup);
 }
 
