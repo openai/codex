@@ -17,6 +17,8 @@
 
 ; process-info
 (allow process-info* (target same-sandbox))
+; Needed by libuv/Node.js os.cpus() via host_processor_info().
+(allow mach-host*)
 
 (allow file-write-data
   (require-all

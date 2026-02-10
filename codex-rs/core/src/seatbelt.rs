@@ -185,6 +185,14 @@ mod tests {
     }
 
     #[test]
+    fn base_policy_allows_mach_host_for_cpu_info() {
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains("(allow mach-host*)"),
+            "base policy must allow mach-host for os.cpus()/uv_cpu_info()"
+        );
+    }
+
+    #[test]
     fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         // Create a temporary workspace with two writable roots: one containing
         // top-level .git and .codex directories and one without them.
