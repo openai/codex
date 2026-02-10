@@ -10,8 +10,23 @@ pub struct SkillMetadata {
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
+    pub policy: Option<SkillPolicy>,
     pub path: PathBuf,
     pub scope: SkillScope,
+}
+
+impl SkillMetadata {
+    fn allow_implicit_invocation(&self) -> bool {
+        self.policy
+            .as_ref()
+            .and_then(|policy| policy.allow_implicit_invocation)
+            .unwrap_or(true)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SkillPolicy {
+    pub allow_implicit_invocation: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,10 +72,14 @@ impl SkillLoadOutcome {
         !self.disabled_paths.contains(&skill.path)
     }
 
-    pub fn enabled_skills(&self) -> Vec<SkillMetadata> {
+    pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {
+        self.is_skill_enabled(skill) && skill.allow_implicit_invocation()
+    }
+
+    pub fn allowed_skills_for_implicit_invocation(&self) -> Vec<SkillMetadata> {
         self.skills
             .iter()
-            .filter(|skill| self.is_skill_enabled(skill))
+            .filter(|skill| self.is_skill_allowed_for_implicit_invocation(skill))
             .cloned()
             .collect()
     }

@@ -434,6 +434,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
+            policy: None,
             path: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -443,6 +444,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
+            policy: None,
             path: user_skill_path.clone(),
             scope: SkillScope::User,
         },
@@ -2361,7 +2363,8 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            personality: None, ..
+            personality: Some(Personality::Pragmatic),
+            ..
         } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
@@ -2912,7 +2915,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -2930,7 +2933,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -3128,7 +3131,7 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {
@@ -3148,7 +3151,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: None,
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => panic!("expected Op::UserTurn without collaboration_mode, got {other:?}"),
@@ -3166,7 +3169,7 @@ async fn collab_mode_toggle_on_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
+            personality: Some(Personality::Pragmatic),
             ..
         } => {}
         other => {

@@ -47,7 +47,6 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .await
     .context("failed to load Codex config")?;
 
-    let cfg_path = codex_home.join(CONFIG_TOML_FILE);
     let merged_toml = config_layer_stack.effective_config();
     let config: NetworkProxyConfig = merged_toml
         .try_into()
@@ -55,7 +54,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
 
     let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
-    let state = build_config_state(config, constraints, cfg_path)?;
+    let state = build_config_state(config, constraints)?;
     Ok((state, layer_mtimes))
 }
 
@@ -194,6 +193,10 @@ impl MtimeConfigReloader {
 
 #[async_trait]
 impl ConfigReloader for MtimeConfigReloader {
+    fn source_label(&self) -> String {
+        "config layers".to_string()
+    }
+
     async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
         if !self.needs_reload().await {
             return Ok(None);

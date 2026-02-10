@@ -16,6 +16,7 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::otel_provider::traceparent_context_from_env;
+use crate::sanitize_metric_tag_value;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_api::ApiError;
@@ -77,7 +78,7 @@ impl OtelManager {
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 account_email,
-                originator,
+                originator: sanitize_metric_tag_value(originator.as_str()),
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),

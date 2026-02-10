@@ -1,7 +1,7 @@
 //! Helpers for computing and resolving optional per-turn metadata headers.
 //!
 //! This module owns both metadata construction and the shared timeout policy used by
-//! turn execution and startup websocket preconnect. Keeping timeout behavior centralized
+//! turn execution and startup websocket prewarm. Keeping timeout behavior centralized
 //! ensures both call sites treat timeout as the same best-effort fallback condition.
 
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ pub(crate) const TURN_METADATA_HEADER_TIMEOUT: Duration = Duration::from_millis(
 /// On timeout, this logs a warning and returns the provided fallback header.
 ///
 /// Keeping this helper centralized avoids drift between turn-time metadata resolution and startup
-/// websocket preconnect, both of which need identical timeout semantics.
+/// websocket prewarm, both of which need identical timeout semantics.
 pub(crate) async fn resolve_turn_metadata_header_with_timeout<F>(
     build_header: F,
     fallback_on_timeout: Option<String>,

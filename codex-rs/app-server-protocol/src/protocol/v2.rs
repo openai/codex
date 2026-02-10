@@ -905,21 +905,20 @@ pub enum LoginAccountParams {
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
-    #[serde(rename = "chatgptAuthTokens")]
-    #[ts(rename = "chatgptAuthTokens")]
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {
-        /// ID token (JWT) supplied by the client.
-        ///
-        /// This token is used for identity and account metadata (email, plan type,
-        /// workspace id).
-        #[serde(rename = "idToken")]
-        #[ts(rename = "idToken")]
-        id_token: String,
         /// Access token (JWT) supplied by the client.
-        /// This token is used for backend API requests.
-        #[serde(rename = "accessToken")]
-        #[ts(rename = "accessToken")]
+        /// This token is used for backend API requests and email extraction.
         access_token: String,
+        /// Workspace/account identifier supplied by the client.
+        chatgpt_account_id: String,
+        /// Optional plan type supplied by the client.
+        ///
+        /// When `null`, Codex attempts to derive the plan type from access-token
+        /// claims. If unavailable, the plan defaults to `unknown`.
+        #[ts(optional = nullable)]
+        chatgpt_plan_type: Option<String>,
     },
 }
 
@@ -991,8 +990,8 @@ pub struct ChatgptAuthTokensRefreshParams {
     /// Clients that manage multiple accounts/workspaces can use this as a hint
     /// to refresh the token for the correct workspace.
     ///
-    /// This may be `null` when the prior ID token did not include a workspace
-    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    /// This may be `null` when the prior auth state did not include a workspace
+    /// identifier (`chatgpt_account_id`).
     #[ts(optional = nullable)]
     pub previous_account_id: Option<String>,
 }
@@ -1001,8 +1000,9 @@ pub struct ChatgptAuthTokensRefreshParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshResponse {
-    pub id_token: String,
     pub access_token: String,
+    pub chatgpt_account_id: String,
+    pub chatgpt_plan_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1201,6 +1201,9 @@ pub struct AppsListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Optional thread id used to evaluate app feature gating from that thread's config.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// When true, bypass app caches and fetch the latest data from sources.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_refetch: bool,
@@ -1704,6 +1707,19 @@ pub struct SkillsListParams {
     /// When true, bypass the skills cache and re-scan skills from disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_reload: bool,
+
+    /// Optional per-cwd extra roots to scan as user-scoped skills.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub per_cwd_extra_user_roots: Option<Vec<SkillsListExtraRootsForCwd>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsListExtraRootsForCwd {
+    pub cwd: PathBuf,
+    pub extra_user_roots: Vec<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3352,20 +3368,36 @@ mod tests {
             serde_json::to_value(SkillsListParams {
                 cwds: Vec::new(),
                 force_reload: false,
+                per_cwd_extra_user_roots: None,
             })
             .unwrap(),
-            json!({}),
+            json!({
+                "perCwdExtraUserRoots": null,
+            }),
         );
 
         assert_eq!(
             serde_json::to_value(SkillsListParams {
                 cwds: vec![PathBuf::from("/repo")],
                 force_reload: true,
+                per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
+                    cwd: PathBuf::from("/repo"),
+                    extra_user_roots: vec![
+                        PathBuf::from("/shared/skills"),
+                        PathBuf::from("/tmp/x")
+                    ],
+                }]),
             })
             .unwrap(),
             json!({
                 "cwds": ["/repo"],
                 "forceReload": true,
+                "perCwdExtraUserRoots": [
+                    {
+                        "cwd": "/repo",
+                        "extraUserRoots": ["/shared/skills", "/tmp/x"],
+                    }
+                ],
             }),
         );
     }

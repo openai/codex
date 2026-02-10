@@ -583,6 +583,64 @@ LIMIT ?
             .collect()
     }
 
+    /// Try to acquire or renew the per-cwd memory consolidation lock.
+    ///
+    /// Returns `true` when the lock is acquired/renewed for `working_thread_id`.
+    /// Returns `false` when another owner holds a non-expired lease.
+    pub async fn try_acquire_memory_consolidation_lock(
+        &self,
+        cwd: &Path,
+        working_thread_id: ThreadId,
+        lease_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let stale_cutoff = now.saturating_sub(lease_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+INSERT INTO memory_consolidation_locks (
+    cwd,
+    working_thread_id,
+    updated_at
+) VALUES (?, ?, ?)
+ON CONFLICT(cwd) DO UPDATE SET
+    working_thread_id = excluded.working_thread_id,
+    updated_at = excluded.updated_at
+WHERE memory_consolidation_locks.working_thread_id = excluded.working_thread_id
+   OR memory_consolidation_locks.updated_at <= ?
+            "#,
+        )
+        .bind(cwd.display().to_string())
+        .bind(working_thread_id.to_string())
+        .bind(now)
+        .bind(stale_cutoff)
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Release the per-cwd memory consolidation lock if held by `working_thread_id`.
+    ///
+    /// Returns `true` when a lock row was removed.
+    pub async fn release_memory_consolidation_lock(
+        &self,
+        cwd: &Path,
+        working_thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+DELETE FROM memory_consolidation_locks
+WHERE cwd = ? AND working_thread_id = ?
+            "#,
+        )
+        .bind(cwd.display().to_string())
+        .bind(working_thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Persist dynamic tools for a thread if none have been stored yet.
     ///
     /// Dynamic tools are defined at thread start and should not change afterward.
@@ -1324,6 +1382,91 @@ mod tests {
         assert_eq!(exact_only.len(), 1);
         assert_eq!(exact_only[0].thread_id, t_exact);
         assert_eq!(exact_only[0].memory_summary, "memory-exact");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn memory_consolidation_lock_enforces_owner_and_release() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let cwd = codex_home.join("workspace");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+
+        assert!(
+            runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_a, 600)
+                .await
+                .expect("acquire for owner_a"),
+            "owner_a should acquire lock"
+        );
+        assert!(
+            !runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_b, 600)
+                .await
+                .expect("acquire for owner_b should fail"),
+            "owner_b should not steal active lock"
+        );
+        assert!(
+            runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_a, 600)
+                .await
+                .expect("owner_a should renew lock"),
+            "owner_a should renew lock"
+        );
+        assert!(
+            !runtime
+                .release_memory_consolidation_lock(cwd.as_path(), owner_b)
+                .await
+                .expect("owner_b release should be no-op"),
+            "non-owner release should not remove lock"
+        );
+        assert!(
+            runtime
+                .release_memory_consolidation_lock(cwd.as_path(), owner_a)
+                .await
+                .expect("owner_a release"),
+            "owner_a should release lock"
+        );
+        assert!(
+            runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_b, 600)
+                .await
+                .expect("owner_b acquire after release"),
+            "owner_b should acquire released lock"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn memory_consolidation_lock_can_be_stolen_when_lease_expired() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let cwd = codex_home.join("workspace");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+
+        assert!(
+            runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_a, 600)
+                .await
+                .expect("owner_a acquire")
+        );
+        assert!(
+            runtime
+                .try_acquire_memory_consolidation_lock(cwd.as_path(), owner_b, 0)
+                .await
+                .expect("owner_b steal with expired lease"),
+            "owner_b should steal lock when lease cutoff marks previous lock stale"
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

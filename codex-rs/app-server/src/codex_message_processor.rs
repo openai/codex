@@ -203,7 +203,6 @@ use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::open_if_present;
-use codex_core::token_data::parse_id_token;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -789,11 +788,17 @@ impl CodexMessageProcessor {
                 self.login_chatgpt_v2(request_id).await;
             }
             LoginAccountParams::ChatgptAuthTokens {
-                id_token,
                 access_token,
+                chatgpt_account_id,
+                chatgpt_plan_type,
             } => {
-                self.login_chatgpt_auth_tokens(request_id, id_token, access_token)
-                    .await;
+                self.login_chatgpt_auth_tokens(
+                    request_id,
+                    access_token,
+                    chatgpt_account_id,
+                    chatgpt_plan_type,
+                )
+                .await;
             }
         }
     }
@@ -1224,8 +1229,9 @@ impl CodexMessageProcessor {
     async fn login_chatgpt_auth_tokens(
         &mut self,
         request_id: ConnectionRequestId,
-        id_token: String,
         access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
     ) {
         if matches!(
             self.config.forced_login_method,
@@ -1249,27 +1255,13 @@ impl CodexMessageProcessor {
             }
         }
 
-        let id_token_info = match parse_id_token(&id_token) {
-            Ok(info) => info,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid id token: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
         if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && id_token_info.chatgpt_account_id.as_deref() != Some(expected_workspace)
+            && chatgpt_account_id != expected_workspace
         {
-            let account_id = id_token_info.chatgpt_account_id;
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
-                    "External auth must use workspace {expected_workspace}, but received {account_id:?}."
+                    "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
                 ),
                 data: None,
             };
@@ -1277,9 +1269,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if let Err(err) =
-            login_with_chatgpt_auth_tokens(&self.config.codex_home, &id_token, &access_token)
-        {
+        if let Err(err) = login_with_chatgpt_auth_tokens(
+            &self.config.codex_home,
+            &access_token,
+            &chatgpt_account_id,
+            chatgpt_plan_type.as_deref(),
+        ) {
             let error = JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to set external auth: {err}"),
@@ -4373,13 +4368,29 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let config = match self.load_latest_config().await {
+        let mut config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+
+        if let Some(thread_id) = params.thread_id.as_deref() {
+            let (_, thread) = match self.load_thread(thread_id).await {
+                Ok(result) => result,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            if thread.enabled(Feature::Apps) {
+                config.features.enable(Feature::Apps);
+            } else {
+                config.features.disable(Feature::Apps);
+            }
+        }
 
         if !config.features.enabled(Feature::Apps) {
             self.outgoing
@@ -4410,6 +4421,7 @@ impl CodexMessageProcessor {
         let AppsListParams {
             cursor,
             limit,
+            thread_id: _,
             force_refetch,
         } = params;
         let start = match cursor {
@@ -4574,17 +4586,58 @@ impl CodexMessageProcessor {
     }
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
-        let SkillsListParams { cwds, force_reload } = params;
+        let SkillsListParams {
+            cwds,
+            force_reload,
+            per_cwd_extra_user_roots,
+        } = params;
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
             cwds
         };
+        let cwd_set: HashSet<PathBuf> = cwds.iter().cloned().collect();
+
+        let mut extra_roots_by_cwd: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        for entry in per_cwd_extra_user_roots.unwrap_or_default() {
+            if !cwd_set.contains(&entry.cwd) {
+                warn!(
+                    cwd = %entry.cwd.display(),
+                    "ignoring per-cwd extra roots for cwd not present in skills/list cwds"
+                );
+                continue;
+            }
+
+            let mut valid_extra_roots = Vec::new();
+            for root in entry.extra_user_roots {
+                if !root.is_absolute() {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!(
+                            "skills/list perCwdExtraUserRoots extraUserRoots paths must be absolute: {}",
+                            root.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+                valid_extra_roots.push(root);
+            }
+            extra_roots_by_cwd
+                .entry(entry.cwd)
+                .or_default()
+                .extend(valid_extra_roots);
+        }
 
         let skills_manager = self.thread_manager.skills_manager();
         let mut data = Vec::new();
         for cwd in cwds {
-            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let extra_roots = extra_roots_by_cwd
+                .get(&cwd)
+                .map_or(&[][..], std::vec::Vec::as_slice);
+            let outcome = skills_manager
+                .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
+                .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {

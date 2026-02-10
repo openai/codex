@@ -148,7 +148,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command =
+            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
@@ -166,16 +167,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(spec)
+            .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(
-            env,
-            attempt.policy,
-            req.network.clone(),
-            Self::stdout_stream(ctx),
-        )
-        .await
-        .map_err(ToolError::Codex)?;
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
+            .await
+            .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }
