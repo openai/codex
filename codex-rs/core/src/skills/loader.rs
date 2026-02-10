@@ -49,7 +49,7 @@ struct SkillMetadataFile {
     #[serde(default)]
     dependencies: Option<Dependencies>,
     #[serde(default)]
-    policy: Policy,
+    policy: Option<Policy>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -575,14 +575,11 @@ fn load_skill_metadata(
         dependencies,
         policy,
     } = parsed;
-    let policy = SkillPolicy {
-        allow_implicit_invocation: policy.allow_implicit_invocation,
-    };
 
     (
         resolve_interface(interface, skill_dir),
         resolve_dependencies(dependencies),
-        policy,
+        resolve_policy(policy),
     )
 }
 
@@ -628,6 +625,13 @@ fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDepen
         None
     } else {
         Some(SkillDependencies { tools })
+    }
+}
+
+fn resolve_policy(policy: Option<Policy>) -> SkillPolicy {
+    let policy = policy.unwrap_or_default();
+    SkillPolicy {
+        allow_implicit_invocation: policy.allow_implicit_invocation,
     }
 }
 
