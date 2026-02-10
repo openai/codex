@@ -1,4 +1,5 @@
 use crate::common::Reasoning;
+use crate::common::ResponseCreateWsRequest;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
 use crate::error::ApiError;
@@ -19,116 +20,39 @@ pub enum Compression {
 }
 
 /// Assembled request body plus headers for a Responses stream request.
-pub struct ResponsesRequest {
+pub struct ResponsesRawRequest {
     pub body: Value,
     pub headers: HeaderMap,
     pub compression: Compression,
 }
 
-#[derive(Default)]
-pub struct ResponsesRequestBuilder<'a> {
-    model: Option<&'a str>,
-    instructions: Option<&'a str>,
-    input: Option<&'a [ResponseItem]>,
-    tools: Option<&'a [Value]>,
-    parallel_tool_calls: bool,
-    reasoning: Option<Reasoning>,
-    include: Vec<String>,
-    prompt_cache_key: Option<String>,
-    text: Option<TextControls>,
-    conversation_id: Option<String>,
-    session_source: Option<SessionSource>,
-    store_override: Option<bool>,
-    headers: HeaderMap,
-    compression: Compression,
+pub struct ResponsesRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<Value>,
+    pub parallel_tool_calls: bool,
+    pub reasoning: Option<Reasoning>,
+    pub include: Vec<String>,
+    pub prompt_cache_key: Option<String>,
+    pub text: Option<TextControls>,
+    pub conversation_id: Option<String>,
+    pub session_source: Option<SessionSource>,
+    pub store_override: Option<bool>,
+    pub extra_headers: HeaderMap,
+    pub compression: Compression,
 }
 
-impl<'a> ResponsesRequestBuilder<'a> {
-    pub fn new(model: &'a str, instructions: &'a str, input: &'a [ResponseItem]) -> Self {
-        Self {
-            model: Some(model),
-            instructions: Some(instructions),
-            input: Some(input),
-            ..Default::default()
-        }
-    }
-
-    pub fn tools(mut self, tools: &'a [Value]) -> Self {
-        self.tools = Some(tools);
-        self
-    }
-
-    pub fn parallel_tool_calls(mut self, enabled: bool) -> Self {
-        self.parallel_tool_calls = enabled;
-        self
-    }
-
-    pub fn reasoning(mut self, reasoning: Option<Reasoning>) -> Self {
-        self.reasoning = reasoning;
-        self
-    }
-
-    pub fn include(mut self, include: Vec<String>) -> Self {
-        self.include = include;
-        self
-    }
-
-    pub fn prompt_cache_key(mut self, key: Option<String>) -> Self {
-        self.prompt_cache_key = key;
-        self
-    }
-
-    pub fn text(mut self, text: Option<TextControls>) -> Self {
-        self.text = text;
-        self
-    }
-
-    pub fn conversation(mut self, conversation_id: Option<String>) -> Self {
-        self.conversation_id = conversation_id;
-        self
-    }
-
-    pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
-        self.session_source = source;
-        self
-    }
-
-    pub fn store_override(mut self, store: Option<bool>) -> Self {
-        self.store_override = store;
-        self
-    }
-
-    pub fn extra_headers(mut self, headers: HeaderMap) -> Self {
-        self.headers = headers;
-        self
-    }
-
-    pub fn compression(mut self, compression: Compression) -> Self {
-        self.compression = compression;
-        self
-    }
-
-    pub fn build(self, provider: &Provider) -> Result<ResponsesRequest, ApiError> {
-        let model = self
-            .model
-            .ok_or_else(|| ApiError::Stream("missing model for responses request".into()))?;
-        let instructions = self
-            .instructions
-            .ok_or_else(|| ApiError::Stream("missing instructions for responses request".into()))?;
-        let input = self
-            .input
-            .ok_or_else(|| ApiError::Stream("missing input for responses request".into()))?;
-        let tools = self.tools.unwrap_or_default();
-
+impl ResponsesRequest {
+    pub fn into_raw_request(self, provider: &Provider) -> Result<ResponsesRawRequest, ApiError> {
         let store = self
             .store_override
             .unwrap_or_else(|| provider.is_azure_responses_endpoint());
-
         let req = ResponsesApiRequest {
-            model,
-            instructions,
-            input,
-            tools,
+            model: &self.model,
+            instructions: &self.instructions,
+            input: &self.input,
+            tools: &self.tools,
             tool_choice: "auto",
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
@@ -138,24 +62,47 @@ impl<'a> ResponsesRequestBuilder<'a> {
             prompt_cache_key: self.prompt_cache_key,
             text: self.text,
         };
-
         let mut body = serde_json::to_value(&req)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         if store && provider.is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, input);
+            attach_item_ids(&mut body, &self.input);
         }
 
-        let mut headers = self.headers;
+        let mut headers = self.extra_headers;
         headers.extend(build_conversation_headers(self.conversation_id));
         if let Some(subagent) = subagent_header(&self.session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        Ok(ResponsesRequest {
+        Ok(ResponsesRawRequest {
             body,
             headers,
             compression: self.compression,
+        })
+    }
+}
+
+impl TryFrom<&ResponsesRequest> for ResponseCreateWsRequest {
+    type Error = ApiError;
+
+    fn try_from(request: &ResponsesRequest) -> Result<Self, Self::Error> {
+        let store = request.store_override.unwrap_or(false);
+
+        Ok(Self {
+            model: request.model.clone(),
+            instructions: request.instructions.clone(),
+            previous_response_id: None,
+            input: request.input.clone(),
+            tools: request.tools.clone(),
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: request.parallel_tool_calls,
+            reasoning: request.reasoning.clone(),
+            store,
+            stream: true,
+            include: request.include.clone(),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            text: request.text.clone(),
         })
     }
 }
@@ -233,11 +180,24 @@ mod tests {
             },
         ];
 
-        let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
-            .conversation(Some("conv-1".into()))
-            .session_source(Some(SessionSource::SubAgent(SubAgentSource::Review)))
-            .build(&provider)
-            .expect("request");
+        let request = ResponsesRequest {
+            model: "gpt-test".into(),
+            instructions: "inst".into(),
+            input,
+            tools: Vec::new(),
+            parallel_tool_calls: false,
+            reasoning: None,
+            include: Vec::new(),
+            prompt_cache_key: None,
+            text: None,
+            conversation_id: Some("conv-1".into()),
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
+            store_override: None,
+            extra_headers: HeaderMap::new(),
+            compression: Compression::None,
+        }
+        .into_raw_request(&provider)
+        .expect("request");
 
         assert_eq!(request.body.get("store"), Some(&Value::Bool(true)));
 

@@ -8,19 +8,16 @@ use bytes::Bytes;
 use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::ResponsesClient;
-use codex_api::ResponsesOptions;
+use codex_api::ResponsesRequest;
 use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 
 fn assert_path_ends_with(requests: &[Request], suffix: &str) {
     assert_eq!(requests.len(), 1);
@@ -251,27 +248,26 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
     let mut provider = provider("openai");
     provider.retry.max_attempts = 2;
 
+    let request = ResponsesRequest {
+        model: "gpt-test".into(),
+        instructions: "Say hi".into(),
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        reasoning: None,
+        include: Vec::new(),
+        prompt_cache_key: None,
+        text: None,
+        conversation_id: None,
+        session_source: None,
+        store_override: None,
+        extra_headers: HeaderMap::new(),
+        compression: Compression::None,
+    }
+    .into_raw_request(&provider)?;
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
-    let prompt = codex_api::Prompt {
-        instructions: "Say hi".to_string(),
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hi".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }],
-        tools: Vec::<Value>::new(),
-        parallel_tool_calls: false,
-        output_schema: None,
-    };
-
-    let options = ResponsesOptions::default();
-
-    let _stream = client.stream_prompt("gpt-test", &prompt, options).await?;
+    let _stream = client.stream_request(request, None).await?;
     assert_eq!(transport.attempts(), 2);
     Ok(())
 }
