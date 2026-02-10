@@ -422,7 +422,8 @@ fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<Strin
 pub(crate) async fn route_outgoing_envelope(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     envelope: OutgoingEnvelope,
-) {
+) -> Vec<ConnectionId> {
+    let mut disconnected = Vec::new();
     match envelope {
         OutgoingEnvelope::ToConnection {
             connection_id,
@@ -433,10 +434,11 @@ pub(crate) async fn route_outgoing_envelope(
                     "dropping message for disconnected connection: {:?}",
                     connection_id
                 );
-                return;
+                return disconnected;
             };
             if connection_state.writer.send(message).await.is_err() {
                 connections.remove(&connection_id);
+                disconnected.push(connection_id);
             }
         }
         OutgoingEnvelope::Broadcast { message } => {
@@ -457,10 +459,12 @@ pub(crate) async fn route_outgoing_envelope(
                 };
                 if connection_state.writer.send(message.clone()).await.is_err() {
                     connections.remove(&connection_id);
+                    disconnected.push(connection_id);
                 }
             }
         }
     }
+    disconnected
 }
 
 pub(crate) fn has_initialized_connections(

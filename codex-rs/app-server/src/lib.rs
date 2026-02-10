@@ -366,6 +366,7 @@ pub async fn run_main_with_transport(
         }
     }
 
+    let transport_event_tx_for_outbound = transport_event_tx.clone();
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
         loop {
@@ -374,7 +375,22 @@ pub async fn run_main_with_transport(
                     let Some(envelope) = envelope else {
                         break;
                     };
-                    route_outgoing_envelope(&mut outbound_connections, envelope).await;
+                    let disconnected_connections =
+                        route_outgoing_envelope(&mut outbound_connections, envelope).await;
+                    let mut should_exit = false;
+                    for connection_id in disconnected_connections {
+                        if transport_event_tx_for_outbound
+                            .send(TransportEvent::ConnectionClosed { connection_id })
+                            .await
+                            .is_err()
+                        {
+                            should_exit = true;
+                            break;
+                        }
+                    }
+                    if should_exit {
+                        break;
+                    }
                 }
                 event = outbound_control_rx.recv() => {
                     let Some(event) = event else {
