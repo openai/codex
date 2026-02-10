@@ -1808,12 +1808,13 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
                     trace_exporter,
-                    metrics_exporter: OtelExporterKind::Statsig,
+                    metrics_exporter,
                 }
             },
         };
@@ -4070,6 +4071,23 @@ model_verbosity = "high"
             },
             o3_profile_config
         );
+        Ok(())
+    }
+
+    #[test]
+    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd()),
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
         Ok(())
     }
 
