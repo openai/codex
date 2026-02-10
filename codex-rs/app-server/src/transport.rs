@@ -433,7 +433,7 @@ fn should_skip_notification_for_connection(
     }
 }
 
-pub(crate) fn route_outgoing_envelope(
+pub(crate) async fn route_outgoing_envelope(
     connections: &mut HashMap<ConnectionId, ConnectionState>,
     envelope: OutgoingEnvelope,
 ) {
@@ -449,18 +449,8 @@ pub(crate) fn route_outgoing_envelope(
                 );
                 return;
             };
-            match connection_state.writer.try_send(message) {
-                Ok(()) => {}
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                    connections.remove(&connection_id);
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    warn!(
-                        "dropping slow connection with full outgoing queue: {:?}",
-                        connection_id
-                    );
-                    connections.remove(&connection_id);
-                }
+            if connection_state.writer.send(message).await.is_err() {
+                connections.remove(&connection_id);
             }
         }
         OutgoingEnvelope::Broadcast { message } => {
@@ -481,18 +471,8 @@ pub(crate) fn route_outgoing_envelope(
                 let Some(connection_state) = connections.get(&connection_id) else {
                     continue;
                 };
-                match connection_state.writer.try_send(message.clone()) {
-                    Ok(()) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                        connections.remove(&connection_id);
-                    }
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        warn!(
-                            "dropping slow connection with full outgoing queue: {:?}",
-                            connection_id
-                        );
-                        connections.remove(&connection_id);
-                    }
+                if connection_state.writer.send(message.clone()).await.is_err() {
+                    connections.remove(&connection_id);
                 }
             }
         }

@@ -449,7 +449,7 @@ pub async fn run_main_with_transport(
                             break;
                         };
                         let mut connections = connections.lock().await;
-                        route_outgoing_envelope(&mut connections, envelope);
+                        route_outgoing_envelope(&mut connections, envelope).await;
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
