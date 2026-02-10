@@ -6781,7 +6781,36 @@ mod tests {
         let mut rollout_items = Vec::new();
         let mut live_history = ContextManager::new();
 
-        let initial_context = session.build_initial_context(turn_context).await;
+        let mut initial_context = session.build_initial_context(turn_context).await;
+        // Ensure personality_spec is present when Personality is enabled, so expected matches
+        // what reconstruction produces (build_initial_context may omit it when baked into model).
+        if !initial_context.iter().any(|m| {
+            matches!(m, ResponseItem::Message { role, content, .. }
+                if role == "developer"
+                    && content.iter().any(|c| {
+                        matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
+                    }))
+        }) {
+            if let Some(p) = turn_context.personality
+                && session.features.enabled(Feature::Personality)
+            {
+                if let Some(personality_message) = turn_context
+                    .model_info
+                    .model_messages
+                    .as_ref()
+                    .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
+                {
+                    let msg =
+                        DeveloperInstructions::personality_spec_message(personality_message).into();
+                    let insert_at = initial_context
+                        .iter()
+                        .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    initial_context.insert(insert_at, msg);
+                }
+            }
+        }
         for item in &initial_context {
             rollout_items.push(RolloutItem::ResponseItem(item.clone()));
         }
@@ -6815,7 +6844,7 @@ mod tests {
         let snapshot1 = live_history.clone().for_prompt();
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 = compact::build_compacted_history(
-            session.build_initial_context(turn_context).await,
+            initial_context.clone(),
             &user_messages1,
             summary1,
         );
@@ -6853,7 +6882,7 @@ mod tests {
         let snapshot2 = live_history.clone().for_prompt();
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 = compact::build_compacted_history(
-            session.build_initial_context(turn_context).await,
+            initial_context.clone(),
             &user_messages2,
             summary2,
         );
