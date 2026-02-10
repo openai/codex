@@ -6022,16 +6022,8 @@ mod tests {
     }
 
     async fn build_test_config(codex_home: &Path) -> Config {
-        use crate::config::ConfigOverrides;
-
-        // Use a distinct base so personality_spec is injected (not baked into instructions).
-        let overrides = ConfigOverrides {
-            base_instructions: Some("Test base instructions.".to_string()),
-            ..Default::default()
-        };
         ConfigBuilder::default()
             .codex_home(codex_home.to_path_buf())
-            .harness_overrides(overrides)
             .build()
             .await
             .expect("load default test config")
