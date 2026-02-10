@@ -9,7 +9,7 @@ use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
-use crate::tools::handlers::agent_jobs::AgentJobsHandler;
+use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
@@ -1800,7 +1800,7 @@ pub(crate) fn build_specs(
     }
 
     if config.collab_tools {
-        let agent_jobs_handler = Arc::new(AgentJobsHandler);
+        let agent_jobs_handler = Arc::new(BatchJobHandler);
         builder.push_spec(create_spawn_agents_on_csv_tool());
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
         if config.agent_jobs_worker_tools {
