@@ -373,49 +373,6 @@ pub async fn get_last_n_thread_memories_for_cwd(
     }
 }
 
-/// Try to acquire or renew a per-cwd memory consolidation lock.
-pub async fn try_acquire_memory_consolidation_lock(
-    context: Option<&codex_state::StateRuntime>,
-    cwd: &Path,
-    working_thread_id: ThreadId,
-    lease_seconds: i64,
-    stage: &str,
-) -> Option<bool> {
-    let ctx = context?;
-    let normalized_cwd = normalize_cwd_for_state_db(cwd);
-    match ctx
-        .try_acquire_memory_consolidation_lock(&normalized_cwd, working_thread_id, lease_seconds)
-        .await
-    {
-        Ok(acquired) => Some(acquired),
-        Err(err) => {
-            warn!("state db try_acquire_memory_consolidation_lock failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Release a per-cwd memory consolidation lock if held by `working_thread_id`.
-pub async fn release_memory_consolidation_lock(
-    context: Option<&codex_state::StateRuntime>,
-    cwd: &Path,
-    working_thread_id: ThreadId,
-    stage: &str,
-) -> Option<bool> {
-    let ctx = context?;
-    let normalized_cwd = normalize_cwd_for_state_db(cwd);
-    match ctx
-        .release_memory_consolidation_lock(&normalized_cwd, working_thread_id)
-        .await
-    {
-        Ok(released) => Some(released),
-        Err(err) => {
-            warn!("state db release_memory_consolidation_lock failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
 /// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
 pub async fn reconcile_rollout(
     context: Option<&codex_state::StateRuntime>,
