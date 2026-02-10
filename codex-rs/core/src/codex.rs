@@ -13,7 +13,6 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
-use crate::agent::status::is_final as is_final_agent_status;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
@@ -31,6 +30,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
+use crate::sandbox_tags::sandbox_tag;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -110,7 +110,6 @@ use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -191,10 +190,8 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
-use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
-use crate::rollout::list::ThreadSortKey;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::shell;
@@ -247,8 +244,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-
-mod memory_startup;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -582,8 +577,11 @@ impl TurnContext {
     }
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
+        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
         self.turn_metadata_header
-            .get_or_init(|| async { build_turn_metadata_header(self.cwd.clone()).await })
+            .get_or_init(|| async {
+                build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
+            })
             .await
             .clone()
     }
@@ -1130,6 +1128,18 @@ impl Session {
             ),
         };
 
+        let prewarm_cwd = session_configuration.cwd.clone();
+        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
+            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
+            None,
+        )
+        .boxed();
+        let startup_regular_task = RegularTask::with_startup_prewarm(
+            services.model_client.clone(),
+            services.otel_manager.clone(),
+            turn_metadata_header,
+        );
+        state.set_startup_regular_task(startup_regular_task);
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1224,7 +1234,7 @@ impl Session {
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
 
-        memory_startup::start_memories_startup_task(
+        memories::start_memories_startup_task(
             &sess,
             Arc::clone(&config),
             &session_configuration.session_source,
@@ -4036,7 +4046,11 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
+        let sampling_request_input: Vec<ResponseItem> = {
+            sess.clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities)
+        };
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -6977,7 +6991,9 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.clone().for_prompt();
+        let snapshot1 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 =
             compact::build_compacted_history(initial_context.clone(), &user_messages1, summary1);
@@ -7018,7 +7034,9 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.clone().for_prompt();
+        let snapshot2 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 =
             compact::build_compacted_history(initial_context.clone(), &user_messages2, summary2);
@@ -7058,7 +7076,10 @@ mod tests {
         );
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
-        (rollout_items, live_history.for_prompt())
+        (
+            rollout_items,
+            live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
+        )
     }
 
     #[tokio::test]

@@ -2,11 +2,11 @@
 Consolidate Codex memories in this directory: {{ memory_root }}
 
 Phase-1 inputs already prepared in this same directory:
-- `raw_memories/` contains per-thread raw memory markdown files.
-- `memory_summary.md` contains a compact routing map from short summary -> thread id.
+- `rollout_summaries/` contains per-thread rollout summary markdown files (`<thread_id>.md`).
+- `raw_memories.md` contains merged raw memory content from recent stage-1 outputs.
 
 Consolidation goals:
-1. Read `memory_summary.md` first to route quickly, then open the most relevant files in `raw_memories/`.
+1. Read `rollout_summaries/` first to route quickly, then cross-check details in `raw_memories.md`.
 2. Resolve conflicts explicitly:
    - prefer newer guidance by default;
    - if older guidance has stronger evidence, keep both with a verification note.
@@ -23,5 +23,5 @@ Expected outputs for this directory (create/update as needed):
 - `skills/<skill-name>/...`: optional skill folders when there is clear reusable procedure value.
 
 Do not rewrite phase-1 artifacts except when adding explicit cross-references:
-- keep `raw_memories/` as phase-1 output;
-- keep `memory_summary.md` as the compact map generated from the latest summaries.
+- keep `rollout_summaries/` as phase-1 output;
+- keep `raw_memories.md` as the merged stage-1 raw-memory artifact.

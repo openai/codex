@@ -29,10 +29,10 @@ struct ReservedListeners {
 }
 
 impl ReservedListeners {
-    fn new(http: StdTcpListener, socks: StdTcpListener, admin: StdTcpListener) -> Self {
+    fn new(http: StdTcpListener, socks: Option<StdTcpListener>, admin: StdTcpListener) -> Self {
         Self {
             http: Mutex::new(Some(http)),
-            socks: Mutex::new(Some(socks)),
+            socks: Mutex::new(socks),
             admin: Mutex::new(Some(admin)),
         }
     }
@@ -133,15 +133,20 @@ impl NetworkProxyBuilder {
         let current_cfg = state.current_cfg().await?;
         let (requested_http_addr, requested_socks_addr, requested_admin_addr, reserved_listeners) =
             if self.managed_by_codex {
+                let runtime = config::resolve_runtime(&current_cfg)?;
                 let (http_listener, socks_listener, admin_listener) =
-                    reserve_loopback_ephemeral_listeners()
+                    reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
                         .context("reserve managed loopback proxy listeners")?;
                 let http_addr = http_listener
                     .local_addr()
                     .context("failed to read reserved HTTP proxy address")?;
-                let socks_addr = socks_listener
-                    .local_addr()
-                    .context("failed to read reserved SOCKS5 proxy address")?;
+                let socks_addr = if let Some(socks_listener) = socks_listener.as_ref() {
+                    socks_listener
+                        .local_addr()
+                        .context("failed to read reserved SOCKS5 proxy address")?
+                } else {
+                    runtime.socks_addr
+                };
                 let admin_addr = admin_listener
                     .local_addr()
                     .context("failed to read reserved admin API address")?;
@@ -186,13 +191,19 @@ impl NetworkProxyBuilder {
     }
 }
 
-fn reserve_loopback_ephemeral_listeners() -> Result<(StdTcpListener, StdTcpListener, StdTcpListener)>
-{
-    Ok((
-        reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?,
-        reserve_loopback_ephemeral_listener().context("reserve SOCKS5 proxy listener")?,
-        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?,
-    ))
+fn reserve_loopback_ephemeral_listeners(
+    reserve_socks_listener: bool,
+) -> Result<(StdTcpListener, Option<StdTcpListener>, StdTcpListener)> {
+    let http_listener =
+        reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?;
+    let socks_listener = if reserve_socks_listener {
+        Some(reserve_loopback_ephemeral_listener().context("reserve SOCKS5 proxy listener")?)
+    } else {
+        None
+    };
+    let admin_listener =
+        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?;
+    Ok((http_listener, socks_listener, admin_listener))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
@@ -609,6 +620,43 @@ mod tests {
         assert_eq!(
             proxy.admin_addr,
             "127.0.0.1:48080".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_proxy_builder_does_not_reserve_socks_listener_when_disabled() {
+        let settings = NetworkProxySettings {
+            enable_socks5: false,
+            socks_url: "http://127.0.0.1:43129".to_string(),
+            ..NetworkProxySettings::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(settings));
+        let proxy = match NetworkProxy::builder().state(state).build().await {
+            Ok(proxy) => proxy,
+            Err(err) => {
+                if err
+                    .chain()
+                    .any(|cause| cause.to_string().contains("Operation not permitted"))
+                {
+                    return;
+                }
+                panic!("failed to build managed proxy: {err:#}");
+            }
+        };
+
+        assert!(proxy.http_addr.ip().is_loopback());
+        assert!(proxy.admin_addr.ip().is_loopback());
+        assert_eq!(
+            proxy.socks_addr,
+            "127.0.0.1:43129".parse::<SocketAddr>().unwrap()
+        );
+        assert!(
+            proxy
+                .reserved_listeners
+                .as_ref()
+                .expect("managed builder should reserve listeners")
+                .take_socks()
+                .is_none()
         );
     }
 
