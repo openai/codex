@@ -9,7 +9,6 @@ use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
@@ -44,7 +43,7 @@ where
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Serialize)]
 struct TurnMetadataWorkspace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     associated_remote_urls: Option<BTreeMap<String, String>>,
@@ -52,7 +51,7 @@ struct TurnMetadataWorkspace {
     latest_git_commit_hash: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Serialize)]
 struct TurnMetadata {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,

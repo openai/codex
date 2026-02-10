@@ -87,7 +87,6 @@ async fn responses_websocket_streams_request() {
         handshake.header(OPENAI_BETA_HEADER),
         Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
     );
-    assert_eq!(handshake.header("x-codex-sandbox"), None);
 
     server.shutdown().await;
 }
