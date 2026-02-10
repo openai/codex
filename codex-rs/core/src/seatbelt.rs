@@ -243,7 +243,6 @@ pub(crate) fn create_seatbelt_command_args(
         ""
     };
 
-    // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
     let proxy = proxy_policy_inputs(network);
     let network_policy = dynamic_network_policy(sandbox_policy, enforce_managed_network, &proxy);
 
