@@ -29,6 +29,12 @@
         "$ref": "#/definitions/AgentRoleToml"
       },
       "properties": {
+        "job_max_runtime_seconds": {
+          "description": "Default maximum runtime in seconds for agent job workers.",
+          "format": "uint64",
+          "minimum": 1.0,
+          "type": "integer"
+        },
         "max_spawn_depth": {
           "description": "Maximum depth for thread-spawned subagents.",
           "format": "uint",
