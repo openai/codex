@@ -39,9 +39,6 @@ use uuid::Uuid;
 pub const STATE_DB_FILENAME: &str = "state";
 pub const STATE_DB_VERSION: u32 = 4;
 
-const MEMORY_SCOPE_KIND_USER: &str = "user";
-const MEMORY_SCOPE_KEY_USER: &str = "user";
-
 const METRIC_DB_INIT: &str = "codex.db.init";
 
 mod memory;
@@ -86,27 +83,18 @@ pub struct Stage1StartupClaimParams<'a> {
     pub lease_seconds: i64,
 }
 
-/// Scope row used to queue phase-2 consolidation work.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingScopeConsolidation {
-    /// Scope family (`user`).
-    pub scope_kind: String,
-    /// Scope identifier keyed by `scope_kind`.
-    pub scope_key: String,
-}
-
 /// Result of trying to claim a phase-2 consolidation job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase2JobClaimOutcome {
-    /// The caller owns the scope and should spawn consolidation.
+    /// The caller owns the global lock and should spawn consolidation.
     Claimed {
         ownership_token: String,
         /// Snapshot of `input_watermark` at claim time.
         input_watermark: i64,
     },
-    /// The scope is not pending consolidation (or is already up to date).
+    /// The global job is not pending consolidation (or is already up to date).
     SkippedNotDirty,
-    /// Another worker currently owns a fresh lease for this scope.
+    /// Another worker currently owns a fresh global consolidation lease.
     SkippedRunning,
 }
 
@@ -926,7 +914,6 @@ fn push_thread_order_and_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::PendingScopeConsolidation;
     use super::Phase2JobClaimOutcome;
     use super::STATE_DB_FILENAME;
     use super::STATE_DB_VERSION;
@@ -1463,7 +1450,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn phase2_consolidation_jobs_rerun_when_watermark_advances() {
+    async fn phase2_global_consolidation_reruns_when_watermark_advances() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1472,24 +1459,12 @@ WHERE kind = 'memory_stage1'
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .enqueue_scope_consolidation("user", "user", 100)
+            .enqueue_global_consolidation(100)
             .await
-            .expect("enqueue scope");
-
-        let scopes = runtime
-            .list_pending_scope_consolidations(10)
-            .await
-            .expect("list pending");
-        assert_eq!(
-            scopes,
-            vec![PendingScopeConsolidation {
-                scope_kind: "user".to_string(),
-                scope_key: "user".to_string(),
-            }]
-        );
+            .expect("enqueue global consolidation");
 
         let claim = runtime
-            .try_claim_phase2_job("user", "user", owner, 3600)
+            .try_claim_global_phase2_job(owner, 3600)
             .await
             .expect("claim phase2");
         let (ownership_token, input_watermark) = match claim {
@@ -1501,30 +1476,25 @@ WHERE kind = 'memory_stage1'
         };
         assert!(
             runtime
-                .mark_phase2_job_succeeded(
-                    "user",
-                    "user",
-                    ownership_token.as_str(),
-                    input_watermark,
-                )
+                .mark_global_phase2_job_succeeded(ownership_token.as_str(), input_watermark)
                 .await
                 .expect("mark phase2 succeeded"),
             "phase2 success should finalize for current token"
         );
 
         let claim_up_to_date = runtime
-            .try_claim_phase2_job("user", "user", owner, 3600)
+            .try_claim_global_phase2_job(owner, 3600)
             .await
             .expect("claim phase2 up-to-date");
         assert_eq!(claim_up_to_date, Phase2JobClaimOutcome::SkippedNotDirty);
 
         runtime
-            .enqueue_scope_consolidation("user", "user", 101)
+            .enqueue_global_consolidation(101)
             .await
-            .expect("enqueue scope again");
+            .expect("enqueue global consolidation again");
 
         let claim_rerun = runtime
-            .try_claim_phase2_job("user", "user", owner, 3600)
+            .try_claim_global_phase2_job(owner, 3600)
             .await
             .expect("claim phase2 rerun");
         assert!(
@@ -1536,7 +1506,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn list_stage1_outputs_for_user_scope_returns_latest_outputs() {
+    async fn list_stage1_outputs_for_global_returns_latest_outputs() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1607,9 +1577,9 @@ WHERE kind = 'memory_stage1'
         );
 
         let outputs = runtime
-            .list_stage1_outputs_for_scope("user", "user", 10)
+            .list_stage1_outputs_for_global(10)
             .await
-            .expect("list stage1 outputs for user scope");
+            .expect("list stage1 outputs for global");
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].thread_id, thread_id_b);
         assert_eq!(outputs[0].summary, "summary b");
@@ -1620,7 +1590,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn mark_stage1_job_succeeded_enqueues_single_user_scope() {
+    async fn mark_stage1_job_succeeded_enqueues_global_consolidation() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1679,106 +1649,116 @@ WHERE kind = 'memory_stage1'
             "stage1 success should persist output for thread b"
         );
 
-        let pending_scopes = runtime
-            .list_pending_scope_consolidations(10)
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
             .await
-            .expect("list pending scopes");
-        assert_eq!(
-            pending_scopes,
-            vec![PendingScopeConsolidation {
-                scope_kind: "user".to_string(),
-                scope_key: "user".to_string(),
-            }]
-        );
+            .expect("claim global consolidation");
+        let input_watermark = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                input_watermark, ..
+            } => input_watermark,
+            other => panic!("unexpected global consolidation claim outcome: {other:?}"),
+        };
+        assert_eq!(input_watermark, 101);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
     #[tokio::test]
-    async fn list_pending_scope_consolidations_omits_unclaimable_jobs() {
+    async fn phase2_global_lock_allows_only_one_fresh_runner() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
             .expect("initialize runtime");
-        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
 
         runtime
-            .enqueue_scope_consolidation("user", "scope-running", 200)
+            .enqueue_global_consolidation(200)
             .await
-            .expect("enqueue running scope");
-        runtime
-            .enqueue_scope_consolidation("user", "scope-backoff", 199)
-            .await
-            .expect("enqueue backoff scope");
-        runtime
-            .enqueue_scope_consolidation("user", "scope-exhausted", 198)
-            .await
-            .expect("enqueue exhausted scope");
-        runtime
-            .enqueue_scope_consolidation("user", "scope-claimable-a", 90)
-            .await
-            .expect("enqueue claimable scope a");
-        runtime
-            .enqueue_scope_consolidation("user", "scope-claimable-b", 89)
-            .await
-            .expect("enqueue claimable scope b");
+            .expect("enqueue global consolidation");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
 
         let running_claim = runtime
-            .try_claim_phase2_job("user", "scope-running", owner, 3600)
+            .try_claim_global_phase2_job(owner_a, 3600)
             .await
-            .expect("claim running scope");
+            .expect("claim global lock");
         assert!(
             matches!(running_claim, Phase2JobClaimOutcome::Claimed { .. }),
-            "scope-running should be claimed"
+            "first owner should claim global lock"
         );
 
-        let backoff_claim = runtime
-            .try_claim_phase2_job("user", "scope-backoff", owner, 3600)
+        let second_claim = runtime
+            .try_claim_global_phase2_job(owner_b, 3600)
             .await
-            .expect("claim backoff scope");
-        let backoff_token = match backoff_claim {
+            .expect("claim global lock from second owner");
+        assert_eq!(second_claim, Phase2JobClaimOutcome::SkippedRunning);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_lock_stale_lease_allows_takeover() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .enqueue_global_consolidation(300)
+            .await
+            .expect("enqueue global consolidation");
+
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner a");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
+
+        let initial_claim = runtime
+            .try_claim_global_phase2_job(owner_a, 3600)
+            .await
+            .expect("claim initial global lock");
+        let token_a = match initial_claim {
             Phase2JobClaimOutcome::Claimed {
                 ownership_token, ..
             } => ownership_token,
-            other => panic!("unexpected backoff claim outcome: {other:?}"),
+            other => panic!("unexpected initial claim outcome: {other:?}"),
         };
-        assert!(
-            runtime
-                .mark_phase2_job_failed(
-                    "user",
-                    "scope-backoff",
-                    backoff_token.as_str(),
-                    "temporary failure",
-                    3600,
-                )
-                .await
-                .expect("mark backoff scope failed"),
-            "backoff scope should transition to retry backoff"
-        );
 
-        sqlx::query("UPDATE jobs SET retry_remaining = 0 WHERE kind = ? AND job_key = ?")
-            .bind("memory_consolidate_user")
-            .bind("scope-exhausted")
+        sqlx::query("UPDATE jobs SET lease_until = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - 1)
+            .bind("memory_consolidate_global")
+            .bind("global")
             .execute(runtime.pool.as_ref())
             .await
-            .expect("set exhausted scope retries to zero");
+            .expect("expire global consolidation lease");
 
-        let pending = runtime
-            .list_pending_scope_consolidations(2)
+        let takeover_claim = runtime
+            .try_claim_global_phase2_job(owner_b, 3600)
             .await
-            .expect("list pending scopes");
+            .expect("claim stale global lock");
+        let (token_b, input_watermark) = match takeover_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected takeover claim outcome: {other:?}"),
+        };
+        assert_ne!(token_a, token_b);
+        assert_eq!(input_watermark, 300);
+
         assert_eq!(
-            pending,
-            vec![
-                PendingScopeConsolidation {
-                    scope_kind: "user".to_string(),
-                    scope_key: "scope-claimable-a".to_string(),
-                },
-                PendingScopeConsolidation {
-                    scope_kind: "user".to_string(),
-                    scope_key: "scope-claimable-b".to_string(),
-                },
-            ]
+            runtime
+                .mark_global_phase2_job_succeeded(token_a.as_str(), 300)
+                .await
+                .expect("mark stale owner success result"),
+            false,
+            "stale owner should lose finalization ownership after takeover"
+        );
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(token_b.as_str(), 300)
+                .await
+                .expect("mark takeover owner success"),
+            "takeover owner should finalize consolidation"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

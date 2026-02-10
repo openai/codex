@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tracing::warn;
 
-use super::MAX_RAW_MEMORIES_PER_SCOPE;
+use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
 use super::text::compact_whitespace;
 use crate::memories::layout::LEGACY_CONSOLIDATED_FILENAME;
 use crate::memories::layout::MEMORY_REGISTRY_FILENAME;
@@ -31,7 +31,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_PER_SCOPE)
+        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
@@ -77,7 +77,7 @@ pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<(
 async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_PER_SCOPE)
+        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 

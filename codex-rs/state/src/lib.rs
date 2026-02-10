@@ -31,7 +31,6 @@ pub use model::Stage1Output;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
-pub use runtime::PendingScopeConsolidation;
 pub use runtime::Phase2JobClaimOutcome;
 pub use runtime::STATE_DB_FILENAME;
 pub use runtime::STATE_DB_VERSION;

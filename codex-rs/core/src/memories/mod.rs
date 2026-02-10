@@ -2,12 +2,11 @@
 //!
 //! The startup memory pipeline is split into two phases:
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
-//! - Phase 2: claim scopes, materialize consolidation inputs, and dispatch consolidation agents.
+//! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
 mod layout;
 mod prompts;
 mod rollout;
-mod scope;
 mod stage_one;
 mod startup;
 mod storage;
@@ -23,10 +22,8 @@ const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
 const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.
 const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
-/// Concurrency cap for phase-2 consolidation dispatch.
-const PHASE_TWO_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
-/// Maximum number of recent raw memories retained per scope.
-const MAX_RAW_MEMORIES_PER_SCOPE: usize = 64;
+/// Maximum number of recent raw memories retained for global consolidation.
+const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 64;
 /// Maximum rollout age considered for phase-1 extraction.
 const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 /// Minimum rollout idle time required before phase-1 extraction.

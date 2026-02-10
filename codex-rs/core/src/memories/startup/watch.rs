@@ -10,11 +10,9 @@ use tracing::warn;
 use super::super::PHASE_TWO_JOB_HEARTBEAT_SECONDS;
 use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
 use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
-use super::MemoryScopeTarget;
 
 pub(super) fn spawn_phase2_completion_task(
     session: &Session,
-    scope: MemoryScopeTarget,
     ownership_token: String,
     completion_watermark: i64,
     consolidation_agent_id: ThreadId,
@@ -31,13 +29,10 @@ pub(super) fn spawn_phase2_completion_task(
             Ok(status_rx) => status_rx,
             Err(err) => {
                 warn!(
-                    "failed to subscribe to memory consolidation agent {} for scope {}:{}: {err}",
-                    consolidation_agent_id, scope.scope_kind, scope.scope_key
+                    "failed to subscribe to global memory consolidation agent {consolidation_agent_id}: {err}"
                 );
                 let _ = state_db
-                    .mark_phase2_job_failed(
-                        scope.scope_kind,
-                        &scope.scope_key,
+                    .mark_global_phase2_job_failed(
                         &ownership_token,
                         "failed to subscribe to consolidation agent status",
                         PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
@@ -61,33 +56,26 @@ pub(super) fn spawn_phase2_completion_task(
                 changed = status_rx.changed() => {
                     if changed.is_err() {
                         warn!(
-                            "lost status updates for memory consolidation agent {} in scope {}:{}",
-                            consolidation_agent_id, scope.scope_kind, scope.scope_key
+                            "lost status updates for global memory consolidation agent {consolidation_agent_id}"
                         );
                         break status;
                     }
                 }
                 _ = heartbeat_interval.tick() => {
                     match state_db
-                        .heartbeat_phase2_job(
-                            scope.scope_kind,
-                            &scope.scope_key,
-                            &ownership_token,
-                            PHASE_TWO_JOB_LEASE_SECONDS,
-                        )
+                        .heartbeat_global_phase2_job(&ownership_token, PHASE_TWO_JOB_LEASE_SECONDS)
                         .await
                     {
                         Ok(true) => {}
                         Ok(false) => {
                             debug!(
-                                "memory phase-2 heartbeat lost ownership for scope {}:{}; skipping finalization",
-                                scope.scope_kind, scope.scope_key
+                                "memory phase-2 heartbeat lost global ownership; skipping finalization"
                             );
                             return;
                         }
                         Err(err) => {
                             warn!(
-                                "state db heartbeat_phase2_job failed during memories startup: {err}"
+                                "state db heartbeat_global_phase2_job failed during memories startup: {err}"
                             );
                             return;
                         }
@@ -98,39 +86,30 @@ pub(super) fn spawn_phase2_completion_task(
 
         if is_phase2_success(&final_status) {
             match state_db
-                .mark_phase2_job_succeeded(
-                    scope.scope_kind,
-                    &scope.scope_key,
-                    &ownership_token,
-                    completion_watermark,
-                )
+                .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
                 .await
             {
                 Ok(true) => {}
                 Ok(false) => {
                     debug!(
-                        "memory phase-2 success finalization skipped after ownership changed: scope={} scope_key={}",
-                        scope.scope_kind, scope.scope_key
+                        "memory phase-2 success finalization skipped after global ownership changed"
                     );
                 }
                 Err(err) => {
                     warn!(
-                        "state db mark_phase2_job_succeeded failed during memories startup: {err}"
+                        "state db mark_global_phase2_job_succeeded failed during memories startup: {err}"
                     );
                 }
             }
             info!(
-                "memory phase-2 consolidation agent finished: scope={} scope_key={} agent_id={} final_status={final_status:?}",
-                scope.scope_kind, scope.scope_key, consolidation_agent_id
+                "memory phase-2 global consolidation agent finished: agent_id={consolidation_agent_id} final_status={final_status:?}"
             );
             return;
         }
 
         let failure_reason = phase2_failure_reason(&final_status);
         match state_db
-            .mark_phase2_job_failed(
-                scope.scope_kind,
-                &scope.scope_key,
+            .mark_global_phase2_job_failed(
                 &ownership_token,
                 &failure_reason,
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
@@ -140,17 +119,17 @@ pub(super) fn spawn_phase2_completion_task(
             Ok(true) => {}
             Ok(false) => {
                 debug!(
-                    "memory phase-2 failure finalization skipped after ownership changed: scope={} scope_key={}",
-                    scope.scope_kind, scope.scope_key
+                    "memory phase-2 failure finalization skipped after global ownership changed"
                 );
             }
             Err(err) => {
-                warn!("state db mark_phase2_job_failed failed during memories startup: {err}");
+                warn!(
+                    "state db mark_global_phase2_job_failed failed during memories startup: {err}"
+                );
             }
         }
         warn!(
-            "memory phase-2 consolidation agent finished with non-success status: scope={} scope_key={} agent_id={} final_status={final_status:?}",
-            scope.scope_kind, scope.scope_key, consolidation_agent_id
+            "memory phase-2 global consolidation agent finished with non-success status: agent_id={consolidation_agent_id} final_status={final_status:?}"
         );
     });
 }

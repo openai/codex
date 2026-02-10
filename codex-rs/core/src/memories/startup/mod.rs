@@ -7,10 +7,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::memories::layout::memory_root;
 use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
-use crate::memories::scope::MEMORY_SCOPE_KEY_USER;
-use crate::memories::scope::MEMORY_SCOPE_KIND_USER;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -19,7 +16,6 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use serde_json::Value;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
@@ -43,52 +39,6 @@ impl StageOneRequestContext {
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: turn_context.reasoning_summary,
             turn_metadata_header,
-        }
-    }
-}
-
-/// Canonical memory scope metadata used by both startup phases.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct MemoryScopeTarget {
-    /// Scope family used for DB ownership and dirty-state tracking.
-    pub(super) scope_kind: &'static str,
-    /// Scope identifier used for DB keys.
-    pub(super) scope_key: String,
-    /// On-disk root where phase-1 artifacts and phase-2 outputs live.
-    pub(super) memory_root: PathBuf,
-}
-
-/// Converts a pending scope consolidation row into a concrete filesystem target for phase 2.
-///
-/// Unsupported scope kinds or malformed keys are ignored.
-pub(super) fn memory_scope_target_for_pending_scope(
-    config: &Config,
-    pending_scope: codex_state::PendingScopeConsolidation,
-) -> Option<MemoryScopeTarget> {
-    let scope_kind = pending_scope.scope_kind;
-    let scope_key = pending_scope.scope_key;
-
-    match scope_kind.as_str() {
-        MEMORY_SCOPE_KIND_USER => {
-            if scope_key != MEMORY_SCOPE_KEY_USER {
-                warn!(
-                    "skipping unsupported user memory scope key for phase-2: {}:{}",
-                    scope_kind, scope_key
-                );
-                return None;
-            }
-            Some(MemoryScopeTarget {
-                scope_kind: MEMORY_SCOPE_KIND_USER,
-                scope_key,
-                memory_root: memory_root(&config.codex_home),
-            })
-        }
-        _ => {
-            warn!(
-                "skipping unsupported memory scope for phase-2 consolidation: {}:{}",
-                scope_kind, scope_key
-            );
-            None
         }
     }
 }
@@ -125,7 +75,7 @@ pub(crate) fn start_memories_startup_task(
 /// Phase 1 selects rollout candidates, performs stage-1 extraction requests in
 /// parallel, persists stage-1 outputs, and enqueues consolidation work.
 ///
-/// Phase 2 claims pending scopes and spawns consolidation agents.
+/// Phase 2 claims a global consolidation lock and spawns one consolidation agent.
 pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
@@ -236,115 +186,15 @@ pub(super) async fn run_memories_startup_pipeline(
         claimed_count, succeeded_count
     );
 
-    let consolidation_scope_count = run_consolidation_dispatch(session, config).await;
+    let consolidation_job_count = run_consolidation_dispatch(session, config).await;
     info!(
-        "memory consolidation dispatch complete: {} scope(s) scheduled",
-        consolidation_scope_count
+        "memory consolidation dispatch complete: {} job(s) scheduled",
+        consolidation_job_count
     );
 
     Ok(())
 }
 
 async fn run_consolidation_dispatch(session: &Arc<Session>, config: Arc<Config>) -> usize {
-    let scopes = list_consolidation_scopes(
-        session.as_ref(),
-        config.as_ref(),
-        super::MAX_ROLLOUTS_PER_STARTUP,
-    )
-    .await;
-    let consolidation_scope_count = scopes.len();
-
-    futures::stream::iter(scopes.into_iter())
-        .map(|scope| {
-            let session = Arc::clone(session);
-            let config = Arc::clone(&config);
-            async move {
-                dispatch::run_memory_consolidation_for_scope(session, config, scope).await;
-            }
-        })
-        .buffer_unordered(super::PHASE_TWO_CONCURRENCY_LIMIT)
-        .collect::<Vec<_>>()
-        .await;
-
-    consolidation_scope_count
-}
-
-async fn list_consolidation_scopes(
-    session: &Session,
-    config: &Config,
-    limit: usize,
-) -> Vec<MemoryScopeTarget> {
-    if limit == 0 {
-        return Vec::new();
-    }
-
-    let Some(state_db) = session.services.state_db.as_deref() else {
-        return Vec::new();
-    };
-
-    let pending_scopes = match state_db.list_pending_scope_consolidations(limit).await {
-        Ok(scopes) => scopes,
-        Err(_) => return Vec::new(),
-    };
-
-    pending_scopes
-        .into_iter()
-        .filter_map(|scope| memory_scope_target_for_pending_scope(config, scope))
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::test_config;
-
-    /// Verifies that phase-2 pending scope rows are translated only for supported scopes.
-    #[test]
-    fn pending_scope_mapping_accepts_supported_scopes_only() {
-        let mut config = test_config();
-        config.codex_home = "/tmp/memory-startup-test-home".into();
-
-        let user_target = memory_scope_target_for_pending_scope(
-            &config,
-            codex_state::PendingScopeConsolidation {
-                scope_kind: MEMORY_SCOPE_KIND_USER.to_string(),
-                scope_key: MEMORY_SCOPE_KEY_USER.to_string(),
-            },
-        )
-        .expect("valid user scope should map");
-        assert_eq!(user_target.scope_kind, MEMORY_SCOPE_KIND_USER);
-
-        assert!(
-            memory_scope_target_for_pending_scope(
-                &config,
-                codex_state::PendingScopeConsolidation {
-                    scope_kind: MEMORY_SCOPE_KIND_USER.to_string(),
-                    scope_key: "unexpected-user-key".to_string(),
-                },
-            )
-            .is_none()
-        );
-
-        assert!(
-            memory_scope_target_for_pending_scope(
-                &config,
-                codex_state::PendingScopeConsolidation {
-                    scope_kind: "cwd".to_string(),
-                    scope_key: "/tmp/project-a".to_string(),
-                },
-            )
-            .is_none()
-        );
-
-        assert!(
-            memory_scope_target_for_pending_scope(
-                &config,
-                codex_state::PendingScopeConsolidation {
-                    scope_kind: "unknown".to_string(),
-                    scope_key: "scope".to_string(),
-                },
-            )
-            .is_none()
-        );
-    }
+    usize::from(dispatch::run_global_memory_consolidation(session, config).await)
 }

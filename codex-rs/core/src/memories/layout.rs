@@ -1,13 +1,12 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use super::scope::MEMORY_SCOPE_KEY_USER;
-
 pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
 pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 pub(super) const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
 pub(super) const LEGACY_CONSOLIDATED_FILENAME: &str = "consolidated.md";
 pub(super) const SKILLS_SUBDIR: &str = "skills";
+const LEGACY_USER_SUBDIR: &str = "user";
 const LEGACY_MEMORY_SUBDIR: &str = "memory";
 
 /// Returns the shared on-disk memory root directory.
@@ -46,7 +45,7 @@ pub(super) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
 fn legacy_user_memory_root(codex_home: &Path) -> PathBuf {
     codex_home
         .join("memories")
-        .join(MEMORY_SCOPE_KEY_USER)
+        .join(LEGACY_USER_SUBDIR)
         .join(LEGACY_MEMORY_SUBDIR)
 }
 
