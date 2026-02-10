@@ -82,6 +82,9 @@ impl OtelManager {
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
+                approval_policy: None,
+                sandbox_mode: None,
+                sandbox_network_access: None,
                 log_user_prompts,
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
@@ -89,6 +92,21 @@ impl OtelManager {
             metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
         }
+    }
+
+    pub fn with_policy_metadata(
+        mut self,
+        approval_policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+    ) -> Self {
+        self.metadata.approval_policy = Some(approval_policy.to_string());
+        self.metadata.sandbox_mode = Some(sandbox_mode_tag(sandbox_policy).to_string());
+        self.metadata.sandbox_network_access = Some(if sandbox_policy.has_full_network_access() {
+            "enabled".to_string()
+        } else {
+            "restricted".to_string()
+        });
+        self
     }
 
     pub fn apply_traceparent_parent(&self, span: &Span) {
@@ -143,6 +161,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             provider_name = %provider_name,
             reasoning_effort = reasoning_effort.map(|e| e.to_string()),
             reasoning_summary = %reasoning_summary,
@@ -208,6 +229,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             error.message = error,
@@ -240,6 +264,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             duration_ms = %duration.as_millis(),
             success = success_str,
             error.message = error,
@@ -342,6 +369,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             duration_ms = %duration.as_millis(),
             success = success_str,
             error.message = error_message.as_deref(),
@@ -420,6 +450,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             duration_ms = %duration.as_millis(),
         );
     }
@@ -454,6 +487,9 @@ impl OtelManager {
                 terminal.type = %self.metadata.terminal_type,
                 model = %self.metadata.model,
                 slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
                 duration_ms = %duration.as_millis(),
                 error.message = %error,
             ),
@@ -470,6 +506,9 @@ impl OtelManager {
                 terminal.type = %self.metadata.terminal_type,
                 model = %self.metadata.model,
                 slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
                 duration_ms = %duration.as_millis(),
                 error.message = %error,
             ),
@@ -494,6 +533,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             error.message = %error,
         )
     }
@@ -520,6 +562,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             input_token_count = %input_token_count,
             output_token_count = %output_token_count,
             cached_token_count = cached_token_count,
@@ -556,6 +601,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             prompt_length = %prompt.chars().count(),
             prompt = %prompt_to_log,
         );
@@ -581,6 +629,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             tool_name = %tool_name,
             call_id = %call_id,
             decision = %decision.clone().to_string().to_lowercase(),
@@ -637,6 +688,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             tool_name = %tool_name,
             duration_ms = %Duration::ZERO.as_millis(),
             success = %false,
@@ -675,6 +729,9 @@ impl OtelManager {
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
+            policy.approval = self.metadata.approval_policy,
+            policy.sandbox_mode = self.metadata.sandbox_mode,
+            policy.sandbox_network_access = self.metadata.sandbox_network_access,
             tool_name = %tool_name,
             call_id = %call_id,
             arguments = %arguments,
@@ -768,6 +825,15 @@ impl OtelManager {
             ResponseItem::Compaction { .. } => "compaction".into(),
             ResponseItem::Other => "other".into(),
         }
+    }
+}
+
+fn sandbox_mode_tag(policy: &SandboxPolicy) -> &'static str {
+    match policy {
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
     }
 }
 

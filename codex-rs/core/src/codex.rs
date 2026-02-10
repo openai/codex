@@ -1021,7 +1021,8 @@ impl Session {
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
-        );
+        )
+        .with_policy_metadata(config.approval_policy.value(), config.sandbox_policy.get());
         config.features.emit_metrics(&otel_manager);
         otel_manager.counter(
             "codex.thread.started",

@@ -1008,7 +1008,8 @@ impl App {
             config.otel.log_user_prompt,
             codex_core::terminal::user_agent(),
             SessionSource::Cli,
-        );
+        )
+        .with_policy_metadata(config.approval_policy.value(), config.sandbox_policy.get());
         if config
             .tui_status_line
             .as_ref()
