@@ -419,7 +419,6 @@ fn mcp_dependency_to_server_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skills::SkillPolicy;
     use crate::skills::model::SkillDependencies;
     use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
@@ -432,9 +431,7 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: Some(SkillDependencies { tools }),
-            policy: SkillPolicy {
-                allow_implicit_invocation: true,
-            },
+            policy: None,
             path: PathBuf::from("skill"),
             scope: SkillScope::User,
         }

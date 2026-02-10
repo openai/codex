@@ -293,8 +293,10 @@ impl Codex {
             config.features.disable(Feature::Collab);
         }
 
-        let enabled_skills = loaded_skills.enabled_skills();
-        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
+        let allowed_skills_for_implicit_invocation =
+            loaded_skills.allowed_skills_for_implicit_invocation();
+        let user_instructions =
+            get_user_instructions(&config, Some(&allowed_skills_for_implicit_invocation)).await;
 
         let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
             .await

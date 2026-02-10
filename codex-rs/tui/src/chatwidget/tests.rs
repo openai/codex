@@ -64,7 +64,6 @@ use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillPolicy;
 use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::ThreadId;
@@ -435,9 +434,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: SkillPolicy {
-                allow_implicit_invocation: true,
-            },
+            policy: None,
             path: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -447,9 +444,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: SkillPolicy {
-                allow_implicit_invocation: true,
-            },
+            policy: None,
             path: user_skill_path.clone(),
             scope: SkillScope::User,
         },

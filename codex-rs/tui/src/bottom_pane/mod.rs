@@ -956,7 +956,6 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
-    use codex_core::skills::model::SkillPolicy;
     use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -1333,9 +1332,7 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

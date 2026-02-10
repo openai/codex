@@ -462,7 +462,6 @@ fn is_mention_name_char(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skills::SkillPolicy;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -474,9 +473,7 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: SkillPolicy {
-                allow_implicit_invocation: true,
-            },
+            policy: None,
             path: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,
         }

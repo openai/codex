@@ -533,17 +533,17 @@ fn load_skill_metadata(
 ) -> (
     Option<SkillInterface>,
     Option<SkillDependencies>,
-    SkillPolicy,
+    Option<SkillPolicy>,
 ) {
     // Fail open: optional metadata should not block loading SKILL.md.
     let Some(skill_dir) = skill_path.parent() else {
-        return (None, None, SkillPolicy::default());
+        return (None, None, None);
     };
     let metadata_path = skill_dir
         .join(SKILLS_METADATA_DIR)
         .join(SKILLS_METADATA_FILENAME);
     if !metadata_path.exists() {
-        return (None, None, SkillPolicy::default());
+        return (None, None, None);
     }
 
     let contents = match fs::read_to_string(&metadata_path) {
@@ -554,7 +554,7 @@ fn load_skill_metadata(
                 path = metadata_path.display(),
                 label = SKILLS_METADATA_FILENAME
             );
-            return (None, None, SkillPolicy::default());
+            return (None, None, None);
         }
     };
 
@@ -566,7 +566,7 @@ fn load_skill_metadata(
                 path = metadata_path.display(),
                 label = SKILLS_METADATA_FILENAME
             );
-            return (None, None, SkillPolicy::default());
+            return (None, None, None);
         }
     };
 
@@ -628,11 +628,10 @@ fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDepen
     }
 }
 
-fn resolve_policy(policy: Option<Policy>) -> SkillPolicy {
-    let policy = policy.unwrap_or_default();
-    SkillPolicy {
+fn resolve_policy(policy: Option<Policy>) -> Option<SkillPolicy> {
+    policy.map(|policy| SkillPolicy {
         allow_implicit_invocation: policy.allow_implicit_invocation,
-    }
+    })
 }
 
 fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> {
@@ -1033,9 +1032,7 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1182,9 +1179,7 @@ mod tests {
                         },
                     ],
                 }),
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1239,9 +1234,7 @@ interface:
                     default_prompt: Some("default prompt".to_string()),
                 }),
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(skill_path.as_path()),
                 scope: SkillScope::User,
             }]
@@ -1271,8 +1264,13 @@ policy:
             outcome.errors
         );
         assert_eq!(outcome.skills.len(), 1);
-        assert!(!outcome.skills[0].policy.allow_implicit_invocation);
-        assert!(outcome.enabled_skills().is_empty());
+        assert_eq!(
+            outcome.skills[0].policy,
+            Some(SkillPolicy {
+                allow_implicit_invocation: false,
+            })
+        );
+        assert!(outcome.allowed_skills_for_implicit_invocation().is_empty());
     }
 
     #[tokio::test]
@@ -1297,7 +1295,12 @@ policy: {}
             outcome.errors
         );
         assert_eq!(outcome.skills.len(), 1);
-        assert!(outcome.skills[0].policy.allow_implicit_invocation);
+        assert_eq!(
+            outcome.skills[0].policy,
+            Some(SkillPolicy {
+                allow_implicit_invocation: true,
+            })
+        );
     }
 
     #[tokio::test]
@@ -1343,9 +1346,7 @@ policy: {}
                     default_prompt: None,
                 }),
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1385,9 +1386,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1440,9 +1439,7 @@ policy: {}
                     default_prompt: None,
                 }),
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1483,9 +1480,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1529,9 +1524,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -1591,9 +1584,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1629,9 +1620,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
@@ -1671,9 +1660,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1740,9 +1727,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
@@ -1769,9 +1754,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1802,9 +1785,7 @@ policy: {}
                 short_description: Some("short summary".to_string()),
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1916,9 +1897,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1953,9 +1932,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2008,9 +1985,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2020,9 +1995,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2061,9 +2034,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2100,9 +2071,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2143,9 +2112,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: normalized(&repo_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2155,9 +2122,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: normalized(&user_skill_path),
                     scope: SkillScope::User,
                 },
@@ -2221,9 +2186,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: first_path,
                     scope: SkillScope::Repo,
                 },
@@ -2233,9 +2196,7 @@ policy: {}
                     short_description: None,
                     interface: None,
                     dependencies: None,
-                    policy: SkillPolicy {
-                        allow_implicit_invocation: true,
-                    },
+                    policy: None,
                     path: second_path,
                     scope: SkillScope::Repo,
                 },
@@ -2306,9 +2267,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2366,9 +2325,7 @@ policy: {}
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: SkillPolicy {
-                    allow_implicit_invocation: true,
-                },
+                policy: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::System,
             }]

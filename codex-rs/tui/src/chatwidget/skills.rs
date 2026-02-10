@@ -20,7 +20,6 @@ use codex_core::protocol::SkillsListEntry;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillPolicy;
 use codex_core::skills::model::SkillToolDependency;
 
 impl ChatWidget {
@@ -190,9 +189,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     })
                     .collect(),
             }),
-        policy: SkillPolicy {
-            allow_implicit_invocation: true,
-        },
+        policy: None,
         path: skill.path.clone(),
         scope: skill.scope,
     }
