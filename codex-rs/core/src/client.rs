@@ -40,7 +40,6 @@ use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
-use codex_api::Prompt as ApiPrompt;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
