@@ -4075,6 +4075,23 @@ model_verbosity = "high"
     }
 
     #[test]
+    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd()),
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
+        Ok(())
+    }
+
+    #[test]
     fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;
 
