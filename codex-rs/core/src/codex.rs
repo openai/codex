@@ -354,11 +354,7 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::open_if_present(
-                        config.codex_home.as_path(),
-                        config.model_provider_id.as_str(),
-                    )
-                    .await;
+                    let state_db_ctx = state_db::get_state_db(&config, None).await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -1947,7 +1943,7 @@ impl Session {
 
     /// Emit an exec approval request event and await the user's decision.
     ///
-    /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
+    /// The request is keyed by `call_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
     #[allow(clippy::too_many_arguments)]
@@ -1960,22 +1956,21 @@ impl Session {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(sub_id, tx_approve)
+                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+            warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
 
         let parsed_cmd = parse_command(&command);
@@ -2000,22 +1995,21 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
-        let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let event_id = sub_id.clone();
+        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(sub_id, tx_approve)
+                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+            warn!("Overwriting existing pending approval for call_id: {approval_id}");
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -2107,13 +2101,13 @@ impl Session {
         }
     }
 
-    pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(sub_id)
+                    ts.remove_pending_approval(approval_id)
                 }
                 None => None,
             }
@@ -2123,7 +2117,7 @@ impl Session {
                 tx_approve.send(decision).ok();
             }
             None => {
-                warn!("No pending approval found for sub_id: {sub_id}");
+                warn!("No pending approval found for call_id: {approval_id}");
             }
         }
     }
@@ -2882,8 +2876,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
                     .await;
             }
-            Op::ExecApproval { id, decision } => {
-                handlers::exec_approval(&sess, id, decision).await;
+            Op::ExecApproval {
+                id: approval_id,
+                turn_id,
+                decision,
+            } => {
+                handlers::exec_approval(&sess, approval_id, turn_id, decision).await;
             }
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
@@ -3206,7 +3204,13 @@ mod handlers {
 
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
-    pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    pub async fn exec_approval(
+        sess: &Arc<Session>,
+        approval_id: String,
+        turn_id: Option<String>,
+        decision: ReviewDecision,
+    ) {
+        let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
@@ -3216,15 +3220,18 @@ mod handlers {
                 .await
             {
                 Ok(()) => {
-                    sess.record_execpolicy_amendment_message(&id, proposed_execpolicy_amendment)
-                        .await;
+                    sess.record_execpolicy_amendment_message(
+                        &event_turn_id,
+                        proposed_execpolicy_amendment,
+                    )
+                    .await;
                 }
                 Err(err) => {
                     let message = format!("Failed to apply execpolicy amendment: {err}");
                     tracing::warn!("{message}");
                     let warning = EventMsg::Warning(WarningEvent { message });
                     sess.send_event_raw(Event {
-                        id: id.clone(),
+                        id: event_turn_id.clone(),
                         msg: warning,
                     })
                     .await;
@@ -3235,7 +3242,7 @@ mod handlers {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
-            other => sess.notify_approval(&id, other).await,
+            other => sess.notify_approval(&approval_id, other).await,
         }
     }
 

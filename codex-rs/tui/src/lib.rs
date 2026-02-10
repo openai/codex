@@ -552,7 +552,7 @@ async fn run_ratatui_app(
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
             match RolloutRecorder::list_threads(
-                &config.codex_home,
+                &config,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
@@ -570,14 +570,7 @@ async fn run_ratatui_app(
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            match resume_picker::run_fork_picker(
-                &mut tui,
-                &config.codex_home,
-                &config.model_provider_id,
-                cli.fork_show_all,
-            )
-            .await?
-            {
+            match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
                 resume_picker::SessionSelection::Exit => {
                     restore();
                     session_log::log_session_end();
@@ -613,7 +606,7 @@ async fn run_ratatui_app(
             Some(config.cwd.as_path())
         };
         match RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -628,14 +621,7 @@ async fn run_ratatui_app(
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(
-            &mut tui,
-            &config.codex_home,
-            &config.model_provider_id,
-            cli.resume_show_all,
-        )
-        .await?
-        {
+        match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
             resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();
