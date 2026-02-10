@@ -37,6 +37,8 @@ use image::Rgba;
 use image::load_from_memory;
 use serde_json::Value;
 use tokio::time::Duration;
+use wiremock::BodyPrintLimit;
+use wiremock::MockServer;
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
@@ -536,7 +538,14 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
+    // Use MockServer directly (not start_mock_server) so the first /models request returns our
+    // text-only model. start_mock_server mounts empty models first, causing get_model_info to
+    // fall back to model_info_from_slug with default_input_modalities (Text+Image), which would
+    // incorrectly allow view_image.
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
     let model_slug = "text-only-view-image-test-model";
     let text_only_model = ModelInfo {
         slug: model_slug.to_string(),
