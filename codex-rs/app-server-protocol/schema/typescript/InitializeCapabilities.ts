@@ -14,4 +14,4 @@ experimentalApi: boolean,
  * Exact notification method names that should be suppressed for this
  * connection (for example `codex/event/session_configured`).
  */
-optOutNotificationMethods?: Array<string>, };
+optOutNotificationMethods?: Array<string> | null, };
