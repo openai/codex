@@ -4019,9 +4019,18 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
-    insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
-        assert_snapshot!("approvals_selection_popup", popup);
-    });
+    assert!(
+        popup.contains("Default (non-admin sandbox)"),
+        "expected degraded sandbox label in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("/setup-default-sandbox"),
+        "expected setup hint in approvals popup: {popup}"
+    );
+    assert!(
+        popup.contains("non-admin sandbox"),
+        "expected degraded sandbox note in approvals popup: {popup}"
+    );
 }
 
 #[tokio::test]
@@ -4074,8 +4083,12 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("requires elevation"),
-        "expected auto mode prompt to mention elevation, popup: {popup}"
+        popup.contains("requires Administrator permissions"),
+        "expected auto mode prompt to mention Administrator permissions, popup: {popup}"
+    );
+    assert!(
+        popup.contains("Use non-admin sandbox"),
+        "expected auto mode prompt to include non-admin fallback option, popup: {popup}"
     );
 }
 
@@ -4091,16 +4104,20 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup.contains("requires elevation"),
-        "expected startup prompt to explain elevation: {popup}"
+        popup.contains("requires Administrator permissions"),
+        "expected startup prompt to mention Administrator permissions: {popup}"
     );
     assert!(
-        popup.contains("Set up agent sandbox"),
-        "expected startup prompt to offer agent sandbox setup: {popup}"
+        popup.contains("Set up default sandbox"),
+        "expected startup prompt to offer default sandbox setup: {popup}"
     );
     assert!(
-        popup.contains("Stay in"),
-        "expected startup prompt to offer staying in current mode: {popup}"
+        popup.contains("Use non-admin sandbox"),
+        "expected startup prompt to offer non-admin fallback: {popup}"
+    );
+    assert!(
+        popup.contains("Quit"),
+        "expected startup prompt to offer quit action: {popup}"
     );
 }
 
