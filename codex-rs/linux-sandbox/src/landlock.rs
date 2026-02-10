@@ -101,9 +101,8 @@ fn network_seccomp_mode(
     proxy_routed_network: bool,
 ) -> Option<NetworkSeccompMode> {
     if !should_install_network_seccomp(sandbox_policy, allow_network_for_proxy) {
-        return None;
-    }
-    if proxy_routed_network {
+        None
+    } else if proxy_routed_network {
         Some(NetworkSeccompMode::ProxyRouted)
     } else {
         Some(NetworkSeccompMode::Restricted)

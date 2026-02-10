@@ -93,17 +93,15 @@ pub fn run_main() -> ! {
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
     if apply_seccomp_then_exec {
-        let proxy_routing_active = if allow_network_for_proxy {
+        if allow_network_for_proxy {
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
             if let Err(err) = activate_proxy_routes_in_netns(spec) {
                 panic!("error activating Linux proxy routing bridge: {err}");
             }
-            true
-        } else {
-            false
-        };
+        }
+        let proxy_routing_active = allow_network_for_proxy;
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
             &sandbox_policy_cwd,
