@@ -4,7 +4,6 @@ You are given one rollout and must produce exactly one JSON object.
 Return exactly one JSON object with this schema:
 - raw_memory: a detailed markdown raw memory for this rollout only.
 - rollout_summary: a concise summary suitable for shared memory aggregation.
-- rollout_slug: optional stable slug for the rollout (accepted but currently ignored).
 
 Input contract:
 - The user message contains:

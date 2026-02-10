@@ -1,6 +1,10 @@
 use super::*;
-use crate::Stage1Output;
+use crate::model::Phase2JobClaimOutcome;
+use crate::model::Stage1JobClaim;
+use crate::model::Stage1JobClaimOutcome;
+use crate::model::Stage1Output;
 use crate::model::Stage1OutputRow;
+use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
 use chrono::Duration;
 use sqlx::Executor;
@@ -117,7 +121,7 @@ FROM threads
     ) -> anyhow::Result<Option<Stage1Output>> {
         let row = sqlx::query(
             r#"
-SELECT thread_id, source_updated_at, raw_memory, summary, generated_at
+SELECT thread_id, source_updated_at, raw_memory, rollout_summary, generated_at
 FROM stage1_outputs
 WHERE thread_id = ?
             "#,
@@ -140,9 +144,8 @@ WHERE thread_id = ?
 
         let rows = sqlx::query(
             r#"
-SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at
+SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
 FROM stage1_outputs AS so
-JOIN threads AS t ON t.id = so.thread_id
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
             "#,
@@ -329,7 +332,7 @@ WHERE kind = ? AND job_key = ?
         ownership_token: &str,
         source_updated_at: i64,
         raw_memory: &str,
-        summary: &str,
+        rollout_summary: &str,
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
@@ -367,13 +370,13 @@ INSERT INTO stage1_outputs (
     thread_id,
     source_updated_at,
     raw_memory,
-    summary,
+    rollout_summary,
     generated_at
 ) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     source_updated_at = excluded.source_updated_at,
     raw_memory = excluded.raw_memory,
-    summary = excluded.summary,
+    rollout_summary = excluded.rollout_summary,
     generated_at = excluded.generated_at
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,
@@ -381,7 +384,7 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .bind(thread_id.as_str())
         .bind(source_updated_at)
         .bind(raw_memory)
-        .bind(summary)
+        .bind(rollout_summary)
         .bind(now)
         .execute(&mut *tx)
         .await?;

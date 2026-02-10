@@ -41,61 +41,14 @@ pub const STATE_DB_VERSION: u32 = 4;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
-mod memory;
-// Memory-specific CRUD and phase job lifecycle methods live in `runtime/memory.rs`.
+mod memories;
+// Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
 #[derive(Clone)]
 pub struct StateRuntime {
     codex_home: PathBuf,
     default_provider: String,
     pool: Arc<sqlx::SqlitePool>,
-}
-
-/// Result of trying to claim a stage-1 memory extraction job.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stage1JobClaimOutcome {
-    /// The caller owns the job and should continue with extraction.
-    Claimed { ownership_token: String },
-    /// Existing output is already newer than or equal to the source rollout.
-    SkippedUpToDate,
-    /// Another worker currently owns a fresh lease for this job.
-    SkippedRunning,
-    /// The job is in backoff and should not be retried yet.
-    SkippedRetryBackoff,
-    /// The job has exhausted retries and should not be retried automatically.
-    SkippedRetryExhausted,
-}
-
-/// Claimed stage-1 job with thread metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stage1JobClaim {
-    pub thread: ThreadMetadata,
-    pub ownership_token: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Stage1StartupClaimParams<'a> {
-    pub scan_limit: usize,
-    pub max_claimed: usize,
-    pub max_age_days: i64,
-    pub min_rollout_idle_hours: i64,
-    pub allowed_sources: &'a [String],
-    pub lease_seconds: i64,
-}
-
-/// Result of trying to claim a phase-2 consolidation job.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Phase2JobClaimOutcome {
-    /// The caller owns the global lock and should spawn consolidation.
-    Claimed {
-        ownership_token: String,
-        /// Snapshot of `input_watermark` at claim time.
-        input_watermark: i64,
-    },
-    /// The global job is not pending consolidation (or is already up to date).
-    SkippedNotDirty,
-    /// Another worker currently owns a fresh global consolidation lease.
-    SkippedRunning,
 }
 
 impl StateRuntime {
@@ -914,14 +867,14 @@ fn push_thread_order_and_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::Phase2JobClaimOutcome;
     use super::STATE_DB_FILENAME;
     use super::STATE_DB_VERSION;
-    use super::Stage1JobClaimOutcome;
-    use super::Stage1StartupClaimParams;
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::model::Phase2JobClaimOutcome;
+    use crate::model::Stage1JobClaimOutcome;
+    use crate::model::Stage1StartupClaimParams;
     use chrono::DateTime;
     use chrono::Duration;
     use chrono::Utc;
@@ -1582,9 +1535,9 @@ WHERE kind = 'memory_stage1'
             .expect("list stage1 outputs for global");
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].thread_id, thread_id_b);
-        assert_eq!(outputs[0].summary, "summary b");
+        assert_eq!(outputs[0].rollout_summary, "summary b");
         assert_eq!(outputs[1].thread_id, thread_id_a);
-        assert_eq!(outputs[1].summary, "summary a");
+        assert_eq!(outputs[1].rollout_summary, "summary a");
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

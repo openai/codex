@@ -1,6 +1,6 @@
 use crate::codex::Session;
 use crate::config::Config;
-use crate::memories::layout::memory_root;
+use crate::memories::memory_root;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -17,7 +17,7 @@ use super::super::prompts::build_consolidation_prompt;
 use super::super::storage::rebuild_raw_memories_file_from_memories;
 use super::super::storage::sync_rollout_summaries_from_memories;
 use super::super::storage::wipe_consolidation_outputs;
-use super::watch::spawn_phase2_completion_task;
+use super::phase2::spawn_phase2_completion_task;
 
 pub(super) async fn run_global_memory_consolidation(
     session: &Arc<Session>,

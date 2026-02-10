@@ -1,13 +1,12 @@
 mod dispatch;
 mod extract;
-mod watch;
+mod phase2;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -15,7 +14,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
@@ -80,10 +78,6 @@ pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> CodexResult<()> {
-    if let Err(err) = migrate_legacy_user_memory_root_if_needed(&config.codex_home).await {
-        warn!("failed migrating legacy shared memory root: {err}");
-    }
-
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable for memories startup pipeline; skipping");
         return Ok(());
@@ -91,11 +85,7 @@ pub(super) async fn run_memories_startup_pipeline(
 
     let allowed_sources = INTERACTIVE_SESSION_SOURCES
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(ToString::to_string)
         .collect::<Vec<_>>();
 
     let claimed_candidates = match state_db
@@ -186,15 +176,12 @@ pub(super) async fn run_memories_startup_pipeline(
         claimed_count, succeeded_count
     );
 
-    let consolidation_job_count = run_consolidation_dispatch(session, config).await;
+    let consolidation_job_count =
+        usize::from(dispatch::run_global_memory_consolidation(session, config).await);
     info!(
         "memory consolidation dispatch complete: {} job(s) scheduled",
         consolidation_job_count
     );
 
     Ok(())
-}
-
-async fn run_consolidation_dispatch(session: &Arc<Session>, config: Arc<Config>) -> usize {
-    usize::from(dispatch::run_global_memory_consolidation(session, config).await)
 }
