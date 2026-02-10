@@ -788,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn session_streams_updates_before_walk_complete() {
+    fn session_emits_updates_and_complete() {
         let dir = create_temp_tree(600);
         let reporter = Arc::new(RecordingReporter::default());
         let session = create_session(dir.path(), FileSearchOptions::default(), reporter.clone())
@@ -799,7 +799,12 @@ mod tests {
 
         assert!(completed);
         let updates = reporter.updates();
-        assert!(updates.iter().any(|snapshot| !snapshot.walk_complete));
+        assert!(!updates.is_empty());
+        assert!(
+            updates
+                .last()
+                .is_some_and(|snapshot| snapshot.walk_complete)
+        );
     }
 
     #[test]

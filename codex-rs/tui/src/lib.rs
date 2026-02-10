@@ -113,6 +113,8 @@ mod version;
 mod wrapping;
 
 #[cfg(test)]
+mod insta_runfiles;
+#[cfg(test)]
 pub mod test_backend;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;

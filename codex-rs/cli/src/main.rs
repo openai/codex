@@ -543,10 +543,33 @@ fn stage_str(stage: codex_core::features::Stage) -> &'static str {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        cli_main(codex_linux_sandbox_exe).await?;
-        Ok(())
-    })
+    #[cfg(windows)]
+    {
+        run_cli_with_large_stack()
+    }
+    #[cfg(not(windows))]
+    {
+        arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+            cli_main(codex_linux_sandbox_exe).await?;
+            Ok(())
+        })
+    }
+}
+
+#[cfg(windows)]
+fn run_cli_with_large_stack() -> anyhow::Result<()> {
+    let handle = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+                cli_main(codex_linux_sandbox_exe).await?;
+                Ok(())
+            })
+        })?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(err) => std::panic::resume_unwind(err),
+    }
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
