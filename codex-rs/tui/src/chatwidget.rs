@@ -1326,6 +1326,9 @@ impl ChatWidget {
         } else {
             text
         };
+        if !plan_text.trim().is_empty() {
+            self.record_agent_markdown(&plan_text);
+        }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
         let should_restore_after_stream = self.plan_stream_controller.is_some();

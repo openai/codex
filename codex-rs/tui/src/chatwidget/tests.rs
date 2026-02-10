@@ -300,6 +300,60 @@ async fn turn_complete_without_last_agent_message_preserves_previous_copy_source
 }
 
 #[tokio::test]
+async fn plan_item_completion_replaces_commentary_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let plan_text = "<proposed_plan>\n# Fake plan\n- Step 1\n</proposed_plan>";
+
+    chat.replay_initial_messages(vec![EventMsg::UserMessage(
+        codex_core::protocol::UserMessageEvent {
+            message: "create a fake plan".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        },
+    )]);
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Plan,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "commentary".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "I’ll create a minimal fake plan.".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "plan-item-completed".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::Plan(codex_protocol::items::PlanItem {
+                id: "plan-item-1".to_string(),
+                text: plan_text.to_string(),
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some(plan_text));
+    assert_eq!(
+        chat.agent_turn_markdowns
+            .last()
+            .map(|entry| (entry.ordinal, entry.markdown.as_str())),
+        Some((1, plan_text)),
+        "expected completed plan item to become copy source for the current user turn",
+    );
+}
+
+#[tokio::test]
 async fn turn_complete_with_last_agent_message_seeds_copy_when_agent_message_is_missing() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
 
