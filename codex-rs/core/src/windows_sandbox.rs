@@ -51,13 +51,62 @@ pub fn resolve_windows_sandbox_mode(
     cfg: &ConfigToml,
     profile: &ConfigProfile,
 ) -> Option<WindowsSandboxModeToml> {
+    match profile_legacy_windows_sandbox_mode(profile.features.as_ref()) {
+        LegacyWindowsSandboxMode::Enabled(mode) => return Some(mode),
+        LegacyWindowsSandboxMode::Disabled => return None,
+        LegacyWindowsSandboxMode::Unset => {}
+    }
+
     profile
         .windows
         .as_ref()
         .and_then(|windows| windows.sandbox)
         .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
-        .or_else(|| legacy_windows_sandbox_mode(profile.features.as_ref()))
         .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
+}
+
+enum LegacyWindowsSandboxMode {
+    Enabled(WindowsSandboxModeToml),
+    Disabled,
+    Unset,
+}
+
+fn profile_legacy_windows_sandbox_mode(
+    features: Option<&FeaturesToml>,
+) -> LegacyWindowsSandboxMode {
+    let Some(entries) = features.map(|features| &features.entries) else {
+        return LegacyWindowsSandboxMode::Unset;
+    };
+
+    let has_elevated = entries.contains_key(Feature::WindowsSandboxElevated.key());
+    let has_unelevated = entries.contains_key(Feature::WindowsSandbox.key())
+        || entries.contains_key("enable_experimental_windows_sandbox");
+
+    if !has_elevated && !has_unelevated {
+        return LegacyWindowsSandboxMode::Unset;
+    }
+
+    if entries
+        .get(Feature::WindowsSandboxElevated.key())
+        .copied()
+        .unwrap_or(false)
+    {
+        return LegacyWindowsSandboxMode::Enabled(WindowsSandboxModeToml::Elevated);
+    }
+
+    if entries
+        .get(Feature::WindowsSandbox.key())
+        .copied()
+        .unwrap_or(false)
+        || entries
+            .get("enable_experimental_windows_sandbox")
+            .copied()
+            .unwrap_or(false)
+    {
+        LegacyWindowsSandboxMode::Enabled(WindowsSandboxModeToml::Unelevated)
+    } else {
+        LegacyWindowsSandboxMode::Disabled
+    }
 }
 
 pub fn legacy_windows_sandbox_mode(features: Option<&FeaturesToml>) -> Option<WindowsSandboxModeToml> {
@@ -299,5 +348,28 @@ mod tests {
             resolve_windows_sandbox_mode(&cfg, &ConfigProfile::default()),
             Some(WindowsSandboxModeToml::Unelevated)
         );
+    }
+
+    #[test]
+    fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_true() {
+        let mut profile_entries = BTreeMap::new();
+        profile_entries.insert("experimental_windows_sandbox".to_string(), false);
+        let profile = ConfigProfile {
+            features: Some(FeaturesToml {
+                entries: profile_entries,
+            }),
+            ..Default::default()
+        };
+
+        let mut cfg_entries = BTreeMap::new();
+        cfg_entries.insert("experimental_windows_sandbox".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: cfg_entries,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(resolve_windows_sandbox_mode(&cfg, &profile), None);
     }
 }
