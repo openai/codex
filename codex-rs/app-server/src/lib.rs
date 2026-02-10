@@ -9,6 +9,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -363,6 +364,7 @@ pub async fn run_main_with_transport(
     let transport_event_tx_for_outbound = transport_event_tx.clone();
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
+        let mut pending_closed_connections = VecDeque::<ConnectionId>::new();
         loop {
             tokio::select! {
                 biased;
@@ -392,19 +394,22 @@ pub async fn run_main_with_transport(
                     };
                     let disconnected_connections =
                         route_outgoing_envelope(&mut outbound_connections, envelope).await;
-                    let mut should_exit = false;
-                    for connection_id in disconnected_connections {
-                        if transport_event_tx_for_outbound
-                            .send(TransportEvent::ConnectionClosed { connection_id })
-                            .await
-                            .is_err()
-                        {
-                            should_exit = true;
-                            break;
-                        }
+                    pending_closed_connections.extend(disconnected_connections);
+                }
+            }
+
+            while let Some(connection_id) = pending_closed_connections.front().copied() {
+                match transport_event_tx_for_outbound
+                    .try_send(TransportEvent::ConnectionClosed { connection_id })
+                {
+                    Ok(()) => {
+                        pending_closed_connections.pop_front();
                     }
-                    if should_exit {
+                    Err(mpsc::error::TrySendError::Full(_)) => {
                         break;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        return;
                     }
                 }
             }
