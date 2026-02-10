@@ -324,19 +324,32 @@ fn render_change(
                     }
                     is_first_hunk = false;
 
+                    // Highlight each hunk as a single block so syntect parser
+                    // state is preserved across consecutive lines.
+                    let hunk_syntax_lines = diff_lang.and_then(|language| {
+                        let hunk_text: String = h
+                            .lines()
+                            .iter()
+                            .map(|line| match line {
+                                diffy::Line::Insert(text)
+                                | diffy::Line::Delete(text)
+                                | diffy::Line::Context(text) => *text,
+                            })
+                            .collect();
+                        let syntax_lines = highlight_code_to_styled_spans(&hunk_text, language)?;
+                        (syntax_lines.len() == h.lines().len()).then_some(syntax_lines)
+                    });
+
                     let mut old_ln = h.old_range().start();
                     let mut new_ln = h.new_range().start();
-                    for l in h.lines() {
-                        // Per-line highlighting for unified diffs.
-                        let highlight_line = |s: &str| -> Option<Vec<RtSpan<'static>>> {
-                            let l = diff_lang?;
-                            let spans = highlight_code_to_styled_spans(s, l)?;
-                            spans.into_iter().next()
-                        };
+                    for (line_idx, l) in h.lines().iter().enumerate() {
+                        let syntax_spans = hunk_syntax_lines
+                            .as_ref()
+                            .and_then(|syntax_lines| syntax_lines.get(line_idx));
                         match l {
                             diffy::Line::Insert(text) => {
                                 let s = text.trim_end_matches('\n');
-                                if let Some(syn) = highlight_line(s) {
+                                if let Some(syn) = syntax_spans {
                                     out.extend(push_wrapped_diff_line_with_syntax(
                                         new_ln,
                                         DiffLineType::Insert,
@@ -358,7 +371,7 @@ fn render_change(
                             }
                             diffy::Line::Delete(text) => {
                                 let s = text.trim_end_matches('\n');
-                                if let Some(syn) = highlight_line(s) {
+                                if let Some(syn) = syntax_spans {
                                     out.extend(push_wrapped_diff_line_with_syntax(
                                         old_ln,
                                         DiffLineType::Delete,
@@ -380,7 +393,7 @@ fn render_change(
                             }
                             diffy::Line::Context(text) => {
                                 let s = text.trim_end_matches('\n');
-                                if let Some(syn) = highlight_line(s) {
+                                if let Some(syn) = syntax_spans {
                                     out.extend(push_wrapped_diff_line_with_syntax(
                                         new_ln,
                                         DiffLineType::Context,
@@ -1161,5 +1174,43 @@ mod tests {
             has_rgb,
             "rename from .xyzzy to .rs should produce syntax-highlighted (RGB) spans"
         );
+    }
+
+    #[test]
+    fn update_diff_preserves_multiline_highlight_state_within_hunk() {
+        let original = "fn demo() {\n    let s = \"hello\";\n}\n";
+        let modified = "fn demo() {\n    let s = \"hello\nworld\";\n}\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("demo.rs"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let expected_multiline =
+            highlight_code_to_styled_spans("    let s = \"hello\nworld\";\n", "rust")
+                .expect("rust highlighting");
+        let expected_style = expected_multiline
+            .get(1)
+            .and_then(|line| {
+                line.iter()
+                    .find(|span| span.content.as_ref().contains("world"))
+            })
+            .map(|span| span.style)
+            .expect("expected highlighted span for second multiline string line");
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 120);
+        let actual_style = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.as_ref().contains("world"))
+            .map(|span| span.style)
+            .expect("expected rendered diff span containing 'world'");
+
+        assert_eq!(actual_style, expected_style);
     }
 }
