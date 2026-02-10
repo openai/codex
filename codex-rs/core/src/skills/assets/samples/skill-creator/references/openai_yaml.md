@@ -46,3 +46,4 @@ Top-level constraints:
 - `dependencies.tools[].url`: MCP server URL when `type` is `mcp`.
 - `policy.allow_implicit_invocation`: When false, the skill is not injected into
   the model context by default, but can still be invoked explicitly via `$skill`.
+  Defaults to true.
