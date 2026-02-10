@@ -152,7 +152,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command =
+            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {

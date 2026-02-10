@@ -280,9 +280,12 @@ impl RequestUserInputOverlay {
                         let prefix = if selected { '›' } else { ' ' };
                         let label = opt.label.as_str();
                         let number = idx + 1;
+                        let prefix_label = format!("{prefix} {number}. ");
+                        let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                         GenericDisplayRow {
-                            name: format!("{prefix} {number}. {label}"),
+                            name: format!("{prefix_label}{label}"),
                             description: Some(opt.description.clone()),
+                            wrap_indent: Some(wrap_indent),
                             ..Default::default()
                         }
                     })
@@ -293,9 +296,12 @@ impl RequestUserInputOverlay {
                     let selected = selected_idx.is_some_and(|sel| sel == idx);
                     let prefix = if selected { '›' } else { ' ' };
                     let number = idx + 1;
+                    let prefix_label = format!("{prefix} {number}. ");
+                    let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                     rows.push(GenericDisplayRow {
-                        name: format!("{prefix} {number}. {OTHER_OPTION_LABEL}"),
+                        name: format!("{prefix_label}{OTHER_OPTION_LABEL}"),
                         description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
+                        wrap_indent: Some(wrap_indent),
                         ..Default::default()
                     });
                 }
@@ -1377,6 +1383,57 @@ mod tests {
                     description:
                         "Summarize the changes and highlight the most important risks and gaps."
                             .to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn question_with_very_long_option_text(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Choose one option.".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/unknown (Recommended when triaging long-running background work and status transitions)".to_string(),
+                    description: "Keep async job statuses for progress tracking and include enough context for debugging retries, stale workers, and unexpected expiration paths.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Add a short status model".to_string(),
+                    description: "Simpler labels with less detail for quick rollouts.".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn question_with_long_scroll_options(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question:
+                "Choose one option; each hint is intentionally very long to test wrapped scrolling."
+                    .to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint A (Recommended)".to_string(),
+                    description: "Select this if you want a deliberately overextended explanatory hint that reads like a miniature specification, including context, rationale, expected behavior, and an explicit statement that this choice is mainly for testing how gracefully the interface wraps, truncates, and preserves readability under unusually verbose helper text conditions.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint B".to_string(),
+                    description: "Select this if you want an equally verbose but differently phrased guidance block that emphasizes user-facing clarity, spacing tolerance, multiline wrapping, visual hierarchy interactions, and whether long descriptive metadata remains understandable when scanned quickly in a constrained layout where cognitive load is already high.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Use Detailed Hint C".to_string(),
+                    description: "Select this when you specifically want to verify that navigating downward will keep the currently highlighted option visible, even when previous options consume many wrapped lines and would otherwise push the selection out of the viewport.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "None of the above".to_string(),
+                    description:
+                        "Use this only if the previous long-form options do not apply.".to_string(),
                 },
             ]),
         }
@@ -2572,6 +2629,49 @@ mod tests {
         insta::assert_snapshot!(
             "request_user_input_wrapped_options",
             render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_long_option_text_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_very_long_option_text("q1", "Status")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let area = Rect::new(0, 0, 120, 18);
+        insta::assert_snapshot!(
+            "request_user_input_long_option_text",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn selected_long_wrapped_option_stays_visible() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_long_scroll_options("q1", "Scroll")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.options_state.selected_idx = Some(2);
+
+        let rendered = render_snapshot(&overlay, Rect::new(0, 0, 80, 20));
+        assert!(
+            rendered.contains("› 3. Use Detailed Hint C"),
+            "expected selected option to be visible in viewport\n{rendered}"
         );
     }
 
