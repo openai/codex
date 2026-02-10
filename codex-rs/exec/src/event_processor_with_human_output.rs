@@ -629,6 +629,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 new_thread_id,
                 prompt,
                 status,
+                ..
             }) => {
                 let success = new_thread_id.is_some() && !is_collab_status_failure(&status);
                 let title_style = if success { self.green } else { self.red };

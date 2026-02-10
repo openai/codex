@@ -11,6 +11,9 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::history_cell::SubagentPanelAgent;
+use crate::history_cell::SubagentPanelState;
+use crate::history_cell::SubagentStatusCell;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -29,6 +32,7 @@ use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::AgentStatus;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
@@ -97,6 +101,9 @@ use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -1201,6 +1208,38 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[tokio::test]
+async fn subagent_panel_is_not_flushed_into_transcript_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let state = Arc::new(StdMutex::new(SubagentPanelState {
+        started_at: Instant::now(),
+        total_agents: 1,
+        running_count: 0,
+        running_agents: vec![SubagentPanelAgent {
+            ordinal: 1,
+            name: "user-request-derisk-implement".to_string(),
+            status: AgentStatus::PendingInit,
+            is_watchdog: true,
+            preview: "watchdog idle".to_string(),
+            latest_update_at: Instant::now(),
+        }],
+    }));
+    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(state, true)));
+
+    chat.add_to_history(history_cell::new_error_event("follow-up cell".to_string()));
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(
+        inserted.len(),
+        1,
+        "subagent panel should remain transient and not be inserted into transcript history"
+    );
+    let rendered = lines_to_single_string(&inserted[0]);
+    assert!(rendered.contains("follow-up cell"));
+    assert!(!rendered.contains("Subagents"));
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {

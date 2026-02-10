@@ -310,6 +310,14 @@
         }
       ]
     },
+    "CollabAgentSpawnMode": {
+      "enum": [
+        "spawn",
+        "fork",
+        "watchdog"
+      ],
+      "type": "string"
+    },
     "ContentItem": {
       "oneOf": [
         {
@@ -2483,6 +2491,15 @@
                 }
               ],
               "description": "Thread ID of the sender."
+            },
+            "spawn_mode": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CollabAgentSpawnMode"
+                }
+              ],
+              "default": "spawn",
+              "description": "Spawn mode used for this agent."
             },
             "status": {
               "allOf": [

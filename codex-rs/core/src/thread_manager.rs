@@ -23,6 +23,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -323,15 +324,33 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
     ) -> CodexResult<NewThread> {
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
         self.state
-            .spawn_thread(
+            .fork_thread_with_source(
+                nth_user_message,
                 config,
-                history,
-                Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
-                Vec::new(),
+                path,
+                self.state.session_source.clone(),
+            )
+            .await
+    }
+
+    /// Fork an existing thread while explicitly controlling the session source of the
+    /// forked thread.
+    pub async fn fork_thread_with_source(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        self.state
+            .fork_thread_with_source(
+                nth_user_message,
+                config,
+                self.agent_control(),
+                path,
+                session_source,
             )
             .await
     }
@@ -359,6 +378,15 @@ impl ThreadManagerState {
             .get(&thread_id)
             .cloned()
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
+    }
+
+    /// Return a snapshot of all currently managed threads.
+    pub(crate) async fn list_threads(&self) -> Vec<(ThreadId, Arc<CodexThread>)> {
+        let threads = self.threads.read().await;
+        threads
+            .iter()
+            .map(|(thread_id, thread)| (*thread_id, Arc::clone(thread)))
+            .collect()
     }
 
     /// Send an operation to a thread by ID.
@@ -397,25 +425,6 @@ impl ThreadManagerState {
         self.spawn_thread_with_source(
             config,
             InitialHistory::New,
-            Arc::clone(&self.auth_manager),
-            agent_control,
-            session_source,
-            Vec::new(),
-        )
-        .await
-    }
-
-    pub(crate) async fn resume_thread_from_rollout_with_source(
-        &self,
-        config: Config,
-        rollout_path: PathBuf,
-        agent_control: AgentControl,
-        session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.spawn_thread_with_source(
-            config,
-            initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
@@ -503,6 +512,36 @@ impl ThreadManagerState {
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
+    }
+
+    pub(crate) async fn fork_thread_with_source(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        agent_control: AgentControl,
+        path: PathBuf,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let mut history = truncate_before_nth_user_message(history, nth_user_message);
+        if let InitialHistory::Forked(items) = &mut history {
+            items.insert(
+                0,
+                RolloutItem::ForkReference(ForkReferenceItem {
+                    rollout_path: path.clone(),
+                    nth_user_message,
+                }),
+            );
+        }
+        self.spawn_thread_with_source(
+            config,
+            history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+        )
+        .await
     }
 }
 

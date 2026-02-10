@@ -857,6 +857,7 @@ fn extract_dynamic_tools(items: &[RolloutItem]) -> Option<Option<Vec<DynamicTool
         RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.dynamic_tools.clone()),
         RolloutItem::ResponseItem(_)
         | RolloutItem::Compacted(_)
+        | RolloutItem::ForkReference(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::EventMsg(_) => None,
     })

@@ -5,8 +5,6 @@ use codex_core::protocol::AgentStatus;
 use codex_core::protocol::CollabAgentInteractionEndEvent;
 use codex_core::protocol::CollabAgentSpawnEndEvent;
 use codex_core::protocol::CollabCloseEndEvent;
-use codex_core::protocol::CollabResumeBeginEvent;
-use codex_core::protocol::CollabResumeEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_protocol::ThreadId;
@@ -26,6 +24,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         new_thread_id,
         prompt,
         status,
+        ..
     } = ev;
     let new_agent = new_thread_id
         .map(|id| Span::from(id.to_string()))
@@ -97,34 +96,6 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
         status_line(&status),
     ];
     collab_event("Agent closed", details)
-}
-
-pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
-    let CollabResumeBeginEvent {
-        call_id,
-        sender_thread_id: _,
-        receiver_thread_id,
-    } = ev;
-    let details = vec![
-        detail_line("call", call_id),
-        detail_line("receiver", receiver_thread_id.to_string()),
-    ];
-    collab_event("Resuming agent", details)
-}
-
-pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
-    let CollabResumeEndEvent {
-        call_id,
-        sender_thread_id: _,
-        receiver_thread_id,
-        status,
-    } = ev;
-    let details = vec![
-        detail_line("call", call_id),
-        detail_line("receiver", receiver_thread_id.to_string()),
-        status_line(&status),
-    ];
-    collab_event("Agent resumed", details)
 }
 
 fn collab_event(title: impl Into<String>, details: Vec<Line<'static>>) -> PlainHistoryCell {

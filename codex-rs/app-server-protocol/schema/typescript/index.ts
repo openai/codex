@@ -35,6 +35,7 @@ export type { CollabAgentInteractionBeginEvent } from "./CollabAgentInteractionB
 export type { CollabAgentInteractionEndEvent } from "./CollabAgentInteractionEndEvent";
 export type { CollabAgentSpawnBeginEvent } from "./CollabAgentSpawnBeginEvent";
 export type { CollabAgentSpawnEndEvent } from "./CollabAgentSpawnEndEvent";
+export type { CollabAgentSpawnMode } from "./CollabAgentSpawnMode";
 export type { CollabCloseBeginEvent } from "./CollabCloseBeginEvent";
 export type { CollabCloseEndEvent } from "./CollabCloseEndEvent";
 export type { CollabResumeBeginEvent } from "./CollabResumeBeginEvent";

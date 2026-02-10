@@ -468,6 +468,9 @@ impl RolloutRecorder {
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
                     }
+                    RolloutItem::ForkReference(item) => {
+                        items.push(RolloutItem::ForkReference(item));
+                    }
                     RolloutItem::Compacted(item) => {
                         items.push(RolloutItem::Compacted(item));
                     }

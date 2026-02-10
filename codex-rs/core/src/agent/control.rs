@@ -1,16 +1,32 @@
+use super::watchdog::WatchdogManager;
+use super::watchdog::WatchdogRegistration;
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
+use crate::config::Config;
+use crate::config::types::CollabInboxDeliveryRole;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::COLLAB_INBOX_KIND;
+use codex_protocol::protocol::COLLAB_INBOX_MESSAGE_PREFIX;
+use codex_protocol::protocol::CollabInboxPayload;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
+use uuid::Uuid;
 
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
@@ -18,33 +34,80 @@ use tokio::sync::watch;
 /// An `AgentControl` instance is shared per "user session" which means the same `AgentControl`
 /// is used for every sub-agent spawned by Codex. By doing so, we make sure the guards are
 /// scoped to a user session.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
-    state: Arc<Guards>,
+    guards: Arc<Guards>,
+    watchdogs: Arc<WatchdogManager>,
+    watchdog_compactions_in_progress: Arc<Mutex<HashSet<ThreadId>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentListing {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) status: AgentStatus,
+    pub(crate) depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WatchdogParentCompactionResult {
+    NotWatchdogHelper,
+    ParentBusy {
+        parent_thread_id: ThreadId,
+    },
+    AlreadyInProgress {
+        parent_thread_id: ThreadId,
+    },
+    Submitted {
+        parent_thread_id: ThreadId,
+        submission_id: String,
+    },
+}
+
+impl Default for AgentControl {
+    fn default() -> Self {
+        let manager = Weak::new();
+        let guards = Arc::new(Guards::default());
+        let watchdogs = WatchdogManager::new(manager.clone(), Arc::clone(&guards));
+        Self::from_parts(manager, guards, watchdogs)
+    }
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
+        let guards = Arc::new(Guards::default());
+        let watchdogs = WatchdogManager::new(manager.clone(), Arc::clone(&guards));
+        watchdogs.start();
+        Self::from_parts(manager, guards, watchdogs)
+    }
+
+    pub(crate) fn from_parts(
+        manager: Weak<ThreadManagerState>,
+        guards: Arc<Guards>,
+        watchdogs: Arc<WatchdogManager>,
+    ) -> Self {
         Self {
             manager,
-            ..Default::default()
+            guards,
+            watchdogs,
+            watchdog_compactions_in_progress: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
     pub(crate) async fn spawn_agent(
         &self,
-        config: crate::config::Config,
+        config: Config,
         prompt: String,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let reservation = self.guards.reserve_spawn_slot(config.agent_max_threads)?;
 
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match session_source {
@@ -67,30 +130,71 @@ impl AgentControl {
         Ok(new_thread.thread_id)
     }
 
-    /// Resume an existing agent thread from a recorded rollout file.
-    pub(crate) async fn resume_agent_from_rollout(
+    /// Spawn a new agent thread but do not submit an initial prompt.
+    ///
+    /// This is used for watchdog handles, which should not run a model turn on
+    /// their own. The watchdog manager will fork helpers from the owner thread
+    /// when the owner becomes idle.
+    pub(crate) async fn spawn_agent_handle(
         &self,
-        config: crate::config::Config,
-        rollout_path: PathBuf,
+        config: Config,
+        session_source: Option<SessionSource>,
+    ) -> CodexResult<ThreadId> {
+        let state = self.upgrade()?;
+        let reservation = self.guards.reserve_spawn_slot(config.agent_max_threads)?;
+
+        let new_thread = match session_source {
+            Some(session_source) => {
+                state
+                    .spawn_new_thread_with_source(config, self.clone(), session_source)
+                    .await?
+            }
+            None => state.spawn_new_thread(config, self.clone()).await?,
+        };
+        reservation.commit(new_thread.thread_id);
+
+        // Notify a new thread has been created. This notification will be processed by clients
+        // to subscribe or drain this newly created thread.
+        state.notify_thread_created(new_thread.thread_id);
+
+        Ok(new_thread.thread_id)
+    }
+
+    /// Fork an existing agent thread and submit a prompt to the fork.
+    pub(crate) async fn fork_agent(
+        &self,
+        config: Config,
+        prompt: String,
+        parent_thread_id: ThreadId,
+        nth_user_message: usize,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let reservation = self.guards.reserve_spawn_slot(config.agent_max_threads)?;
 
-        let resumed_thread = state
-            .resume_thread_from_rollout_with_source(
+        let parent_thread = state.get_thread(parent_thread_id).await?;
+        parent_thread.flush_rollout().await;
+        let rollout_path = parent_thread.rollout_path().ok_or_else(|| {
+            CodexErr::UnsupportedOperation(format!(
+                "rollout history unavailable for thread {parent_thread_id}"
+            ))
+        })?;
+
+        let new_thread = state
+            .fork_thread_with_source(
+                nth_user_message,
                 config,
-                rollout_path,
                 self.clone(),
+                rollout_path,
                 session_source,
             )
             .await?;
-        reservation.commit(resumed_thread.thread_id);
-        // Resumed threads are re-registered in-memory and need the same listener
-        // attachment path as freshly spawned threads.
-        state.notify_thread_created(resumed_thread.thread_id);
+        reservation.commit(new_thread.thread_id);
+        state.notify_thread_created(new_thread.thread_id);
 
-        Ok(resumed_thread.thread_id)
+        self.send_prompt(new_thread.thread_id, prompt).await?;
+
+        Ok(new_thread.thread_id)
     }
 
     /// Send a `user` prompt to an existing agent thread.
@@ -115,9 +219,36 @@ impl AgentControl {
             .await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
-            self.state.release_spawned_thread(agent_id);
+            self.guards.release_spawned_thread(agent_id);
         }
         result
+    }
+
+    /// Send a prompt to an existing agent thread using the configured collab inbox delivery role.
+    pub(crate) async fn send_collab_message(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: String,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        let snapshot = thread.config_snapshot().await;
+
+        if matches!(snapshot.session_source, SessionSource::SubAgent(_)) {
+            return self.send_prompt(agent_id, message).await;
+        }
+
+        let prepend_turn_start_user_message = !thread.has_active_turn().await;
+        let items = build_collab_inbox_items(
+            snapshot.collab_inbox_delivery_role,
+            sender_thread_id,
+            message,
+            prepend_turn_start_user_message,
+        )?;
+        state
+            .send_op(agent_id, Op::InjectResponseItems { items })
+            .await
     }
 
     /// Interrupt the current task for an existing agent thread.
@@ -131,7 +262,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let result = state.send_op(agent_id, Op::Shutdown {}).await;
         let _ = state.remove_thread(&agent_id).await;
-        self.state.release_spawned_thread(agent_id);
+        self.guards.release_spawned_thread(agent_id);
         result
     }
 
@@ -157,11 +288,225 @@ impl AgentControl {
         Ok(thread.subscribe_status())
     }
 
+    pub(crate) async fn register_watchdog(
+        &self,
+        registration: WatchdogRegistration,
+    ) -> CodexResult<Vec<ThreadId>> {
+        self.watchdogs.register(registration).await
+    }
+
+    pub(crate) async fn unregister_watchdog(&self, target_thread_id: ThreadId) {
+        self.watchdogs.unregister(target_thread_id).await;
+    }
+
+    pub(crate) async fn unregister_watchdogs_for_owner(
+        &self,
+        owner_thread_id: ThreadId,
+    ) -> Vec<ThreadId> {
+        self.watchdogs.take_for_owner(owner_thread_id).await
+    }
+
+    pub(crate) async fn compact_parent_for_watchdog_helper(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> CodexResult<WatchdogParentCompactionResult> {
+        let Some(parent_thread_id) = self
+            .watchdogs
+            .owner_for_active_helper(helper_thread_id)
+            .await
+        else {
+            return Ok(WatchdogParentCompactionResult::NotWatchdogHelper);
+        };
+        let state = self.upgrade()?;
+        let parent_thread = state.get_thread(parent_thread_id).await?;
+        let parent_has_active_turn = parent_thread.has_active_turn().await;
+
+        {
+            let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+            if compacting.contains(&parent_thread_id) {
+                if parent_has_active_turn {
+                    return Ok(WatchdogParentCompactionResult::AlreadyInProgress {
+                        parent_thread_id,
+                    });
+                }
+                // Clear stale marker when the parent is no longer actively compacting.
+                compacting.remove(&parent_thread_id);
+            }
+            if parent_has_active_turn {
+                return Ok(WatchdogParentCompactionResult::ParentBusy { parent_thread_id });
+            }
+            compacting.insert(parent_thread_id);
+        }
+
+        match state.send_op(parent_thread_id, Op::Compact).await {
+            Ok(submission_id) => Ok(WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            }),
+            Err(err) => {
+                let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+                compacting.remove(&parent_thread_id);
+                Err(err)
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    pub(crate) async fn run_watchdogs_once_for_tests(&self) {
+        self.watchdogs.run_once().await;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    pub(crate) async fn force_watchdog_due_for_tests(&self, target_thread_id: ThreadId) {
+        self.watchdogs.force_due_for_tests(target_thread_id).await;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(dead_code)]
+    pub(crate) async fn set_watchdog_active_helper_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+        helper_thread_id: ThreadId,
+    ) {
+        self.watchdogs
+            .set_active_helper_for_tests(target_thread_id, helper_thread_id)
+            .await;
+    }
+
+    pub(crate) async fn list_agents(
+        &self,
+        owner_thread_id: ThreadId,
+        recursive: bool,
+    ) -> CodexResult<Vec<AgentListing>> {
+        let state = self.upgrade()?;
+        let threads = state.list_threads().await;
+
+        let mut parent_by_thread: HashMap<ThreadId, Option<ThreadId>> =
+            HashMap::with_capacity(threads.len());
+        let mut status_by_thread: HashMap<ThreadId, AgentStatus> =
+            HashMap::with_capacity(threads.len());
+
+        for (thread_id, thread) in &threads {
+            let snapshot = thread.config_snapshot().await;
+            let parent_thread_id = match snapshot.session_source {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id, ..
+                }) => Some(parent_thread_id),
+                _ => None,
+            };
+            parent_by_thread.insert(*thread_id, parent_thread_id);
+            status_by_thread.insert(*thread_id, thread.agent_status().await);
+        }
+
+        let mut children_by_parent: HashMap<ThreadId, Vec<ThreadId>> = HashMap::new();
+        for (thread_id, parent_thread_id) in &parent_by_thread {
+            if let Some(parent_thread_id) = parent_thread_id {
+                children_by_parent
+                    .entry(*parent_thread_id)
+                    .or_default()
+                    .push(*thread_id);
+            }
+        }
+
+        for children in children_by_parent.values_mut() {
+            children.sort_by_key(ToString::to_string);
+        }
+
+        let mut listings = Vec::new();
+        let mut queue: VecDeque<(ThreadId, usize)> = VecDeque::new();
+        if let Some(children) = children_by_parent.get(&owner_thread_id) {
+            for child in children {
+                queue.push_back((*child, 1));
+            }
+        }
+
+        while let Some((thread_id, depth)) = queue.pop_front() {
+            listings.push(AgentListing {
+                thread_id,
+                parent_thread_id: parent_by_thread.get(&thread_id).copied().flatten(),
+                status: status_by_thread
+                    .get(&thread_id)
+                    .cloned()
+                    .unwrap_or(AgentStatus::NotFound),
+                depth,
+            });
+
+            if recursive && let Some(children) = children_by_parent.get(&thread_id) {
+                for child in children {
+                    queue.push_back((*child, depth + 1));
+                }
+            }
+        }
+
+        Ok(listings)
+    }
+
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
         self.manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
+}
+
+fn build_collab_inbox_items(
+    role: CollabInboxDeliveryRole,
+    sender_thread_id: ThreadId,
+    message: String,
+    prepend_turn_start_user_message: bool,
+) -> CodexResult<Vec<ResponseInputItem>> {
+    let mut items = Vec::new();
+    if prepend_turn_start_user_message {
+        items.push(ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: String::new(),
+            }],
+        });
+    }
+    let role_items = match role {
+        CollabInboxDeliveryRole::Tool => {
+            let call_id = format!("collab_inbox_{}", Uuid::new_v4());
+            let payload = CollabInboxPayload::new(sender_thread_id, message);
+            let output = serde_json::to_string(&payload).map_err(|err| {
+                CodexErr::UnsupportedOperation(format!(
+                    "failed to serialize collab inbox payload: {err}"
+                ))
+            })?;
+
+            vec![
+                ResponseInputItem::FunctionCall {
+                    name: COLLAB_INBOX_KIND.to_string(),
+                    arguments: "{}".to_string(),
+                    call_id: call_id.clone(),
+                },
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text(output),
+                        ..Default::default()
+                    },
+                },
+            ]
+        }
+        CollabInboxDeliveryRole::Assistant => {
+            let text = format!("{COLLAB_INBOX_MESSAGE_PREFIX}{sender_thread_id}] {message}");
+            vec![ResponseInputItem::Message {
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText { text }],
+            }]
+        }
+        CollabInboxDeliveryRole::Developer => {
+            let text = format!("{COLLAB_INBOX_MESSAGE_PREFIX}{sender_thread_id}] {message}");
+            vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            }]
+        }
+    };
+    items.extend(role_items);
+    Ok(items)
 }
 
 #[cfg(test)]
@@ -316,24 +661,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_agent_errors_when_manager_dropped() {
-        let control = AgentControl::default();
-        let (_home, config) = test_config().await;
-        let err = control
-            .resume_agent_from_rollout(
-                config,
-                PathBuf::from("/tmp/missing-rollout.jsonl"),
-                SessionSource::Exec,
-            )
-            .await
-            .expect_err("resume_agent should fail without a manager");
-        assert_eq!(
-            err.to_string(),
-            "unsupported operation: thread manager dropped"
-        );
-    }
-
-    #[tokio::test]
     async fn send_prompt_errors_when_thread_missing() {
         let harness = AgentControlHarness::new().await;
         let thread_id = ThreadId::new();
@@ -419,6 +746,72 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn send_collab_message_to_idle_thread_prepends_empty_user_message() {
+        let harness = AgentControlHarness::new().await;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_collab_message(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_collab_message should succeed");
+        assert!(!submission_id.is_empty());
+
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|(thread_id, op)| {
+                *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+            })
+            .expect("expected injected collab inbox op");
+
+        let Op::InjectResponseItems { items } = captured.1 else {
+            unreachable!("matched above");
+        };
+        assert_eq!(items.len(), 3);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new()
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        match &items[1] {
+            ResponseInputItem::FunctionCall {
+                name, arguments, ..
+            } => {
+                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+            }
+            other => panic!("expected collab function call, got {other:?}"),
+        }
+        match &items[2] {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: CollabInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected collab function call output, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -565,87 +958,146 @@ mod tests {
             .expect("shutdown agent");
     }
 
-    #[tokio::test]
-    async fn resume_agent_respects_max_threads_limit() {
-        let max_threads = 1usize;
-        let (_home, config) = test_config_with_cli_overrides(vec![(
-            "agents.max_threads".to_string(),
-            TomlValue::Integer(max_threads as i64),
-        )])
-        .await;
-        let manager = ThreadManager::with_models_provider_and_home(
-            CodexAuth::from_api_key("dummy"),
-            config.model_provider.clone(),
-            config.codex_home.clone(),
-        );
-        let control = manager.agent_control();
+    #[test]
+    fn build_collab_inbox_items_tool_role_emits_function_call_and_output() {
+        let sender_thread_id = ThreadId::new();
+        let message = "ping".to_string();
 
-        let resumable_id = control
-            .spawn_agent(config.clone(), "hello".to_string(), None)
-            .await
-            .expect("spawn_agent should succeed");
-        let rollout_path = manager
-            .get_thread(resumable_id)
-            .await
-            .expect("thread should exist")
-            .rollout_path()
-            .expect("rollout path should exist");
-        let _ = control
-            .shutdown_agent(resumable_id)
-            .await
-            .expect("shutdown resumable thread");
+        let items = build_collab_inbox_items(
+            CollabInboxDeliveryRole::Tool,
+            sender_thread_id,
+            message,
+            false,
+        )
+        .expect("tool role should build inbox items");
 
-        let active_id = control
-            .spawn_agent(config.clone(), "occupy".to_string(), None)
-            .await
-            .expect("spawn_agent should succeed for active slot");
+        assert_eq!(items.len(), 2);
 
-        let err = control
-            .resume_agent_from_rollout(config, rollout_path, SessionSource::Exec)
-            .await
-            .expect_err("resume should respect max threads");
-        let CodexErr::AgentLimitReached {
-            max_threads: seen_max_threads,
-        } = err
-        else {
-            panic!("expected CodexErr::AgentLimitReached");
+        let call_id = match &items[0] {
+            ResponseInputItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+            } => {
+                assert_eq!(name, COLLAB_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+                call_id.clone()
+            }
+            other => panic!("expected function call item, got {other:?}"),
         };
-        assert_eq!(seen_max_threads, max_threads);
 
-        let _ = control
-            .shutdown_agent(active_id)
-            .await
-            .expect("shutdown active thread");
+        match &items[1] {
+            ResponseInputItem::FunctionCallOutput {
+                call_id: output_call_id,
+                output,
+            } => {
+                assert_eq!(output_call_id, &call_id);
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: CollabInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert!(payload.injected);
+                assert_eq!(payload.kind, COLLAB_INBOX_KIND);
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "ping");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
+        }
     }
 
-    #[tokio::test]
-    async fn resume_agent_releases_slot_after_resume_failure() {
-        let max_threads = 1usize;
-        let (_home, config) = test_config_with_cli_overrides(vec![(
-            "agents.max_threads".to_string(),
-            TomlValue::Integer(max_threads as i64),
-        )])
-        .await;
-        let manager = ThreadManager::with_models_provider_and_home(
-            CodexAuth::from_api_key("dummy"),
-            config.model_provider.clone(),
-            config.codex_home.clone(),
-        );
-        let control = manager.agent_control();
+    #[test]
+    fn build_collab_inbox_items_tool_role_prepends_empty_user_message_when_requested() {
+        let sender_thread_id = ThreadId::new();
+        let message = "ping".to_string();
 
-        let missing_rollout = config.codex_home.join("sessions/missing-rollout.jsonl");
-        let _ = control
-            .resume_agent_from_rollout(config.clone(), missing_rollout, SessionSource::Exec)
-            .await
-            .expect_err("resume should fail for missing rollout path");
+        let items = build_collab_inbox_items(
+            CollabInboxDeliveryRole::Tool,
+            sender_thread_id,
+            message,
+            true,
+        )
+        .expect("tool role should build inbox items");
 
-        let resumed_id = control
-            .spawn_agent(config, "hello".to_string(), None)
-            .await
-            .expect("spawn should succeed after failed resume");
-        let _ = control
-            .shutdown_agent(resumed_id)
-            .await
-            .expect("shutdown resumed thread");
+        assert_eq!(items.len(), 3);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new()
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        assert_matches!(&items[1], ResponseInputItem::FunctionCall { .. });
+        assert_matches!(&items[2], ResponseInputItem::FunctionCallOutput { .. });
+    }
+
+    #[test]
+    fn build_collab_inbox_items_assistant_role_prepends_empty_user_message_when_requested() {
+        let sender_thread_id = ThreadId::new();
+        let message = "hello".to_string();
+
+        let items = build_collab_inbox_items(
+            CollabInboxDeliveryRole::Assistant,
+            sender_thread_id,
+            message,
+            true,
+        )
+        .expect("assistant role should build inbox items");
+
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new()
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        match &items[1] {
+            ResponseInputItem::Message { role, .. } => assert_eq!(role, "assistant"),
+            other => panic!("expected assistant message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_collab_inbox_items_developer_role_prepends_empty_user_message_when_requested() {
+        let sender_thread_id = ThreadId::new();
+        let message = "hello".to_string();
+
+        let items = build_collab_inbox_items(
+            CollabInboxDeliveryRole::Developer,
+            sender_thread_id,
+            message,
+            true,
+        )
+        .expect("developer role should build inbox items");
+
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new()
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        match &items[1] {
+            ResponseInputItem::Message { role, .. } => assert_eq!(role, "developer"),
+            other => panic!("expected developer message, got {other:?}"),
+        }
     }
 }

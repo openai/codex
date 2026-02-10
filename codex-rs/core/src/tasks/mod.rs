@@ -192,6 +192,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
+        self.snapshot_collab_send_input_on_turn_complete();
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
@@ -219,6 +220,7 @@ impl Session {
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
+        self.reset_turn_collab_send_input_flag();
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
         turn.add_task(task);

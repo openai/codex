@@ -24,6 +24,24 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+## Agent Inbox Delivery
+
+Inbound messages from other agents (for example, when a watchdog uses `send_input`) can be injected
+as different roles in the root thread. Configure this under the `[agents]` table:
+
+```toml
+[agents]
+inbox_delivery_role = "tool" # tool | developer | assistant
+```
+
+`tool` (default) injects a synthetic `collab_inbox` tool-call + tool-output pair so inbound agent
+messages are explicit tool activity in the transcript. `developer` injects a developer message with
+an explicit `[collab_inbox:...]` prefix so it is not mistaken for user input. `assistant` injects
+the same prefix using the assistant role.
+
+This setting applies to non-subagent threads (for example, the root thread). Messages sent to
+subagents via `send_input` are still delivered as user input.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

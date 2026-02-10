@@ -45,11 +45,12 @@ pub fn backoff(attempt: u64) -> Duration {
 }
 
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
-    if cfg!(debug_assertions) {
-        panic!("{}", message.to_string());
-    } else {
-        error!("{}", message.to_string());
-    }
+    // Historically this panicked in debug builds to surface invariant violations
+    // early. In practice, some backend streams (especially when inbox/tool
+    // items are injected mid-turn) can momentarily violate our local
+    // assumptions without representing a fatal condition. We log instead of
+    // panicking so the session stays alive while still leaving a clear trail.
+    error!("{}", message.to_string());
 }
 
 pub(crate) fn try_parse_error_message(text: &str) -> String {

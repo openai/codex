@@ -50,6 +50,11 @@ pub enum ResponseInputItem {
         role: String,
         content: Vec<ContentItem>,
     },
+    FunctionCall {
+        name: String,
+        arguments: String,
+        call_id: String,
+    },
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
@@ -625,6 +630,16 @@ impl From<ResponseInputItem> for ResponseItem {
                 id: None,
                 end_turn: None,
                 phase: None,
+            },
+            ResponseInputItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+            } => Self::FunctionCall {
+                id: None,
+                name,
+                arguments,
+                call_id,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }

@@ -4,6 +4,7 @@ use codex_core::protocol::AgentStatus;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::CollabAgentSpawnBeginEvent;
 use codex_core::protocol::CollabAgentSpawnEndEvent;
+use codex_core::protocol::CollabAgentSpawnMode;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -568,6 +569,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             sender_thread_id,
             new_thread_id: Some(new_thread_id),
             prompt: prompt.clone(),
+            spawn_mode: CollabAgentSpawnMode::Spawn,
             status: AgentStatus::Running,
         }),
     );
