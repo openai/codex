@@ -31,6 +31,7 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ContextCompactedEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -192,6 +193,100 @@ async fn resumed_initial_messages_render_history() {
     assert!(
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
+    );
+}
+
+#[tokio::test]
+async fn resumed_initial_messages_set_last_agent_markdown_for_copy() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hello from user".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "assistant reply".to_string(),
+            }),
+        ]),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "expected replayed assistant message to seed copy state",
+    );
+}
+
+#[tokio::test]
+async fn context_compacted_does_not_replace_last_agent_markdown() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "compacted".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "context compacted marker should not overwrite last agent copy state",
+    );
+}
+
+#[tokio::test]
+async fn turn_complete_without_last_agent_message_preserves_previous_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "empty turn completion should preserve previous copy source",
     );
 }
 
@@ -3239,6 +3334,26 @@ async fn slash_clean_submits_background_terminal_cleanup() {
     assert!(
         rendered.contains("Stopping all background terminals."),
         "expected cleanup confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_is_available_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.dispatch_command(SlashCommand::Copy);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected copy feedback message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No agent response to copy"),
+        "expected copy empty-state message, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("disabled while a task is in progress"),
+        "did not expect task-running disabled message, got {rendered:?}"
     );
 }
 
