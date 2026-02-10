@@ -54,6 +54,7 @@ use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TerminalInteractionEvent;
+use codex_core::protocol::ThreadRolledBackEvent;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -1689,6 +1690,26 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
         !duplicate_popup.contains(PLAN_IMPLEMENTATION_TITLE),
         "expected no prompt for duplicate live completion, got {duplicate_popup:?}"
     );
+}
+
+#[tokio::test]
+async fn replayed_thread_rollback_emits_ordered_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+
+    chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+        num_turns: 2,
+    })]);
+
+    let mut saw = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ApplyReplayedThreadRollback { num_turns } = event {
+            saw = true;
+            assert_eq!(num_turns, 2);
+            break;
+        }
+    }
+
+    assert!(saw, "expected replay rollback app event");
 }
 
 #[tokio::test]

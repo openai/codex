@@ -538,7 +538,7 @@ fn trim_transcript_cells_to_nth_user(
     }
 }
 
-fn trim_transcript_cells_drop_last_n_user_turns(
+pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
     transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
     num_turns: u32,
 ) -> bool {
