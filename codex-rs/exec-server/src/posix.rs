@@ -61,8 +61,8 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
+use codex_command_safety::is_dangerous_command::command_might_be_dangerous;
 use codex_core::config::find_codex_home;
-use codex_core::is_dangerous_command::command_might_be_dangerous;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Policy;

@@ -1,9 +1,9 @@
-use crate::bash::parse_shell_lc_plain_commands;
+use crate::bash_parse::parse_shell_lc_plain_commands;
 // Find the first matching git subcommand, skipping known global options that
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
-use crate::command_safety::is_dangerous_command::find_git_subcommand;
-use crate::command_safety::windows_safe_commands::is_safe_command_windows;
+use crate::is_dangerous_command::find_git_subcommand;
+use crate::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command

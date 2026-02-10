@@ -7,8 +7,8 @@ use arc_swap::ArcSwap;
 
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
-use crate::is_dangerous_command::command_might_be_dangerous;
-use crate::is_safe_command::is_known_safe_command;
+use codex_command_safety::is_dangerous_command::command_might_be_dangerous;
+use codex_command_safety::is_safe_command::is_known_safe_command;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;

@@ -1629,6 +1629,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-command-safety"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "url",
+]
+
+[[package]]
 name = "codex-common"
 version = "0.0.0"
 dependencies = [
@@ -1665,6 +1681,7 @@ dependencies = [
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
+ "codex-command-safety",
  "codex-core",
  "codex-execpolicy",
  "codex-file-search",
@@ -1803,6 +1820,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "codex-command-safety",
  "codex-core",
  "codex-execpolicy",
  "codex-utils-cargo-bin",

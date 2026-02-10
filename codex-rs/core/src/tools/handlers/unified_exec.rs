@@ -1,5 +1,4 @@
 use crate::function_tool::FunctionCallError;
-use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
@@ -18,6 +17,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
+use codex_command_safety::is_safe_command::is_known_safe_command;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use std::path::PathBuf;

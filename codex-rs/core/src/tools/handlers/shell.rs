@@ -10,7 +10,6 @@ use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
-use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
@@ -26,6 +25,7 @@ use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use codex_command_safety::is_safe_command::is_known_safe_command;
 
 pub struct ShellHandler;
 
@@ -348,7 +348,6 @@ mod tests {
 
     use crate::codex::make_session_and_context;
     use crate::exec_env::create_env;
-    use crate::is_safe_command::is_known_safe_command;
     use crate::powershell::try_find_powershell_executable_blocking;
     use crate::powershell::try_find_pwsh_executable_blocking;
     use crate::sandboxing::SandboxPermissions;
@@ -356,6 +355,7 @@ mod tests {
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
     use crate::tools::handlers::ShellCommandHandler;
+    use codex_command_safety::is_safe_command::is_known_safe_command;
     use tokio::sync::watch;
 
     /// The logic for is_known_safe_command() has heuristics for known shells,

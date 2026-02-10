@@ -23,6 +23,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-command-safety = { workspace = true }
 codex-core = { workspace = true }
 codex-execpolicy = { workspace = true }
 libc = { workspace = true }
