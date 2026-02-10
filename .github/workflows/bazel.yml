@@ -132,10 +132,6 @@ jobs:
             # --noexperimental_remote_repo_contents_cache:
             #   disable remote repo contents cache enabled in .bazelrc startup options.
             #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-            # --bes_backend= and --bes_results_url=:
-            #   clear Build Event Protocol endpoints configured in .bazelrc.
-            #   https://bazel.build/reference/command-line-reference#common_options-flag--bes_backend
-            #   https://bazel.build/reference/command-line-reference#common_options-flag--bes_results_url
             # --remote_cache= and --remote_executor=:
             #   clear remote cache/execution endpoints configured in .bazelrc.
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
@@ -143,8 +139,6 @@ jobs:
             bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               "${bazel_args[@]}" \
-              --bes_backend= \
-              --bes_results_url= \
               --remote_cache= \
               --remote_executor=
           fi
