@@ -176,6 +176,8 @@ impl NetworkProxyBuilder {
             state,
             http_addr,
             socks_addr,
+            socks_enabled: current_cfg.network.enable_socks5,
+            allow_local_binding: current_cfg.network.allow_local_binding,
             admin_addr,
             reserved_listeners,
             policy_decider: self.policy_decider,
@@ -202,6 +204,8 @@ pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
+    socks_enabled: bool,
+    allow_local_binding: bool,
     admin_addr: SocketAddr,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -223,11 +227,135 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
+            && self.allow_local_binding == other.allow_local_binding
             && self.admin_addr == other.admin_addr
     }
 }
 
 impl Eq for NetworkProxy {}
+
+pub const PROXY_URL_ENV_KEYS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "FTP_PROXY",
+    "YARN_HTTP_PROXY",
+    "YARN_HTTPS_PROXY",
+    "NPM_CONFIG_HTTP_PROXY",
+    "NPM_CONFIG_HTTPS_PROXY",
+    "NPM_CONFIG_PROXY",
+    "BUNDLE_HTTP_PROXY",
+    "BUNDLE_HTTPS_PROXY",
+    "PIP_PROXY",
+    "DOCKER_HTTP_PROXY",
+    "DOCKER_HTTPS_PROXY",
+];
+
+pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
+pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+
+const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
+
+pub const NO_PROXY_ENV_KEYS: &[&str] = &[
+    "NO_PROXY",
+    "no_proxy",
+    "npm_config_noproxy",
+    "NPM_CONFIG_NOPROXY",
+    "YARN_NO_PROXY",
+    "BUNDLE_NO_PROXY",
+];
+
+pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
+    "localhost,127.0.0.1,::1,",
+    "*.local,.local,",
+    "169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+);
+
+pub fn proxy_url_env_value<'a>(
+    env: &'a HashMap<String, String>,
+    canonical_key: &str,
+) -> Option<&'a str> {
+    if let Some(value) = env.get(canonical_key) {
+        return Some(value.as_str());
+    }
+    let lower_key = canonical_key.to_ascii_lowercase();
+    env.get(lower_key.as_str()).map(String::as_str)
+}
+
+pub fn has_proxy_url_env_vars(env: &HashMap<String, String>) -> bool {
+    PROXY_URL_ENV_KEYS
+        .iter()
+        .any(|key| proxy_url_env_value(env, key).is_some_and(|value| !value.trim().is_empty()))
+}
+
+fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
+    for key in keys {
+        env.insert((*key).to_string(), value.to_string());
+    }
+}
+
+fn apply_proxy_env_overrides(
+    env: &mut HashMap<String, String>,
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    socks_enabled: bool,
+    allow_local_binding: bool,
+) {
+    let http_proxy_url = format!("http://{http_addr}");
+    let socks_proxy_url = format!("socks5h://{socks_addr}");
+    env.insert(
+        ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
+        if allow_local_binding {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        },
+    );
+
+    // HTTP-based clients are best served by explicit HTTP proxy URLs.
+    set_env_keys(
+        env,
+        &[
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "YARN_HTTP_PROXY",
+            "YARN_HTTPS_PROXY",
+            "npm_config_http_proxy",
+            "npm_config_https_proxy",
+            "npm_config_proxy",
+            "NPM_CONFIG_HTTP_PROXY",
+            "NPM_CONFIG_HTTPS_PROXY",
+            "NPM_CONFIG_PROXY",
+            "BUNDLE_HTTP_PROXY",
+            "BUNDLE_HTTPS_PROXY",
+            "PIP_PROXY",
+            "DOCKER_HTTP_PROXY",
+            "DOCKER_HTTPS_PROXY",
+        ],
+        &http_proxy_url,
+    );
+
+    // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
+    set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
+
+    env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
+
+    if socks_enabled {
+        set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
+        set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
+        #[cfg(target_os = "macos")]
+        {
+            // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
+            // and only provide a SOCKS ProxyCommand fallback when one is not present.
+            env.entry("GIT_SSH_COMMAND".to_string())
+                .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
+        }
+    } else {
+        set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
+    }
+}
 
 impl NetworkProxy {
     pub fn builder() -> NetworkProxyBuilder {
@@ -235,12 +363,15 @@ impl NetworkProxy {
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        // Enforce proxying for all child processes when configured. We always override to ensure
-        // the proxy is actually used even if the caller passed conflicting environment variables.
-        let proxy_url = format!("http://{}", self.http_addr);
-        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env.insert(key.to_string(), proxy_url.clone());
-        }
+        // Enforce proxying for child processes. We intentionally override existing values so
+        // command-level environment cannot bypass the managed proxy endpoint.
+        apply_proxy_env_overrides(
+            env,
+            self.http_addr,
+            self.socks_addr,
+            self.socks_enabled,
+            self.allow_local_binding,
+        );
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -406,6 +537,9 @@ mod tests {
     use super::*;
     use crate::config::NetworkProxySettings;
     use crate::state::network_proxy_state_for_policy;
+    use pretty_assertions::assert_eq;
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
 
     #[tokio::test]
     async fn managed_proxy_builder_uses_loopback_ephemeral_ports() {
@@ -460,6 +594,113 @@ mod tests {
         assert_eq!(
             proxy.admin_addr,
             "127.0.0.1:48080".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn proxy_url_env_value_resolves_lowercase_aliases() {
+        let mut env = HashMap::new();
+        env.insert(
+            "http_proxy".to_string(),
+            "http://127.0.0.1:3128".to_string(),
+        );
+
+        assert_eq!(
+            proxy_url_env_value(&env, "HTTP_PROXY"),
+            Some("http://127.0.0.1:3128")
+        );
+    }
+
+    #[test]
+    fn has_proxy_url_env_vars_detects_lowercase_aliases() {
+        let mut env = HashMap::new();
+        env.insert(
+            "all_proxy".to_string(),
+            "socks5h://127.0.0.1:8081".to_string(),
+        );
+
+        assert_eq!(has_proxy_url_env_vars(&env), true);
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_sets_common_tool_vars() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("npm_config_proxy"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"socks5h://127.0.0.1:8081".to_string())
+        );
+        assert_eq!(
+            env.get("FTP_PROXY"),
+            Some(&"socks5h://127.0.0.1:8081".to_string())
+        );
+        assert_eq!(
+            env.get("NO_PROXY"),
+            Some(&DEFAULT_NO_PROXY_VALUE.to_string())
+        );
+        assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
+        assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_uses_http_for_all_proxy_without_socks() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            false,
+            true,
+        );
+
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_proxy_env_overrides_preserves_existing_git_ssh_command() {
+        let mut env = HashMap::new();
+        env.insert(
+            "GIT_SSH_COMMAND".to_string(),
+            "ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string(),
+        );
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+        );
+
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string())
         );
     }
 }

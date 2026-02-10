@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -460,7 +460,7 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
-        env: &ExecEnv,
+        env: &ExecRequest,
         tty: bool,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
@@ -520,7 +520,7 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             cwd,
             env,
-            network: context.turn.config.network.clone(),
+            network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),
