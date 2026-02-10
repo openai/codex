@@ -395,7 +395,6 @@ pub async fn run_main_with_transport(
                                 );
                                 continue;
                             };
-                            let was_initialized = session.initialized;
                             let pre_synced_initialize =
                                 !session.initialized && request.method == "initialize";
                             if pre_synced_initialize
@@ -411,17 +410,10 @@ pub async fn run_main_with_transport(
                                 .process_request(connection_id, request, session)
                                 .await;
 
-                            if pre_synced_initialize
-                                && !session.initialized
-                                && let Some(connection_state) =
-                                    connections.lock().await.get_mut(&connection_id)
+                            if let Some(connection_state) =
+                                connections.lock().await.get_mut(&connection_id)
                             {
-                                connection_state.session.initialized = false;
-                            } else if session.initialized != was_initialized
-                                && let Some(connection_state) =
-                                    connections.lock().await.get_mut(&connection_id)
-                            {
-                                connection_state.session.initialized = session.initialized;
+                                connection_state.session = session.clone();
                             }
                         }
                         JSONRPCMessage::Response(response) => {
@@ -457,7 +449,7 @@ pub async fn run_main_with_transport(
                             break;
                         };
                         let mut connections = connections.lock().await;
-                        route_outgoing_envelope(&mut connections, envelope).await;
+                        route_outgoing_envelope(&mut connections, envelope);
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {

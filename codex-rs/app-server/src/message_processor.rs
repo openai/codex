@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -114,10 +115,11 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     experimental_api_enabled: bool,
+    pub(crate) opted_out_notification_methods: HashSet<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
@@ -256,9 +258,8 @@ impl MessageProcessor {
                             None => (false, Vec::new()),
                         };
                     session.experimental_api_enabled = experimental_api_enabled;
-                    self.outgoing
-                        .set_opted_out_notification_methods(opt_out_notification_methods)
-                        .await;
+                    session.opted_out_notification_methods =
+                        opt_out_notification_methods.into_iter().collect();
                     let ClientInfo {
                         name,
                         title: _title,

@@ -413,7 +413,27 @@ fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<Strin
     }
 }
 
-pub(crate) async fn route_outgoing_envelope(
+fn should_skip_notification_for_connection(
+    connection_state: &ConnectionState,
+    message: &OutgoingMessage,
+) -> bool {
+    match message {
+        OutgoingMessage::AppServerNotification(notification) => {
+            let method = notification.to_string();
+            connection_state
+                .session
+                .opted_out_notification_methods
+                .contains(method.as_str())
+        }
+        OutgoingMessage::Notification(notification) => connection_state
+            .session
+            .opted_out_notification_methods
+            .contains(notification.method.as_str()),
+        _ => false,
+    }
+}
+
+pub(crate) fn route_outgoing_envelope(
     connections: &mut HashMap<ConnectionId, ConnectionState>,
     envelope: OutgoingEnvelope,
 ) {
@@ -429,15 +449,27 @@ pub(crate) async fn route_outgoing_envelope(
                 );
                 return;
             };
-            if connection_state.writer.send(message).await.is_err() {
-                connections.remove(&connection_id);
+            match connection_state.writer.try_send(message) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    connections.remove(&connection_id);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    warn!(
+                        "dropping slow connection with full outgoing queue: {:?}",
+                        connection_id
+                    );
+                    connections.remove(&connection_id);
+                }
             }
         }
         OutgoingEnvelope::Broadcast { message } => {
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.session.initialized {
+                    if connection_state.session.initialized
+                        && !should_skip_notification_for_connection(connection_state, &message)
+                    {
                         Some(*connection_id)
                     } else {
                         None
@@ -449,8 +481,18 @@ pub(crate) async fn route_outgoing_envelope(
                 let Some(connection_state) = connections.get(&connection_id) else {
                     continue;
                 };
-                if connection_state.writer.send(message.clone()).await.is_err() {
-                    connections.remove(&connection_id);
+                match connection_state.writer.try_send(message.clone()) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        connections.remove(&connection_id);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        warn!(
+                            "dropping slow connection with full outgoing queue: {:?}",
+                            connection_id
+                        );
+                        connections.remove(&connection_id);
+                    }
                 }
             }
         }
