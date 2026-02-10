@@ -152,7 +152,7 @@ use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
-use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
@@ -201,6 +201,7 @@ use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::skills::SkillInjections;
+use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
@@ -3905,10 +3906,6 @@ pub(crate) async fn run_turn(
             .await,
     );
 
-    let (skill_name_counts, skill_name_counts_lower) = skills_outcome.as_ref().map_or_else(
-        || (HashMap::new(), HashMap::new()),
-        |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
-    );
     let connector_slug_counts = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
             .services
@@ -3932,12 +3929,10 @@ pub(crate) async fn run_turn(
             &input,
             &outcome.skills,
             &outcome.disabled_paths,
-            &skill_name_counts,
             &connector_slug_counts,
         )
     });
-    let explicit_app_paths = collect_explicit_app_paths(&input);
-
+    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let config = turn_context.config.clone();
     if config
         .features
@@ -4039,10 +4034,6 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        let tool_selection = SamplingRequestToolSelection {
-            explicit_app_paths: &explicit_app_paths,
-            skill_name_counts_lower: &skill_name_counts_lower,
-        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -4050,7 +4041,8 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            tool_selection,
+            &explicitly_enabled_connectors,
+            skills_outcome.as_ref(),
             cancellation_token.child_token(),
         )
         .await
@@ -4150,11 +4142,11 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 fn filter_connectors_for_input(
     connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-    explicit_app_paths: &[String],
+    explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicit_app_paths.is_empty() {
+    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
         return Vec::new();
     }
 
@@ -4166,10 +4158,10 @@ fn filter_connectors_for_input(
         .collect::<HashSet<String>>();
 
     let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids: HashSet<String> = HashSet::new();
-    for path in explicit_app_paths
+    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
+    for path in mentions
+        .paths
         .iter()
-        .chain(mentions.paths.iter())
         .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
     {
         if let Some(connector_id) = app_id_from_path(path) {
@@ -4255,12 +4247,6 @@ fn build_prompt(
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }
-
-struct SamplingRequestToolSelection<'a> {
-    explicit_app_paths: &'a [String],
-    skill_name_counts_lower: &'a HashMap<String, usize>,
-}
-
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -4277,58 +4263,19 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    tool_selection: SamplingRequestToolSelection<'_>,
+    explicitly_enabled_connectors: &HashSet<String>,
+    skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
-    let mut mcp_tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .or_cancel(&cancellation_token)
-        .await?;
-
-    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        Some(filter_connectors_for_input(
-            connectors,
-            &input,
-            tool_selection.explicit_app_paths,
-            tool_selection.skill_name_counts_lower,
-        ))
-    } else {
-        None
-    };
-
-    if turn_context.config.features.enabled(Feature::SearchTool) {
-        let mut selected_mcp_tools =
-            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
-            } else {
-                HashMap::new()
-            };
-
-        if let Some(connectors) = connectors_for_tools.as_ref() {
-            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
-            selected_mcp_tools.extend(apps_mcp_tools);
-        }
-
-        mcp_tools = selected_mcp_tools;
-    } else if let Some(connectors) = connectors_for_tools.as_ref() {
-        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
-    }
-
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        Some(
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-        turn_context.dynamic_tools.as_slice(),
-    ));
+    let router = built_tools(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &input,
+        explicitly_enabled_connectors,
+        skills_outcome,
+        &cancellation_token,
+    )
+    .await?;
 
     let base_instructions = sess.get_base_instructions().await;
 
@@ -4416,6 +4363,68 @@ async fn run_sampling_request(
             return Err(err);
         }
     }
+}
+
+async fn built_tools(
+    sess: &Session,
+    turn_context: &TurnContext,
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+    skills_outcome: Option<&SkillLoadOutcome>,
+    cancellation_token: &CancellationToken,
+) -> CodexResult<Arc<ToolRouter>> {
+    let mut mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .or_cancel(cancellation_token)
+        .await?;
+
+    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
+        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
+            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+        });
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        Some(filter_connectors_for_input(
+            connectors,
+            input,
+            explicitly_enabled_connectors,
+            &skill_name_counts_lower,
+        ))
+    } else {
+        None
+    };
+
+    if turn_context.config.features.enabled(Feature::SearchTool) {
+        let mut selected_mcp_tools =
+            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
+                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+            } else {
+                HashMap::new()
+            };
+
+        if let Some(connectors) = connectors_for_tools.as_ref() {
+            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
+            selected_mcp_tools.extend(apps_mcp_tools);
+        }
+
+        mcp_tools = selected_mcp_tools;
+    } else if let Some(connectors) = connectors_for_tools.as_ref() {
+        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
+    }
+
+    Ok(Arc::new(ToolRouter::from_config(
+        &turn_context.tools_config,
+        Some(
+            mcp_tools
+                .into_iter()
+                .map(|(name, tool)| (name, tool.tool))
+                .collect(),
+        ),
+        turn_context.dynamic_tools.as_slice(),
+    )))
 }
 
 #[derive(Debug)]
@@ -5319,13 +5328,13 @@ mod tests {
             make_connector("two", "Foo-Bar"),
         ];
         let input = vec![user_message("use $foo-bar")];
-        let explicit_app_paths = Vec::new();
+        let explicitly_enabled_connectors = HashSet::new();
         let skill_name_counts_lower = HashMap::new();
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicit_app_paths,
+            &explicitly_enabled_connectors,
             &skill_name_counts_lower,
         );
 
@@ -5336,13 +5345,13 @@ mod tests {
     fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
         let connectors = vec![make_connector("one", "Todoist")];
         let input = vec![user_message("use $todoist")];
-        let explicit_app_paths = Vec::new();
+        let explicitly_enabled_connectors = HashSet::new();
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicit_app_paths,
+            &explicitly_enabled_connectors,
             &skill_name_counts_lower,
         );
 
@@ -5374,10 +5383,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("run the selected tools")],
-            &[],
+            &explicitly_enabled_connectors,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
@@ -5416,10 +5426,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("use $calendar and then echo the response")],
-            &[],
+            &explicitly_enabled_connectors,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
