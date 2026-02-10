@@ -28,6 +28,10 @@
 //!
 //! # Submission and Prompt Expansion
 //!
+//! When steer is enabled, `Enter` submits immediately. `Tab` requests queuing while a task is
+//! running; if no task is running, `Tab` submits just like Enter so input is never dropped.
+//! `Tab` does not submit when entering a `!` shell command.
+//!
 //! On submit/queue paths, the composer:
 //!
 //! - Expands pending paste placeholders so element ranges align with the final text.
@@ -444,7 +448,8 @@ impl ChatComposer {
     /// Enables or disables "Steer" behavior for submission keys.
     ///
     /// When steer is enabled, `Enter` produces [`InputResult::Submitted`] (send immediately) and
-    /// `Tab` produces [`InputResult::Queued`] (eligible to queue if a task is running).
+    /// `Tab` produces [`InputResult::Queued`] when a task is running; otherwise it submits
+    /// immediately. `Tab` does not submit when the input is a `!` shell command.
     /// When steer is disabled, `Enter` produces [`InputResult::Queued`], preserving the default
     /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -2383,7 +2388,17 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.is_task_running => self.handle_submission(true),
+            } if self.steer_enabled && !self.is_bang_shell_command() => {
+                self.handle_submission(self.is_task_running)
+            }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_task_running && !self.is_bang_shell_command() => {
+                self.handle_submission(true)
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -2394,6 +2409,10 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn is_bang_shell_command(&self) -> bool {
+        self.textarea.text().trim_start().starts_with('!')
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -5425,6 +5444,65 @@ mod tests {
         let elements = composer.textarea.text_elements();
         assert_eq!(text, "x/review ");
         assert!(elements.is_empty());
+    }
+
+    #[test]
+    fn tab_submits_when_no_task_running_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['h', 'i']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "hi"
+        ));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn tab_does_not_submit_for_bang_shell_command_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.set_task_running(false);
+
+        type_chars_humanlike(&mut composer, &['!', 'l', 's']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(
+            composer.textarea.text().starts_with("!ls"),
+            "expected Tab not to submit or clear a `!` command"
+        );
     }
 
     #[test]
