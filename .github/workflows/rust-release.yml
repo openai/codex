@@ -615,9 +615,9 @@ jobs:
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
         run: |
           set -euo pipefail
-          tag_args=()
+          prefix=""
           if [[ -n "${NPM_TAG}" ]]; then
-            tag_args+=(--tag "${NPM_TAG}")
+            prefix="${NPM_TAG}-"
           fi
 
           shopt -s nullglob
@@ -628,7 +628,31 @@ jobs:
           fi
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/${tarball}" "${tag_args[@]}"
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-linux-*-npm-"${VERSION}".tgz|codex-darwin-*-npm-"${VERSION}".tgz|codex-win32-*-npm-"${VERSION}".tgz)
+                platform="${filename#codex-}"
+                platform="${platform%-npm-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
           done
 
   update-branch:
