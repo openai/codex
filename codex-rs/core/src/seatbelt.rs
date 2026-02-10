@@ -1,6 +1,5 @@
 #![cfg(target_os = "macos")]
 
-use codex_network_proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
@@ -101,18 +100,13 @@ fn proxy_loopback_ports_from_env(env: &HashMap<String, String>) -> Vec<u16> {
     ports.into_iter().collect()
 }
 
-fn local_binding_enabled(env: &HashMap<String, String>) -> bool {
-    env.get(ALLOW_LOCAL_BINDING_ENV_KEY).is_some_and(|value| {
-        let trimmed = value.trim();
-        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
-    })
-}
-
 #[derive(Debug, Default)]
 struct ProxyPolicyInputs {
     ports: Vec<u16>,
     has_proxy_config: bool,
     allow_local_binding: bool,
+    allow_unix_sockets: Vec<String>,
+    dangerously_allow_all_unix_sockets: bool,
 }
 
 fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
@@ -122,11 +116,46 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
         return ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
-            allow_local_binding: local_binding_enabled(&env),
+            allow_local_binding: network.allow_local_binding(),
+            allow_unix_sockets: network.allow_unix_sockets().to_vec(),
+            dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets(),
         };
     }
 
     ProxyPolicyInputs::default()
+}
+
+fn normalize_path_for_sandbox(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
+fn escape_seatbelt_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
+    if proxy.dangerously_allow_all_unix_sockets {
+        return "(allow network* (subpath \"/\"))\n".to_string();
+    }
+
+    let mut paths = BTreeSet::new();
+    for socket_path in &proxy.allow_unix_sockets {
+        let Some(normalized_path) = normalize_path_for_sandbox(Path::new(socket_path)) else {
+            continue;
+        };
+        paths.insert(normalized_path);
+    }
+
+    paths
+        .into_iter()
+        .map(|path| {
+            let escaped_path = escape_seatbelt_string(path.to_string_lossy().as_ref());
+            format!("(allow network* (subpath \"{escaped_path}\"))\n")
+        })
+        .collect()
 }
 
 fn dynamic_network_policy(
@@ -147,6 +176,11 @@ fn dynamic_network_policy(
             policy.push_str(&format!(
                 "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
             ));
+        }
+        let unix_socket_policy = unix_socket_policy(proxy);
+        if !unix_socket_policy.is_empty() {
+            policy.push_str("; allow unix domain sockets for local IPC\n");
+            policy.push_str(&unix_socket_policy);
         }
         return format!("{policy}{MACOS_SEATBELT_NETWORK_POLICY}");
     }
@@ -323,6 +357,7 @@ mod tests {
                 ports: vec![43128, 48081],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -357,6 +392,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: true,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -392,6 +428,7 @@ mod tests {
                 ports: vec![],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
@@ -419,10 +456,71 @@ mod tests {
                 ports: vec![],
                 has_proxy_config: false,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 
         assert_eq!(policy, "");
+    }
+
+    #[test]
+    fn create_seatbelt_args_allowlists_unix_socket_paths() {
+        let policy = dynamic_network_policy(
+            &SandboxPolicy::ReadOnly,
+            false,
+            &ProxyPolicyInputs {
+                ports: vec![43128],
+                has_proxy_config: true,
+                allow_local_binding: false,
+                allow_unix_sockets: vec!["/tmp/example.sock".to_string()],
+                dangerously_allow_all_unix_sockets: false,
+            },
+        );
+
+        assert!(
+            policy.contains("(allow network* (subpath \"/tmp/example.sock\"))"),
+            "policy should allow explicitly configured unix sockets:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_ignores_relative_unix_socket_paths() {
+        let policy = dynamic_network_policy(
+            &SandboxPolicy::ReadOnly,
+            false,
+            &ProxyPolicyInputs {
+                ports: vec![43128],
+                has_proxy_config: true,
+                allow_local_binding: false,
+                allow_unix_sockets: vec!["relative.sock".to_string()],
+                dangerously_allow_all_unix_sockets: false,
+            },
+        );
+
+        assert!(
+            !policy.contains("relative.sock"),
+            "policy should ignore relative unix socket paths:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn create_seatbelt_args_allows_all_unix_sockets_when_enabled() {
+        let policy = dynamic_network_policy(
+            &SandboxPolicy::ReadOnly,
+            false,
+            &ProxyPolicyInputs {
+                ports: vec![43128],
+                has_proxy_config: true,
+                allow_local_binding: false,
+                allow_unix_sockets: vec![],
+                dangerously_allow_all_unix_sockets: true,
+            },
+        );
+
+        assert!(
+            policy.contains("(allow network* (subpath \"/\"))"),
+            "policy should allow all unix sockets when flag is enabled:\n{policy}"
+        );
     }
 
     #[test]
@@ -439,6 +537,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: false,
+                ..ProxyPolicyInputs::default()
             },
         );
 

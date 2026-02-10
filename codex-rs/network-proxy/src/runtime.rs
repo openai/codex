@@ -308,6 +308,10 @@ impl NetworkProxyState {
         }
 
         let guard = self.state.read().await;
+        if guard.config.network.dangerously_allow_all_unix_sockets {
+            return Ok(true);
+        }
+
         // Normalize the path while keeping the absolute-path requirement explicit.
         let requested_abs = match AbsolutePathBuf::from_absolute_path(requested_path) {
             Ok(path) => path,
@@ -875,6 +879,43 @@ mod tests {
     }
 
     #[test]
+    fn validate_policy_against_constraints_disallows_allow_all_unix_sockets_without_managed_opt_in()
+    {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(false),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_allow_all_unix_sockets_with_managed_opt_in() {
+        let constraints = NetworkProxyConstraints {
+            dangerously_allow_all_unix_sockets: Some(true),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                enabled: true,
+                dangerously_allow_all_unix_sockets: true,
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
         let set = compile_globset(&patterns).unwrap();
@@ -971,6 +1012,19 @@ mod tests {
         assert!(state.is_unix_socket_allowed(&link_s).await.unwrap());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn unix_socket_allow_all_flag_bypasses_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            dangerously_allow_all_unix_sockets: true,
+            ..NetworkProxySettings::default()
+        });
+
+        assert!(state.is_unix_socket_allowed("/tmp/any.sock").await.unwrap());
+        assert!(!state.is_unix_socket_allowed("relative.sock").await.unwrap());
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn unix_socket_allowlist_is_rejected_on_non_macos() {
@@ -978,6 +1032,7 @@ mod tests {
         let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             allow_unix_sockets: vec![socket_path.clone()],
+            dangerously_allow_all_unix_sockets: true,
             ..NetworkProxySettings::default()
         });
 

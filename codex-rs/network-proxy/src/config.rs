@@ -33,6 +33,8 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub dangerously_allow_non_loopback_admin: bool,
     #[serde(default)]
+    pub dangerously_allow_all_unix_sockets: bool,
+    #[serde(default)]
     pub mode: NetworkMode,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
@@ -55,6 +57,7 @@ impl Default for NetworkProxySettings {
             allow_upstream_proxy: true,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
+            dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
             allowed_domains: Vec::new(),
             denied_domains: Vec::new(),
@@ -136,7 +139,7 @@ pub(crate) fn clamp_bind_addrs(
         cfg.dangerously_allow_non_loopback_admin,
         "admin API",
     );
-    if cfg.allow_unix_sockets.is_empty() {
+    if cfg.allow_unix_sockets.is_empty() && !cfg.dangerously_allow_all_unix_sockets {
         return (http_addr, socks_addr, admin_addr);
     }
 
@@ -513,6 +516,26 @@ mod tests {
             dangerously_allow_non_loopback_proxy: true,
             dangerously_allow_non_loopback_admin: true,
             allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
+            ..Default::default()
+        };
+        let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();
+        let socks_addr = "0.0.0.0:8081".parse::<SocketAddr>().unwrap();
+        let admin_addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+
+        let (http_addr, socks_addr, admin_addr) =
+            clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg);
+
+        assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
+        assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
+        assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn clamp_bind_addrs_forces_loopback_when_all_unix_sockets_enabled() {
+        let cfg = NetworkProxySettings {
+            dangerously_allow_non_loopback_proxy: true,
+            dangerously_allow_non_loopback_admin: true,
+            dangerously_allow_all_unix_sockets: true,
             ..Default::default()
         };
         let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();

@@ -374,8 +374,8 @@ async fn http_plain_proxy(
     };
 
     // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly scoped:
-    // macOS-only + explicit allowlist, to avoid turning the proxy into a general local capability
-    // escalation mechanism.
+    // macOS-only + explicit allowlist by default, to avoid turning the proxy into a general local
+    // capability escalation mechanism.
     if let Some(unix_socket_header) = req.headers().get("x-unix-socket") {
         let socket_path = match unix_socket_header.to_str() {
             Ok(value) => value.to_string(),

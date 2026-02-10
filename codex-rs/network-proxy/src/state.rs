@@ -19,6 +19,7 @@ pub struct NetworkProxyConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
@@ -38,6 +39,7 @@ pub struct PartialNetworkConfig {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[serde(default)]
     pub allowed_domains: Option<Vec<String>>,
     #[serde(default)]
@@ -162,6 +164,25 @@ pub fn validate_policy_against_constraints(
                 if *candidate {
                     Err(invalid_value(
                         "network.dangerously_allow_non_loopback_proxy",
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )?;
+
+    let allow_all_unix_sockets = constraints.dangerously_allow_all_unix_sockets;
+    validate(
+        config.network.dangerously_allow_all_unix_sockets,
+        move |candidate| match allow_all_unix_sockets {
+            Some(true) | None => Ok(()),
+            Some(false) => {
+                if *candidate {
+                    Err(invalid_value(
+                        "network.dangerously_allow_all_unix_sockets",
                         "true",
                         "false (disabled by managed config)",
                     ))
