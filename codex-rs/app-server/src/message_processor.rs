@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use crate::outgoing_message::ConnectionId;
-use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -26,6 +26,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -111,17 +112,13 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
     config: Arc<Config>,
-    config_warnings: Arc<Vec<ConfigWarningNotification>>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct ConnectionSessionState {
-    pub(crate) initialized: bool,
-    experimental_api_enabled: bool,
+    initialized: bool,
+    experimental_api_enabled: Arc<AtomicBool>,
+    config_warnings: Vec<ConfigWarningNotification>,
 }
 
 pub(crate) struct MessageProcessorArgs {
-    pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) outgoing: OutgoingMessageSender,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
@@ -145,6 +142,8 @@ impl MessageProcessor {
             feedback,
             config_warnings,
         } = args;
+        let outgoing = Arc::new(outgoing);
+        let experimental_api_enabled = Arc::new(AtomicBool::new(false));
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
             false,
@@ -182,20 +181,14 @@ impl MessageProcessor {
             codex_message_processor,
             config_api,
             config,
-            config_warnings: Arc::new(config_warnings),
+            initialized: false,
+            experimental_api_enabled,
+            config_warnings,
         }
     }
 
-    pub(crate) async fn process_request(
-        &mut self,
-        connection_id: ConnectionId,
-        request: JSONRPCRequest,
-        session: &mut ConnectionSessionState,
-    ) {
-        let request_id = ConnectionRequestId {
-            connection_id,
-            request_id: request.id.clone(),
-        };
+    pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
+        let request_id = request.id.clone();
         let request_json = match serde_json::to_value(&request) {
             Ok(request_json) => request_json,
             Err(err) => {
@@ -226,11 +219,7 @@ impl MessageProcessor {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
             // itself with the `initialized` bool.
             ClientRequest::Initialize { request_id, params } => {
-                let request_id = ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                };
-                if session.initialized {
+                if self.initialized {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
                         message: "Already initialized".to_string(),
@@ -239,16 +228,12 @@ impl MessageProcessor {
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 } else {
-                    // TODO(maxj): Revisit capability scoping for `experimental_api_enabled`.
-                    // Current behavior is per-connection. Reviewer feedback notes this can
-                    // create odd cross-client behavior (for example dynamic tool calls on a
-                    // shared thread when another connected client did not opt into
-                    // experimental API). Proposed direction is instance-global first-write-wins
-                    // with initialize-time mismatch rejection.
-                    session.experimental_api_enabled = params
+                    let experimental_api_enabled = params
                         .capabilities
                         .as_ref()
                         .is_some_and(|cap| cap.experimental_api);
+                    self.experimental_api_enabled
+                        .store(experimental_api_enabled, Ordering::Relaxed);
                     let ClientInfo {
                         name,
                         title: _title,
@@ -264,7 +249,7 @@ impl MessageProcessor {
                                     ),
                                     data: None,
                                 };
-                                self.outgoing.send_error(request_id.clone(), error).await;
+                                self.outgoing.send_error(request_id, error).await;
                                 return;
                             }
                             SetOriginatorError::AlreadyInitialized => {
@@ -285,20 +270,22 @@ impl MessageProcessor {
                     let response = InitializeResponse { user_agent };
                     self.outgoing.send_response(request_id, response).await;
 
-                    session.initialized = true;
-                    for notification in self.config_warnings.iter().cloned() {
-                        self.outgoing
-                            .send_server_notification(ServerNotification::ConfigWarning(
-                                notification,
-                            ))
-                            .await;
+                    self.initialized = true;
+                    if !self.config_warnings.is_empty() {
+                        for notification in self.config_warnings.drain(..) {
+                            self.outgoing
+                                .send_server_notification(ServerNotification::ConfigWarning(
+                                    notification,
+                                ))
+                                .await;
+                        }
                     }
 
                     return;
                 }
             }
             _ => {
-                if !session.initialized {
+                if !self.initialized {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
                         message: "Not initialized".to_string(),
@@ -311,7 +298,7 @@ impl MessageProcessor {
         }
 
         if let Some(reason) = codex_request.experimental_reason()
-            && !session.experimental_api_enabled
+            && !self.experimental_api_enabled.load(Ordering::Relaxed)
         {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -324,49 +311,22 @@ impl MessageProcessor {
 
         match codex_request {
             ClientRequest::ConfigRead { request_id, params } => {
-                self.handle_config_read(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.handle_config_read(request_id, params).await;
             }
             ClientRequest::ConfigValueWrite { request_id, params } => {
-                self.handle_config_value_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.handle_config_value_write(request_id, params).await;
             }
             ClientRequest::ConfigBatchWrite { request_id, params } => {
-                self.handle_config_batch_write(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                )
-                .await;
+                self.handle_config_batch_write(request_id, params).await;
             }
             ClientRequest::ConfigRequirementsRead {
                 request_id,
                 params: _,
             } => {
-                self.handle_config_requirements_read(ConnectionRequestId {
-                    connection_id,
-                    request_id,
-                })
-                .await;
+                self.handle_config_requirements_read(request_id).await;
             }
             other => {
-                self.codex_message_processor
-                    .process_request(connection_id, other)
-                    .await;
+                self.codex_message_processor.process_request(other).await;
             }
         }
     }
@@ -382,6 +342,9 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+        if !self.initialized {
+            return;
+        }
         self.codex_message_processor
             .try_attach_thread_listener(thread_id)
             .await;
@@ -400,7 +363,7 @@ impl MessageProcessor {
         self.outgoing.notify_client_error(err.id, err.error).await;
     }
 
-    async fn handle_config_read(&self, request_id: ConnectionRequestId, params: ConfigReadParams) {
+    async fn handle_config_read(&self, request_id: RequestId, params: ConfigReadParams) {
         match self.config_api.read(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
@@ -409,7 +372,7 @@ impl MessageProcessor {
 
     async fn handle_config_value_write(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ConfigValueWriteParams,
     ) {
         match self.config_api.write_value(params).await {
@@ -420,7 +383,7 @@ impl MessageProcessor {
 
     async fn handle_config_batch_write(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
@@ -429,7 +392,7 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_config_requirements_read(&self, request_id: ConnectionRequestId) {
+    async fn handle_config_requirements_read(&self, request_id: RequestId) {
         match self.config_api.config_requirements_read().await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
