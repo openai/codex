@@ -14,22 +14,6 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
-/// Canonical prompt input for Responses endpoints.
-#[derive(Debug, Clone)]
-pub struct Prompt {
-    /// Fully-resolved system instructions for this turn.
-    pub instructions: String,
-    /// Conversation history and user/tool messages.
-    pub input: Vec<ResponseItem>,
-    /// JSON-encoded tool definitions compatible with the target API.
-    // TODO(jif) have a proper type here
-    pub tools: Vec<Value>,
-    /// Whether parallel tool calls are permitted.
-    pub parallel_tool_calls: bool,
-    /// Optional output schema used to build the `text.format` controls.
-    pub output_schema: Option<Value>,
-}
-
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct CompactionInput<'a> {
@@ -38,30 +22,32 @@ pub struct CompactionInput<'a> {
     pub instructions: &'a str,
 }
 
-/// Canonical input payload for the memory trace summarize endpoint.
+/// Canonical input payload for the memory summarize endpoint.
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTraceSummarizeInput {
+pub struct MemorySummarizeInput {
     pub model: String,
-    pub traces: Vec<MemoryTrace>,
+    #[serde(rename = "traces")]
+    pub raw_memories: Vec<RawMemory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTrace {
+pub struct RawMemory {
     pub id: String,
-    pub metadata: MemoryTraceMetadata,
+    pub metadata: RawMemoryMetadata,
     pub items: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MemoryTraceMetadata {
+pub struct RawMemoryMetadata {
     pub source_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct MemoryTraceSummaryOutput {
-    pub trace_summary: String,
+pub struct MemorySummarizeOutput {
+    #[serde(rename = "trace_summary", alias = "raw_memory")]
+    pub raw_memory: String,
     pub memory_summary: String,
 }
 
@@ -150,13 +136,13 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResponsesApiRequest<'a> {
-    pub model: &'a str,
-    pub instructions: &'a str,
-    pub input: &'a [ResponseItem],
-    pub tools: &'a [serde_json::Value],
-    pub tool_choice: &'static str,
+#[derive(Debug, Serialize, Clone)]
+pub struct ResponsesApiRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<serde_json::Value>,
+    pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
@@ -166,6 +152,26 @@ pub struct ResponsesApiRequest<'a> {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+}
+
+impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
+    fn from(request: &ResponsesApiRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+            instructions: request.instructions.clone(),
+            previous_response_id: None,
+            input: request.input.clone(),
+            tools: request.tools.clone(),
+            tool_choice: request.tool_choice.clone(),
+            parallel_tool_calls: request.parallel_tool_calls,
+            reasoning: request.reasoning.clone(),
+            store: request.store,
+            stream: request.stream,
+            include: request.include.clone(),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            text: request.text.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -36,6 +36,7 @@ use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
 use std::io;
 use std::net::SocketAddr;
+use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use tracing::error;
 use tracing::info;
@@ -54,6 +55,30 @@ pub async fn run_socks5(
         .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind SOCKS5 proxy: {addr}"))?;
+
+    run_socks5_with_listener(state, listener, policy_decider, enable_socks5_udp).await
+}
+
+pub async fn run_socks5_with_std_listener(
+    state: Arc<NetworkProxyState>,
+    listener: StdTcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    enable_socks5_udp: bool,
+) -> Result<()> {
+    let listener =
+        TcpListener::try_from(listener).context("convert std listener to SOCKS5 proxy listener")?;
+    run_socks5_with_listener(state, listener, policy_decider, enable_socks5_udp).await
+}
+
+async fn run_socks5_with_listener(
+    state: Arc<NetworkProxyState>,
+    listener: TcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    enable_socks5_udp: bool,
+) -> Result<()> {
+    let addr = listener
+        .local_addr()
+        .context("read SOCKS5 listener local addr")?;
 
     info!("SOCKS5 proxy listening on {addr}");
 

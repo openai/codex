@@ -11,9 +11,13 @@ use futures::StreamExt;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
+use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 use tokio_tungstenite::tungstenite::handshake::server::Response;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use wiremock::BodyPrintLimit;
 use wiremock::Match;
 use wiremock::Mock;
@@ -964,7 +968,13 @@ pub async fn start_websocket_server_with_headers(
                 Ok(response)
             };
 
-            let mut ws_stream = match tokio_tungstenite::accept_hdr_async(stream, callback).await {
+            let mut ws_stream = match accept_hdr_async_with_config(
+                stream,
+                callback,
+                Some(websocket_accept_config()),
+            )
+            .await
+            {
                 Ok(ws) => ws,
                 Err(_) => continue,
             };
@@ -1018,6 +1028,15 @@ fn parse_ws_request_body(message: Message) -> Option<Value> {
         Message::Binary(bytes) => serde_json::from_slice(&bytes).ok(),
         _ => None,
     }
+}
+
+fn websocket_accept_config() -> WebSocketConfig {
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default();
+    config.extensions = extensions;
+    config
 }
 
 #[derive(Clone)]

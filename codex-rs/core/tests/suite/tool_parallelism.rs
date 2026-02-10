@@ -72,7 +72,7 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 fn assert_parallel_duration(actual: Duration) {
     // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
     assert!(
-        actual < Duration::from_millis(1_200),
+        actual < Duration::from_millis(1_600),
         "expected parallel execution to finish quickly, got {actual:?}"
     );
 }
@@ -148,7 +148,7 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     let test = builder.build(&server).await?;
 
     let shell_args = json!({
-        "command": "sleep 0.3",
+        "command": "sleep 0.25",
         // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
         "login": false,
         "timeout_ms": 1_000,
@@ -186,7 +186,9 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     })
     .to_string();
     let shell_args = serde_json::to_string(&json!({
-        "command": "sleep 0.3",
+        "command": "sleep 0.25",
+        // Avoid user-specific shell startup cost in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     }))?;
 

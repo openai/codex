@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::features::Feature;
+use crate::path_utils::normalize_for_path_comparison;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::metadata;
@@ -154,6 +155,10 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     }
     .with_nanosecond(0)?;
     Some(codex_state::Anchor { ts, id })
+}
+
+fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
+    normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
 /// List thread ids from SQLite for parity checks without rollout scanning.
@@ -330,13 +335,13 @@ pub async fn get_thread_memory(
 pub async fn upsert_thread_memory(
     context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
-    trace_summary: &str,
+    raw_memory: &str,
     memory_summary: &str,
     stage: &str,
 ) -> Option<codex_state::ThreadMemory> {
     let ctx = context?;
     match ctx
-        .upsert_thread_memory(thread_id, trace_summary, memory_summary)
+        .upsert_thread_memory(thread_id, raw_memory, memory_summary)
         .await
     {
         Ok(memory) => Some(memory),
@@ -355,7 +360,11 @@ pub async fn get_last_n_thread_memories_for_cwd(
     stage: &str,
 ) -> Option<Vec<codex_state::ThreadMemory>> {
     let ctx = context?;
-    match ctx.get_last_n_thread_memories_for_cwd(cwd, n).await {
+    let normalized_cwd = normalize_cwd_for_state_db(cwd);
+    match ctx
+        .get_last_n_thread_memories_for_cwd(&normalized_cwd, n)
+        .await
+    {
         Ok(memories) => Some(memories),
         Err(err) => {
             warn!("state db get_last_n_thread_memories_for_cwd failed during {stage}: {err}");
@@ -400,6 +409,7 @@ pub async fn reconcile_rollout(
             }
         };
     let mut metadata = outcome.metadata;
+    metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
             metadata.archived_at = Some(metadata.updated_at);
@@ -447,6 +457,7 @@ pub async fn read_repair_rollout_path(
         && let Ok(Some(mut metadata)) = ctx.get_thread(thread_id).await
     {
         metadata.rollout_path = rollout_path.to_path_buf();
+        metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
         match archived_only {
             Some(true) if metadata.archived_at.is_none() => {
                 metadata.archived_at = Some(metadata.updated_at);
@@ -509,6 +520,7 @@ pub async fn apply_rollout_items(
         },
     };
     builder.rollout_path = rollout_path.to_path_buf();
+    builder.cwd = normalize_cwd_for_state_db(&builder.cwd);
     if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
         warn!(
             "state db apply_rollout_items failed during {stage} for {}: {err}",

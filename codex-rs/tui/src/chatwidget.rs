@@ -20,6 +20,11 @@
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
 //! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
+//!
+//! For preamble-capable models, assistant output may include commentary before
+//! the final answer. During streaming we hide the status row to avoid duplicate
+//! progress indicators; once commentary completes and stream queues drain, we
+//! re-show it so users still see turn-in-progress state between output bursts.
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -116,6 +121,8 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -138,12 +145,14 @@ use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
+use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -532,6 +541,7 @@ pub(crate) struct ChatWidget {
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     connectors_cache: ConnectorsCacheState,
+    connectors_prefetch_in_flight: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -542,6 +552,8 @@ pub(crate) struct ChatWidget {
     current_status_header: String,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
+    // Set when commentary output completes; once stream queues go idle we restore the status row.
+    pending_status_indicator_restore: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
@@ -601,6 +613,8 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Runtime network proxy bind addresses from SessionConfigured.
+    session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Cached git branch name for the status line (None if unknown).
@@ -808,6 +822,37 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
     }
 
+    fn stream_controllers_idle(&self) -> bool {
+        self.stream_controller
+            .as_ref()
+            .map(|controller| controller.queued_lines() == 0)
+            .unwrap_or(true)
+            && self
+                .plan_stream_controller
+                .as_ref()
+                .map(|controller| controller.queued_lines() == 0)
+                .unwrap_or(true)
+    }
+
+    /// Restore the status indicator only after commentary completion is pending,
+    /// the turn is still running, and all stream queues have drained.
+    ///
+    /// This gate prevents flicker while normal output is still actively
+    /// streaming, but still restores a visible "working" affordance when a
+    /// commentary block ends before the turn itself has completed.
+    fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
+        if !self.pending_status_indicator_restore
+            || !self.bottom_pane.is_task_running()
+            || !self.stream_controllers_idle()
+        {
+            return;
+        }
+
+        self.bottom_pane.ensure_status_indicator();
+        self.set_status_header(self.current_status_header.clone());
+        self.pending_status_indicator_restore = false;
+    }
+
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
@@ -822,10 +867,9 @@ impl ChatWidget {
         self.set_status(header, None);
     }
 
-    /// Sets the currently rendered footer status-line value and schedules a redraw.
+    /// Sets the currently rendered footer status-line value.
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
         self.bottom_pane.set_status_line(status_line);
-        self.request_redraw();
     }
 
     /// Recomputes footer status-line content from config and current runtime state.
@@ -973,7 +1017,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
-        self.bottom_pane.set_connectors_snapshot(None);
+        self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -1117,6 +1161,7 @@ impl ChatWidget {
             instructions,
             url,
             is_installed,
+            self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -1181,21 +1226,29 @@ impl ChatWidget {
         } else {
             text
         };
+        // Plan commit ticks can hide the status row; remember whether we streamed plan output so
+        // completion can restore it once stream queues are idle.
+        let should_restore_after_stream = self.plan_stream_controller.is_some();
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
+        let finalized_streamed_cell =
+            if let Some(mut controller) = self.plan_stream_controller.take() {
+                controller.finalize()
+            } else {
+                None
+            };
+        if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
-            return;
+        } else if !plan_text.is_empty() {
+            self.add_to_history(history_cell::new_proposed_plan(plan_text));
         }
-        if plan_text.is_empty() {
-            return;
+        if should_restore_after_stream {
+            self.pending_status_indicator_restore = true;
+            self.maybe_restore_status_indicator_after_stream_idle();
         }
-        self.add_to_history(history_cell::new_proposed_plan(plan_text));
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
@@ -1256,6 +1309,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
+        self.pending_status_indicator_restore = false;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
@@ -1297,13 +1351,13 @@ impl ChatWidget {
             self.request_status_line_branch_refresh();
         }
         // Mark task stopped and request redraw now that all content is in history.
+        self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -1524,10 +1578,10 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
+        self.pending_status_indicator_restore = false;
         self.request_status_line_branch_refresh();
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -1638,6 +1692,9 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        if reason == TurnAbortReason::Interrupted {
+            self.clear_unified_exec_processes();
+        }
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1730,21 +1787,19 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
-    fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
-        let id2 = id.clone();
+    fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(id, ev),
-            |s| s.handle_exec_approval_now(id2, ev2),
+            |q| q.push_exec_approval(ev),
+            |s| s.handle_exec_approval_now(ev2),
         );
     }
 
-    fn on_apply_patch_approval_request(&mut self, id: String, ev: ApplyPatchApprovalRequestEvent) {
-        let id2 = id.clone();
+    fn on_apply_patch_approval_request(&mut self, _id: String, ev: ApplyPatchApprovalRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(id, ev),
-            |s| s.handle_apply_patch_approval_now(id2, ev2),
+            |q| q.push_apply_patch_approval(ev),
+            |s| s.handle_apply_patch_approval_now(ev2),
         );
     }
 
@@ -1767,9 +1822,12 @@ impl ChatWidget {
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
+            self.track_unified_exec_process_begin(&ev);
+            if !self.bottom_pane.is_task_running() {
+                return;
+            }
             // Unified exec may be parsed as Unknown; keep the working indicator visible regardless.
             self.bottom_pane.ensure_status_indicator();
-            self.track_unified_exec_process_begin(&ev);
             if !is_standard_tool_call(&ev.parsed_cmd) {
                 return;
             }
@@ -1780,6 +1838,9 @@ impl ChatWidget {
 
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
         self.track_unified_exec_output_chunk(&ev.call_id, &ev.chunk);
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
 
         let Some(cell) = self
             .active_cell
@@ -2087,7 +2148,22 @@ impl ChatWidget {
         if self.retry_status_header.is_none() {
             self.retry_status_header = Some(self.current_status_header.clone());
         }
+        self.bottom_pane.ensure_status_indicator();
         self.set_status(message, additional_details);
+    }
+
+    /// Handle completion of an `AgentMessage` turn item.
+    ///
+    /// Commentary completion sets a deferred restore flag so the status row
+    /// returns once stream queues are idle. Final-answer completion (or absent
+    /// phase for legacy models) clears the flag to preserve historical behavior.
+    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        self.pending_status_indicator_restore = match item.phase {
+            // Models that don't support preambles only output AgentMessageItems on turn completion.
+            Some(MessagePhase::FinalAnswer) | None => false,
+            Some(MessagePhase::Commentary) => true,
+        };
+        self.maybe_restore_status_indicator_after_stream_idle();
     }
 
     /// Periodic tick for stream commits. In smooth mode this preserves one-line pacing, while
@@ -2110,9 +2186,8 @@ impl ChatWidget {
     ///
     /// `scope` controls whether this call may commit in smooth mode or only when catch-up
     /// is currently active. While lines are actively streaming we hide the status row to avoid
-    /// duplicate "in progress" affordances, but once all stream controllers go idle for this
-    /// turn we restore the status row if the task is still running so users keep a live
-    /// spinner/shimmer signal between preamble output and subsequent tool activity.
+    /// duplicate "in progress" affordances. Restoration is gated separately so we only re-show
+    /// the row after commentary completion once stream queues are idle.
     fn run_commit_tick_with_scope(&mut self, scope: CommitTickScope) {
         let now = Instant::now();
         let outcome = run_commit_tick(
@@ -2128,10 +2203,7 @@ impl ChatWidget {
         }
 
         if outcome.has_controller && outcome.all_idle {
-            if self.bottom_pane.is_task_running() {
-                self.bottom_pane.ensure_status_indicator();
-                self.set_status_header(self.current_status_header.clone());
-            }
+            self.maybe_restore_status_indicator_after_stream_idle();
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
 
@@ -2292,14 +2364,14 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+    pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
         let request = ApprovalRequest::Exec {
-            id,
+            id: ev.call_id,
             command: ev.command,
             reason: ev.reason,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
@@ -2309,15 +2381,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_apply_patch_approval_now(
-        &mut self,
-        id: String,
-        ev: ApplyPatchApprovalRequestEvent,
-    ) {
+    pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
-            id,
+            id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
@@ -2557,11 +2625,13 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -2586,6 +2656,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -2719,11 +2790,13 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -2748,6 +2821,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -2870,11 +2944,13 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
+            connectors_prefetch_in_flight: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             retry_status_header: None,
+            pending_status_indicator_restore: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -2899,6 +2975,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -3209,7 +3286,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {
-                self.open_approvals_popup();
+                self.open_permissions_popup();
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -3311,6 +3388,9 @@ impl ChatWidget {
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
+            }
+            SlashCommand::Clean => {
+                self.clean_background_terminals();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -3959,6 +4039,8 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -3967,8 +4049,12 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
             EventMsg::ItemCompleted(event) => {
-                if let codex_protocol::items::TurnItem::Plan(plan_item) = event.item {
-                    self.on_plan_item_completed(plan_item.text);
+                let item = event.item;
+                if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
+                    self.on_plan_item_completed(plan_item.text.clone());
+                }
+                if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
+                    self.on_agent_message_item_completed(item);
                 }
             }
         }
@@ -4154,7 +4240,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {
-        self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
+        self.add_to_history(crate::debug_config::new_debug_config_output(
+            &self.config,
+            self.session_network_proxy.as_ref(),
+        ));
     }
 
     fn open_status_line_setup(&mut self) {
@@ -4392,43 +4481,84 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
     }
 
+    fn clean_background_terminals(&mut self) {
+        self.submit_op(Op::CleanBackgroundTerminals);
+        self.add_info_message("Stopping all background terminals.".to_string(), None);
+    }
+
     fn stop_rate_limit_poller(&mut self) {
         if let Some(handle) = self.rate_limit_poller.take() {
             handle.abort();
         }
     }
 
+    pub(crate) fn refresh_connectors(&mut self, force_refetch: bool) {
+        self.prefetch_connectors_with_options(force_refetch);
+    }
+
     fn prefetch_connectors(&mut self) {
-        if !self.connectors_enabled() {
-            return;
-        }
-        if matches!(self.connectors_cache, ConnectorsCacheState::Loading) {
+        self.prefetch_connectors_with_options(false);
+    }
+
+    fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
+        if !self.connectors_enabled() || self.connectors_prefetch_in_flight {
             return;
         }
 
-        self.connectors_cache = ConnectorsCacheState::Loading;
+        self.connectors_prefetch_in_flight = true;
+        if !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+            self.connectors_cache = ConnectorsCacheState::Loading;
+        }
+
         let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result: Result<ConnectorsSnapshot, anyhow::Error> = async {
-                let connectors = connectors::list_connectors(&config).await?;
+            let accessible_connectors =
+                match connectors::list_accessible_connectors_from_mcp_tools_with_options(
+                    &config,
+                    force_refetch,
+                )
+                .await
+                {
+                    Ok(connectors) => connectors,
+                    Err(err) => {
+                        app_event_tx.send(AppEvent::ConnectorsLoaded {
+                            result: Err(format!("Failed to load apps: {err}")),
+                            is_final: true,
+                        });
+                        return;
+                    }
+                };
+
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result: Ok(ConnectorsSnapshot {
+                    connectors: accessible_connectors.clone(),
+                }),
+                is_final: false,
+            });
+
+            let result: Result<ConnectorsSnapshot, String> = async {
+                let all_connectors = connectors::list_all_connectors(&config).await?;
+                let connectors = connectors::merge_connectors_with_accessible(
+                    all_connectors,
+                    accessible_connectors,
+                );
                 Ok(ConnectorsSnapshot { connectors })
             }
-            .await;
-            let result = result.map_err(|err| format!("Failed to load apps: {err}"));
-            app_event_tx.send(AppEvent::ConnectorsLoaded(result));
+            .await
+            .map_err(|err: anyhow::Error| format!("Failed to load apps: {err}"));
+
+            app_event_tx.send(AppEvent::ConnectorsLoaded {
+                result,
+                is_final: true,
+            });
         });
     }
 
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if !self
-            .auth_manager
-            .auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
-        {
+        if !self.should_prefetch_rate_limits() {
             return;
         }
 
@@ -4451,6 +4581,17 @@ impl ChatWidget {
         });
 
         self.rate_limit_poller = Some(handle);
+    }
+
+    fn should_prefetch_rate_limits(&self) -> bool {
+        if !self.config.model_provider.requires_openai_auth {
+            return false;
+        }
+
+        self.auth_manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -5083,18 +5224,14 @@ impl ChatWidget {
         );
     }
 
-    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    /// Open the permissions popup (alias for /permissions).
     pub(crate) fn open_approvals_popup(&mut self) {
-        self.open_approval_mode_popup(true);
+        self.open_permissions_popup();
     }
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
-        self.open_approval_mode_popup(include_read_only);
-    }
-
-    fn open_approval_mode_popup(&mut self, include_read_only: bool) {
         let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -5123,7 +5260,7 @@ impl ChatWidget {
             } else {
                 preset.label.to_string()
             };
-            let description = Some(preset.description.to_string());
+            let description = Some(preset.description.replace(" (Identical to Agent mode)", ""));
             let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
@@ -5441,8 +5578,8 @@ impl ChatWidget {
         // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
         // so downstream policy-change hooks don't re-trigger the warning.
         let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals),
-        // to avoid duplicate warnings from the ensuing policy change.
+        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
+        // /permissions), to avoid duplicate warnings from the ensuing policy change.
         if preset.is_some() {
             accept_actions.push(Box::new(|tx| {
                 tx.send(AppEvent::SkipNextWorldWritableScan);
@@ -6237,7 +6374,10 @@ impl ChatWidget {
             return;
         }
 
-        match self.connectors_cache.clone() {
+        let connectors_cache = self.connectors_cache.clone();
+        self.prefetch_connectors_with_options(true);
+
+        match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
                 if snapshot.connectors.is_empty() {
                     self.add_info_message("No apps available.".to_string(), None);
@@ -6247,8 +6387,6 @@ impl ChatWidget {
             }
             ConnectorsCacheState::Failed(err) => {
                 self.add_to_history(history_cell::new_error_event(err));
-                // Retry on demand so `/apps` can recover after transient failures.
-                self.prefetch_connectors();
             }
             ConnectorsCacheState::Loading => {
                 self.add_to_history(history_cell::new_info_event(
@@ -6257,7 +6395,6 @@ impl ChatWidget {
                 ));
             }
             ConnectorsCacheState::Uninitialized => {
-                self.prefetch_connectors();
                 self.add_to_history(history_cell::new_info_event(
                     "Apps are still loading.".to_string(),
                     Some("Try again in a moment.".to_string()),
@@ -6268,6 +6405,11 @@ impl ChatWidget {
     }
 
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
+        self.bottom_pane
+            .show_selection_view(self.connectors_popup_params(connectors));
+    }
+
+    fn connectors_popup_params(&self, connectors: &[connectors::AppInfo]) -> SelectionViewParams {
         let total = connectors.len();
         let installed = connectors
             .iter()
@@ -6335,7 +6477,8 @@ impl ChatWidget {
             items.push(item);
         }
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        SelectionViewParams {
+            view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(Self::connectors_popup_hint_line()),
             items,
@@ -6343,7 +6486,14 @@ impl ChatWidget {
             search_placeholder: Some("Type to search apps".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
-        });
+        }
+    }
+
+    fn refresh_connectors_popup_if_open(&mut self, connectors: &[connectors::AppInfo]) {
+        let _ = self.bottom_pane.replace_selection_view_if_active(
+            CONNECTORS_SELECTION_VIEW_ID,
+            self.connectors_popup_params(connectors),
+        );
     }
 
     fn connectors_popup_hint_line() -> Line<'static> {
@@ -6582,16 +6732,32 @@ impl ChatWidget {
         self.set_skills_from_response(&ev);
     }
 
-    pub(crate) fn on_connectors_loaded(&mut self, result: Result<ConnectorsSnapshot, String>) {
-        self.connectors_cache = match result {
-            Ok(connectors) => ConnectorsCacheState::Ready(connectors),
-            Err(err) => ConnectorsCacheState::Failed(err),
-        };
-        if let ConnectorsCacheState::Ready(snapshot) = &self.connectors_cache {
-            self.bottom_pane
-                .set_connectors_snapshot(Some(snapshot.clone()));
-        } else {
-            self.bottom_pane.set_connectors_snapshot(None);
+    pub(crate) fn on_connectors_loaded(
+        &mut self,
+        result: Result<ConnectorsSnapshot, String>,
+        is_final: bool,
+    ) {
+        if is_final {
+            self.connectors_prefetch_in_flight = false;
+        }
+
+        match result {
+            Ok(snapshot) => {
+                self.refresh_connectors_popup_if_open(&snapshot.connectors);
+                if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                    self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                }
+                self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+            }
+            Err(err) => {
+                if matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                    warn!("failed to refresh apps list; retaining current apps snapshot: {err}");
+                    return;
+                }
+
+                self.connectors_cache = ConnectorsCacheState::Failed(err);
+                self.bottom_pane.set_connectors_snapshot(None);
+            }
         }
     }
 
@@ -6768,6 +6934,12 @@ impl ChatWidget {
     pub(crate) fn thread_name(&self) -> Option<String> {
         self.thread_name.clone()
     }
+
+    /// Returns the current thread's precomputed rollout path.
+    ///
+    /// For fresh non-ephemeral threads this path may exist before the file is
+    /// materialized; rollout persistence is deferred until the first user
+    /// message is recorded.
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
     }

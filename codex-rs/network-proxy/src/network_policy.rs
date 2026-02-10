@@ -217,7 +217,7 @@ fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
 mod tests {
     use super::*;
 
-    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::state::network_proxy_state_for_policy;
@@ -228,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_invokes_decider_for_not_allowed() {
-        let state = network_proxy_state_for_policy(NetworkPolicy::default());
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
             let calls = calls.clone();
@@ -259,10 +259,10 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_denied() {
-        let state = network_proxy_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             denied_domains: vec!["blocked.com".to_string()],
-            ..NetworkPolicy::default()
+            ..NetworkProxySettings::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
@@ -299,10 +299,10 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_not_allowed_local() {
-        let state = network_proxy_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             allow_local_binding: false,
-            ..NetworkPolicy::default()
+            ..NetworkProxySettings::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({

@@ -405,6 +405,25 @@ impl ThreadManagerState {
         .await
     }
 
+    pub(crate) async fn resume_thread_from_rollout_with_source(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            Arc::clone(&self.auth_manager),
+            agent_control,
+            session_source,
+            Vec::new(),
+        )
+        .await
+    }
+
     /// Spawn a new thread with optional history and register it with the manager.
     pub(crate) async fn spawn_thread(
         &self,

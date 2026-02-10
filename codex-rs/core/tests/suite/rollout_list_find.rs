@@ -176,6 +176,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
         None,
     )
     .await?;
+    recorder.persist().await?;
     recorder.flush().await?;
 
     let index_path = home.path().join("session_index.jsonl");

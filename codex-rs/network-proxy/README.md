@@ -17,7 +17,7 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 Example config:
 
 ```toml
-[network_proxy]
+[network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
@@ -35,7 +35,6 @@ dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
-[network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com"]
@@ -148,8 +147,8 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
-- HTTPS tunneling uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
-  native toolchain and CMake on macOS/Linux/Windows.
+- HTTPS tunneling uses rustls via Rama's `rama-tls-rustls`; this avoids BoringSSL/OpenSSL symbol
+  collisions in mixed TLS dependency graphs.
 
 ## Security notes (important)
 

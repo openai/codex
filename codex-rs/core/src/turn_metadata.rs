@@ -1,12 +1,12 @@
 //! Helpers for computing and resolving optional per-turn metadata headers.
 //!
 //! This module owns both metadata construction and the shared timeout policy used by
-//! turn execution and startup websocket preconnect. Keeping timeout behavior centralized
+//! turn execution and startup websocket prewarm. Keeping timeout behavior centralized
 //! ensures both call sites treat timeout as the same best-effort fallback condition.
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -16,7 +16,6 @@ use crate::git_info::get_git_remote_urls_assume_git_repo;
 use crate::git_info::get_git_repo_root;
 use crate::git_info::get_head_commit_hash;
 
-/// Timeout used when resolving the optional turn-metadata header.
 pub(crate) const TURN_METADATA_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Resolves turn metadata with a shared timeout policy.
@@ -24,7 +23,7 @@ pub(crate) const TURN_METADATA_HEADER_TIMEOUT: Duration = Duration::from_millis(
 /// On timeout, this logs a warning and returns the provided fallback header.
 ///
 /// Keeping this helper centralized avoids drift between turn-time metadata resolution and startup
-/// websocket preconnect, both of which need identical timeout semantics.
+/// websocket prewarm, both of which need identical timeout semantics.
 pub(crate) async fn resolve_turn_metadata_header_with_timeout<F>(
     build_header: F,
     fallback_on_timeout: Option<String>,
@@ -57,7 +56,8 @@ struct TurnMetadata {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
 }
 
-pub async fn build_turn_metadata_header(cwd: &Path) -> Option<String> {
+pub async fn build_turn_metadata_header(cwd: PathBuf) -> Option<String> {
+    let cwd = cwd.as_path();
     let repo_root = get_git_repo_root(cwd)?;
 
     let (latest_git_commit_hash, associated_remote_urls) = tokio::join!(
