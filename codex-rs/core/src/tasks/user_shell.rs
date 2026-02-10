@@ -147,6 +147,7 @@ pub(crate) async fn execute_user_shell_command(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),
         ),
+        network: turn_context.config.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),
@@ -164,14 +165,9 @@ pub(crate) async fn execute_user_shell_command(
     });
 
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
-    let exec_result = execute_exec_env(
-        exec_env,
-        &sandbox_policy,
-        stdout_stream,
-        turn_context.config.network.clone(),
-    )
-    .or_cancel(&cancellation_token)
-    .await;
+    let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+        .or_cancel(&cancellation_token)
+        .await;
 
     match exec_result {
         Err(CancelErr::Cancelled) => {

@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_network_proxy::NetworkProxy;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -79,6 +80,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
+    pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -203,6 +205,7 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
+                    network: None,
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,

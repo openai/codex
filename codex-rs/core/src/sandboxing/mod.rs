@@ -45,6 +45,7 @@ pub struct ExecEnv {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -201,6 +202,7 @@ impl SandboxManager {
             command,
             cwd: spec.cwd,
             env,
+            network: network.cloned(),
             expiration: spec.expiration,
             sandbox,
             windows_sandbox_level,
@@ -218,8 +220,7 @@ impl SandboxManager {
 pub async fn execute_env(
     env: ExecEnv,
     policy: &SandboxPolicy,
-    network: Option<NetworkProxy>,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env, policy, stdout_stream, network).await
+    execute_exec_env(env, policy, stdout_stream).await
 }

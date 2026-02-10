@@ -215,19 +215,19 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_env, sandbox_policy, network, stdout_stream).await
+    crate::sandboxing::execute_env(exec_env, sandbox_policy, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
     env: ExecEnv,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
-    network: Option<NetworkProxy>,
 ) -> Result<ExecToolCallOutput> {
     let ExecEnv {
         command,
         cwd,
         env,
+        network,
         expiration,
         sandbox,
         windows_sandbox_level,
