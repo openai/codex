@@ -46,13 +46,13 @@ async fn list_models_returns_chatgpt_models() -> Result<()> {
 fn expected_slugs() -> Vec<String> {
     vec![
         "gpt-5.2-codex".into(),
-        "gpt-5.2".into(),
         "gpt-5.1-codex-max".into(),
         "gpt-5.1-codex".into(),
-        "gpt-5.1-codex-mini".into(),
+        "gpt-5.2".into(),
         "gpt-5.1".into(),
         "gpt-5-codex".into(),
         "gpt-5".into(),
+        "gpt-5.1-codex-mini".into(),
         "gpt-5-codex-mini".into(),
         "bengalfox".into(),
         "boomslang".into(),
