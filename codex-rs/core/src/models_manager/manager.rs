@@ -84,7 +84,7 @@ impl ModelsManager {
         {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.get_remote_models(config).await;
+        let remote_models = self.get_remote_models().await;
         self.build_available_models(remote_models)
     }
 
@@ -98,8 +98,8 @@ impl ModelsManager {
     /// Attempt to list models without blocking, using the current cached state.
     ///
     /// Returns an error if the internal lock cannot be acquired.
-    pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
-        let remote_models = self.try_get_remote_models(config)?;
+    pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
+        let remote_models = self.try_get_remote_models()?;
         Ok(self.build_available_models(remote_models))
     }
 
@@ -123,7 +123,7 @@ impl ModelsManager {
         {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.get_remote_models(config).await;
+        let remote_models = self.get_remote_models().await;
         let available = self.build_available_models(remote_models);
         available
             .iter()
@@ -137,7 +137,7 @@ impl ModelsManager {
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
-            .find_remote_model_by_longest_prefix(model, config)
+            .find_remote_model_by_longest_prefix(model)
             .await;
         let model = if let Some(remote) = remote {
             remote
@@ -150,10 +150,9 @@ impl ModelsManager {
     async fn find_remote_model_by_longest_prefix(
         &self,
         model: &str,
-        config: &Config,
     ) -> Option<ModelInfo> {
         let mut best: Option<ModelInfo> = None;
-        for candidate in self.get_remote_models(config).await {
+        for candidate in self.get_remote_models().await {
             if !model.starts_with(&candidate.slug) {
                 continue;
             }
@@ -473,7 +472,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("refresh succeeds");
-        let cached_remote = manager.get_remote_models(&config).await;
+        let cached_remote = manager.get_remote_models().await;
         assert_models_contain(&cached_remote, &remote_models);
 
         let available = manager
@@ -529,14 +528,14 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("first refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
+        assert_models_contain(&manager.get_remote_models().await, &remote_models);
 
         // Second call should read from cache and avoid the network.
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("cached refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
+        assert_models_contain(&manager.get_remote_models().await, &remote_models);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -599,7 +598,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
+        assert_models_contain(&manager.get_remote_models().await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,
@@ -667,7 +666,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
+        assert_models_contain(&manager.get_remote_models().await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,
@@ -726,7 +725,7 @@ mod tests {
             .expect("second refresh succeeds");
 
         let available = manager
-            .try_list_models(&config)
+            .try_list_models()
             .expect("models should be available");
         assert!(
             available.iter().any(|preset| preset.model == "remote-new"),
