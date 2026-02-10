@@ -45,8 +45,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 
-const CONTEXT_COMPACTED_MARKER: &str = "Context compacted";
-
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
 pub(crate) struct BacktrackState {
@@ -513,9 +511,11 @@ impl App {
 
     /// Trim `transcript_cells` to preserve only content before the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
+        let before_count = agent_group_count(&self.transcript_cells);
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
         let remaining = agent_group_count(&self.transcript_cells);
-        self.chat_widget.truncate_agent_turn_markdowns(remaining);
+        let removed = before_count.saturating_sub(remaining);
+        self.chat_widget.drop_recent_agent_turn_markdowns(removed);
     }
 }
 
@@ -585,29 +585,9 @@ fn agent_group_positions_iter(
         .skip(start)
         .filter_map(move |(idx, cell)| {
             let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
-            let is_copy_source_group =
-                is_agent && !cell.is_stream_continuation() && !is_compaction_marker_cell(cell);
+            let is_copy_source_group = is_agent && !cell.is_stream_continuation();
             is_copy_source_group.then_some(idx)
         })
-}
-
-fn is_compaction_marker_cell(cell: &Arc<dyn crate::history_cell::HistoryCell>) -> bool {
-    let Some(agent_cell) = cell.as_any().downcast_ref::<AgentMessageCell>() else {
-        return false;
-    };
-    let rendered_lines = crate::history_cell::HistoryCell::display_lines(agent_cell, u16::MAX);
-    let Some(first_line) = rendered_lines.first() else {
-        return false;
-    };
-
-    line_text(first_line).trim_start_matches(['•', ' ']).trim() == CONTEXT_COMPACTED_MARKER
-}
-
-fn line_text(line: &ratatui::text::Line<'_>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect()
 }
 
 #[cfg(test)]
@@ -742,9 +722,9 @@ mod tests {
         let cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(AgentMessageCell::new(vec![Line::from("first")], true))
                 as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(
-                vec![Line::from("Context compacted")],
-                true,
+            Arc::new(crate::history_cell::new_info_event(
+                "Context compacted".to_string(),
+                None,
             )) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
                 as Arc<dyn HistoryCell>,

@@ -94,10 +94,16 @@ impl SuppressStderr {
             }
             // Open /dev/null and point fd 2 at it.
             let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-            if devnull >= 0 {
-                libc::dup2(devnull, 2);
-                libc::close(devnull);
+            if devnull < 0 {
+                libc::close(saved);
+                return Self { saved_fd: None };
             }
+            if libc::dup2(devnull, 2) < 0 {
+                libc::close(saved);
+                libc::close(devnull);
+                return Self { saved_fd: None };
+            }
+            libc::close(devnull);
             Self {
                 saved_fd: Some(saved),
             }
