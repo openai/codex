@@ -66,6 +66,15 @@ struct SpawnAgentsOnCsvResult {
     total_items: usize,
     completed_items: usize,
     failed_items: usize,
+    job_error: Option<String>,
+    failed_item_errors: Option<Vec<AgentJobFailureSummary>>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentJobFailureSummary {
+    item_id: String,
+    source_id: Option<String>,
+    last_error: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -376,6 +385,43 @@ mod spawn_agents_on_csv {
                     "failed to load agent job progress {job_id}: {err}"
                 ))
             })?;
+        let mut job_error = job.last_error.clone().filter(|err| !err.trim().is_empty());
+        let failed_item_errors = if progress.failed_items > 0 {
+            let items = db
+                .list_agent_job_items(
+                    job_id.as_str(),
+                    Some(codex_state::AgentJobItemStatus::Failed),
+                    Some(5),
+                )
+                .await
+                .unwrap_or_default();
+            let summaries: Vec<_> = items
+                .into_iter()
+                .filter_map(|item| {
+                    let last_error = item.last_error.unwrap_or_default();
+                    if last_error.trim().is_empty() {
+                        return None;
+                    }
+                    Some(AgentJobFailureSummary {
+                        item_id: item.item_id,
+                        source_id: item.source_id,
+                        last_error,
+                    })
+                })
+                .collect();
+            if summaries.is_empty() {
+                if job_error.is_none() {
+                    job_error = Some(
+                        "agent job has failed items but no error details were recorded".to_string(),
+                    );
+                }
+                None
+            } else {
+                Some(summaries)
+            }
+        } else {
+            None
+        };
         let content = serde_json::to_string(&SpawnAgentsOnCsvResult {
             job_id,
             status: job.status.as_str().to_string(),
@@ -383,6 +429,8 @@ mod spawn_agents_on_csv {
             total_items: progress.total_items,
             completed_items: progress.completed_items,
             failed_items: progress.failed_items,
+            job_error,
+            failed_item_errors,
         })
         .map_err(|err| {
             FunctionCallError::Fatal(format!(
