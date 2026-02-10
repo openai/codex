@@ -8,6 +8,7 @@ use chrono::Local;
 use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -62,8 +63,7 @@ struct StatusHistoryCell {
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
-    approval: String,
-    sandbox: String,
+    permissions: String,
     agents_summary: String,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
@@ -167,6 +167,13 @@ impl StatusHistoryCell {
                 }
             }
         };
+        let permissions = match (config.approval_policy.value(), config.sandbox_policy.get()) {
+            (AskForApproval::OnRequest, SandboxPolicy::WorkspaceWrite { .. }) => {
+                "Default".to_string()
+            }
+            (AskForApproval::Never, SandboxPolicy::DangerFullAccess) => "Full Access".to_string(),
+            _ => format!("Custom ({sandbox}, {approval})"),
+        };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
@@ -195,8 +202,7 @@ impl StatusHistoryCell {
             model_name,
             model_details,
             directory: config.cwd.clone(),
-            approval,
-            sandbox,
+            permissions,
             agents_summary,
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
@@ -376,11 +382,10 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> =
-            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
 
@@ -443,8 +448,7 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
-        lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
+        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {
