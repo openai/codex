@@ -1,12 +1,9 @@
 use crate::bash_parse::parse_shell_lc_plain_commands;
-#[cfg(windows)]
-#[path = "windows_dangerous_commands.rs"]
-mod windows_dangerous_commands;
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
     #[cfg(windows)]
     {
-        if windows_dangerous_commands::is_dangerous_command_windows(command) {
+        if crate::windows_dangerous_commands::is_dangerous_command_windows(command) {
             return true;
         }
     }
