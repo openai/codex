@@ -2189,6 +2189,16 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
+    fn on_context_compacted(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.handle_stream_finished();
+        self.add_to_history(history_cell::new_info_event(
+            "Context compacted".to_owned(),
+            None,
+        ));
+        self.request_redraw();
+    }
+
     fn on_agent_message_delta(&mut self, delta: String) {
         self.handle_streaming_delta(delta);
     }
@@ -5069,8 +5079,9 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn truncate_agent_turn_markdowns(&mut self, remaining: usize) {
-        self.agent_turn_markdowns.truncate(remaining);
+    pub(crate) fn drop_recent_agent_turn_markdowns(&mut self, count: usize) {
+        let keep_len = self.agent_turn_markdowns.len().saturating_sub(count);
+        self.agent_turn_markdowns.truncate(keep_len);
         self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
     }
 
@@ -7101,7 +7112,7 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => self.on_context_compacted(),
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
