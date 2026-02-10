@@ -2019,15 +2019,17 @@ impl App {
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
+                #[cfg(target_os = "windows")]
+                let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
+                if let Err(err) = self.config.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
+                if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));

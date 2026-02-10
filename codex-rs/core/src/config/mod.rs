@@ -4625,15 +4625,15 @@ trust_level = "untrusted"
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(resolution.policy, SandboxPolicy::ReadOnly),
+                matches!(resolution, SandboxPolicy::ReadOnly),
                 "Expected ReadOnly on Windows, got {:?}",
-                resolution.policy
+                resolution
             );
         } else {
             assert!(
-                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
+                matches!(resolution, SandboxPolicy::WorkspaceWrite { .. }),
                 "Expected WorkspaceWrite for untrusted project, got {:?}",
-                resolution.policy
+                resolution
             );
         }
 
@@ -4676,7 +4676,7 @@ trust_level = "untrusted"
             Some(&constrained),
         );
 
-        assert_eq!(resolution.policy, SandboxPolicy::DangerFullAccess);
+        assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
         Ok(())
     }
 

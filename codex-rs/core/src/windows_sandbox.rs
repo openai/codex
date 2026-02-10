@@ -210,6 +210,7 @@ pub fn run_legacy_setup_preflight(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::WindowsToml;
     use crate::features::Features;
     use crate::features::FeaturesToml;
     use pretty_assertions::assert_eq;

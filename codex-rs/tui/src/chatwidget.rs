@@ -5892,6 +5892,7 @@ impl ChatWidget {
     }
 
     /// Set the sandbox policy in the widget's config copy.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         self.config.sandbox_policy.set(policy)?;
         Ok(())
