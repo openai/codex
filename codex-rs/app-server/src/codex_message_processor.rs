@@ -514,11 +514,8 @@ impl CodexMessageProcessor {
                 self.thread_compact_start(request_id, params).await;
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
-                self.thread_background_terminals_clean(
-                    to_connection_request_id(request_id),
-                    params,
-                )
-                .await;
+                self.thread_background_terminals_clean(request_id, params)
+                    .await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -1156,7 +1153,6 @@ impl CodexMessageProcessor {
     async fn login_chatgpt_auth_tokens(
         &mut self,
         request_id: RequestId,
-        id_token: String,
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
