@@ -790,7 +790,7 @@ pub(crate) struct ChatWidget {
     /// Some models only provide `TurnComplete.last_agent_message`. This flag lets us use
     /// `TurnComplete` as a fallback source without duplicating entries when `AgentMessage` was
     /// already received in the same turn.
-    saw_agent_message_this_turn: bool,
+    saw_copy_source_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
@@ -1980,7 +1980,7 @@ impl ChatWidget {
             .agent_turn_markdowns
             .last()
             .map(|entry| entry.markdown.clone());
-        self.saw_agent_message_this_turn = true;
+        self.saw_copy_source_this_turn = true;
     }
 
     // --- Small event handlers ---
@@ -1988,7 +1988,7 @@ impl ChatWidget {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.completed_turn_count = 0;
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(/*skills*/ None);
@@ -2065,7 +2065,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         self.submit_op(AppCommand::list_skills(
             Vec::new(),
             /*force_reload*/ true,
@@ -2348,7 +2348,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2387,11 +2387,11 @@ impl ChatWidget {
         if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
-            && !self.saw_agent_message_this_turn
+            && !self.saw_copy_source_this_turn
         {
             self.record_agent_markdown(message);
         }
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -4736,7 +4736,7 @@ impl ChatWidget {
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
             completed_turn_count: 0,
-            saw_agent_message_this_turn: false,
+            saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
