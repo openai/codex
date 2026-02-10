@@ -13,8 +13,8 @@ The public interface of this crate is intentionally small and uniform:
 
 - **Responses endpoint**
   - Input:
-    - `ResponsesRequest` for structured request fields (`model`, `instructions`, `input`, `tools`, `parallel_tool_calls`, reasoning/text controls, headers/session metadata).
-    - Convert to wire payload via `ResponsesRequest::into_raw_request(...)`, producing `ResponsesRawRequest`.
+    - `ResponsesApiRequest` for the request body (`model`, `instructions`, `input`, `tools`, `parallel_tool_calls`, reasoning/text controls).
+    - `ResponsesOptions` for transport/header concerns (`conversation_id`, `session_source`, `extra_headers`, `compression`, `turn_state`).
   - Output: a `ResponseStream` of `ResponseEvent` (both re-exported from `common`).
 
 - **Compaction endpoint**

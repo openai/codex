@@ -134,13 +134,13 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResponsesApiRequest<'a> {
-    pub model: &'a str,
-    pub instructions: &'a str,
-    pub input: &'a [ResponseItem],
-    pub tools: &'a [serde_json::Value],
-    pub tool_choice: &'static str,
+#[derive(Debug, Serialize, Clone)]
+pub struct ResponsesApiRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<serde_json::Value>,
+    pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
@@ -150,6 +150,26 @@ pub struct ResponsesApiRequest<'a> {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+}
+
+impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
+    fn from(request: &ResponsesApiRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+            instructions: request.instructions.clone(),
+            previous_response_id: None,
+            input: request.input.clone(),
+            tools: request.tools.clone(),
+            tool_choice: request.tool_choice.clone(),
+            parallel_tool_calls: request.parallel_tool_calls,
+            reasoning: request.reasoning.clone(),
+            store: request.store,
+            stream: request.stream,
+            include: request.include.clone(),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            text: request.text.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

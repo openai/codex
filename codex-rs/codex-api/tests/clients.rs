@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
 use codex_api::Provider;
+use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
-use codex_api::ResponsesRequest;
+use codex_api::ResponsesOptions;
 use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
@@ -248,26 +249,31 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
     let mut provider = provider("openai");
     provider.retry.max_attempts = 2;
 
-    let request = ResponsesRequest {
+    let request = ResponsesApiRequest {
         model: "gpt-test".into(),
         instructions: "Say hi".into(),
         input: Vec::new(),
         tools: Vec::new(),
+        tool_choice: "auto".into(),
         parallel_tool_calls: false,
         reasoning: None,
+        store: false,
+        stream: true,
         include: Vec::new(),
         prompt_cache_key: None,
         text: None,
-        conversation_id: None,
-        session_source: None,
-        store_override: None,
-        extra_headers: HeaderMap::new(),
-        compression: Compression::None,
-    }
-    .into_raw_request(&provider)?;
+    };
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
-    let _stream = client.stream_request(request, None).await?;
+    let _stream = client
+        .stream_request(
+            request,
+            ResponsesOptions {
+                compression: Compression::None,
+                ..Default::default()
+            },
+        )
+        .await?;
     assert_eq!(transport.attempts(), 2);
     Ok(())
 }

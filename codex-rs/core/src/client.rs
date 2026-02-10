@@ -45,10 +45,9 @@ use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
 use codex_api::ResponseCreateWsRequest;
+use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
-use codex_api::ResponsesRawRequest;
-use codex_api::ResponsesRequest;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
@@ -450,8 +449,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        options: &ApiResponsesOptions,
-    ) -> Result<ResponsesRequest> {
+    ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
@@ -489,30 +487,19 @@ impl ModelClientSession {
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
-        let store_override = Some(provider.is_azure_responses_endpoint());
-        let ApiResponsesOptions {
-            conversation_id,
-            session_source,
-            extra_headers,
-            compression,
-            ..
-        } = options;
-
-        let request = ResponsesRequest {
+        let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
             input,
             tools,
+            tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
+            store: provider.is_azure_responses_endpoint(),
+            stream: true,
             include,
             prompt_cache_key,
             text,
-            conversation_id: conversation_id.clone(),
-            session_source: session_source.clone(),
-            store_override,
-            extra_headers: extra_headers.clone(),
-            compression: *compression,
         };
         Ok(request)
     }
@@ -740,19 +727,14 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                &options,
             )?;
-            let request: ResponsesRawRequest = request
-                .into_raw_request(&client_setup.api_provider)
-                .map_err(map_api_error)?;
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let turn_state = options.turn_state.clone();
-            let stream_result = client.stream_request(request, turn_state).await;
+            let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
                 Ok(stream) => {
@@ -796,9 +778,8 @@ impl ModelClientSession {
                 model_info,
                 effort,
                 summary,
-                &options,
             )?;
-            let ws_payload = ResponseCreateWsRequest::try_from(&request).map_err(map_api_error)?;
+            let ws_payload = ResponseCreateWsRequest::from(&request);
 
             match self
                 .websocket_connection(
