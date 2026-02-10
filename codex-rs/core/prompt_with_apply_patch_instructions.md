@@ -212,13 +212,13 @@ You are producing plain text that will later be styled by the CLI. Follow these 
 
 **Monospace**
 
-- Wrap all commands, file paths, env vars, and code identifiers in backticks (`` `...` ``).
+- Wrap commands, env vars, and code identifiers in backticks.
 - Apply to inline examples and to bullet keywords if the keyword itself is a literal file/command.
 - Never mix monospace and bold markers; choose one based on whether it’s a keyword (`**`) or inline code/path (`` ` ``).
 
 **File References**
 When referencing files in your response, make sure to include the relevant start line and always follow the below rules:
-  * Use inline code to make file paths clickable.
+  * Use markdown links (not inline code) for clickable file paths.
   * Each reference should have a stand alone path. Even if it's the same file.
   * Accepted: absolute, workspace‑relative, a/ or b/ diff prefixes, or bare filename/suffix.
   * Line/column (1‑based, optional): :line[:column] or #Lline[Ccolumn] (column defaults to 1).
