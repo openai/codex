@@ -15,11 +15,11 @@ pub use codex_client::TransportError;
 
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;
-pub use crate::common::MemoryTrace;
-pub use crate::common::MemoryTraceMetadata;
-pub use crate::common::MemoryTraceSummarizeInput;
-pub use crate::common::MemoryTraceSummaryOutput;
+pub use crate::common::MemorySummarizeInput;
+pub use crate::common::MemorySummarizeOutput;
 pub use crate::common::Prompt;
+pub use crate::common::RawMemory;
+pub use crate::common::RawMemoryMetadata;
 pub use crate::common::ResponseAppendWsRequest;
 pub use crate::common::ResponseCreateWsRequest;
 pub use crate::common::ResponseEvent;

@@ -17,6 +17,7 @@ members = [
     "cli",
     "common",
     "core",
+    "hooks",
     "secrets",
     "exec",
     "exec-server",
@@ -46,6 +47,7 @@ members = [
     "utils/home-dir",
     "utils/pty",
     "utils/readiness",
+    "utils/rustls-provider",
     "utils/string",
     "codex-client",
     "codex-api",
@@ -81,6 +83,7 @@ codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-hooks = { path = "hooks" }
 codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
@@ -111,6 +114,7 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
+codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -128,6 +132,7 @@ assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
+askama = "0.15.4"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bm25 = "2.3.2"

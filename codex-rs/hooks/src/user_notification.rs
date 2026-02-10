@@ -1,14 +1,14 @@
+use std::path::Path;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use serde::Serialize;
-use std::path::Path;
-use std::process::Stdio;
 
-use super::registry::command_from_argv;
-use super::types::Hook;
-use super::types::HookEvent;
-use super::types::HookOutcome;
-use super::types::HookPayload;
+use crate::Hook;
+use crate::HookEvent;
+use crate::HookOutcome;
+use crate::HookPayload;
+use crate::command_from_argv;
 
 /// Legacy notify payload appended as the final argv argument for backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -28,10 +28,7 @@ enum UserNotification {
     },
 }
 
-pub(super) fn legacy_notify_json(
-    hook_event: &HookEvent,
-    cwd: &Path,
-) -> Result<String, serde_json::Error> {
+pub fn legacy_notify_json(hook_event: &HookEvent, cwd: &Path) -> Result<String, serde_json::Error> {
     serde_json::to_string(&match hook_event {
         HookEvent::AfterAgent { event } => UserNotification::AgentTurnComplete {
             thread_id: event.thread_id.to_string(),
@@ -43,7 +40,7 @@ pub(super) fn legacy_notify_json(
     })
 }
 
-pub(super) fn notify_hook(argv: Vec<String>) -> Hook {
+pub fn notify_hook(argv: Vec<String>) -> Hook {
     let argv = Arc::new(argv);
     Hook {
         func: Arc::new(move |payload: &HookPayload| {
@@ -72,14 +69,13 @@ pub(super) fn notify_hook(argv: Vec<String>) -> Hook {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::*;
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
+
+    use super::*;
 
     fn expected_notification_json() -> Value {
         json!({
@@ -112,7 +108,7 @@ mod tests {
     #[test]
     fn legacy_notify_json_matches_historical_wire_shape() -> Result<()> {
         let hook_event = HookEvent::AfterAgent {
-            event: super::super::types::HookEventAfterAgent {
+            event: crate::HookEventAfterAgent {
                 thread_id: ThreadId::from_string("b5f6c1c2-1111-2222-3333-444455556666")
                     .expect("valid thread id"),
                 turn_id: "12345".to_string(),

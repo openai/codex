@@ -130,10 +130,7 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let mut env = create_env(&config.shell_environment_policy, None);
-    if let Some(network) = config.network.as_ref() {
-        network.apply_to_env(&mut env);
-    }
+    let env = create_env(&config.shell_environment_policy, None);
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
@@ -216,6 +213,19 @@ async fn run_command_under_sandbox(
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
+    // This proxy should only live for the lifetime of the child process.
+    let network_proxy = match config.network.as_ref() {
+        Some(spec) => Some(
+            spec.start_proxy()
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
+        ),
+        None => None,
+    };
+    let network = network_proxy
+        .as_ref()
+        .map(codex_core::config::StartedNetworkProxy::proxy);
+
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
@@ -225,7 +235,7 @@ async fn run_command_under_sandbox(
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
-                None,
+                network.as_ref(),
                 env,
             )
             .await?
@@ -245,7 +255,7 @@ async fn run_command_under_sandbox(
                 sandbox_policy_cwd.as_path(),
                 use_bwrap_sandbox,
                 stdio_policy,
-                None,
+                network.as_ref(),
                 env,
             )
             .await?

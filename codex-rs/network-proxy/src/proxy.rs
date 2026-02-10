@@ -8,6 +8,7 @@ use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
@@ -362,6 +363,18 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
+    pub fn http_addr(&self) -> SocketAddr {
+        self.http_addr
+    }
+
+    pub fn socks_addr(&self) -> SocketAddr {
+        self.socks_addr
+    }
+
+    pub fn admin_addr(&self) -> SocketAddr {
+        self.admin_addr
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
@@ -380,6 +393,8 @@ impl NetworkProxy {
             warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
+
+        ensure_rustls_crypto_provider();
 
         if !unix_socket_permissions_supported() {
             warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
