@@ -30,6 +30,7 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
@@ -478,14 +479,12 @@ impl App {
     ///
     /// Returns `true` when local transcript state changed.
     pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
-        let before_count = agent_group_count(&self.transcript_cells);
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
-        let remaining = agent_group_count(&self.transcript_cells);
-        let removed = before_count.saturating_sub(remaining);
+        let remaining_turns = user_count(&self.transcript_cells);
         self.chat_widget
-            .drop_recent_agent_turn_markdowns(removed);
+            .truncate_agent_turn_markdowns_to_turn_count(remaining_turns);
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -503,15 +502,13 @@ impl App {
             // Ignore rollbacks targeting a prior thread.
             return;
         }
-        let before_count = agent_group_count(&self.transcript_cells);
         if trim_transcript_cells_to_nth_user(
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
-            let remaining = agent_group_count(&self.transcript_cells);
-            let removed = before_count.saturating_sub(remaining);
+            let remaining_turns = user_count(&self.transcript_cells);
             self.chat_widget
-                .drop_recent_agent_turn_markdowns(removed);
+                .truncate_agent_turn_markdowns_to_turn_count(remaining_turns);
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
@@ -646,10 +643,12 @@ fn user_positions_iter(
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
 }
 
+#[cfg(test)]
 fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     agent_group_positions_iter(cells).count()
 }
 
+#[cfg(test)]
 fn agent_group_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
