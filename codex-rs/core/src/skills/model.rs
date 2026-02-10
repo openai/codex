@@ -24,17 +24,9 @@ impl SkillMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SkillPolicy {
     pub allow_implicit_invocation: Option<bool>,
-}
-
-impl Default for SkillPolicy {
-    fn default() -> Self {
-        Self {
-            allow_implicit_invocation: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
