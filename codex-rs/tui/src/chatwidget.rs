@@ -253,6 +253,7 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const MAX_AGENT_COPY_HISTORY: usize = 256;
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
@@ -1943,9 +1944,12 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
-        let markdown = message.to_string();
-        self.last_agent_markdown = Some(markdown.clone());
-        self.agent_turn_markdowns.push(markdown);
+        self.agent_turn_markdowns.push(message.to_string());
+        if self.agent_turn_markdowns.len() > MAX_AGENT_COPY_HISTORY {
+            let overflow = self.agent_turn_markdowns.len() - MAX_AGENT_COPY_HISTORY;
+            self.agent_turn_markdowns.drain(0..overflow);
+        }
+        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
         self.saw_agent_message_this_turn = true;
     }
 

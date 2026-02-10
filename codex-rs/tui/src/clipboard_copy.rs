@@ -1,6 +1,11 @@
 use base64::Engine;
 use std::io::Write;
 
+const OSC52_MAX_RAW_BYTES: usize = 100_000;
+#[cfg(target_os = "macos")]
+static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
 /// Copy text to the system clipboard.
 ///
 /// Over SSH, uses OSC 52 so the text reaches the *local* terminal emulator's
@@ -53,6 +58,11 @@ fn is_ssh_session() -> bool {
 /// fd 2 to `/dev/null` around the call to keep the screen clean.
 #[cfg(not(target_os = "android"))]
 fn arboard_copy(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let _stderr_lock = STDERR_SUPPRESSION_MUTEX
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .map_err(|_| "stderr suppression lock poisoned".to_string())?;
     let _guard = SuppressStderr::new();
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
@@ -119,8 +129,7 @@ impl SuppressStderr {
 
 /// Write text to the clipboard via the OSC 52 terminal escape sequence.
 fn osc52_copy(text: &str) -> Result<(), String> {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let sequence = format!("\x1b]52;c;{encoded}\x07");
+    let sequence = osc52_sequence(text)?;
     let mut stdout = std::io::stdout().lock();
     stdout
         .write_all(sequence.as_bytes())
@@ -130,22 +139,51 @@ fn osc52_copy(text: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to flush OSC 52: {e}"))
 }
 
+fn osc52_sequence(text: &str) -> Result<String, String> {
+    let raw_bytes = text.len();
+    if raw_bytes > OSC52_MAX_RAW_BYTES {
+        return Err(format!(
+            "OSC 52 payload too large ({raw_bytes} bytes; max {OSC52_MAX_RAW_BYTES})"
+        ));
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    Ok(format!("\x1b]52;c;{encoded}\x07"))
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
     use std::cell::Cell;
 
+    use super::OSC52_MAX_RAW_BYTES;
     use super::copy_to_clipboard_with;
+    use super::osc52_sequence;
 
     #[test]
     fn osc52_encoding_roundtrips() {
         use base64::Engine;
         let text = "# Hello\n\n```rust\nfn main() {}\n```\n";
-        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        let sequence = osc52_sequence(text).expect("OSC 52 sequence");
+        let encoded = sequence
+            .trim_start_matches("\u{1b}]52;c;")
+            .trim_end_matches('\u{7}');
         let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&encoded)
+            .decode(encoded)
             .unwrap();
         assert_eq!(decoded, text.as_bytes());
+    }
+
+    #[test]
+    fn osc52_rejects_payload_larger_than_limit() {
+        let text = "x".repeat(OSC52_MAX_RAW_BYTES + 1);
+        assert_eq!(
+            osc52_sequence(&text),
+            Err(format!(
+                "OSC 52 payload too large ({} bytes; max {OSC52_MAX_RAW_BYTES})",
+                OSC52_MAX_RAW_BYTES + 1
+            ))
+        );
     }
 
     #[test]
