@@ -6745,7 +6745,9 @@ impl ChatWidget {
         match result {
             Ok(snapshot) => {
                 self.refresh_connectors_popup_if_open(&snapshot.connectors);
-                self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                    self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                }
                 self.bottom_pane.set_connectors_snapshot(Some(snapshot));
             }
             Err(err) => {
