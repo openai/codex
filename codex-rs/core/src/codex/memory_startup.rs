@@ -454,7 +454,7 @@ fn memory_scope_targets_for_candidate(
     vec![
         MemoryScopeTarget {
             scope_kind: memories::MEMORY_SCOPE_KIND_CWD,
-            scope_key: candidate.cwd.display().to_string(),
+            scope_key: memories::memory_scope_key_for_cwd(&candidate.cwd),
             memory_root: memories::memory_root_for_cwd(&config.codex_home, &candidate.cwd),
         },
         MemoryScopeTarget {

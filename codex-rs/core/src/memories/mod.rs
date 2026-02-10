@@ -65,6 +65,13 @@ pub(crate) fn memory_root_for_cwd(codex_home: &Path, cwd: &Path) -> PathBuf {
     codex_home.join("memories").join(bucket).join(MEMORY_SUBDIR)
 }
 
+/// Returns the DB scope key for a cwd-scoped memory entry.
+///
+/// This uses the same normalization/fallback behavior as cwd bucket derivation.
+pub(crate) fn memory_scope_key_for_cwd(cwd: &Path) -> String {
+    normalize_cwd_for_memory(cwd).display().to_string()
+}
+
 /// Returns the on-disk user-shared memory root directory.
 pub(crate) fn memory_root_for_user(codex_home: &Path) -> PathBuf {
     codex_home
@@ -87,10 +94,14 @@ pub(crate) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
 }
 
 fn memory_bucket_for_cwd(cwd: &Path) -> String {
-    let normalized = normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let normalized = normalize_cwd_for_memory(cwd);
     let normalized = normalized.to_string_lossy();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let full_hash = format!("{:x}", hasher.finalize());
     full_hash[..CWD_MEMORY_BUCKET_HEX_LEN].to_string()
+}
+
+fn normalize_cwd_for_memory(cwd: &Path) -> PathBuf {
+    normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }

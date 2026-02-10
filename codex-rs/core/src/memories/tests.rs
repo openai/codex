@@ -4,6 +4,7 @@ use super::StageOneResponseItemKinds;
 use super::StageOneRolloutFilter;
 use super::ensure_layout;
 use super::memory_root_for_cwd;
+use super::memory_scope_key_for_cwd;
 use super::memory_summary_file;
 use super::parse_stage_one_output;
 use super::prune_to_recent_memories_and_rebuild_summary;
@@ -97,6 +98,21 @@ fn memory_root_encoding_avoids_component_collisions() {
     assert_ne!(root_question, root_hash);
     assert!(!root_question.display().to_string().contains("workspace"));
     assert!(!root_hash.display().to_string().contains("workspace"));
+}
+
+#[test]
+fn memory_scope_key_uses_normalized_cwd() {
+    let dir = tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("mkdir workspace");
+
+    let alias = workspace.join("nested").join("..");
+    let normalized = workspace
+        .canonicalize()
+        .expect("canonical workspace path should resolve");
+    let alias_key = memory_scope_key_for_cwd(&alias);
+    let normalized_key = memory_scope_key_for_cwd(&normalized);
+    assert_eq!(alias_key, normalized_key);
 }
 
 #[test]
