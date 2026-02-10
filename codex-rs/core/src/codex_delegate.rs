@@ -478,6 +478,7 @@ mod tests {
             .send(Event {
                 id: "full".to_string(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: "turn-1".to_string(),
                     reason: TurnAbortReason::Interrupted,
                 }),
             })

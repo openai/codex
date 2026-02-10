@@ -1152,11 +1152,13 @@ pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
+    pub turn_id: String,
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
+    pub turn_id: String,
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
@@ -2404,6 +2406,7 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnAbortedEvent {
+    pub turn_id: String,
     pub reason: TurnAbortReason,
 }
 

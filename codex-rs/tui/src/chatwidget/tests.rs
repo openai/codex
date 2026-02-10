@@ -588,6 +588,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -651,6 +652,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -1626,6 +1628,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
     })]);
 
@@ -1650,6 +1653,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
         last_agent_message: Some("Plan details".to_string()),
     })]);
     let replay_popup = render_bottom_popup(&chat, 80);
@@ -1661,6 +1665,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.handle_codex_event(Event {
         id: "live-turn-complete-1".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
         }),
     });
@@ -1681,6 +1686,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
     chat.handle_codex_event(Event {
         id: "live-turn-complete-2".to_string(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("Plan details".to_string()),
         }),
     });
@@ -2625,6 +2631,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2642,6 +2649,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("Final response.".into()),
         }),
     });
@@ -2660,6 +2668,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -2682,6 +2691,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -2734,6 +2744,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     chat.handle_codex_event(Event {
         id: "turn-wait-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -2785,6 +2796,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     chat.handle_codex_event(Event {
         id: "turn-wait-3".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -3522,6 +3534,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     chat.handle_codex_event(Event {
         id: "call-int".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -3547,6 +3560,7 @@ async fn interrupted_turn_error_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -3556,6 +3570,7 @@ async fn interrupted_turn_error_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4619,6 +4634,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4657,6 +4673,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4685,6 +4702,7 @@ async fn interrupt_clears_unified_exec_processes() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4705,6 +4723,7 @@ async fn review_ended_keeps_unified_exec_processes() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::ReviewEnded,
         }),
     });
@@ -4737,6 +4756,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4748,6 +4768,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4774,6 +4795,7 @@ async fn turn_complete_keeps_unified_exec_processes() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -4827,6 +4849,7 @@ async fn ui_snapshots_small_heights_task_running() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4859,6 +4882,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4912,6 +4936,7 @@ async fn status_widget_active_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -4962,6 +4987,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5594,6 +5620,7 @@ async fn status_line_branch_refreshes_after_turn_complete() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -5611,6 +5638,7 @@ async fn status_line_branch_refreshes_after_interrupt() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            turn_id: "turn-1".to_string(),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -5624,6 +5652,7 @@ async fn stream_recovery_restores_previous_status_header() {
     chat.handle_codex_event(Event {
         id: "task".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5706,6 +5735,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5731,6 +5761,7 @@ async fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -5901,6 +5932,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -5949,6 +5981,7 @@ async fn chatwidget_markdown_code_blocks_vt100_snapshot() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -6021,6 +6054,7 @@ printf 'fenced within fenced\n'
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     });
@@ -6039,6 +6073,7 @@ async fn chatwidget_tall() {
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }),

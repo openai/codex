@@ -3929,9 +3929,9 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message, from_replay)
-            }
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => self.on_task_complete(last_agent_message, from_replay),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);

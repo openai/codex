@@ -7,19 +7,20 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 
-/// Convert persisted [`EventMsg`] entries into a sequence of [`Turn`] values.
+/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
-/// The purpose of this is to convert the EventMsgs persisted in a rollout file
-/// into a sequence of Turns and ThreadItems, which allows the client to render
-/// the historical messages when resuming a thread.
-pub fn build_turns_from_event_msgs(events: &[EventMsg]) -> Vec<Turn> {
+/// When available, this uses `TurnContext.turn_id` as the canonical turn id so
+/// resumed/rebuilt thread history preserves the original turn identifiers.
+pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
-    for event in events {
-        builder.handle_event(event);
+    for item in items {
+        builder.handle_rollout_item(item);
     }
     builder.finish()
 }
@@ -64,6 +65,16 @@ impl ThreadHistoryBuilder {
             EventMsg::UndoCompleted(_) => {}
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
             _ => {}
+        }
+    }
+
+    fn handle_rollout_item(&mut self, item: &RolloutItem) {
+        match item {
+            RolloutItem::EventMsg(event) => self.handle_event(event),
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_) => {}
         }
     }
 
