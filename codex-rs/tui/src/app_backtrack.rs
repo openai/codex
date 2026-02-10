@@ -12,8 +12,8 @@
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
 //! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message.
 //! - `Enter` requests a rollback from core and records a `pending_rollback` guard.
-//! - Only after receiving `EventMsg::ThreadRolledBack` do we trim local transcript state and
-//!   schedule a one-time scrollback refresh.
+//! - On `EventMsg::ThreadRolledBack`, we trim local transcript state and schedule a one-time
+//!   scrollback refresh.
 //!
 //! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
@@ -453,7 +453,18 @@ impl App {
 
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
-            EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::ThreadRolledBack(rollback) => {
+                if self.backtrack.pending_rollback.is_some() {
+                    self.finish_pending_backtrack();
+                } else if trim_transcript_cells_drop_last_n_user_turns(
+                    &mut self.transcript_cells,
+                    rollback.num_turns,
+                ) {
+                    // Keep inline-mode scrollback synced when rollback came from replay
+                    // or another client rather than this UI's pending backtrack flow.
+                    self.backtrack_render_pending = true;
+                }
+            }
             EventMsg::Error(ErrorEvent {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
@@ -525,6 +536,30 @@ fn trim_transcript_cells_to_nth_user(
     if let Some(cut_idx) = nth_user_position(transcript_cells, nth_user_message) {
         transcript_cells.truncate(cut_idx);
     }
+}
+
+fn trim_transcript_cells_drop_last_n_user_turns(
+    transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
+    num_turns: u32,
+) -> bool {
+    if num_turns == 0 {
+        return false;
+    }
+
+    let user_positions: Vec<usize> = user_positions_iter(transcript_cells).collect();
+    let Some(&first_user_idx) = user_positions.first() else {
+        return false;
+    };
+
+    let turns_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+    let cut_idx = if turns_from_end >= user_positions.len() {
+        first_user_idx
+    } else {
+        user_positions[user_positions.len() - turns_from_end]
+    };
+    let original_len = transcript_cells.len();
+    transcript_cells.truncate(cut_idx);
+    transcript_cells.len() != original_len
 }
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
@@ -665,5 +700,70 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(between_text, "  between");
+    }
+
+    #[test]
+    fn trim_drop_last_n_user_turns_applies_rollback_semantics() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after first")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after second")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        let changed = trim_transcript_cells_drop_last_n_user_turns(&mut cells, 1);
+
+        assert!(changed);
+        assert_eq!(cells.len(), 2);
+        let first_user = cells[0]
+            .as_any()
+            .downcast_ref::<UserHistoryCell>()
+            .expect("first user");
+        assert_eq!(first_user.message, "first");
+    }
+
+    #[test]
+    fn trim_drop_last_n_user_turns_allows_overflow() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(vec![Line::from("intro")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        let changed = trim_transcript_cells_drop_last_n_user_turns(&mut cells, u32::MAX);
+
+        assert!(changed);
+        assert_eq!(cells.len(), 1);
+        let intro = cells[0]
+            .as_any()
+            .downcast_ref::<AgentMessageCell>()
+            .expect("intro agent");
+        let intro_lines = intro.display_lines(u16::MAX);
+        let intro_text: String = intro_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(intro_text, "• intro");
     }
 }
