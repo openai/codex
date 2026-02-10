@@ -194,16 +194,16 @@ impl NetworkProxyBuilder {
 fn reserve_loopback_ephemeral_listeners(
     reserve_socks_listener: bool,
 ) -> Result<(StdTcpListener, Option<StdTcpListener>, StdTcpListener)> {
+    let http_listener =
+        reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?;
     let socks_listener = if reserve_socks_listener {
         Some(reserve_loopback_ephemeral_listener().context("reserve SOCKS5 proxy listener")?)
     } else {
         None
     };
-    Ok((
-        reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?,
-        socks_listener,
-        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?,
-    ))
+    let admin_listener =
+        reserve_loopback_ephemeral_listener().context("reserve admin API listener")?;
+    Ok((http_listener, socks_listener, admin_listener))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
