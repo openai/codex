@@ -152,7 +152,7 @@ use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
-use crate::mentions::collect_explicit_app_paths;
+use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::project_doc::get_user_instructions;
 use crate::proposed_plan_parser::ProposedPlanParser;
@@ -3908,11 +3908,7 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let explicitly_enabled_connectors: HashSet<String> = collect_explicit_app_paths(&input)
-        .into_iter()
-        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-        .filter_map(|path| app_id_from_path(path.as_str()).map(str::to_string))
-        .collect();
+    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let config = turn_context.config.clone();
     if config
         .features
@@ -5352,10 +5348,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("run the selected tools")],
-            &[],
+            &explicitly_enabled_connectors,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
@@ -5394,10 +5391,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("use $calendar and then echo the response")],
-            &[],
+            &explicitly_enabled_connectors,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);

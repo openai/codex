@@ -6,7 +6,10 @@ use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
 use crate::skills::SkillMetadata;
+use crate::skills::injection::ToolMentionKind;
+use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::extract_tool_mentions;
+use crate::skills::injection::tool_kind_for_path;
 
 pub(crate) struct CollectedToolMentions {
     pub(crate) plain_names: HashSet<String>,
@@ -24,13 +27,15 @@ pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> Collec
     CollectedToolMentions { plain_names, paths }
 }
 
-pub(crate) fn collect_explicit_app_paths(input: &[UserInput]) -> Vec<String> {
+pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
     input
         .iter()
         .filter_map(|item| match item {
             UserInput::Mention { path, .. } => Some(path.clone()),
             _ => None,
         })
+        .filter(|path| tool_kind_for_path(path.as_str()) == ToolMentionKind::App)
+        .filter_map(|path| app_id_from_path(path.as_str()).map(str::to_string))
         .collect()
 }
 
