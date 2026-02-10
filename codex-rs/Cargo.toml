@@ -16,7 +16,9 @@ members = [
     "cloud-tasks-client",
     "cli",
     "common",
+    "command",
     "core",
+    "hooks",
     "secrets",
     "exec",
     "exec-server",
@@ -81,7 +83,9 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
+codex-command = { path = "command" }
 codex-core = { path = "core" }
+codex-hooks = { path = "hooks" }
 codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
@@ -130,6 +134,7 @@ assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
+askama = "0.15.4"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bm25 = "2.3.2"

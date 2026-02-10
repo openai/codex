@@ -119,7 +119,7 @@ impl RolloutRecorderParams {
 impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     pub async fn list_threads(
-        codex_home: &Path,
+        config: &Config,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -128,7 +128,7 @@ impl RolloutRecorder {
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
-            codex_home,
+            config,
             page_size,
             cursor,
             sort_key,
@@ -142,7 +142,7 @@ impl RolloutRecorder {
 
     /// List archived threads (rollout files) under the archived sessions directory.
     pub async fn list_archived_threads(
-        codex_home: &Path,
+        config: &Config,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -151,7 +151,7 @@ impl RolloutRecorder {
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
-            codex_home,
+            config,
             page_size,
             cursor,
             sort_key,
@@ -165,7 +165,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_with_db_fallback(
-        codex_home: &Path,
+        config: &Config,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -174,7 +174,8 @@ impl RolloutRecorder {
         default_provider: &str,
         archived: bool,
     ) -> std::io::Result<ThreadsPage> {
-        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
+        let codex_home = config.codex_home.as_path();
+        let state_db_ctx = state_db::get_state_db(config, None).await;
         if let Some(db_page) = state_db::list_threads_db(
             state_db_ctx.as_deref(),
             codex_home,
@@ -224,7 +225,7 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
-        codex_home: &Path,
+        config: &Config,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -233,7 +234,8 @@ impl RolloutRecorder {
         default_provider: &str,
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
-        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
+        let codex_home = config.codex_home.as_path();
+        let state_db_ctx = state_db::get_state_db(config, None).await;
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
