@@ -1499,7 +1499,10 @@ mod tests {
     use crate::client_common::tools::FreeformTool;
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
+    use crate::models_manager::model_info::with_config_overrides;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_protocol::openai_models::ModelInfo;
+    use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -1630,10 +1633,21 @@ mod tests {
         }
     }
 
+    fn model_info_from_models_json(slug: &str) -> ModelInfo {
+        let config = test_config();
+        let response: ModelsResponse =
+            serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+        let model = response
+            .models
+            .into_iter()
+            .find(|candidate| candidate.slug == slug)
+            .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
+        with_config_overrides(model, &config)
+    }
+
     #[test]
     fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info = model_info_from_models_json("gpt-5-codex");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::CollaborationModes);
@@ -1752,8 +1766,7 @@ mod tests {
         web_search_mode: Option<WebSearchMode>,
         expected_tools: &[&str],
     ) {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline(model_slug, &config);
+        let model_info = model_info_from_models_json(model_slug);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features,
@@ -1917,20 +1930,21 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_mini_defaults() {
+    fn test_gpt_5_1_codex_max_defaults() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
         assert_default_model_tools(
-            "codex-mini-latest",
+            "gpt-5.1-codex-max",
             &features,
             Some(WebSearchMode::Cached),
-            "local_shell",
+            "shell_command",
             &[
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "apply_patch",
                 "web_search",
                 "view_image",
             ],
@@ -2026,35 +2040,12 @@ mod tests {
     }
 
     #[test]
-    fn test_exp_5_1_defaults() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
-        assert_model_tools(
-            "exp-5.1",
-            &features,
-            Some(WebSearchMode::Cached),
-            &[
-                "exec_command",
-                "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
-                "update_plan",
-                "request_user_input",
-                "apply_patch",
-                "web_search",
-                "view_image",
-            ],
-        );
-    }
-
-    #[test]
-    fn test_codex_mini_unified_exec_web_search() {
+    fn test_gpt_5_1_codex_max_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::CollaborationModes);
         assert_model_tools(
-            "codex-mini-latest",
+            "gpt-5.1-codex-max",
             &features,
             Some(WebSearchMode::Live),
             &[
@@ -2065,6 +2056,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "apply_patch",
                 "web_search",
                 "view_image",
             ],
@@ -2115,8 +2107,13 @@ mod tests {
 
     #[test]
     fn test_test_model_info_includes_sync_tool() {
-        let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
+        let mut model_info = model_info_from_models_json("gpt-5-codex");
+        model_info.experimental_supported_tools = vec![
+            "test_sync_tool".to_string(),
+            "read_file".to_string(),
+            "grep_files".to_string(),
+            "list_dir".to_string(),
+        ];
         let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
