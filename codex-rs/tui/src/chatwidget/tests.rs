@@ -291,6 +291,33 @@ async fn turn_complete_without_last_agent_message_preserves_previous_copy_source
 }
 
 #[tokio::test]
+async fn turn_started_preserves_previous_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "starting a new turn should keep the previous copy source until a newer assistant message arrives",
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
