@@ -334,7 +334,7 @@ mod tests {
     fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
         let command = vec!["/bin/true".to_string()];
         let args = create_bwrap_command_args(
-            command.clone(),
+            command,
             &SandboxPolicy::DangerFullAccess,
             Path::new("/"),
             BwrapOptions {
