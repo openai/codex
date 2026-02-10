@@ -66,9 +66,7 @@ pub fn resolve_windows_sandbox_mode(
         .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
 }
 
-fn legacy_windows_sandbox_keys_present(
-    features: Option<&FeaturesToml>,
-) -> bool {
+fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
     let Some(entries) = features.map(|features| &features.entries) else {
         return false;
     };
