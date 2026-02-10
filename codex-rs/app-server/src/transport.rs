@@ -279,45 +279,97 @@ async fn run_websocket_connection(
     }
 
     let (mut websocket_writer, mut websocket_reader) = websocket_stream.split();
-    loop {
-        tokio::select! {
-            outgoing_message = writer_rx.recv() => {
-                let Some(outgoing_message) = outgoing_message else {
-                    break;
-                };
-                let Some(json) = serialize_outgoing_message(outgoing_message) else {
-                    continue;
-                };
-                if websocket_writer.send(WebSocketMessage::Text(json.into())).await.is_err() {
-                    break;
-                }
+    let (websocket_outgoing_tx, mut websocket_outgoing_rx) =
+        mpsc::channel::<WebSocketMessage>(CHANNEL_CAPACITY);
+
+    let mut outgoing_handle = tokio::spawn(async move {
+        while let Some(outgoing_message) = websocket_outgoing_rx.recv().await {
+            if websocket_writer.send(outgoing_message).await.is_err() {
+                break;
             }
-            incoming_message = websocket_reader.next() => {
-                match incoming_message {
-                    Some(Ok(WebSocketMessage::Text(text))) => {
-                        if !forward_incoming_message(&transport_event_tx, connection_id, &text).await {
-                            break;
-                        }
-                    }
-                    Some(Ok(WebSocketMessage::Ping(payload))) => {
-                        if websocket_writer.send(WebSocketMessage::Pong(payload)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(Ok(WebSocketMessage::Pong(_))) => {}
-                    Some(Ok(WebSocketMessage::Close(_))) | None => break,
-                    Some(Ok(WebSocketMessage::Binary(_))) => {
-                        warn!("dropping unsupported binary websocket message");
-                    }
-                    Some(Ok(WebSocketMessage::Frame(_))) => {}
-                    Some(Err(err)) => {
-                        warn!("websocket receive error: {err}");
+        }
+    });
+
+    let websocket_outgoing_tx_for_forwarder = websocket_outgoing_tx.clone();
+    let mut outgoing_forwarder_handle = tokio::spawn(async move {
+        while let Some(outgoing_message) = writer_rx.recv().await {
+            let Some(json) = serialize_outgoing_message(outgoing_message) else {
+                continue;
+            };
+            if websocket_outgoing_tx_for_forwarder
+                .send(WebSocketMessage::Text(json.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    let transport_event_tx_for_incoming = transport_event_tx.clone();
+    let mut incoming_handle = tokio::spawn(async move {
+        loop {
+            match websocket_reader.next().await {
+                Some(Ok(WebSocketMessage::Text(text))) => {
+                    if !forward_incoming_message(
+                        &transport_event_tx_for_incoming,
+                        connection_id,
+                        &text,
+                    )
+                    .await
+                    {
                         break;
                     }
                 }
+                Some(Ok(WebSocketMessage::Ping(payload))) => {
+                    match websocket_outgoing_tx.try_send(WebSocketMessage::Pong(payload)) {
+                        Ok(()) => {}
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                            debug!("dropping websocket pong because outgoing queue is full");
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                            break;
+                        }
+                    }
+                }
+                Some(Ok(WebSocketMessage::Pong(_))) => {}
+                Some(Ok(WebSocketMessage::Close(_))) | None => break,
+                Some(Ok(WebSocketMessage::Binary(_))) => {
+                    warn!("dropping unsupported binary websocket message");
+                }
+                Some(Ok(WebSocketMessage::Frame(_))) => {}
+                Some(Err(err)) => {
+                    warn!("websocket receive error: {err}");
+                    break;
+                }
+            }
+        }
+    });
+
+    tokio::select! {
+        join_result = &mut outgoing_handle => {
+            if let Err(err) = join_result {
+                warn!("websocket outgoing task failed: {err}");
+            }
+        }
+        join_result = &mut outgoing_forwarder_handle => {
+            if let Err(err) = join_result {
+                warn!("websocket outgoing forwarder task failed: {err}");
+            }
+        }
+        join_result = &mut incoming_handle => {
+            if let Err(err) = join_result {
+                warn!("websocket incoming task failed: {err}");
             }
         }
     }
+
+    outgoing_handle.abort();
+    outgoing_forwarder_handle.abort();
+    incoming_handle.abort();
+    let _ = outgoing_handle.await;
+    let _ = outgoing_forwarder_handle.await;
+    let _ = incoming_handle.await;
 
     let _ = transport_event_tx
         .send(TransportEvent::ConnectionClosed { connection_id })
