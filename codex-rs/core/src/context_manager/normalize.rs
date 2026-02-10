@@ -1,8 +1,11 @@
 use std::collections::HashSet;
 
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::InputModality;
 
 use crate::util::error_or_panic;
 use tracing::info;
@@ -209,5 +212,32 @@ where
 {
     if let Some(pos) = items.iter().position(predicate) {
         items.remove(pos);
+    }
+}
+
+/// Strip image content from messages and tool outputs when the model does not support images.
+/// When `input_modalities` contains `InputModality::Image`, no stripping is performed.
+pub(crate) fn strip_images_when_unsupported(
+    input_modalities: &[InputModality],
+    items: &mut [ResponseItem],
+) {
+    let supports_images = input_modalities.contains(&InputModality::Image);
+    if supports_images {
+        return;
+    }
+
+    for item in items.iter_mut() {
+        match item {
+            ResponseItem::Message { content, .. } => {
+                content.retain(|c| !matches!(c, ContentItem::InputImage { .. }));
+            }
+            ResponseItem::FunctionCallOutput { output, .. } => {
+                if let Some(content_items) = output.content_items_mut() {
+                    content_items
+                        .retain(|c| !matches!(c, FunctionCallOutputContentItem::InputImage { .. }));
+                }
+            }
+            _ => {}
+        }
     }
 }

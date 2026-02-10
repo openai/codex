@@ -4010,7 +4010,11 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = { sess.clone_history().await.for_prompt() };
+        let sampling_request_input: Vec<ResponseItem> = {
+            sess.clone_history()
+                .await
+                .for_prompt(&turn_context.model_info.input_modalities)
+        };
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -6923,7 +6927,9 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
 
         let summary1 = "summary one";
-        let snapshot1 = live_history.clone().for_prompt();
+        let snapshot1 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages1 = collect_user_messages(&snapshot1);
         let rebuilt1 =
             compact::build_compacted_history(initial_context.clone(), &user_messages1, summary1);
@@ -6964,7 +6970,9 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
 
         let summary2 = "summary two";
-        let snapshot2 = live_history.clone().for_prompt();
+        let snapshot2 = live_history
+            .clone()
+            .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages2 = collect_user_messages(&snapshot2);
         let rebuilt2 =
             compact::build_compacted_history(initial_context.clone(), &user_messages2, summary2);
@@ -7004,7 +7012,10 @@ mod tests {
         );
         rollout_items.push(RolloutItem::ResponseItem(assistant3));
 
-        (rollout_items, live_history.for_prompt())
+        (
+            rollout_items,
+            live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
+        )
     }
 
     #[tokio::test]
