@@ -52,6 +52,10 @@ pub struct HookEventAfterAgent {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub struct HookEventSessionStart {}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum HookToolKind {
     Function,
     Custom,
@@ -116,6 +120,10 @@ where
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum HookEvent {
+    SessionStart {
+        #[serde(flatten)]
+        event: HookEventSessionStart,
+    },
     AfterAgent {
         #[serde(flatten)]
         event: HookEventAfterAgent,
@@ -147,6 +155,7 @@ mod tests {
     use super::HookEvent;
     use super::HookEventAfterAgent;
     use super::HookEventAfterToolUse;
+    use super::HookEventSessionStart;
     use super::HookPayload;
     use super::HookToolInput;
     use super::HookToolInputLocalShell;
@@ -184,6 +193,34 @@ mod tests {
                 "turn_id": "turn-1",
                 "input_messages": ["hello"],
                 "last_assistant_message": "hi",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn session_start_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::SessionStart {
+                event: HookEventSessionStart {},
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "session_start",
             },
         });
 

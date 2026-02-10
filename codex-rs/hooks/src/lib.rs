@@ -9,6 +9,7 @@ pub use types::Hook;
 pub use types::HookEvent;
 pub use types::HookEventAfterAgent;
 pub use types::HookEventAfterToolUse;
+pub use types::HookEventSessionStart;
 pub use types::HookOutcome;
 pub use types::HookPayload;
 pub use types::HookToolInput;

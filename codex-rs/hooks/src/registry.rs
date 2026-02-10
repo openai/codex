@@ -12,6 +12,7 @@ pub struct HooksConfig {
 
 #[derive(Clone)]
 pub struct Hooks {
+    session_start: Vec<Hook>,
     after_agent: Vec<Hook>,
     after_tool_use: Vec<Hook>,
 }
@@ -33,6 +34,7 @@ impl Hooks {
             .into_iter()
             .collect();
         Self {
+            session_start: Vec::new(),
             after_agent,
             after_tool_use: Vec::new(),
         }
@@ -40,6 +42,7 @@ impl Hooks {
 
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
+            HookEvent::SessionStart { .. } => &self.session_start,
             HookEvent::AfterAgent { .. } => &self.after_agent,
             HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
@@ -88,6 +91,7 @@ mod tests {
     use super::*;
     use crate::types::HookEventAfterAgent;
     use crate::types::HookEventAfterToolUse;
+    use crate::types::HookEventSessionStart;
     use crate::types::HookToolInput;
     use crate::types::HookToolKind;
 
@@ -151,6 +155,20 @@ mod tests {
                     sandbox_policy: "danger-full-access".to_string(),
                     output_preview: "ok".to_string(),
                 },
+            },
+        }
+    }
+
+    fn session_start_payload() -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::SessionStart {
+                event: HookEventSessionStart {},
             },
         }
     }
@@ -266,6 +284,18 @@ mod tests {
         };
 
         hooks.dispatch(after_tool_use_payload("p")).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_session_start_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            session_start: vec![counting_hook(&calls, HookOutcome::Continue)],
+            ..Hooks::default()
+        };
+
+        hooks.dispatch(session_start_payload()).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 

@@ -44,6 +44,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventSessionStart;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -1327,6 +1328,16 @@ impl Session {
             Arc::clone(&config),
             &session_configuration.session_source,
         );
+        sess.hooks()
+            .dispatch(HookPayload {
+                session_id: sess.conversation_id,
+                cwd: session_configuration.cwd.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::SessionStart {
+                    event: HookEventSessionStart {},
+                },
+            })
+            .await;
 
         Ok(sess)
     }
