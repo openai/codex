@@ -985,7 +985,7 @@ impl ChatWidget {
     }
 
     fn apply_runtime_metrics_delta(&mut self, delta: RuntimeMetricsSummary) {
-        let should_log_timing = has_websocket_timing_metrics(delta);
+        let should_log_timing = cfg!(debug_assertions) && has_websocket_timing_metrics(delta);
         self.turn_runtime_metrics.merge(delta);
         if should_log_timing {
             self.log_websocket_timing_totals(delta);
