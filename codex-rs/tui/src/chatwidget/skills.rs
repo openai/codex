@@ -189,6 +189,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     })
                     .collect(),
             }),
+        policy: None,
         path: skill.path.clone(),
         scope: skill.scope,
     }

@@ -502,7 +502,7 @@ mod tests {
         let signature_b64 = encode(b"sig");
         let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
 
-        crate::token_data::parse_id_token(&fake_jwt).expect("fake JWT should parse")
+        crate::token_data::parse_chatgpt_jwt_claims(&fake_jwt).expect("fake JWT should parse")
     }
 
     fn auth_with_prefix(prefix: &str) -> AuthDotJson {

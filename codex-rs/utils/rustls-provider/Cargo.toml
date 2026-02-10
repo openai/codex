@@ -1,0 +1,11 @@
+[package]
+name = "codex-utils-rustls-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rustls = { workspace = true }

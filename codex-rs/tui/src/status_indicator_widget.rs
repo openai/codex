@@ -1,5 +1,8 @@
-//! A live status indicator that shows the *latest* log line emitted by the
-//! application while the agent is processing a long‑running task.
+//! A live task status row rendered above the composer while the agent is busy.
+//!
+//! The row owns spinner timing, the optional interrupt hint, and short inline
+//! context (for example, the unified-exec background-process summary). Keeping
+//! these pieces on one line avoids vertical layout churn in the bottom pane.
 
 use std::time::Duration;
 use std::time::Instant;
@@ -30,10 +33,13 @@ use crate::wrapping::word_wrap_lines;
 const DETAILS_MAX_LINES: usize = 3;
 const DETAILS_PREFIX: &str = "  └ ";
 
+/// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
     details: Option<String>,
+    /// Optional suffix rendered after the elapsed/interrupt segment.
+    inline_message: Option<String>,
     show_interrupt_hint: bool,
 
     elapsed_running: Duration,
@@ -70,6 +76,7 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             details: None,
+            inline_message: None,
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
@@ -95,6 +102,17 @@ impl StatusIndicatorWidget {
         self.details = details
             .filter(|details| !details.is_empty())
             .map(|details| capitalize_first(details.trim_start()));
+    }
+
+    /// Update the inline suffix text shown after `({elapsed} • esc to interrupt)`.
+    ///
+    /// Callers should provide plain, already-contextualized text. Passing
+    /// verbose status prose here can cause frequent width truncation and hide
+    /// the more important elapsed/interrupt hint.
+    pub(crate) fn update_inline_message(&mut self, message: Option<String>) {
+        self.inline_message = message
+            .map(|message| message.trim().to_string())
+            .filter(|message| !message.is_empty());
     }
 
     #[cfg(test)]
@@ -224,6 +242,12 @@ impl Renderable for StatusIndicatorWidget {
             ]);
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
+        }
+        if let Some(message) = &self.inline_message {
+            // Keep optional context after elapsed/interrupt text so that core
+            // interrupt affordances stay in a fixed visual location.
+            spans.push(" · ".dim());
+            spans.push(message.clone().dim());
         }
 
         let mut lines = Vec::new();

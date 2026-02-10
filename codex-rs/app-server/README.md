@@ -663,11 +663,20 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
+Entries whose `cwd` is not present in `cwds` are ignored.
+`skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwds": ["/Users/me/project"],
-    "forceReload": false
+    "cwds": ["/Users/me/project", "/Users/me/other-project"],
+    "forceReload": true,
+    "perCwdExtraUserRoots": [
+      {
+        "cwd": "/Users/me/project",
+        "extraUserRoots": ["/Users/me/shared-skills"]
+      }
+    ]
 } }
 { "id": 25, "result": {
     "data": [{
@@ -713,6 +722,7 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
 { "method": "app/list", "id": 50, "params": {
     "cursor": null,
     "limit": 50,
+    "threadId": "thr_123",
     "forceRefetch": false
 } }
 { "id": 50, "result": {
@@ -731,6 +741,8 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
     "nextCursor": null
 } }
 ```
+
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
 
 `app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
 

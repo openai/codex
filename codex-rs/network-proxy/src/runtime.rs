@@ -22,7 +22,6 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
@@ -112,12 +111,14 @@ pub struct ConfigState {
     pub allow_set: GlobSet,
     pub deny_set: GlobSet,
     pub constraints: NetworkProxyConstraints,
-    pub cfg_path: PathBuf,
     pub blocked: VecDeque<BlockedRequest>,
 }
 
 #[async_trait]
 pub trait ConfigReloader: Send + Sync {
+    /// Human-readable description of where config is loaded from, for logs.
+    fn source_label(&self) -> String;
+
     /// Return a freshly loaded state if a reload is needed; otherwise, return `None`.
     async fn maybe_reload(&self) -> Result<Option<ConfigState>>;
 
@@ -179,9 +180,9 @@ impl NetworkProxyState {
     }
 
     pub async fn force_reload(&self) -> Result<()> {
-        let (previous_cfg, cfg_path) = {
+        let previous_cfg = {
             let guard = self.state.read().await;
-            (guard.config.clone(), guard.cfg_path.clone())
+            guard.config.clone()
         };
 
         match self.reloader.reload_now().await {
@@ -189,16 +190,18 @@ impl NetworkProxyState {
                 // Policy changes are operationally sensitive; logging diffs makes changes traceable
                 // without needing to dump full config blobs (which can include unrelated settings).
                 log_policy_changes(&previous_cfg, &new_state.config);
-                let mut guard = self.state.write().await;
-                new_state.blocked = guard.blocked.clone();
-                *guard = new_state;
-                let path = guard.cfg_path.display();
-                info!("reloaded config from {path}");
+                {
+                    let mut guard = self.state.write().await;
+                    new_state.blocked = guard.blocked.clone();
+                    *guard = new_state;
+                }
+                let source = self.reloader.source_label();
+                info!("reloaded config from {source}");
                 Ok(())
             }
             Err(err) => {
-                let path = cfg_path.display();
-                warn!("failed to reload config from {path}: {err}; keeping previous config");
+                let source = self.reloader.source_label();
+                warn!("failed to reload config from {source}: {err}; keeping previous config");
                 Err(err)
             }
         }
@@ -383,10 +386,12 @@ impl NetworkProxyState {
                 };
                 log_policy_changes(&previous_cfg, &new_state.config);
                 new_state.blocked = blocked;
-                let mut guard = self.state.write().await;
-                *guard = new_state;
-                let path = guard.cfg_path.display();
-                info!("reloaded config from {path}");
+                {
+                    let mut guard = self.state.write().await;
+                    *guard = new_state;
+                }
+                let source = self.reloader.source_label();
+                info!("reloaded config from {source}");
                 Ok(())
             }
         }
@@ -493,12 +498,7 @@ pub(crate) fn network_proxy_state_for_policy(
     network.enabled = true;
     network.mode = NetworkMode::Full;
     let config = NetworkProxyConfig { network };
-    let state = build_config_state(
-        config,
-        NetworkProxyConstraints::default(),
-        PathBuf::from("/nonexistent/config.toml"),
-    )
-    .unwrap();
+    let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
 
     NetworkProxyState::with_reloader(state, Arc::new(NoopReloader))
 }
@@ -509,6 +509,10 @@ struct NoopReloader;
 #[cfg(test)]
 #[async_trait]
 impl ConfigReloader for NoopReloader {
+    fn source_label(&self) -> String {
+        "test config state".to_string()
+    }
+
     async fn maybe_reload(&self) -> Result<Option<ConfigState>> {
         Ok(None)
     }

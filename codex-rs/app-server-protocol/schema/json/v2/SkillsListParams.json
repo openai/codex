@@ -1,5 +1,25 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SkillsListExtraRootsForCwd": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "extraUserRoots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "extraUserRoots"
+      ],
+      "type": "object"
+    }
+  },
   "properties": {
     "cwds": {
       "description": "When empty, defaults to the current session working directory.",
@@ -11,6 +31,17 @@
     "forceReload": {
       "description": "When true, bypass the skills cache and re-scan skills from disk.",
       "type": "boolean"
+    },
+    "perCwdExtraUserRoots": {
+      "default": null,
+      "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+      "items": {
+        "$ref": "#/definitions/SkillsListExtraRootsForCwd"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     }
   },
   "title": "SkillsListParams",
