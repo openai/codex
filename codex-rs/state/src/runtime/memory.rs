@@ -4,6 +4,9 @@ use crate::model::Stage1OutputRow;
 use chrono::Duration;
 use sqlx::Executor;
 use sqlx::Sqlite;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
 const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_CWD: &str = "memory_consolidate_cwd";
@@ -25,6 +28,10 @@ fn scope_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
         JOB_KIND_MEMORY_CONSOLIDATE_USER => Some(MEMORY_SCOPE_KIND_USER),
         _ => None,
     }
+}
+
+fn normalize_cwd_for_scope_matching(cwd: &str) -> Option<PathBuf> {
+    Path::new(cwd).canonicalize().ok()
 }
 
 impl StateRuntime {
@@ -116,7 +123,7 @@ WHERE thread_id = ?
 
         let rows = match scope_kind {
             MEMORY_SCOPE_KIND_CWD => {
-                sqlx::query(
+                let mut rows = sqlx::query(
                     r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at
 FROM stage1_outputs AS so
@@ -129,7 +136,46 @@ LIMIT ?
                 .bind(scope_key)
                 .bind(n as i64)
                 .fetch_all(self.pool.as_ref())
-                .await?
+                .await?;
+
+                if rows.len() < n
+                    && let Some(normalized_scope_key) = normalize_cwd_for_scope_matching(scope_key)
+                {
+                    let mut selected_thread_ids = rows
+                        .iter()
+                        .map(|row| row.try_get::<String, _>("thread_id"))
+                        .collect::<Result<HashSet<_>, _>>()?;
+                    let candidate_rows = sqlx::query(
+                        r#"
+SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at, t.cwd AS thread_cwd
+FROM stage1_outputs AS so
+JOIN threads AS t ON t.id = so.thread_id
+ORDER BY so.source_updated_at DESC, so.thread_id DESC
+                        "#,
+                    )
+                    .fetch_all(self.pool.as_ref())
+                    .await?;
+
+                    for row in candidate_rows {
+                        if rows.len() >= n {
+                            break;
+                        }
+                        let thread_id: String = row.try_get("thread_id")?;
+                        if selected_thread_ids.contains(&thread_id) {
+                            continue;
+                        }
+                        let thread_cwd: String = row.try_get("thread_cwd")?;
+                        if let Some(normalized_thread_cwd) =
+                            normalize_cwd_for_scope_matching(&thread_cwd)
+                            && normalized_thread_cwd == normalized_scope_key
+                        {
+                            selected_thread_ids.insert(thread_id);
+                            rows.push(row);
+                        }
+                    }
+                }
+
+                rows
             }
             MEMORY_SCOPE_KIND_USER => {
                 sqlx::query(
@@ -446,6 +492,7 @@ WHERE kind = ? AND job_key = ?
         if limit == 0 {
             return Ok(Vec::new());
         }
+        let now = Utc::now().timestamp();
 
         let rows = sqlx::query(
             r#"
@@ -454,12 +501,17 @@ FROM jobs
 WHERE kind IN (?, ?)
   AND input_watermark IS NOT NULL
   AND input_watermark > COALESCE(last_success_watermark, 0)
+  AND retry_remaining > 0
+  AND (retry_at IS NULL OR retry_at <= ?)
+  AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
 ORDER BY input_watermark DESC, kind ASC, job_key ASC
 LIMIT ?
             "#,
         )
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_CWD)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_USER)
+        .bind(now)
+        .bind(now)
         .bind(limit as i64)
         .fetch_all(self.pool.as_ref())
         .await?;

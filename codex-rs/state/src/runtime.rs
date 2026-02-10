@@ -1365,6 +1365,158 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
+    #[tokio::test]
+    async fn list_stage1_outputs_for_cwd_scope_matches_canonical_equivalent_paths() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let workspace = codex_home.join("workspace");
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("create workspace");
+        let non_normalized_cwd = workspace.join("..").join("workspace");
+        let canonical_scope_key = workspace
+            .canonicalize()
+            .expect("canonicalize workspace")
+            .display()
+            .to_string();
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                non_normalized_cwd,
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw memory",
+                    "summary",
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "stage1 success should persist output"
+        );
+
+        let outputs = runtime
+            .list_stage1_outputs_for_scope("cwd", canonical_scope_key.as_str(), 10)
+            .await
+            .expect("list stage1 outputs for canonical cwd scope");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].thread_id, thread_id);
+        assert_eq!(outputs[0].summary, "summary");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn list_pending_scope_consolidations_omits_unclaimable_jobs() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .enqueue_scope_consolidation("cwd", "scope-running", 200)
+            .await
+            .expect("enqueue running scope");
+        runtime
+            .enqueue_scope_consolidation("cwd", "scope-backoff", 199)
+            .await
+            .expect("enqueue backoff scope");
+        runtime
+            .enqueue_scope_consolidation("cwd", "scope-exhausted", 198)
+            .await
+            .expect("enqueue exhausted scope");
+        runtime
+            .enqueue_scope_consolidation("cwd", "scope-claimable-a", 90)
+            .await
+            .expect("enqueue claimable scope a");
+        runtime
+            .enqueue_scope_consolidation("cwd", "scope-claimable-b", 89)
+            .await
+            .expect("enqueue claimable scope b");
+
+        let running_claim = runtime
+            .try_claim_phase2_job("cwd", "scope-running", owner, 3600)
+            .await
+            .expect("claim running scope");
+        assert!(
+            matches!(running_claim, Phase2JobClaimOutcome::Claimed { .. }),
+            "scope-running should be claimed"
+        );
+
+        let backoff_claim = runtime
+            .try_claim_phase2_job("cwd", "scope-backoff", owner, 3600)
+            .await
+            .expect("claim backoff scope");
+        let backoff_token = match backoff_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token, ..
+            } => ownership_token,
+            other => panic!("unexpected backoff claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_phase2_job_failed(
+                    "cwd",
+                    "scope-backoff",
+                    backoff_token.as_str(),
+                    "temporary failure",
+                    3600,
+                )
+                .await
+                .expect("mark backoff scope failed"),
+            "backoff scope should transition to retry backoff"
+        );
+
+        sqlx::query("UPDATE jobs SET retry_remaining = 0 WHERE kind = ? AND job_key = ?")
+            .bind("memory_consolidate_cwd")
+            .bind("scope-exhausted")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("set exhausted scope retries to zero");
+
+        let pending = runtime
+            .list_pending_scope_consolidations(2)
+            .await
+            .expect("list pending scopes");
+        assert_eq!(
+            pending,
+            vec![
+                PendingScopeConsolidation {
+                    scope_kind: "cwd".to_string(),
+                    scope_key: "scope-claimable-a".to_string(),
+                },
+                PendingScopeConsolidation {
+                    scope_kind: "cwd".to_string(),
+                    scope_key: "scope-claimable-b".to_string(),
+                },
+            ]
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
     fn test_thread_metadata(
         codex_home: &Path,
         thread_id: ThreadId,
