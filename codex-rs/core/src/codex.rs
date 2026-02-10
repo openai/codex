@@ -567,8 +567,8 @@ impl TurnContext {
 
     /// Resolves the per-turn metadata header under a shared timeout policy.
     ///
-    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
-    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
+    /// This uses the same timeout helper as websocket request prewarm so both turn execution and
+    /// prewarm observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -580,7 +580,7 @@ impl TurnContext {
     /// Starts best-effort background computation of turn metadata.
     ///
     /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
+    /// and websocket request prewarm are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -1083,15 +1083,42 @@ impl Session {
             ),
         };
 
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            build_turn_metadata_header(session_configuration.cwd.clone()),
-            None,
-        )
-        .boxed();
+        let startup_per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let startup_model_info = ModelsManager::construct_model_info_offline(
+            session_configuration.collaboration_mode.model(),
+            &startup_per_turn_config,
+        );
+        let startup_turn_context = Arc::new(Self::make_turn_context(
+            Some(Arc::clone(&auth_manager)),
+            &services.otel_manager,
+            session_configuration.provider.clone(),
+            &session_configuration,
+            startup_per_turn_config,
+            startup_model_info,
+            INITIAL_SUBMIT_ID.to_owned(),
+        ));
+        let startup_router = ToolRouter::from_config(
+            &startup_turn_context.tools_config,
+            Some(HashMap::new()),
+            startup_turn_context.dynamic_tools.as_slice(),
+        );
+        let startup_prompt = build_prompt(
+            Vec::new(),
+            &startup_router,
+            startup_turn_context.as_ref(),
+            BaseInstructions {
+                text: session_configuration.base_instructions.clone(),
+            },
+        );
+        let startup_turn_metadata_header = {
+            let startup_turn_context = Arc::clone(&startup_turn_context);
+            async move { startup_turn_context.resolve_turn_metadata_header().await }.boxed()
+        };
         let startup_regular_task = RegularTask::with_startup_prewarm(
             services.model_client.clone(),
-            services.otel_manager.clone(),
-            turn_metadata_header,
+            startup_prompt,
+            startup_turn_context,
+            startup_turn_metadata_header,
         );
         state.set_startup_regular_task(startup_regular_task);
 
@@ -4078,6 +4105,22 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn build_prompt(
+    input: Vec<ResponseItem>,
+    router: &ToolRouter,
+    turn_context: &TurnContext,
+    base_instructions: BaseInstructions,
+) -> Prompt {
+    Prompt {
+        input,
+        tools: router.specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: turn_context.final_output_json_schema.clone(),
+    }
+}
+
 struct SamplingRequestToolSelection<'a> {
     explicit_app_paths: &'a [String],
     skill_name_counts_lower: &'a HashMap<String, usize>,
@@ -4135,18 +4178,28 @@ async fn run_sampling_request(
         turn_context.dynamic_tools.as_slice(),
     ));
 
-    let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
-
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = Prompt {
+    let prompt = build_prompt(
         input,
-        tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel,
+        router.as_ref(),
+        turn_context.as_ref(),
         base_instructions,
-        personality: turn_context.personality,
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
+    );
+
+    if let Err(err) = client_session
+        .prewarm_websocket(
+            &prompt,
+            &turn_context.model_info,
+            &turn_context.otel_manager,
+            turn_context.reasoning_effort,
+            turn_context.reasoning_summary,
+            turn_metadata_header,
+        )
+        .await
+    {
+        warn!("websocket request prewarm failed: {err}");
+    }
 
     let mut retries = 0;
     loop {

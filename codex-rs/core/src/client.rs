@@ -12,19 +12,16 @@
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
 //! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Prewarm is intentionally handshake-only: it may warm a socket and capture sticky-routing
-//! state, but the first `response.create` payload is still sent only when a turn starts.
+//! Prewarm sends a deferred `response.create` and waits for completion so the next request can
+//! append onto the same websocket connection.
 //!
-//! Startup prewarm is owned by turn-scoped callers (for example, a pre-created regular task). When
-//! a warmed [`ModelClientSession`] is available, turn execution can reuse it; otherwise the turn
-//! lazily opens a websocket on first stream call.
+//! Turn execution performs prewarm as a best-effort step before the first stream request so the
+//! subsequent request can reuse the same connection via append semantics.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! Startup prewarm is treated as the first websocket connection attempt for the first turn. If
-//! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
-//! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
-//! budget slot before any turn payload is sent.
+//! Deferred request prewarm is treated as the first websocket connection attempt for a turn. If
+//! it fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -167,7 +164,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
+    websocket_last_items: Option<Vec<ResponseItem>>,
     websocket_last_response_id: Option<String>,
     websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
     /// Turn state for sticky routing.
@@ -231,7 +228,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             connection: None,
-            websocket_last_items: Vec::new(),
+            websocket_last_items: None,
             websocket_last_response_id: None,
             websocket_last_response_id_rx: None,
             turn_state: Arc::new(OnceLock::new()),
@@ -522,18 +519,18 @@ impl ModelClientSession {
     }
 
     fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build
-        // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
-        if can_append {
-            Some(input_items[previous_len..].to_vec())
-        } else {
-            None
+        if let Some(last_items) = &self.websocket_last_items {
+            // Checks whether the current request input is an incremental append to the previous request.
+            // If items in the new request contain all the items from the previous request we build
+            // a response.append request otherwise we start with a fresh response.create request.
+            let previous_len = last_items.len();
+            let can_append =
+                input_items.starts_with(last_items) && previous_len < input_items.len();
+            if can_append {
+                return Some(input_items[previous_len..].to_vec());
+            }
         }
+        None
     }
 
     fn refresh_websocket_last_response_id(&mut self) {
@@ -566,6 +563,7 @@ impl ModelClientSession {
         options: &ApiResponsesOptions,
         input: Vec<ResponseItem>,
         previous_response_id: Option<String>,
+        deferred: bool,
     ) -> ResponsesWsRequest {
         let ApiResponsesOptions {
             reasoning,
@@ -591,6 +589,7 @@ impl ModelClientSession {
             include: include.clone(),
             prompt_cache_key: prompt_cache_key.clone(),
             text: text.clone(),
+            deferred,
         };
 
         ResponsesWsRequest::ResponseCreate(payload)
@@ -601,10 +600,13 @@ impl ModelClientSession {
         model_slug: &str,
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
+        deferred: bool,
     ) -> ResponsesWsRequest {
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
         let incremental_items = self.get_incremental_items(&api_prompt.input);
-        if let Some(append_items) = incremental_items {
+        if let Some(append_items) = incremental_items
+            && !deferred
+        {
             if responses_websockets_v2_enabled
                 && let Some(previous_response_id) = self.websocket_previous_response_id()
             {
@@ -614,6 +616,7 @@ impl ModelClientSession {
                     options,
                     append_items,
                     Some(previous_response_id),
+                    deferred,
                 );
             }
 
@@ -630,42 +633,8 @@ impl ModelClientSession {
             options,
             api_prompt.input.clone(),
             None,
+            deferred,
         )
-    }
-
-    /// Opportunistically warms a websocket for this turn-scoped client session.
-    ///
-    /// This performs only connection setup; it never sends prompt payloads.
-    pub async fn prewarm_websocket(
-        &mut self,
-        otel_manager: &OtelManager,
-        turn_metadata_header: Option<&str>,
-    ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
-            return Ok(());
-        }
-        if self.connection.is_some() {
-            return Ok(());
-        }
-
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
-            ApiError::Stream(format!(
-                "failed to build websocket prewarm client setup: {err}"
-            ))
-        })?;
-
-        let connection = self
-            .client
-            .connect_websocket(
-                otel_manager,
-                client_setup.api_provider,
-                client_setup.api_auth,
-                Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
-            )
-            .await?;
-        self.connection = Some(connection);
-        Ok(())
     }
 
     /// Returns a websocket connection for this turn.
@@ -683,7 +652,7 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.websocket_last_items.clear();
+            self.websocket_last_items = None;
             self.websocket_last_response_id = None;
             self.websocket_last_response_id_rx = None;
             let turn_state = options
@@ -800,6 +769,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        deferred: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
         let api_prompt = Self::build_responses_request(prompt)?;
@@ -845,37 +815,47 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
+            let request =
+                self.prepare_websocket_request(&model_info.slug, &api_prompt, &options, deferred);
 
-            let stream_result = self
-                .connection
-                .as_ref()
-                .ok_or_else(|| {
-                    map_api_error(ApiError::Stream(
-                        "websocket connection is unavailable".to_string(),
-                    ))
-                })?
-                .stream_request(request)
-                .await
-                .map_err(map_api_error)?;
-            self.websocket_last_items = api_prompt.input.clone();
-            let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
-            self.websocket_last_response_id_rx = Some(last_response_id_receiver);
-            let mut last_response_id_sender = Some(last_response_id_sender);
-            let stream_result = stream_result.inspect(move |event| {
-                if let Ok(ResponseEvent::Completed { response_id, .. }) = event
-                    && !response_id.is_empty()
-                    && let Some(sender) = last_response_id_sender.take()
-                {
-                    let _ = sender.send(response_id.clone());
-                }
-            });
-
-            return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
-                stream_result,
-                otel_manager.clone(),
-            )));
+            self.websocket_last_items = Some(api_prompt.input.clone());
+            return self.send_websocket_request(request, otel_manager).await;
         }
+    }
+
+    async fn send_websocket_request(
+        &mut self,
+        request: ResponsesWsRequest,
+        otel_manager: &OtelManager,
+    ) -> Result<WebsocketStreamOutcome> {
+        let stream_result = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| {
+                map_api_error(ApiError::Stream(
+                    "websocket connection is unavailable".to_string(),
+                ))
+            })?
+            .stream_request(request)
+            .await
+            .map_err(map_api_error)?;
+        let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
+        self.websocket_last_response_id_rx = Some(last_response_id_receiver);
+        let mut last_response_id_sender: Option<oneshot::Sender<String>> =
+            Some(last_response_id_sender);
+        let stream_result = stream_result.inspect(move |event| {
+            if let Ok(ResponseEvent::Completed { response_id, .. }) = event
+                && !response_id.is_empty()
+                && let Some(sender) = last_response_id_sender.take()
+            {
+                let _ = sender.send(response_id.clone());
+            }
+        });
+
+        return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
+            stream_result,
+            otel_manager.clone(),
+        )));
     }
 
     /// Builds request and SSE telemetry for streaming API calls.
@@ -893,6 +873,61 @@ impl ModelClientSession {
         let telemetry = Arc::new(ApiTelemetry::new(otel_manager.clone()));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prewarm_websocket(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<()> {
+        if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
+            return Ok(());
+        }
+        if self.websocket_last_items.is_some() {
+            return Ok(());
+        }
+
+        match self
+            .stream_responses_websocket(
+                prompt,
+                model_info,
+                otel_manager,
+                effort,
+                summary,
+                turn_metadata_header,
+                true,
+            )
+            .await
+        {
+            Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
+                // Wait for the deferred warmup request to complete before sending append.
+                while let Some(event) = stream.next().await {
+                    match event {
+                        Ok(ResponseEvent::Completed { response_id, .. }) => {
+                            self.websocket_last_items = Some(vec![]);
+                            if response_id.is_empty() {
+                                self.websocket_last_response_id = None;
+                            } else {
+                                self.websocket_last_response_id = Some(response_id);
+                            }
+                        }
+                        Err(err) => return Err(err),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            Ok(WebsocketStreamOutcome::FallbackToHttp) => {
+                self.try_switch_fallback_transport(otel_manager);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -926,6 +961,7 @@ impl ModelClientSession {
                             effort,
                             summary,
                             turn_metadata_header,
+                            false,
                         )
                         .await?
                     {
@@ -967,7 +1003,7 @@ impl ModelClientSession {
             );
 
             self.connection = None;
-            self.websocket_last_items.clear();
+            self.websocket_last_items = None;
         }
         activated
     }

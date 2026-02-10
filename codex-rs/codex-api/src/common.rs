@@ -186,6 +186,7 @@ pub struct ResponseCreateWsRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    pub deferred: bool,
 }
 
 #[derive(Debug, Serialize)]
