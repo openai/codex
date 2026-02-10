@@ -1161,6 +1161,7 @@ impl ChatWidget {
             instructions,
             url,
             is_installed,
+            self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
@@ -1786,21 +1787,19 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
-    fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
-        let id2 = id.clone();
+    fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(id, ev),
-            |s| s.handle_exec_approval_now(id2, ev2),
+            |q| q.push_exec_approval(ev),
+            |s| s.handle_exec_approval_now(ev2),
         );
     }
 
-    fn on_apply_patch_approval_request(&mut self, id: String, ev: ApplyPatchApprovalRequestEvent) {
-        let id2 = id.clone();
+    fn on_apply_patch_approval_request(&mut self, _id: String, ev: ApplyPatchApprovalRequestEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(id, ev),
-            |s| s.handle_apply_patch_approval_now(id2, ev2),
+            |q| q.push_apply_patch_approval(ev),
+            |s| s.handle_apply_patch_approval_now(ev2),
         );
     }
 
@@ -2365,14 +2364,14 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+    pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
         let request = ApprovalRequest::Exec {
-            id,
+            id: ev.call_id,
             command: ev.command,
             reason: ev.reason,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
@@ -2382,15 +2381,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_apply_patch_approval_now(
-        &mut self,
-        id: String,
-        ev: ApplyPatchApprovalRequestEvent,
-    ) {
+    pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
-            id,
+            id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
             cwd: self.config.cwd.clone(),
@@ -4497,7 +4492,15 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn refresh_connectors(&mut self, force_refetch: bool) {
+        self.prefetch_connectors_with_options(force_refetch);
+    }
+
     fn prefetch_connectors(&mut self) {
+        self.prefetch_connectors_with_options(false);
+    }
+
+    fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
         if !self.connectors_enabled() || self.connectors_prefetch_in_flight {
             return;
         }
@@ -4511,7 +4514,12 @@ impl ChatWidget {
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
             let accessible_connectors =
-                match connectors::list_accessible_connectors_from_mcp_tools(&config).await {
+                match connectors::list_accessible_connectors_from_mcp_tools_with_options(
+                    &config,
+                    force_refetch,
+                )
+                .await
+                {
                     Ok(connectors) => connectors,
                     Err(err) => {
                         app_event_tx.send(AppEvent::ConnectorsLoaded {
@@ -6366,7 +6374,10 @@ impl ChatWidget {
             return;
         }
 
-        match self.connectors_cache.clone() {
+        let connectors_cache = self.connectors_cache.clone();
+        self.prefetch_connectors_with_options(true);
+
+        match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
                 if snapshot.connectors.is_empty() {
                     self.add_info_message("No apps available.".to_string(), None);
@@ -6376,8 +6387,6 @@ impl ChatWidget {
             }
             ConnectorsCacheState::Failed(err) => {
                 self.add_to_history(history_cell::new_error_event(err));
-                // Retry on demand so `/apps` can recover after transient failures.
-                self.prefetch_connectors();
             }
             ConnectorsCacheState::Loading => {
                 self.add_to_history(history_cell::new_info_event(
@@ -6386,7 +6395,6 @@ impl ChatWidget {
                 ));
             }
             ConnectorsCacheState::Uninitialized => {
-                self.prefetch_connectors();
                 self.add_to_history(history_cell::new_info_event(
                     "Apps are still loading.".to_string(),
                     Some("Try again in a moment.".to_string()),
@@ -6736,7 +6744,9 @@ impl ChatWidget {
         match result {
             Ok(snapshot) => {
                 self.refresh_connectors_popup_if_open(&snapshot.connectors);
-                self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
+                    self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+                }
                 self.bottom_pane.set_connectors_snapshot(Some(snapshot));
             }
             Err(err) => {

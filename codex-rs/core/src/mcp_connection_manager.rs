@@ -531,6 +531,33 @@ impl McpConnectionManager {
         tools
     }
 
+    /// Force-refresh codex apps tools by bypassing the in-process cache.
+    ///
+    /// On success, the refreshed tools replace the cache contents. On failure,
+    /// the existing cache remains unchanged.
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<()> {
+        let managed_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .client()
+            .await
+            .context("failed to get client")?;
+
+        let tools = list_tools_for_client_uncached(
+            CODEX_APPS_MCP_SERVER_NAME,
+            &managed_client.client,
+            managed_client.tool_timeout,
+        )
+        .await
+        .with_context(|| {
+            format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
+        })?;
+
+        write_cached_codex_apps_tools(&tools);
+        Ok(())
+    }
+
     /// Returns a single map that contains all resources. Each key is the
     /// server name and the value is a vector of resources.
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {

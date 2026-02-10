@@ -140,7 +140,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ApiVersion::V1 => {
                 let params = ApplyPatchApprovalParams {
                     conversation_id,
-                    call_id,
+                    call_id: call_id.clone(),
                     file_changes: changes.clone(),
                     reason,
                     grant_root,
@@ -149,7 +149,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_patch_approval_response(event_turn_id, rx, conversation).await;
+                    on_patch_approval_response(call_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -216,7 +216,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
                     conversation_id,
-                    call_id,
+                    call_id: call_id.clone(),
                     command,
                     cwd,
                     reason,
@@ -226,7 +226,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_request(ServerRequestPayload::ExecCommandApproval(params))
                     .await;
                 tokio::spawn(async move {
-                    on_exec_approval_response(event_turn_id, rx, conversation).await;
+                    on_exec_approval_response(call_id, event_turn_id, rx, conversation).await;
                 });
             }
             ApiVersion::V2 => {
@@ -1115,7 +1115,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                     ),
                                     data: None,
                                 };
-                                outgoing.send_error(request_id.clone(), error).await;
+                                outgoing.send_error(request_id, error).await;
                                 return;
                             }
                         }
@@ -1129,7 +1129,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ),
                             data: None,
                         };
-                        outgoing.send_error(request_id.clone(), error).await;
+                        outgoing.send_error(request_id, error).await;
                         return;
                     }
                 };
@@ -1428,7 +1428,7 @@ async fn handle_error(
 }
 
 async fn on_patch_approval_response(
-    event_turn_id: String,
+    call_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexThread>,
 ) {
@@ -1439,7 +1439,7 @@ async fn on_patch_approval_response(
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
-                    id: event_turn_id.clone(),
+                    id: call_id.clone(),
                     decision: ReviewDecision::Denied,
                 })
                 .await
@@ -1460,7 +1460,7 @@ async fn on_patch_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: call_id,
             decision: response.decision,
         })
         .await
@@ -1470,7 +1470,8 @@ async fn on_patch_approval_response(
 }
 
 async fn on_exec_approval_response(
-    event_turn_id: String,
+    call_id: String,
+    turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
 ) {
@@ -1496,7 +1497,8 @@ async fn on_exec_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: call_id,
+            turn_id: Some(turn_id),
             decision: response.decision,
         })
         .await
@@ -1678,7 +1680,7 @@ async fn on_file_change_request_approval_response(
     if let Some(status) = completion_status {
         complete_file_change_item(
             conversation_id,
-            item_id,
+            item_id.clone(),
             changes,
             status,
             event_turn_id.clone(),
@@ -1690,7 +1692,7 @@ async fn on_file_change_request_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_turn_id,
+            id: item_id,
             decision,
         })
         .await
@@ -1771,7 +1773,8 @@ async fn on_command_execution_request_approval_response(
 
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
-            id: event_turn_id,
+            id: item_id,
+            turn_id: Some(event_turn_id),
             decision,
         })
         .await
@@ -1891,7 +1894,6 @@ async fn construct_mcp_tool_call_end_notification(
 mod tests {
     use super::*;
     use crate::CHANNEL_CAPACITY;
-    use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
     use anyhow::Result;
@@ -1919,21 +1921,6 @@ mod tests {
 
     fn new_turn_summary_store() -> TurnSummaryStore {
         Arc::new(Mutex::new(HashMap::new()))
-    }
-
-    async fn recv_broadcast_message(
-        rx: &mut mpsc::Receiver<OutgoingEnvelope>,
-    ) -> Result<OutgoingMessage> {
-        let envelope = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one message"))?;
-        match envelope {
-            OutgoingEnvelope::Broadcast { message } => Ok(message),
-            OutgoingEnvelope::ToConnection { connection_id, .. } => {
-                bail!("unexpected targeted message for connection {connection_id:?}")
-            }
-        }
     }
 
     #[test]
@@ -2037,7 +2024,10 @@ mod tests {
         )
         .await;
 
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2076,7 +2066,10 @@ mod tests {
         )
         .await;
 
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2115,7 +2108,10 @@ mod tests {
         )
         .await;
 
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2164,7 +2160,10 @@ mod tests {
         )
         .await;
 
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
@@ -2232,7 +2231,10 @@ mod tests {
         )
         .await;
 
-        let first = recv_broadcast_message(&mut rx).await?;
+        let first = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected usage notification"))?;
         match first {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ThreadTokenUsageUpdated(payload),
@@ -2248,7 +2250,10 @@ mod tests {
             other => bail!("unexpected notification: {other:?}"),
         }
 
-        let second = recv_broadcast_message(&mut rx).await?;
+        let second = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("expected rate limit notification"))?;
         match second {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::AccountRateLimitsUpdated(payload),
@@ -2385,7 +2390,10 @@ mod tests {
         .await;
 
         // Verify: A turn 1
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send first notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn1);
@@ -2403,7 +2411,10 @@ mod tests {
         }
 
         // Verify: B turn 1
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send second notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, b_turn1);
@@ -2421,7 +2432,10 @@ mod tests {
         }
 
         // Verify: A turn 2
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send third notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn2);
@@ -2587,7 +2601,10 @@ mod tests {
         )
         .await;
 
-        let msg = recv_broadcast_message(&mut rx).await?;
+        let msg = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one notification"))?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,

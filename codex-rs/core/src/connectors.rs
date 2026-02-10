@@ -10,6 +10,7 @@ use async_channel::unbounded;
 pub use codex_app_server_protocol::AppInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -95,6 +96,16 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
             sandbox_state,
         )
         .await;
+
+    if force_refetch
+        && let Err(err) = mcp_connection_manager
+            .hard_refresh_codex_apps_tools_cache()
+            .await
+    {
+        warn!(
+            "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
+        );
+    }
 
     let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
