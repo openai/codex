@@ -628,6 +628,14 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     /// Raw markdown of the most recently completed agent response.
     last_agent_markdown: Option<String>,
+    /// Raw markdown for each completed agent response in this session timeline.
+    agent_turn_markdowns: Vec<String>,
+    /// Whether this turn already emitted a full `AgentMessage`.
+    ///
+    /// Some models only provide `TurnComplete.last_agent_message`. This flag lets us use
+    /// `TurnComplete` as a fallback source without duplicating entries when `AgentMessage` was
+    /// already received in the same turn.
+    saw_agent_message_this_turn: bool,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1014,8 +1022,21 @@ impl ChatWidget {
         }
     }
 
+    fn record_agent_markdown(&mut self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let markdown = message.to_string();
+        self.last_agent_markdown = Some(markdown.clone());
+        self.agent_turn_markdowns.push(markdown);
+        self.saw_agent_message_this_turn = true;
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+        self.last_agent_markdown = None;
+        self.agent_turn_markdowns.clear();
+        self.saw_agent_message_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1050,6 +1071,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.saw_agent_message_this_turn = false;
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
@@ -1298,6 +1320,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.saw_agent_message_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1364,9 +1387,11 @@ impl ChatWidget {
         if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
+            && !self.saw_agent_message_this_turn
         {
-            self.last_agent_markdown = Some(message.clone());
+            self.record_agent_markdown(message);
         }
+        self.saw_agent_message_this_turn = false;
 
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation();
@@ -2672,6 +2697,8 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
+            agent_turn_markdowns: Vec::new(),
+            saw_agent_message_this_turn: false,
         };
 
         widget.prefetch_rate_limits();
@@ -2838,6 +2865,8 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
+            agent_turn_markdowns: Vec::new(),
+            saw_agent_message_this_turn: false,
         };
 
         widget.prefetch_rate_limits();
@@ -2993,6 +3022,8 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             last_agent_markdown: None,
+            agent_turn_markdowns: Vec::new(),
+            saw_agent_message_this_turn: false,
         };
 
         widget.prefetch_rate_limits();
@@ -3938,9 +3969,7 @@ impl ChatWidget {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                if !message.is_empty() {
-                    self.last_agent_markdown = Some(message.clone());
-                }
+                self.record_agent_markdown(&message);
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
@@ -4262,6 +4291,21 @@ impl ChatWidget {
             )),
         }
         self.request_redraw();
+    }
+
+    pub(crate) fn truncate_agent_turn_markdowns(&mut self, len: usize) {
+        self.agent_turn_markdowns.truncate(len);
+        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
+        self.last_agent_markdown.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn agent_turn_markdown_count(&self) -> usize {
+        self.agent_turn_markdowns.len()
     }
 
     pub(crate) fn add_status_output(&mut self) {
