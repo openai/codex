@@ -4187,20 +4187,6 @@ async fn run_sampling_request(
         base_instructions,
     );
 
-    if let Err(err) = client_session
-        .prewarm_websocket(
-            &prompt,
-            &turn_context.model_info,
-            &turn_context.otel_manager,
-            turn_context.reasoning_effort,
-            turn_context.reasoning_summary,
-            turn_metadata_header,
-        )
-        .await
-    {
-        warn!("websocket request prewarm failed: {err}");
-    }
-
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
