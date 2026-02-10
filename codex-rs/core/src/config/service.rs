@@ -700,6 +700,9 @@ fn find_effective_layer(
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_app_server_protocol::AppConfig;
+    use codex_app_server_protocol::AppDisabledReason;
+    use codex_app_server_protocol::AppsConfig;
     use codex_app_server_protocol::AskForApproval;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -774,7 +777,7 @@ unified_exec = true
         service
             .write_value(ConfigValueWriteParams {
                 file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-                key_path: "features.remote_compaction".to_string(),
+                key_path: "features.remote_models".to_string(),
                 value: serde_json::json!(true),
                 merge_strategy: MergeStrategy::Replace,
                 expected_version: None,
@@ -794,9 +797,65 @@ hide_full_access_warning = true
 
 [features]
 unified_exec = true
-remote_compaction = true
+remote_models = true
 "#;
         assert_eq!(updated, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_value_supports_nested_app_paths() -> Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
+
+        let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps".to_string(),
+                value: serde_json::json!({
+                    "app1": {
+                        "enabled": false,
+                    },
+                }),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps succeeds");
+
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps.app1.disabled_reason".to_string(),
+                value: serde_json::json!("user"),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps.app1.disabled_reason succeeds");
+
+        let read = service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await
+            .expect("config read succeeds");
+
+        assert_eq!(
+            read.config.apps,
+            Some(AppsConfig {
+                apps: std::collections::HashMap::from([(
+                    "app1".to_string(),
+                    AppConfig {
+                        enabled: false,
+                        disabled_reason: Some(AppDisabledReason::User),
+                    },
+                )]),
+            })
+        );
+
         Ok(())
     }
 
@@ -844,41 +903,23 @@ remote_compaction = true
             },
         );
         let layers = response.layers.expect("layers present");
-        if cfg!(unix) {
-            let system_file = AbsolutePathBuf::from_absolute_path(
-                crate::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX,
-            )
-            .expect("system file");
-            assert_eq!(layers.len(), 3, "expected three layers on unix");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User {
-                    file: user_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(2).unwrap().name,
-                ConfigLayerSource::System { file: system_file }
-            );
-        } else {
-            assert_eq!(layers.len(), 2, "expected two layers");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User { file: user_file }
-            );
-        }
+        assert_eq!(layers.len(), 3, "expected three layers");
+        assert_eq!(
+            layers.first().unwrap().name,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: managed_file.clone()
+            }
+        );
+        assert_eq!(
+            layers.get(1).unwrap().name,
+            ConfigLayerSource::User {
+                file: user_file.clone()
+            }
+        );
+        assert!(matches!(
+            layers.get(2).unwrap().name,
+            ConfigLayerSource::System { .. }
+        ));
     }
 
     #[tokio::test]

@@ -2,8 +2,8 @@ use crate::harness::attributes_to_map;
 use crate::harness::build_metrics_with_defaults;
 use crate::harness::find_metric;
 use crate::harness::latest_metrics;
-use codex_app_server_protocol::AuthMode;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -22,7 +22,8 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         "gpt-5.1",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,
@@ -52,8 +53,12 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
             "app.version".to_string(),
             env!("CARGO_PKG_VERSION").to_string(),
         ),
-        ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
+        (
+            "auth_mode".to_string(),
+            TelemetryAuthMode::ApiKey.to_string(),
+        ),
         ("model".to_string(), "gpt-5.1".to_string()),
+        ("originator".to_string(), "test_originator".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("source".to_string(), "tui".to_string()),
@@ -73,7 +78,8 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
         "gpt-4o",
         Some("account-id".to_string()),
         None,
-        Some(AuthMode::ApiKey),
+        Some(TelemetryAuthMode::ApiKey),
+        "test_originator".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,

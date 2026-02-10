@@ -53,6 +53,9 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(windows)]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+#[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
@@ -408,6 +411,8 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
+    let payload_text = payload.to_string();
+    assert!(payload_text.contains("The `request_user_input` tool is unavailable in Default mode."));
 
     Ok(())
 }
@@ -1716,11 +1721,12 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(
+    create_config_toml_with_sandbox(
         codex_home.path(),
         &server.uri(),
         "never",
         &BTreeMap::from([(Feature::UnifiedExec, true)]),
+        "danger-full-access",
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1848,6 +1854,22 @@ fn create_config_toml(
     approval_policy: &str,
     feature_flags: &BTreeMap<Feature, bool>,
 ) -> std::io::Result<()> {
+    create_config_toml_with_sandbox(
+        codex_home,
+        server_uri,
+        approval_policy,
+        feature_flags,
+        "read-only",
+    )
+}
+
+fn create_config_toml_with_sandbox(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+    feature_flags: &BTreeMap<Feature, bool>,
+    sandbox_mode: &str,
+) -> std::io::Result<()> {
     let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
@@ -1871,7 +1893,7 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
-sandbox_mode = "read-only"
+sandbox_mode = "{sandbox_mode}"
 
 model_provider = "mock_provider"
 

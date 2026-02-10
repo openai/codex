@@ -11,7 +11,7 @@ use url::Url;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkProxyConfig {
     #[serde(default)]
-    pub network_proxy: NetworkProxySettings,
+    pub network: NetworkProxySettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +37,13 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub mode: NetworkMode,
     #[serde(default)]
-    pub policy: NetworkPolicy,
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub denied_domains: Vec<String>,
+    #[serde(default)]
+    pub allow_unix_sockets: Vec<String>,
+    #[serde(default)]
+    pub allow_local_binding: bool,
 }
 
 impl Default for NetworkProxySettings {
@@ -53,21 +59,12 @@ impl Default for NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),
-            policy: NetworkPolicy::default(),
+            allowed_domains: Vec::new(),
+            denied_domains: Vec::new(),
+            allow_unix_sockets: Vec::new(),
+            allow_local_binding: false,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NetworkPolicy {
-    #[serde(default)]
-    pub allowed_domains: Vec<String>,
-    #[serde(default)]
-    pub denied_domains: Vec<String>,
-    #[serde(default)]
-    pub allow_unix_sockets: Vec<String>,
-    #[serde(default)]
-    pub allow_local_binding: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -142,7 +139,7 @@ pub(crate) fn clamp_bind_addrs(
         cfg.dangerously_allow_non_loopback_admin,
         "admin API",
     );
-    if cfg.policy.allow_unix_sockets.is_empty() {
+    if cfg.allow_unix_sockets.is_empty() {
         return (http_addr, socks_addr, admin_addr);
     }
 
@@ -179,26 +176,14 @@ pub struct RuntimeConfig {
 }
 
 pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
-    let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128).with_context(|| {
-        format!(
-            "invalid network_proxy.proxy_url: {}",
-            cfg.network_proxy.proxy_url
-        )
-    })?;
-    let socks_addr = resolve_addr(&cfg.network_proxy.socks_url, 8081).with_context(|| {
-        format!(
-            "invalid network_proxy.socks_url: {}",
-            cfg.network_proxy.socks_url
-        )
-    })?;
-    let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080).with_context(|| {
-        format!(
-            "invalid network_proxy.admin_url: {}",
-            cfg.network_proxy.admin_url
-        )
-    })?;
+    let http_addr = resolve_addr(&cfg.network.proxy_url, 3128)
+        .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
+    let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
+        .with_context(|| format!("invalid network.socks_url: {}", cfg.network.socks_url))?;
+    let admin_addr = resolve_addr(&cfg.network.admin_url, 8080)
+        .with_context(|| format!("invalid network.admin_url: {}", cfg.network.admin_url))?;
     let (http_addr, socks_addr, admin_addr) =
-        clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg.network_proxy);
+        clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg.network);
 
     Ok(RuntimeConfig {
         http_addr,
@@ -453,10 +438,7 @@ mod tests {
         let cfg = NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: true,
             dangerously_allow_non_loopback_admin: true,
-            policy: NetworkPolicy {
-                allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
-                ..Default::default()
-            },
+            allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
             ..Default::default()
         };
         let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();

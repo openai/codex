@@ -87,8 +87,8 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Gate the execpolicy enforcement for shell/unified exec.
-    ExecPolicy,
+    /// Allow the model to search MCP tools via BM25 before exposing them.
+    SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
     /// Allow the model to request approval and propose exec rules.
@@ -97,8 +97,6 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Remote compaction enabled (only for ChatGPT auth)
-    RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
     /// Experimental shell snapshotting.
@@ -107,6 +105,8 @@ pub enum Feature {
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
+    /// Enable the get_memory tool backed by SQLite thread memories.
+    MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Enforce UTF8 output in Powershell.
@@ -129,6 +129,8 @@ pub enum Feature {
     Personality,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Enable Responses API websocket v2 mode.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -415,6 +417,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: !cfg!(windows),
     },
     FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -426,17 +434,13 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Deprecated,
         default_enabled: false,
     },
-    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Experimental {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        },
+        id: Feature::SearchTool,
+        key: "search_tool",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
@@ -446,6 +450,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memory_tool",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -460,12 +470,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "apply_patch_freeform",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ExecPolicy,
-        key: "exec_policy",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
@@ -492,15 +496,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RemoteCompaction,
-        key: "remote_compaction",
-        stage: Stage::UnderDevelopment,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
@@ -577,6 +575,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
 ];
 
 /// Push a warning event if any under-development features are enabled.
@@ -628,4 +632,24 @@ pub fn maybe_push_unstable_features_warning(
         id: "".to_owned(),
         msg: EventMsg::Warning(WarningEvent { message }),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn under_development_features_are_disabled_by_default() {
+        for spec in FEATURES {
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                assert_eq!(
+                    spec.default_enabled, false,
+                    "feature `{}` is under development and must be disabled by default",
+                    spec.key
+                );
+            }
+        }
+    }
 }

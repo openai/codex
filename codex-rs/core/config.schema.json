@@ -55,6 +55,40 @@
       },
       "type": "object"
     },
+    "AppConfig": {
+      "additionalProperties": false,
+      "description": "Config values for a single app/connector.",
+      "properties": {
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            }
+          ],
+          "description": "Reason this app was disabled."
+        },
+        "enabled": {
+          "default": true,
+          "description": "When `false`, Codex does not surface this app.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppDisabledReason": {
+      "enum": [
+        "unknown",
+        "user"
+      ],
+      "type": "string"
+    },
+    "AppsConfigToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AppConfig"
+      },
+      "description": "App/connector settings loaded from `config.toml`.",
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -175,9 +209,6 @@
             "enable_request_compression": {
               "type": "boolean"
             },
-            "exec_policy": {
-              "type": "boolean"
-            },
             "experimental_use_freeform_apply_patch": {
               "type": "boolean"
             },
@@ -190,13 +221,13 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "memory_tool": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
             "powershell_utf8": {
-              "type": "boolean"
-            },
-            "remote_compaction": {
               "type": "boolean"
             },
             "remote_models": {
@@ -208,7 +239,13 @@
             "responses_websockets": {
               "type": "boolean"
             },
+            "responses_websockets_v2": {
+              "type": "boolean"
+            },
             "runtime_metrics": {
+              "type": "boolean"
+            },
+            "search_tool": {
               "type": "boolean"
             },
             "shell_snapshot": {
@@ -574,6 +611,14 @@
           "description": "Log user prompt in traces",
           "type": "boolean"
         },
+        "metrics_exporter": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OtelExporterKind"
+            }
+          ],
+          "description": "Optional metrics exporter"
+        },
         "trace_exporter": {
           "allOf": [
             {
@@ -790,6 +835,10 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "required": {
+          "default": null,
+          "type": "boolean"
         },
         "scopes": {
           "default": null,
@@ -1046,6 +1095,14 @@
           "default": true,
           "description": "Show startup tooltips in the TUI welcome screen. Defaults to `true`.",
           "type": "boolean"
+        },
+        "status_line": {
+          "default": null,
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1126,6 +1183,15 @@
       ],
       "description": "Default approval policy for executing commands."
     },
+    "apps": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AppsConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Settings for app-specific controls."
+    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
@@ -1197,9 +1263,6 @@
         "enable_request_compression": {
           "type": "boolean"
         },
-        "exec_policy": {
-          "type": "boolean"
-        },
         "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
@@ -1212,13 +1275,13 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "memory_tool": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
         "powershell_utf8": {
-          "type": "boolean"
-        },
-        "remote_compaction": {
           "type": "boolean"
         },
         "remote_models": {
@@ -1230,7 +1293,13 @@
         "responses_websockets": {
           "type": "boolean"
         },
+        "responses_websockets_v2": {
+          "type": "boolean"
+        },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "search_tool": {
           "type": "boolean"
         },
         "shell_snapshot": {

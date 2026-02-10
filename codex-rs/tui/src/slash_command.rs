@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     DebugConfig,
+    Statusline,
     Mcp,
     Apps,
     Logout,
@@ -42,6 +43,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Clean,
     Personality,
     TestApproval,
 }
@@ -65,13 +67,15 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
+            SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Ps => "list background terminals",
+            SlashCommand::Clean => "stop all background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
-            SlashCommand::Approvals => "choose what Codex can do without approval",
+            SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
@@ -122,6 +126,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
+            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Feedback
@@ -131,6 +136,7 @@ impl SlashCommand {
             SlashCommand::TestApproval => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent => true,
+            SlashCommand::Statusline => false,
         }
     }
 
