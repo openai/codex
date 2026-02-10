@@ -96,6 +96,10 @@ popup so gating stays in sync.
 
 There are multiple submission paths, but they share the same core rules:
 
+When steer mode is enabled, `Tab` requests queuing if a task is already running; otherwise it
+submits immediately. `Enter` always submits immediately in this mode. `Tab` does not submit when
+the input starts with `!` (shell command).
+
 ### Normal submit/queue path
 
 `handle_submission` calls `prepare_submission_text` for both submit and queue. That method:
