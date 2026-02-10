@@ -2070,10 +2070,7 @@ network_access = false  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(
-            resolution,
-            SandboxPolicy::DangerFullAccess
-        );
+        assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
 
         let sandbox_read_only = r#"
 sandbox_mode = "read-only"
@@ -2092,10 +2089,7 @@ network_access = true  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(
-            resolution,
-            SandboxPolicy::ReadOnly
-        );
+        assert_eq!(resolution, SandboxPolicy::ReadOnly);
 
         let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(

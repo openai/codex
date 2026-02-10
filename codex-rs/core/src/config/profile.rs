@@ -3,8 +3,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::config::types::WindowsToml;
 use crate::config::types::Personality;
+use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;

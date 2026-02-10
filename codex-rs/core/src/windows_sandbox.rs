@@ -109,7 +109,9 @@ fn profile_legacy_windows_sandbox_mode(
     }
 }
 
-pub fn legacy_windows_sandbox_mode(features: Option<&FeaturesToml>) -> Option<WindowsSandboxModeToml> {
+pub fn legacy_windows_sandbox_mode(
+    features: Option<&FeaturesToml>,
+) -> Option<WindowsSandboxModeToml> {
     let entries = features.map(|features| &features.entries)?;
     legacy_windows_sandbox_mode_from_entries(entries)
 }
@@ -242,8 +244,8 @@ pub fn run_legacy_setup_preflight(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::FeaturesToml;
     use crate::features::Features;
+    use crate::features::FeaturesToml;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 

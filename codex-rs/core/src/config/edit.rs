@@ -851,9 +851,7 @@ impl ConfigEditsBuilder {
                     key.to_string(),
                 ];
             }
-            self.edits.push(ConfigEdit::ClearPath {
-                segments,
-            });
+            self.edits.push(ConfigEdit::ClearPath { segments });
         }
         self
     }
