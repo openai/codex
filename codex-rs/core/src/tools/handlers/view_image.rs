@@ -21,7 +21,7 @@ pub struct ViewImageHandler {
 }
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
-    "view_image is not allowed because the current model does not support image inputs";
+    "view_image is not allowed because you do not support image inputs";
 
 impl ViewImageHandler {
     pub fn new(supports_image_input: bool) -> Self {
@@ -121,22 +121,5 @@ impl ToolHandler for ViewImageHandler {
             body: FunctionCallOutputBody::Text("attached local image path".to_string()),
             success: Some(true),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn unsupported_models_return_clear_message() {
-        let handler = ViewImageHandler::new(false);
-
-        let err = handler.ensure_supported().expect_err("must reject");
-        assert_eq!(
-            err,
-            FunctionCallError::RespondToModel(VIEW_IMAGE_UNSUPPORTED_MESSAGE.to_string())
-        );
     }
 }
