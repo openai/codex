@@ -283,6 +283,8 @@ mod tests {
         let notification =
             ServerNotification::AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification {
                 rate_limits: RateLimitSnapshot {
+                    limit_id: None,
+                    limit_name: None,
                     primary: Some(RateLimitWindow {
                         used_percent: 25,
                         window_duration_mins: Some(15),
@@ -300,6 +302,8 @@ mod tests {
                 "method": "account/rateLimits/updated",
                 "params": {
                     "rateLimits": {
+                        "limitId": null,
+                        "limitName": null,
                         "primary": {
                             "usedPercent": 25,
                             "windowDurationMins": 15,

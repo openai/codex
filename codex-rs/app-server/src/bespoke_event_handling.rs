@@ -2206,6 +2206,8 @@ mod tests {
             model_context_window: Some(4096),
         };
         let rate_limits = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 42.5,
                 window_minutes: Some(15),

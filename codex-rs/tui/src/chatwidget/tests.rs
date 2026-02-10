@@ -95,6 +95,7 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -124,6 +125,8 @@ fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> Co
 
 fn snapshot(percent: f64) -> RateLimitSnapshot {
     RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: percent,
             window_minutes: Some(60),
@@ -1061,7 +1064,7 @@ async fn make_chatwidget_manual(
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
-        rate_limit_snapshot: None,
+        rate_limit_snapshots_by_limit_id: BTreeMap::new(),
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -1277,6 +1280,8 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -1287,13 +1292,15 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         plan_type: None,
     }));
     let initial_balance = chat
-        .rate_limit_snapshot
-        .as_ref()
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
         .and_then(|snapshot| snapshot.credits.as_ref())
         .and_then(|credits| credits.balance.as_deref());
     assert_eq!(initial_balance, Some("17.5"));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 80.0,
             window_minutes: Some(60),
@@ -1305,8 +1312,8 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
     }));
 
     let display = chat
-        .rate_limit_snapshot
-        .as_ref()
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
         .expect("rate limits should be cached");
     let credits = display
         .credits
@@ -1326,6 +1333,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 10.0,
             window_minutes: Some(60),
@@ -1342,6 +1351,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 25.0,
             window_minutes: Some(30),
@@ -1358,6 +1369,8 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 30.0,
             window_minutes: Some(60),
@@ -1375,12 +1388,92 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
 }
 
 #[tokio::test]
+async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex".to_string()),
+        limit_name: Some("codex".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 20.0,
+            window_minutes: Some(300),
+            resets_at: Some(100),
+        }),
+        secondary: None,
+        credits: Some(CreditsSnapshot {
+            has_credits: true,
+            unlimited: false,
+            balance: Some("5.00".to_string()),
+        }),
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex_other".to_string()),
+        limit_name: Some("codex_other".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 90.0,
+            window_minutes: Some(60),
+            resets_at: Some(200),
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: Some(PlanType::Pro),
+    }));
+
+    let codex = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex")
+        .expect("codex snapshot should exist");
+    let other = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex_other")
+        .expect("codex_other snapshot should exist");
+
+    assert_eq!(codex.primary.as_ref().map(|w| w.used_percent), Some(20.0));
+    assert_eq!(
+        codex
+            .credits
+            .as_ref()
+            .and_then(|credits| credits.balance.as_deref()),
+        Some("5.00")
+    );
+    assert_eq!(other.primary.as_ref().map(|w| w.used_percent), Some(90.0));
+    assert!(other.credits.is_none());
+}
+
+#[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
+
+    assert!(matches!(
+        chat.rate_limit_switch_prompt,
+        RateLimitSwitchPromptState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn rate_limit_switch_prompt_skips_non_codex_limit() {
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: Some("codex_other".to_string()),
+        limit_name: Some("codex_other".to_string()),
+        primary: Some(RateLimitWindow {
+            used_percent: 95.0,
+            window_minutes: Some(60),
+            resets_at: None,
+        }),
+        secondary: None,
+        credits: None,
+        plan_type: None,
+    }));
 
     assert!(matches!(
         chat.rate_limit_switch_prompt,

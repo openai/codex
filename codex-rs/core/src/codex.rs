@@ -4279,7 +4279,7 @@ async fn run_sampling_request(
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                    sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -5820,6 +5820,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
                 window_minutes: Some(15),
@@ -5836,6 +5838,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: Some("codex_other".to_string()),
+            limit_name: Some("codex_other".to_string()),
             primary: Some(RateLimitWindow {
                 used_percent: 40.0,
                 window_minutes: Some(30),
@@ -5854,6 +5858,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex_other".to_string()),
+                limit_name: Some("codex_other".to_string()),
                 primary: update.primary.clone(),
                 secondary: update.secondary,
                 credits: initial.credits,
@@ -5903,6 +5909,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
                 window_minutes: Some(20),
@@ -5923,6 +5931,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 35.0,
                 window_minutes: Some(25),
@@ -5937,6 +5947,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: None,
                 primary: update.primary,
                 secondary: update.secondary,
                 credits: initial.credits,
