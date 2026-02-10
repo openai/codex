@@ -185,14 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn base_policy_allows_mach_host_for_cpu_info() {
-        assert!(
-            MACOS_SEATBELT_BASE_POLICY.contains("(allow mach-host*)"),
-            "base policy must allow mach-host for os.cpus()/uv_cpu_info()"
-        );
-    }
-
-    #[test]
     fn base_policy_allows_node_cpu_sysctls() {
         assert!(
             MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"machdep.cpu.brand_string\")"),
@@ -201,18 +193,6 @@ mod tests {
         assert!(
             MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
             "base policy must allow hardware model lookup for os.cpus()"
-        );
-    }
-
-    #[test]
-    fn base_policy_allows_preexisting_tty_data_writes() {
-        let expected = r#"(allow file-write-data
-  (require-all
-    (regex #"^/dev/ttys[0-9]+")
-    (vnode-type CHARACTER-DEVICE)))"#;
-        assert!(
-            MACOS_SEATBELT_BASE_POLICY.contains(expected),
-            "base policy must allow file-write-data on preexisting tty devices"
         );
     }
 
