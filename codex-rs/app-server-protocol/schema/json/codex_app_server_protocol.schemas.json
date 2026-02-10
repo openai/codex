@@ -12085,7 +12085,7 @@
                 "type": "string"
               },
               "chatgptPlanType": {
-                "description": "Optional plan type supplied by the client.",
+                "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
                 "type": [
                   "string",
                   "null"
