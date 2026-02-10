@@ -1,33 +1,24 @@
 use tokio::process::Command;
 
-use super::types::Hook;
-use super::types::HookEvent;
-use super::types::HookOutcome;
-use super::types::HookPayload;
-use super::user_notification::notify_hook;
-use crate::config::Config;
+use crate::types::Hook;
+use crate::types::HookEvent;
+use crate::types::HookOutcome;
+use crate::types::HookPayload;
 
 #[derive(Default, Clone)]
-pub(crate) struct Hooks {
+pub struct Hooks {
     after_agent: Vec<Hook>,
-}
-
-fn get_notify_hook(config: &Config) -> Option<Hook> {
-    config
-        .notify
-        .as_ref()
-        .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-        .map(|argv| notify_hook(argv.clone()))
 }
 
 // Hooks are arbitrary, user-specified functions that are deterministically
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
-    // new creates a new Hooks instance from config.
-    // For legacy compatibility, if config.notify is set, it will be added to
-    // the after_agent hooks.
-    pub(crate) fn new(config: &Config) -> Self {
-        let after_agent = get_notify_hook(config).into_iter().collect();
+    pub fn new(notify: Option<Vec<String>>) -> Self {
+        let after_agent = notify
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(crate::notify_hook)
+            .into_iter()
+            .collect();
         Self { after_agent }
     }
 
@@ -37,7 +28,7 @@ impl Hooks {
         }
     }
 
-    pub(crate) async fn dispatch(&self, hook_payload: HookPayload) {
+    pub async fn dispatch(&self, hook_payload: HookPayload) {
         // TODO(gt): support interrupting program execution by returning a result here.
         for hook in self.hooks_for_event(&hook_payload.hook_event) {
             let outcome = hook.execute(&hook_payload).await;
@@ -48,7 +39,7 @@ impl Hooks {
     }
 }
 
-pub(super) fn command_from_argv(argv: &[String]) -> Option<Command> {
+pub fn command_from_argv(argv: &[String]) -> Option<Command> {
     let (program, args) = argv.split_first()?;
     if program.is_empty() {
         return None;
@@ -77,16 +68,8 @@ mod tests {
     use tempfile::tempdir;
     use tokio::time::timeout;
 
-    use crate::config::test_config;
-
-    use super::super::types::Hook;
-    use super::super::types::HookEvent;
-    use super::super::types::HookEventAfterAgent;
-    use super::super::types::HookOutcome;
-    use super::super::types::HookPayload;
-    use super::Hooks;
-    use super::command_from_argv;
-    use super::get_notify_hook;
+    use super::*;
+    use crate::types::HookEventAfterAgent;
 
     const CWD: &str = "/tmp";
     const INPUT_MESSAGE: &str = "hello";
@@ -154,17 +137,20 @@ mod tests {
     }
 
     #[test]
-    fn get_notify_hook_requires_program_name() {
-        let mut config = test_config();
-
-        config.notify = Some(vec![]);
-        assert!(get_notify_hook(&config).is_none());
-
-        config.notify = Some(vec!["".to_string()]);
-        assert!(get_notify_hook(&config).is_none());
-
-        config.notify = Some(vec!["notify-send".to_string()]);
-        assert!(get_notify_hook(&config).is_some());
+    fn hooks_new_requires_program_name() {
+        assert!(Hooks::new(None).after_agent.is_empty());
+        assert!(Hooks::new(Some(vec![])).after_agent.is_empty());
+        assert!(
+            Hooks::new(Some(vec!["".to_string()]))
+                .after_agent
+                .is_empty()
+        );
+        assert_eq!(
+            Hooks::new(Some(vec!["notify-send".to_string()]))
+                .after_agent
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -270,11 +256,8 @@ mod tests {
                 let script_path_arg = script_path_arg.clone();
                 Box::pin(async move {
                     let json = to_string(payload).expect("serialize hook payload");
-                    let powershell = crate::powershell::try_find_powershell_executable_blocking()
-                        .map(|path| path.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "powershell.exe".to_string());
                     let mut command = command_from_argv(&[
-                        powershell,
+                        "powershell.exe".to_string(),
                         "-NoLogo".to_string(),
                         "-NoProfile".to_string(),
                         "-ExecutionPolicy".to_string(),

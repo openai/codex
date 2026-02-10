@@ -9,12 +9,11 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::Serializer;
 
-pub(crate) type HookFn =
-    Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookOutcome> + Send + Sync>;
+pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookOutcome> + Send + Sync>;
 
 #[derive(Clone)]
-pub(crate) struct Hook {
-    pub(crate) func: HookFn,
+pub struct Hook {
+    pub func: HookFn,
 }
 
 impl Default for Hook {
@@ -26,24 +25,24 @@ impl Default for Hook {
 }
 
 impl Hook {
-    pub(super) async fn execute(&self, payload: &HookPayload) -> HookOutcome {
+    pub async fn execute(&self, payload: &HookPayload) -> HookOutcome {
         (self.func)(payload).await
     }
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct HookPayload {
-    pub(crate) session_id: ThreadId,
-    pub(crate) cwd: PathBuf,
+pub struct HookPayload {
+    pub session_id: ThreadId,
+    pub cwd: PathBuf,
     #[serde(serialize_with = "serialize_triggered_at")]
-    pub(crate) triggered_at: DateTime<Utc>,
-    pub(crate) hook_event: HookEvent,
+    pub triggered_at: DateTime<Utc>,
+    pub hook_event: HookEvent,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct HookEventAfterAgent {
+pub struct HookEventAfterAgent {
     pub thread_id: ThreadId,
     pub turn_id: String,
     pub input_messages: Vec<String>,
@@ -59,7 +58,7 @@ where
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
-pub(crate) enum HookEvent {
+pub enum HookEvent {
     AfterAgent {
         #[serde(flatten)]
         event: HookEventAfterAgent,
@@ -67,7 +66,7 @@ pub(crate) enum HookEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HookOutcome {
+pub enum HookOutcome {
     Continue,
     #[allow(dead_code)]
     Stop,

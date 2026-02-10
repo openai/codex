@@ -574,6 +574,29 @@ ON CONFLICT(id) DO UPDATE SET
         raw_memory: &str,
         memory_summary: &str,
     ) -> anyhow::Result<ThreadMemory> {
+        let Some(thread) = self.get_thread(thread_id).await? else {
+            return Err(anyhow::anyhow!("thread not found: {thread_id}"));
+        };
+        let scope_key = thread.cwd.display().to_string();
+        self.upsert_thread_memory_for_scope(
+            thread_id,
+            MEMORY_SCOPE_KIND_CWD,
+            scope_key.as_str(),
+            raw_memory,
+            memory_summary,
+        )
+        .await
+    }
+
+    /// Insert or update memory summaries for a thread in an explicit scope.
+    pub async fn upsert_thread_memory_for_scope(
+        &self,
+        thread_id: ThreadId,
+        scope_kind: &str,
+        scope_key: &str,
+        raw_memory: &str,
+        memory_summary: &str,
+    ) -> anyhow::Result<ThreadMemory> {
         if self.get_thread(thread_id).await?.is_none() {
             return Err(anyhow::anyhow!("thread not found: {thread_id}"));
         }
@@ -726,6 +749,21 @@ WHERE thread_id = ? AND scope_kind = ? AND scope_key = ?
     pub async fn get_last_n_thread_memories_for_cwd(
         &self,
         cwd: &Path,
+        n: usize,
+    ) -> anyhow::Result<Vec<ThreadMemory>> {
+        self.get_last_n_thread_memories_for_scope(
+            MEMORY_SCOPE_KIND_CWD,
+            &cwd.display().to_string(),
+            n,
+        )
+        .await
+    }
+
+    /// Get the last `n` memories for a specific memory scope.
+    pub async fn get_last_n_thread_memories_for_scope(
+        &self,
+        scope_kind: &str,
+        scope_key: &str,
         n: usize,
     ) -> anyhow::Result<Vec<ThreadMemory>> {
         self.get_last_n_thread_memories_for_scope(
@@ -2654,6 +2692,272 @@ mod tests {
         .try_get::<i64, _>("attempt")
         .expect("attempt value");
         assert_eq!(attempt, 2);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase1_job_claim_and_success_require_current_owner_token() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner, 100, 3600)
+            .await
+            .expect("claim phase1 job");
+        let ownership_token = match claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        assert!(
+            !runtime
+                .mark_phase1_job_succeeded(
+                    thread_id,
+                    "cwd",
+                    "scope",
+                    "wrong-token",
+                    "/tmp/path",
+                    "summary-hash"
+                )
+                .await
+                .expect("mark succeeded wrong token should fail"),
+            "wrong token should not finalize the job"
+        );
+        assert!(
+            runtime
+                .mark_phase1_job_succeeded(
+                    thread_id,
+                    "cwd",
+                    "scope",
+                    ownership_token.as_str(),
+                    "/tmp/path",
+                    "summary-hash"
+                )
+                .await
+                .expect("mark succeeded with current token"),
+            "current token should finalize the job"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase1_job_running_stale_can_be_stolen_but_fresh_running_is_skipped() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let first_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_a, 100, 3600)
+            .await
+            .expect("first claim");
+        assert!(
+            matches!(first_claim, Phase1JobClaimOutcome::Claimed { .. }),
+            "first claim should acquire"
+        );
+
+        let fresh_second_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_b, 100, 3600)
+            .await
+            .expect("fresh second claim");
+        assert_eq!(fresh_second_claim, Phase1JobClaimOutcome::SkippedRunning);
+
+        let stale_second_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_b, 100, 0)
+            .await
+            .expect("stale second claim");
+        assert!(
+            matches!(stale_second_claim, Phase1JobClaimOutcome::Claimed { .. }),
+            "stale running job should be stealable"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase1_job_lease_renewal_requires_current_owner_token() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let first_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_a, 100, 3600)
+            .await
+            .expect("first claim");
+        let owner_a_token = match first_claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        let stolen_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_b, 100, 0)
+            .await
+            .expect("stolen claim");
+        let owner_b_token = match stolen_claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        assert!(
+            !runtime
+                .renew_phase1_job_lease(thread_id, "cwd", "scope", owner_a_token.as_str())
+                .await
+                .expect("old owner lease renewal should fail"),
+            "stale owner token should not renew lease"
+        );
+        assert!(
+            runtime
+                .renew_phase1_job_lease(thread_id, "cwd", "scope", owner_b_token.as_str())
+                .await
+                .expect("current owner lease renewal should succeed"),
+            "current owner token should renew lease"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase1_owner_guarded_upsert_rejects_stale_owner() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let first_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_a, 100, 3600)
+            .await
+            .expect("first claim");
+        let owner_a_token = match first_claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        let stolen_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_b, 100, 0)
+            .await
+            .expect("stolen claim");
+        let owner_b_token = match stolen_claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+
+        let stale_upsert = runtime
+            .upsert_thread_memory_for_scope_if_phase1_owner(
+                thread_id,
+                "cwd",
+                "scope",
+                owner_a_token.as_str(),
+                "stale raw memory",
+                "stale summary",
+            )
+            .await
+            .expect("stale owner upsert");
+        assert!(
+            stale_upsert.is_none(),
+            "stale owner token should not upsert thread memory"
+        );
+
+        let current_upsert = runtime
+            .upsert_thread_memory_for_scope_if_phase1_owner(
+                thread_id,
+                "cwd",
+                "scope",
+                owner_b_token.as_str(),
+                "fresh raw memory",
+                "fresh summary",
+            )
+            .await
+            .expect("current owner upsert");
+        let current_upsert = current_upsert.expect("current owner should upsert");
+        assert_eq!(current_upsert.raw_memory, "fresh raw memory");
+        assert_eq!(current_upsert.memory_summary, "fresh summary");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase1_job_failed_is_terminal() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let cwd = codex_home.join("workspace");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_id, cwd))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_a, 100, 3600)
+            .await
+            .expect("claim");
+        let ownership_token = match claim {
+            Phase1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_phase1_job_failed(
+                    thread_id,
+                    "cwd",
+                    "scope",
+                    ownership_token.as_str(),
+                    "prompt failed"
+                )
+                .await
+                .expect("mark failed"),
+            "owner token should be able to fail job"
+        );
+
+        let second_claim = runtime
+            .try_claim_phase1_job(thread_id, "cwd", "scope", owner_b, 101, 3600)
+            .await
+            .expect("second claim");
+        assert_eq!(second_claim, Phase1JobClaimOutcome::SkippedTerminalFailure);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -85,7 +85,7 @@ pub(super) async fn run_memories_startup_pipeline(
         None,
         false,
     )
-    .await
+        .await
     else {
         warn!("state db unavailable for memories startup pipeline; skipping");
         return Ok(());
@@ -103,7 +103,7 @@ pub(super) async fn run_memories_startup_pipeline(
         selection_candidates,
         memories::MAX_ROLLOUTS_PER_STARTUP,
     )
-    .await;
+        .await;
     info!(
         "memory phase-1 candidate selection complete: {} claimed candidate(s) from {} indexed thread(s)",
         claimed_candidates.len(),
@@ -189,7 +189,7 @@ async fn claim_phase_one_candidates(
                 session.conversation_id,
                 source_updated_at,
             )
-            .await
+                .await
             else {
                 continue;
             };
@@ -237,7 +237,7 @@ async fn try_claim_phase1_job_with_retry(
                     tokio::time::sleep(Duration::from_millis(
                         PHASE_ONE_DB_LOCK_RETRY_BACKOFF_MS * (attempt as u64 + 1),
                     ))
-                    .await;
+                        .await;
                     continue;
                 }
                 warn!("state db try_claim_phase1_job failed during {MEMORY_STARTUP_STAGE}: {err}");
@@ -337,7 +337,7 @@ async fn try_claim_phase2_job_with_retry(
                     tokio::time::sleep(Duration::from_millis(
                         PHASE_TWO_DB_LOCK_RETRY_BACKOFF_MS * (attempt as u64 + 1),
                     ))
-                    .await;
+                        .await;
                     continue;
                 }
                 warn!("state db try_claim_phase2_job failed during {MEMORY_STARTUP_STAGE}: {err}");
@@ -373,7 +373,7 @@ async fn process_memory_candidate(
                 &ownership_token,
                 "failed to create memory layout",
             )
-            .await;
+                .await;
             continue;
         }
         ready_scopes.push((scope, ownership_token));
@@ -396,7 +396,7 @@ async fn process_memory_candidate(
                     &ready_scopes,
                     "failed to load rollout",
                 )
-                .await;
+                    .await;
                 return 0;
             }
         };
@@ -423,7 +423,7 @@ async fn process_memory_candidate(
                 &ready_scopes,
                 "failed to serialize filtered rollout",
             )
-            .await;
+                .await;
             return 0;
         }
     };
@@ -474,7 +474,7 @@ async fn process_memory_candidate(
                 &ready_scopes,
                 "stage-1 memory request failed",
             )
-            .await;
+                .await;
             return 0;
         }
     };
@@ -492,7 +492,7 @@ async fn process_memory_candidate(
                 &ready_scopes,
                 "stage-1 memory response stream failed",
             )
-            .await;
+                .await;
             return 0;
         }
     };
@@ -510,7 +510,7 @@ async fn process_memory_candidate(
                 &ready_scopes,
                 "invalid stage-1 memory payload",
             )
-            .await;
+                .await;
             return 0;
         }
     };
@@ -525,7 +525,7 @@ async fn process_memory_candidate(
             &stage_one_output.raw_memory,
             &stage_one_output.summary,
         )
-        .await
+            .await
         {
             touched_scope_count += 1;
         }
@@ -576,7 +576,7 @@ async fn fail_claimed_phase_one_jobs(
             ownership_token,
             reason,
         )
-        .await;
+            .await;
     }
 }
 
@@ -597,7 +597,7 @@ async fn persist_phase_one_memory_for_scope(
             ownership_token,
             "state db unavailable for scoped thread memory upsert",
         )
-        .await;
+            .await;
         return false;
     };
 
@@ -650,7 +650,7 @@ async fn persist_phase_one_memory_for_scope(
                 ownership_token,
                 "failed to upsert scoped thread memory",
             )
-            .await;
+                .await;
             return false;
         }
     };
@@ -685,7 +685,7 @@ async fn persist_phase_one_memory_for_scope(
                 ownership_token,
                 "failed to read scope memories after upsert",
             )
-            .await;
+                .await;
             return false;
         }
     };
@@ -707,7 +707,7 @@ async fn persist_phase_one_memory_for_scope(
             ownership_token,
             "failed to sync scope raw memories",
         )
-        .await;
+            .await;
         return false;
     }
 
@@ -728,7 +728,7 @@ async fn persist_phase_one_memory_for_scope(
             ownership_token,
             "failed to rebuild scope memory summary",
         )
-        .await;
+            .await;
         return false;
     }
 
@@ -796,7 +796,7 @@ async fn run_memory_consolidation_for_scope(
         &scope.scope_key,
         session.conversation_id,
     )
-    .await
+        .await
     else {
         return;
     };
@@ -832,7 +832,7 @@ async fn run_memory_consolidation_for_scope(
             &ownership_token,
             "failed to create memory layout",
         )
-        .await;
+            .await;
         return;
     }
 
@@ -856,7 +856,7 @@ async fn run_memory_consolidation_for_scope(
                 &ownership_token,
                 "failed to read scope memories before consolidation",
             )
-            .await;
+                .await;
             return;
         }
     };
@@ -876,7 +876,7 @@ async fn run_memory_consolidation_for_scope(
             &ownership_token,
             "failed to refresh phase-1 memory outputs",
         )
-        .await;
+            .await;
         return;
     }
 
@@ -892,7 +892,7 @@ async fn run_memory_consolidation_for_scope(
             &ownership_token,
             "failed to wipe previous consolidation outputs",
         )
-        .await;
+            .await;
         return;
     }
 
@@ -959,7 +959,7 @@ async fn run_memory_consolidation_for_scope(
                 &ownership_token,
                 "failed to spawn consolidation agent",
             )
-            .await;
+                .await;
         }
     }
 }
