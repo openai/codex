@@ -282,7 +282,7 @@ mod spawn_agents_on_csv {
                 .clone()
                 .unwrap_or_else(|| format!("row-{row_index}"));
             let mut item_id = base_item_id.clone();
-            let mut suffix = 1usize;
+            let mut suffix = 2usize;
             while !seen_ids.insert(item_id.clone()) {
                 item_id = format!("{base_item_id}-{suffix}");
                 suffix = suffix.saturating_add(1);
@@ -385,6 +385,16 @@ mod spawn_agents_on_csv {
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
             })?;
+        let output_path = PathBuf::from(job.output_csv_path.clone());
+        if !tokio::fs::try_exists(&output_path).await.unwrap_or(false) {
+            export_job_csv_snapshot(db.clone(), &job)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to export output csv {job_id}: {err}"
+                    ))
+                })?;
+        }
         let progress = db
             .get_agent_job_progress(job_id.as_str())
             .await

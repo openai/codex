@@ -56,6 +56,7 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
 }
 
@@ -79,8 +80,9 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_collaboration_modes_tools = true;
+        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let include_search_tool = features.enabled(Feature::Apps);
+        let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
@@ -116,11 +118,12 @@ impl ToolsConfig {
             }
         };
 
-        let agent_jobs_worker_tools = matches!(
-            session_source,
-            SessionSource::SubAgent(SubAgentSource::Other(label))
-                if label.starts_with("agent_job:")
-        );
+        let agent_jobs_worker_tools = include_agent_jobs
+            && matches!(
+                session_source,
+                SessionSource::SubAgent(SubAgentSource::Other(label))
+                    if label.starts_with("agent_job:")
+            );
 
         Self {
             shell_type,
@@ -136,6 +139,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
         }
     }
@@ -1799,7 +1803,7 @@ pub(crate) fn build_specs(
         builder.register_handler("close_agent", multi_agent_handler);
     }
 
-    if config.collab_tools {
+    if config.agent_jobs_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         builder.push_spec(create_spawn_agents_on_csv_tool());
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
@@ -2068,6 +2072,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
         features.enable(Feature::CollaborationModes);
+        features.enable(Feature::Sqlite);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2094,6 +2099,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
         features.enable(Feature::CollaborationModes);
+        features.enable(Feature::Sqlite);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,

@@ -119,6 +119,32 @@ pub(crate) const DEFAULT_AGENT_MAX_SPAWN_DEPTH: Option<usize> = Some(2);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
+pub const CONFIG_TOML_FILE: &str = "config.toml";
+const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
+
+fn default_sqlite_home(sandbox_policy: &SandboxPolicy, codex_home: &Path) -> PathBuf {
+    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+        let mut path = std::env::temp_dir();
+        path.push("codex-sqlite");
+        path
+    } else {
+        codex_home.to_path_buf()
+    }
+}
+
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+    let raw = std::env::var(SQLITE_HOME_ENV).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(resolved_cwd.join(path))
+    }
+}
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempdir().expect("create temp dir");
@@ -349,6 +375,9 @@ pub struct Config {
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
+
+    /// Directory where Codex stores the SQLite state DB.
+    pub sqlite_home: PathBuf,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -1113,6 +1142,11 @@ pub struct ConfigToml {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     #[serde(default)]
     pub history: Option<History>,
+
+    /// Directory where Codex stores the SQLite state DB.
+    /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses a temp dir
+    /// under WorkspaceWrite sandboxing and `$CODEX_HOME` for other modes.
+    pub sqlite_home: Option<AbsolutePathBuf>,
 
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
@@ -1986,6 +2020,12 @@ impl Config {
                 p.push("log");
                 p
             });
+        let sqlite_home = cfg
+            .sqlite_home
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf)
+            .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
+            .unwrap_or_else(|| default_sqlite_home(&sandbox_policy, &codex_home));
 
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
@@ -2105,6 +2145,7 @@ impl Config {
             agent_max_spawn_depth,
             agent_job_max_runtime_seconds,
             codex_home,
+            sqlite_home,
             log_dir,
             config_layer_stack,
             history,
@@ -4715,6 +4756,7 @@ model_verbosity = "high"
                 agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
                 agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
                 codex_home: fixture.codex_home(),
+                sqlite_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
                 startup_warnings: Vec::new(),
@@ -4840,6 +4882,7 @@ model_verbosity = "high"
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -4963,6 +5006,7 @@ model_verbosity = "high"
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -5072,6 +5116,7 @@ model_verbosity = "high"
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
