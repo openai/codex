@@ -6,6 +6,7 @@ use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
@@ -42,9 +43,9 @@ pub struct LandlockCommand {
 
     /// Internal compatibility flag.
     ///
-    /// By default, proxy environment variables do not disable
-    /// restricted-network sandboxing.
-    /// If set, proxy configuration can disable restricted-network sandboxing.
+    /// By default, restricted-network sandboxing uses isolated networking.
+    /// If set, sandbox setup switches to proxy-only network mode
+    /// (currently enforced the same as isolated networking).
     #[arg(long = "allow-network-for-proxy", hide = true, default_value_t = false)]
     pub allow_network_for_proxy: bool,
 
@@ -118,7 +119,13 @@ pub fn run_main() -> ! {
             allow_network_for_proxy,
             command,
         );
-        run_bwrap_with_proc_fallback(&sandbox_policy_cwd, &sandbox_policy, inner, !no_proc);
+        run_bwrap_with_proc_fallback(
+            &sandbox_policy_cwd,
+            &sandbox_policy,
+            inner,
+            !no_proc,
+            allow_network_for_proxy,
+        );
     }
 
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
@@ -138,6 +145,7 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
     inner: Vec<String>,
     mount_proc: bool,
+    allow_network_for_proxy: bool,
 ) -> ! {
     let mut mount_proc = mount_proc;
 
@@ -146,9 +154,16 @@ fn run_bwrap_with_proc_fallback(
         mount_proc = false;
     }
 
+    let network_mode = if sandbox_policy.has_full_network_access() {
+        BwrapNetworkMode::FullAccess
+    } else if allow_network_for_proxy {
+        BwrapNetworkMode::ProxyOnly
+    } else {
+        BwrapNetworkMode::Isolated
+    };
     let options = BwrapOptions {
         mount_proc,
-        isolate_network: !sandbox_policy.has_full_network_access(),
+        network_mode,
     };
     let argv = build_bwrap_argv(inner, sandbox_policy, sandbox_policy_cwd, options);
     exec_vendored_bwrap(argv);
@@ -188,7 +203,7 @@ fn preflight_proc_mount_support(
         sandbox_policy_cwd,
         BwrapOptions {
             mount_proc: true,
-            isolate_network: false,
+            network_mode: BwrapNetworkMode::FullAccess,
         },
     );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
@@ -373,7 +388,7 @@ mod tests {
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
-                isolate_network: false,
+                network_mode: BwrapNetworkMode::FullAccess,
             },
         );
         assert_eq!(
@@ -407,7 +422,21 @@ mod tests {
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
-                isolate_network: true,
+                network_mode: BwrapNetworkMode::Isolated,
+            },
+        );
+        assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
+    }
+
+    #[test]
+    fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
+        let argv = build_bwrap_argv(
+            vec!["/bin/true".to_string()],
+            &SandboxPolicy::ReadOnly,
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::ProxyOnly,
             },
         );
         assert_eq!(argv.contains(&"--unshare-net".to_string()), true);

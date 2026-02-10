@@ -26,19 +26,37 @@ pub(crate) struct BwrapOptions {
     /// This is the secure default, but some restrictive container environments
     /// deny `--proc /proc` even when PID namespaces are available.
     pub mount_proc: bool,
-    /// Whether to isolate networking with a dedicated network namespace.
-    ///
-    /// When true, bubblewrap adds `--unshare-net`, which removes access to the
-    /// host network stack and leaves only loopback inside the sandbox.
-    pub isolate_network: bool,
+    /// How networking should be configured inside the bubblewrap sandbox.
+    pub network_mode: BwrapNetworkMode,
 }
 
 impl Default for BwrapOptions {
     fn default() -> Self {
         Self {
             mount_proc: true,
-            isolate_network: false,
+            network_mode: BwrapNetworkMode::FullAccess,
         }
+    }
+}
+
+/// Network policy modes for bubblewrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BwrapNetworkMode {
+    /// Keep access to the host network namespace.
+    #[default]
+    FullAccess,
+    /// Remove access to the host network namespace.
+    Isolated,
+    /// Intended proxy-only mode.
+    ///
+    /// Bubblewrap does not currently enforce proxy-only egress, so this is
+    /// treated as isolated for fail-closed behavior.
+    ProxyOnly,
+}
+
+impl BwrapNetworkMode {
+    fn should_unshare_network(self) -> bool {
+        !matches!(self, Self::FullAccess)
     }
 }
 
@@ -73,7 +91,7 @@ fn create_bwrap_flags(
     args.extend(create_filesystem_args(sandbox_policy, cwd)?);
     // Isolate the PID namespace.
     args.push("--unshare-pid".to_string());
-    if options.isolate_network {
+    if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
     // Mount a fresh /proc unless the caller explicitly disables it.
