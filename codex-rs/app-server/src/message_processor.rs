@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
@@ -191,6 +193,7 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         session: &mut ConnectionSessionState,
+        outbound_initialized: &AtomicBool,
     ) {
         let request_id = ConnectionRequestId {
             connection_id,
@@ -286,6 +289,7 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;
+                    outbound_initialized.store(true, Ordering::Release);
                     return;
                 }
             }

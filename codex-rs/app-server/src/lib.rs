@@ -13,6 +13,7 @@ use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
@@ -70,23 +71,18 @@ pub use crate::transport::AppServerTransport;
 /// - outbound loop: performs potentially slow writes to per-connection writers
 ///
 /// `OutboundControlEvent` keeps those loops coordinated without sharing mutable
-/// connection state directly. In particular, the outbound loop needs to know:
-/// - when a connection opens/closes so it can route messages correctly
-/// - when a connection becomes initialized so broadcast semantics remain unchanged
+/// connection state directly. In particular, the outbound loop needs to know
+/// when a connection opens/closes so it can route messages correctly.
 enum OutboundControlEvent {
     /// Register a new writer for an opened connection.
     Opened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        initialized: Arc<AtomicBool>,
         ready: oneshot::Sender<()>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
-    /// Mark the connection as initialized, enabling broadcast delivery.
-    Initialized {
-        connection_id: ConnectionId,
-        ready: oneshot::Sender<()>,
-    },
 }
 
 fn config_warning_from_error(
@@ -400,22 +396,17 @@ pub async fn run_main_with_transport(
                         OutboundControlEvent::Opened {
                             connection_id,
                             writer,
+                            initialized,
                             ready,
                         } => {
-                            outbound_connections.insert(connection_id, OutboundConnectionState::new(writer));
+                            outbound_connections.insert(
+                                connection_id,
+                                OutboundConnectionState::new(writer, initialized),
+                            );
                             let _ = ready.send(());
                         }
                         OutboundControlEvent::Closed { connection_id } => {
                             outbound_connections.remove(&connection_id);
-                        }
-                        OutboundControlEvent::Initialized {
-                            connection_id,
-                            ready,
-                        } => {
-                            if let Some(connection_state) = outbound_connections.get_mut(&connection_id) {
-                                connection_state.initialized = true;
-                            }
-                            let _ = ready.send(());
                         }
                     }
                 }
@@ -451,11 +442,13 @@ pub async fn run_main_with_transport(
                         };
                         match event {
                             TransportEvent::ConnectionOpened { connection_id, writer } => {
+                                let outbound_initialized = Arc::new(AtomicBool::new(false));
                                 let (ready_tx, ready_rx) = oneshot::channel();
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer: writer.clone(),
+                                        initialized: Arc::clone(&outbound_initialized),
                                         ready: ready_tx,
                                     })
                                     .await
@@ -466,7 +459,7 @@ pub async fn run_main_with_transport(
                                 if ready_rx.await.is_err() {
                                     break;
                                 }
-                                connections.insert(connection_id, ConnectionState::new());
+                                connections.insert(connection_id, ConnectionState::new(outbound_initialized));
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
                                 if outbound_control_tx
@@ -494,22 +487,10 @@ pub async fn run_main_with_transport(
                                                 connection_id,
                                                 request,
                                                 &mut connection_state.session,
+                                                &connection_state.outbound_initialized,
                                             )
                                             .await;
                                         if !was_initialized && connection_state.session.initialized {
-                                            let (ready_tx, ready_rx) = oneshot::channel();
-                                            let send_result = outbound_control_tx
-                                                .send(OutboundControlEvent::Initialized {
-                                                    connection_id,
-                                                    ready: ready_tx,
-                                                })
-                                                .await;
-                                            if send_result.is_err() {
-                                                break;
-                                            }
-                                            if ready_rx.await.is_err() {
-                                                break;
-                                            }
                                             processor.send_initialize_notifications().await;
                                         }
                                     }

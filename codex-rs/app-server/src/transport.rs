@@ -17,6 +17,7 @@ use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::io::AsyncBufReadExt;
@@ -143,27 +144,29 @@ pub(crate) enum TransportEvent {
 }
 
 pub(crate) struct ConnectionState {
+    pub(crate) outbound_initialized: Arc<AtomicBool>,
     pub(crate) session: ConnectionSessionState,
 }
 
 impl ConnectionState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(outbound_initialized: Arc<AtomicBool>) -> Self {
         Self {
+            outbound_initialized,
             session: ConnectionSessionState::default(),
         }
     }
 }
 
 pub(crate) struct OutboundConnectionState {
+    pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) writer: mpsc::Sender<OutgoingMessage>,
-    pub(crate) initialized: bool,
 }
 
 impl OutboundConnectionState {
-    pub(crate) fn new(writer: mpsc::Sender<OutgoingMessage>) -> Self {
+    pub(crate) fn new(writer: mpsc::Sender<OutgoingMessage>, initialized: Arc<AtomicBool>) -> Self {
         Self {
+            initialized,
             writer,
-            initialized: false,
         }
     }
 }
@@ -383,20 +386,26 @@ async fn enqueue_incoming_message(
             connection_id,
             message: JSONRPCMessage::Request(request),
         })) => {
-            if writer
-                .try_send(OutgoingMessage::Error(OutgoingError {
-                    id: request.id,
-                    error: JSONRPCErrorError {
-                        code: OVERLOADED_ERROR_CODE,
-                        message: "Server overloaded; retry later.".to_string(),
-                        data: None,
-                    },
-                }))
-                .is_err()
-            {
-                warn!("failed to enqueue overload response for connection: {connection_id:?}");
+            let overload_error = OutgoingMessage::Error(OutgoingError {
+                id: request.id,
+                error: JSONRPCErrorError {
+                    code: OVERLOADED_ERROR_CODE,
+                    message: "Server overloaded; retry later.".to_string(),
+                    data: None,
+                },
+            });
+            match writer.try_send(overload_error) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+                Err(mpsc::error::TrySendError::Full(overload_error)) => {
+                    if writer.send(overload_error).await.is_err() {
+                        warn!("failed to send overload response for connection: {connection_id:?}");
+                        false
+                    } else {
+                        true
+                    }
+                }
             }
-            true
         }
         Err(mpsc::error::TrySendError::Full(event)) => transport_event_tx.send(event).await.is_ok(),
     }
@@ -445,7 +454,7 @@ pub(crate) async fn route_outgoing_envelope(
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.initialized {
+                    if connection_state.initialized.load(Ordering::Acquire) {
                         Some(*connection_id)
                     } else {
                         None
