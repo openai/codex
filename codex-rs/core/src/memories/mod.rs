@@ -52,8 +52,8 @@ pub(crate) use rollout::serialize_filtered_rollout_response_items;
 pub(crate) use selection::select_rollout_candidates_from_db;
 pub(crate) use storage::prune_to_recent_memories_and_rebuild_summary;
 pub(crate) use storage::rebuild_memory_summary_from_memories;
+pub(crate) use storage::sync_raw_memories_from_memories;
 pub(crate) use storage::wipe_consolidation_outputs;
-pub(crate) use storage::write_raw_memory;
 pub(crate) use types::RolloutCandidate;
 
 /// Returns the on-disk memory root directory for a given working directory.

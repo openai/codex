@@ -530,59 +530,41 @@ async fn persist_phase_one_memory_for_scope(
         return false;
     }
 
-    let raw_memory_path =
-        match memories::write_raw_memory(&scope.memory_root, candidate, raw_memory).await {
-            Ok(path) => path,
-            Err(err) => {
-                warn!(
-                    "failed to write raw memory for rollout {} scope {}:{}: {err}",
-                    candidate.rollout_path.display(),
-                    scope.scope_kind,
-                    scope.scope_key
-                );
-                mark_phase1_job_failed_best_effort(
-                    session,
-                    candidate.thread_id,
-                    scope.scope_kind,
-                    &scope.scope_key,
-                    ownership_token,
-                    "failed to write raw memory",
-                )
-                .await;
-                return false;
-            }
-        };
-
-    if let Err(err) = state_db
-        .upsert_thread_memory_for_scope(
+    let upserted = match state_db
+        .upsert_thread_memory_for_scope_if_phase1_owner(
             candidate.thread_id,
             scope.scope_kind,
             &scope.scope_key,
+            ownership_token,
             raw_memory,
             summary,
         )
         .await
     {
-        warn!(
-            "state db upsert_thread_memory_for_scope failed during {MEMORY_STARTUP_STAGE}: {err}"
-        );
-        if let Err(err) = tokio::fs::remove_file(&raw_memory_path).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
+        Ok(upserted) => upserted,
+        Err(err) => {
             warn!(
-                "failed to remove orphaned raw memory {}: {err}",
-                raw_memory_path.display()
+                "state db upsert_thread_memory_for_scope_if_phase1_owner failed during {MEMORY_STARTUP_STAGE}: {err}"
             );
+            mark_phase1_job_failed_best_effort(
+                session,
+                candidate.thread_id,
+                scope.scope_kind,
+                &scope.scope_key,
+                ownership_token,
+                "failed to upsert scoped thread memory",
+            )
+            .await;
+            return false;
         }
-        mark_phase1_job_failed_best_effort(
-            session,
-            candidate.thread_id,
+    };
+    if upserted.is_none() {
+        debug!(
+            "memory phase-1 db upsert skipped after ownership changed: rollout={} scope={} scope_key={}",
+            candidate.rollout_path.display(),
             scope.scope_kind,
-            &scope.scope_key,
-            ownership_token,
-            "failed to upsert scoped thread memory",
-        )
-        .await;
+            scope.scope_key
+        );
         return false;
     }
 
@@ -613,6 +595,27 @@ async fn persist_phase_one_memory_for_scope(
     };
 
     if let Err(err) =
+        memories::sync_raw_memories_from_memories(&scope.memory_root, &latest_memories).await
+    {
+        warn!(
+            "failed syncing raw memories for scope {}:{} root={}: {err}",
+            scope.scope_kind,
+            scope.scope_key,
+            scope.memory_root.display()
+        );
+        mark_phase1_job_failed_best_effort(
+            session,
+            candidate.thread_id,
+            scope.scope_kind,
+            &scope.scope_key,
+            ownership_token,
+            "failed to sync scope raw memories",
+        )
+        .await;
+        return false;
+    }
+
+    if let Err(err) =
         memories::rebuild_memory_summary_from_memories(&scope.memory_root, &latest_memories).await
     {
         warn!(
@@ -636,6 +639,10 @@ async fn persist_phase_one_memory_for_scope(
     let mut hasher = Sha256::new();
     hasher.update(summary.as_bytes());
     let summary_hash = format!("{:x}", hasher.finalize());
+    let raw_memory_path = scope
+        .memory_root
+        .join("raw_memories")
+        .join(format!("{}.md", candidate.thread_id));
     let marked_succeeded = match state_db
         .mark_phase1_job_succeeded(
             candidate.thread_id,
