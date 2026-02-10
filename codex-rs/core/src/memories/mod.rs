@@ -29,6 +29,8 @@ const PHASE_TWO_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
 const MAX_RAW_MEMORIES_PER_SCOPE: usize = 64;
 /// Maximum rollout age considered for phase-1 extraction.
 const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+/// Minimum rollout idle time required before phase-1 extraction.
+const PHASE_ONE_MIN_ROLLOUT_IDLE_HOURS: i64 = 12;
 /// Lease duration (seconds) for phase-1 job ownership.
 const PHASE_ONE_JOB_LEASE_SECONDS: i64 = 3_600;
 /// Backoff delay (seconds) before retrying a failed stage-1 extraction job.

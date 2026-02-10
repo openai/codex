@@ -1,8 +1,10 @@
 use super::*;
 use crate::Stage1Output;
 use crate::model::Stage1OutputRow;
+use crate::model::ThreadRow;
 use chrono::Duration;
 use sqlx::Executor;
+use sqlx::QueryBuilder;
 use sqlx::Sqlite;
 use std::collections::HashSet;
 use std::path::Path;
@@ -38,47 +40,87 @@ impl StateRuntime {
     pub async fn claim_stage1_jobs_for_startup(
         &self,
         current_thread_id: ThreadId,
-        scan_limit: usize,
-        max_claimed: usize,
-        max_age_days: i64,
-        allowed_sources: &[String],
-        lease_seconds: i64,
+        params: Stage1StartupClaimParams<'_>,
     ) -> anyhow::Result<Vec<Stage1JobClaim>> {
+        let Stage1StartupClaimParams {
+            scan_limit,
+            max_claimed,
+            max_age_days,
+            min_rollout_idle_hours,
+            allowed_sources,
+            lease_seconds,
+        } = params;
         if scan_limit == 0 || max_claimed == 0 {
             return Ok(Vec::new());
         }
 
-        let page = self
-            .list_threads(
-                scan_limit,
-                None,
-                SortKey::UpdatedAt,
-                allowed_sources,
-                None,
-                false,
-            )
-            .await?;
+        let worker_id = current_thread_id;
+        let current_thread_id = worker_id.to_string();
+        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp();
+        let idle_cutoff = (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp();
 
-        let cutoff = Utc::now() - Duration::days(max_age_days.max(0));
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    cli_version,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    first_user_message,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url
+FROM threads
+            "#,
+        );
+        push_thread_filters(
+            &mut builder,
+            false,
+            allowed_sources,
+            None,
+            None,
+            SortKey::UpdatedAt,
+        );
+        builder
+            .push(" AND id != ")
+            .push_bind(current_thread_id.as_str());
+        builder
+            .push(" AND updated_at >= ")
+            .push_bind(max_age_cutoff);
+        builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
+        push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
+
+        let items = builder
+            .build()
+            .fetch_all(self.pool.as_ref())
+            .await?
+            .into_iter()
+            .map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
+            .collect::<Result<Vec<_>, _>>()?;
+
         let mut claimed = Vec::new();
 
-        for item in page.items {
+        for item in items {
             if claimed.len() >= max_claimed {
                 break;
-            }
-            if item.id == current_thread_id {
-                continue;
-            }
-            if item.updated_at < cutoff {
-                continue;
             }
 
             if let Stage1JobClaimOutcome::Claimed { ownership_token } = self
                 .try_claim_stage1_job(
                     item.id,
-                    current_thread_id,
+                    worker_id,
                     item.updated_at.timestamp(),
                     lease_seconds,
+                    max_claimed,
                 )
                 .await?
             {
@@ -202,9 +244,11 @@ LIMIT ?
         worker_id: ThreadId,
         source_updated_at: i64,
         lease_seconds: i64,
+        max_running_jobs: usize,
     ) -> anyhow::Result<Stage1JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
+        let max_running_jobs = max_running_jobs as i64;
         let ownership_token = Uuid::new_v4().to_string();
         let thread_id = thread_id.to_string();
         let worker_id = worker_id.to_string();
@@ -241,7 +285,53 @@ WHERE kind = ? AND job_key = ?
         .fetch_optional(&mut *tx)
         .await?;
 
-        let Some(existing_job) = existing_job else {
+        let should_insert = if let Some(existing_job) = existing_job {
+            let status: String = existing_job.try_get("status")?;
+            let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
+            let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
+            let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
+
+            if retry_remaining <= 0 {
+                tx.commit().await?;
+                return Ok(Stage1JobClaimOutcome::SkippedRetryExhausted);
+            }
+            if retry_at.is_some_and(|retry_at| retry_at > now) {
+                tx.commit().await?;
+                return Ok(Stage1JobClaimOutcome::SkippedRetryBackoff);
+            }
+            if status == "running"
+                && existing_lease_until.is_some_and(|lease_until| lease_until > now)
+            {
+                tx.commit().await?;
+                return Ok(Stage1JobClaimOutcome::SkippedRunning);
+            }
+
+            false
+        } else {
+            true
+        };
+
+        let fresh_running_jobs = sqlx::query(
+            r#"
+SELECT COUNT(*) AS count
+FROM jobs
+WHERE kind = ?
+  AND status = 'running'
+  AND lease_until IS NOT NULL
+  AND lease_until > ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?
+        .try_get::<i64, _>("count")?;
+        if fresh_running_jobs >= max_running_jobs {
+            tx.commit().await?;
+            return Ok(Stage1JobClaimOutcome::SkippedRunning);
+        }
+
+        if should_insert {
             sqlx::query(
                 r#"
 INSERT INTO jobs (
@@ -273,25 +363,6 @@ INSERT INTO jobs (
             .await?;
             tx.commit().await?;
             return Ok(Stage1JobClaimOutcome::Claimed { ownership_token });
-        };
-
-        let status: String = existing_job.try_get("status")?;
-        let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
-        let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
-        let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
-
-        if retry_remaining <= 0 {
-            tx.commit().await?;
-            return Ok(Stage1JobClaimOutcome::SkippedRetryExhausted);
-        }
-        if retry_at.is_some_and(|retry_at| retry_at > now) {
-            tx.commit().await?;
-            return Ok(Stage1JobClaimOutcome::SkippedRetryBackoff);
-        }
-        if status == "running" && existing_lease_until.is_some_and(|lease_until| lease_until > now)
-        {
-            tx.commit().await?;
-            return Ok(Stage1JobClaimOutcome::SkippedRunning);
         }
 
         let rows_affected = sqlx::query(
