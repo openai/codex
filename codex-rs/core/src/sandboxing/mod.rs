@@ -61,6 +61,7 @@ pub(crate) struct SandboxTransformRequest<'a> {
     pub spec: CommandSpec,
     pub policy: &'a SandboxPolicy,
     pub sandbox: SandboxType,
+    pub enforce_managed_network: bool,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
@@ -98,6 +99,7 @@ impl SandboxManager {
         policy: &SandboxPolicy,
         pref: SandboxablePreference,
         windows_sandbox_level: WindowsSandboxLevel,
+        has_managed_network_requirements: bool,
     ) -> SandboxType {
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
@@ -111,7 +113,14 @@ impl SandboxManager {
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                    SandboxType::None
+                    if has_managed_network_requirements {
+                        crate::safety::get_platform_sandbox(
+                            windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                        )
+                        .unwrap_or(SandboxType::None)
+                    } else {
+                        SandboxType::None
+                    }
                 }
                 _ => crate::safety::get_platform_sandbox(
                     windows_sandbox_level != WindowsSandboxLevel::Disabled,
@@ -129,6 +138,7 @@ impl SandboxManager {
             mut spec,
             policy,
             sandbox,
+            enforce_managed_network,
             network,
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
@@ -157,6 +167,7 @@ impl SandboxManager {
                     command.clone(),
                     policy,
                     sandbox_policy_cwd,
+                    enforce_managed_network,
                     network,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
@@ -169,7 +180,7 @@ impl SandboxManager {
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(network);
+                let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args(
                     command.clone(),
                     policy,
@@ -223,4 +234,39 @@ pub async fn execute_env(
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
     execute_exec_env(env, policy, stdout_stream).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SandboxManager;
+    use crate::exec::SandboxType;
+    use crate::protocol::SandboxPolicy;
+    use crate::tools::sandboxing::SandboxablePreference;
+    use codex_protocol::config_types::WindowsSandboxLevel;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
+        let manager = SandboxManager::new();
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::DangerFullAccess,
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            false,
+        );
+        assert_eq!(sandbox, SandboxType::None);
+    }
+
+    #[test]
+    fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
+        let manager = SandboxManager::new();
+        let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+        let sandbox = manager.select_initial(
+            &SandboxPolicy::DangerFullAccess,
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            true,
+        );
+        assert_eq!(sandbox, expected);
+    }
 }

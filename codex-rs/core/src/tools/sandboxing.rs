@@ -272,6 +272,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
+    pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
@@ -290,6 +291,7 @@ impl<'a> SandboxAttempt<'a> {
                 spec,
                 policy: self.policy,
                 sandbox: self.sandbox,
+                enforce_managed_network: self.enforce_managed_network,
                 network,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,

@@ -158,9 +158,18 @@ pub async fn process_exec_tool_call(
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
+    let enforce_managed_network = params.network.is_some();
     let sandbox_type = match &sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            SandboxType::None
+            if enforce_managed_network {
+                get_platform_sandbox(
+                    windows_sandbox_level
+                        != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None)
+            } else {
+                SandboxType::None
+            }
         }
         _ => get_platform_sandbox(
             windows_sandbox_level != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
@@ -206,6 +215,7 @@ pub async fn process_exec_tool_call(
             spec,
             policy: sandbox_policy,
             sandbox: sandbox_type,
+            enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),

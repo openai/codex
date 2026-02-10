@@ -96,7 +96,7 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if sandbox_policy.has_full_disk_write_access() {
+    if sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
             &sandbox_policy_cwd,
@@ -154,19 +154,26 @@ fn run_bwrap_with_proc_fallback(
         mount_proc = false;
     }
 
-    let network_mode = if sandbox_policy.has_full_network_access() {
-        BwrapNetworkMode::FullAccess
-    } else if allow_network_for_proxy {
-        BwrapNetworkMode::ProxyOnly
-    } else {
-        BwrapNetworkMode::Isolated
-    };
+    let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
     let options = BwrapOptions {
         mount_proc,
         network_mode,
     };
     let argv = build_bwrap_argv(inner, sandbox_policy, sandbox_policy_cwd, options);
     exec_vendored_bwrap(argv);
+}
+
+fn bwrap_network_mode(
+    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    allow_network_for_proxy: bool,
+) -> BwrapNetworkMode {
+    if allow_network_for_proxy {
+        BwrapNetworkMode::ProxyOnly
+    } else if sandbox_policy.has_full_network_access() {
+        BwrapNetworkMode::FullAccess
+    } else {
+        BwrapNetworkMode::Isolated
+    }
 }
 
 fn build_bwrap_argv(
@@ -440,5 +447,11 @@ mod tests {
             },
         );
         assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
+    }
+
+    #[test]
+    fn proxy_only_mode_takes_precedence_over_full_network_policy() {
+        let mode = bwrap_network_mode(&SandboxPolicy::DangerFullAccess, true);
+        assert_eq!(mode, BwrapNetworkMode::ProxyOnly);
     }
 }
