@@ -4626,14 +4626,12 @@ trust_level = "untrusted"
         if cfg!(target_os = "windows") {
             assert!(
                 matches!(resolution, SandboxPolicy::ReadOnly),
-                "Expected ReadOnly on Windows, got {:?}",
-                resolution
+                "Expected ReadOnly on Windows, got {resolution:?}"
             );
         } else {
             assert!(
                 matches!(resolution, SandboxPolicy::WorkspaceWrite { .. }),
-                "Expected WorkspaceWrite for untrusted project, got {:?}",
-                resolution
+                "Expected WorkspaceWrite for untrusted project, got {resolution:?}"
             );
         }
 
