@@ -2,13 +2,13 @@ use super::rollout::StageOneResponseItemKinds;
 use super::rollout::StageOneRolloutFilter;
 use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
-use super::storage::rebuild_memory_summary_from_memories;
-use super::storage::sync_raw_memories_from_memories;
+use super::storage::rebuild_raw_memories_file_from_memories;
+use super::storage::sync_rollout_summaries_from_memories;
 use super::storage::wipe_consolidation_outputs;
 use crate::memories::layout::ensure_layout;
 use crate::memories::layout::memory_root_for_cwd;
-use crate::memories::layout::memory_summary_file;
-use crate::memories::layout::raw_memories_dir;
+use crate::memories::layout::raw_memories_file;
+use crate::memories::layout::rollout_summaries_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -65,10 +65,20 @@ fn memory_root_encoding_avoids_component_collisions() {
 
 #[test]
 fn parse_stage_one_output_accepts_fenced_json() {
-    let raw = "```json\n{\"rawMemory\":\"abc\",\"summary\":\"short\"}\n```";
+    let raw = "```json\n{\"raw_memory\":\"abc\",\"rollout_summary\":\"short\",\"rollout_slug\":\"slug\"}\n```";
     let parsed = parse_stage_one_output(raw).expect("parsed");
     assert!(parsed.raw_memory.contains("abc"));
-    assert_eq!(parsed.summary, "short");
+    assert_eq!(parsed.rollout_summary, "short");
+    assert_eq!(parsed.rollout_slug, Some("slug".to_string()));
+}
+
+#[test]
+fn parse_stage_one_output_accepts_legacy_keys() {
+    let raw = r#"{"rawMemory":"abc","summary":"short"}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert!(parsed.raw_memory.contains("abc"));
+    assert_eq!(parsed.rollout_summary, "short");
+    assert_eq!(parsed.rollout_slug, None);
 }
 
 #[test]
@@ -172,15 +182,15 @@ fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
 }
 
 #[tokio::test]
-async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
+async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
     ensure_layout(&root).await.expect("ensure layout");
 
     let keep_id = ThreadId::default().to_string();
     let drop_id = ThreadId::default().to_string();
-    let keep_path = raw_memories_dir(&root).join(format!("{keep_id}.md"));
-    let drop_path = raw_memories_dir(&root).join(format!("{drop_id}.md"));
+    let keep_path = rollout_summaries_dir(&root).join(format!("{keep_id}.md"));
+    let drop_path = rollout_summaries_dir(&root).join(format!("{drop_id}.md"));
     tokio::fs::write(&keep_path, "keep")
         .await
         .expect("write keep");
@@ -196,21 +206,21 @@ async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
-    sync_raw_memories_from_memories(&root, &memories)
+    sync_rollout_summaries_from_memories(&root, &memories)
         .await
-        .expect("sync raw memories");
-    rebuild_memory_summary_from_memories(&root, &memories)
+        .expect("sync rollout summaries");
+    rebuild_raw_memories_file_from_memories(&root, &memories)
         .await
-        .expect("rebuild memory summary");
+        .expect("rebuild raw memories");
 
     assert!(keep_path.is_file());
     assert!(!drop_path.exists());
 
-    let summary = tokio::fs::read_to_string(memory_summary_file(&root))
+    let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
-        .expect("read summary");
-    assert!(summary.contains("short summary"));
-    assert!(summary.contains(&keep_id));
+        .expect("read raw memories");
+    assert!(raw_memories.contains("raw memory"));
+    assert!(raw_memories.contains(&keep_id));
 }
 
 #[tokio::test]

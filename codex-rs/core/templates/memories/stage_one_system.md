@@ -2,8 +2,9 @@
 You are given one rollout and must produce exactly one JSON object.
 
 Return exactly one JSON object with this schema:
-- rawMemory: a detailed markdown raw memory for this rollout only.
-- summary: a concise summary suitable for shared memory aggregation.
+- raw_memory: a detailed markdown raw memory for this rollout only.
+- rollout_summary: a concise summary suitable for shared memory aggregation.
+- rollout_slug: optional stable slug for the rollout (accepted but currently ignored).
 
 Input contract:
 - The user message contains:
@@ -20,7 +21,7 @@ Global writing rules:
 - Do not include markdown fences around the JSON object.
 - Output only the JSON object and nothing else.
 
-Outcome triage guidance for `Outcome:` labels in `rawMemory`:
+Outcome triage guidance for `Outcome:` labels in `raw_memory`:
 - Use `success` for explicit user approval or clear verification evidence.
 - Use `partial` when there is meaningful progress but incomplete or unverified completion.
 - Use `fail` for explicit dissatisfaction/rejection or hard failure.
@@ -28,7 +29,7 @@ Outcome triage guidance for `Outcome:` labels in `rawMemory`:
 - If the user switched topics without explicit evaluation, usually use `uncertain`.
 - If only assistant claims success without user confirmation or verification, use `uncertain`.
 
-`rawMemory` structure requirements:
+`raw_memory` structure requirements:
 - Start with `# <one-sentence summary>`.
 - Include:
   - `Memory context: ...`
@@ -42,7 +43,7 @@ Outcome triage guidance for `Outcome:` labels in `rawMemory`:
   - `Pointers and references (annotate why each item matters):`
 - Prefer more, smaller task sections over one broad mixed section.
 
-`summary` requirements:
+`rollout_summary` requirements:
 - Keep under 120 words.
 - Capture only the most reusable and actionable outcomes.
 - Include concrete paths/commands/errors when high-signal.

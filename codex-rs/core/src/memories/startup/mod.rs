@@ -222,7 +222,7 @@ pub(super) async fn run_memories_startup_pipeline(
                             &claim.ownership_token,
                             thread.updated_at.timestamp(),
                             &stage_one_output.raw_memory,
-                            &stage_one_output.summary,
+                            &stage_one_output.rollout_summary,
                         )
                         .await
                         .unwrap_or(false)
