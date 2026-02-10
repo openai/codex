@@ -578,6 +578,8 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -634,6 +636,8 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -674,6 +678,8 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -753,7 +759,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
 
     let server = MockServer::start().await;
     let remote_model = test_remote_model("codex-auto-balanced", ModelVisibility::Hide, 0);
-    mount_models_once(
+    let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![remote_model],
@@ -789,6 +795,13 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
         .find(|model| model.model == "codex-auto-balanced")
         .expect("hidden remote model should be listed");
     assert!(!hidden.show_in_picker, "hidden models should remain hidden");
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
