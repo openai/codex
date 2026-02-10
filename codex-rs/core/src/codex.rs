@@ -1045,7 +1045,7 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let mut state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1083,45 +1083,6 @@ impl Session {
             ),
         };
 
-        let startup_per_turn_config = Self::build_per_turn_config(&session_configuration);
-        let startup_model_info = ModelsManager::construct_model_info_offline(
-            session_configuration.collaboration_mode.model(),
-            &startup_per_turn_config,
-        );
-        let startup_turn_context = Arc::new(Self::make_turn_context(
-            Some(Arc::clone(&auth_manager)),
-            &services.otel_manager,
-            session_configuration.provider.clone(),
-            &session_configuration,
-            startup_per_turn_config,
-            startup_model_info,
-            INITIAL_SUBMIT_ID.to_owned(),
-        ));
-        let startup_router = ToolRouter::from_config(
-            &startup_turn_context.tools_config,
-            Some(HashMap::new()),
-            startup_turn_context.dynamic_tools.as_slice(),
-        );
-        let startup_prompt = build_prompt(
-            Vec::new(),
-            &startup_router,
-            startup_turn_context.as_ref(),
-            BaseInstructions {
-                text: session_configuration.base_instructions.clone(),
-            },
-        );
-        let startup_turn_metadata_header = {
-            let startup_turn_context = Arc::clone(&startup_turn_context);
-            async move { startup_turn_context.resolve_turn_metadata_header().await }.boxed()
-        };
-        let startup_regular_task = RegularTask::with_startup_prewarm(
-            services.model_client.clone(),
-            startup_prompt,
-            startup_turn_context,
-            startup_turn_metadata_header,
-        );
-        state.set_startup_regular_task(startup_regular_task);
-
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1133,7 +1094,6 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
-
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -1162,7 +1122,6 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
-
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
@@ -1211,6 +1170,8 @@ impl Session {
                 ));
             }
         }
+        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+            .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -1524,6 +1485,37 @@ impl Session {
     pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
         let mut state = self.state.lock().await;
         state.take_startup_regular_task()
+    }
+
+    async fn schedule_startup_prewarm(&self, base_instructions: String) {
+        let startup_turn_context = self
+            .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+            .await;
+        let startup_router = ToolRouter::from_config(
+            &startup_turn_context.tools_config,
+            Some(HashMap::new()),
+            startup_turn_context.dynamic_tools.as_slice(),
+        );
+        let startup_prompt = build_prompt(
+            Vec::new(),
+            &startup_router,
+            startup_turn_context.as_ref(),
+            BaseInstructions {
+                text: base_instructions,
+            },
+        );
+        let startup_turn_metadata_header = {
+            let startup_turn_context = Arc::clone(&startup_turn_context);
+            async move { startup_turn_context.resolve_turn_metadata_header().await }.boxed()
+        };
+        let startup_regular_task = RegularTask::with_startup_prewarm(
+            self.services.model_client.clone(),
+            startup_prompt,
+            startup_turn_context,
+            startup_turn_metadata_header,
+        );
+        let mut state = self.state.lock().await;
+        state.set_startup_regular_task(startup_regular_task);
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
