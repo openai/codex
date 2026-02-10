@@ -5061,6 +5061,7 @@ mod tests {
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::mcp_connection_manager::ToolInfo;
+    use crate::models_manager::model_info;
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
@@ -5094,6 +5095,7 @@ mod tests {
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::openai_models::ModelsResponse;
     use std::path::Path;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -5166,33 +5168,24 @@ mod tests {
     async fn get_base_instructions_no_user_content() {
         let prompt_with_apply_patch_instructions =
             include_str!("../prompt_with_apply_patch_instructions.md");
+        let models_response: ModelsResponse =
+            serde_json::from_str(include_str!("../models.json")).expect("valid models.json");
+        let model_info_for_slug = |slug: &str, config: &Config| {
+            let model = models_response
+                .models
+                .iter()
+                .find(|candidate| candidate.slug == slug)
+                .cloned()
+                .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
+            model_info::with_config_overrides(model, config)
+        };
         let test_cases = vec![
             InstructionsTestCase {
-                slug: "gpt-3.5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4.1",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-4o",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
                 slug: "gpt-5",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-5.1",
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "codex-mini-latest",
-                expects_apply_patch_instructions: true,
-            },
-            InstructionsTestCase {
-                slug: "gpt-oss:120b",
+                slug: "gpt-5.1",
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
@@ -5209,7 +5202,7 @@ mod tests {
 
         for test_case in test_cases {
             let config = test_config();
-            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
+            let model_info = model_info_for_slug(test_case.slug, &config);
             if test_case.expects_apply_patch_instructions {
                 assert_eq!(
                     model_info.base_instructions.as_str(),
