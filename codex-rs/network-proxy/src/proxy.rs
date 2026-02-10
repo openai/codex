@@ -234,6 +234,18 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
+    pub fn http_addr(&self) -> SocketAddr {
+        self.http_addr
+    }
+
+    pub fn socks_addr(&self) -> SocketAddr {
+        self.socks_addr
+    }
+
+    pub fn admin_addr(&self) -> SocketAddr {
+        self.admin_addr
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for all child processes when configured. We always override to ensure
         // the proxy is actually used even if the caller passed conflicting environment variables.

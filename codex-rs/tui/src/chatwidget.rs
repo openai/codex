@@ -613,6 +613,8 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Runtime network proxy bind addresses from SessionConfigured.
+    session_network_proxy: Option<codex_core::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
     // Cached git branch name for the status line (None if unknown).
@@ -1015,6 +1017,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
+        self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -2658,6 +2661,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -2822,6 +2826,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -2975,6 +2980,7 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             current_cwd,
+            session_network_proxy: None,
             status_line_invalid_items_warned,
             status_line_branch: None,
             status_line_branch_cwd: None,
@@ -4239,7 +4245,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {
-        self.add_to_history(crate::debug_config::new_debug_config_output(&self.config));
+        self.add_to_history(crate::debug_config::new_debug_config_output(
+            &self.config,
+            self.session_network_proxy.as_ref(),
+        ));
     }
 
     fn open_status_line_setup(&mut self) {
