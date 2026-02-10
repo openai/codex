@@ -49,8 +49,8 @@ pub(crate) enum BwrapNetworkMode {
     Isolated,
     /// Intended proxy-only mode.
     ///
-    /// Bubblewrap does not currently enforce proxy-only egress, so this is
-    /// treated as isolated for fail-closed behavior.
+    /// Bubblewrap enforces this by unsharing the network namespace. The
+    /// proxy-routing bridge is established by the helper process after startup.
     ProxyOnly,
 }
 

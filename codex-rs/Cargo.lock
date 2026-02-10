@@ -1880,9 +1880,11 @@ dependencies = [
  "pkg-config",
  "pretty_assertions",
  "seccompiler",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
