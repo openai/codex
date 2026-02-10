@@ -791,7 +791,14 @@ async fn run_memory_consolidation_for_scope(
     match session
         .services
         .agent_control
-        .spawn_agent(consolidation_config, prompt, Some(source))
+        .spawn_agent(
+            consolidation_config,
+            vec![UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+            Some(source),
+        )
         .await
     {
         Ok(consolidation_agent_id) => {
