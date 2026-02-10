@@ -1266,13 +1266,13 @@ dependencies = [
  "bytes",
  "codex-client",
  "codex-protocol",
+ "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
- "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1956,6 +1956,7 @@ dependencies = [
  "async-trait",
  "clap",
  "codex-utils-absolute-path",
+ "codex-utils-rustls-provider",
  "globset",
  "pretty_assertions",
  "rama-core",
@@ -2324,6 +2325,13 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "codex-utils-rustls-provider"
+version = "0.0.0"
+dependencies = [
+ "rustls",
 ]
 
 [[package]]
