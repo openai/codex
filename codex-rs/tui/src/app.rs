@@ -3136,10 +3136,28 @@ mod tests {
             id: "session".to_string(),
             msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-1".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "first".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
         app.chat_widget.handle_codex_event(Event {
             id: "agent-1".to_string(),
             msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
                 message: "answer first".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-2".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "second".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
         });
         app.chat_widget.handle_codex_event(Event {
@@ -3196,6 +3214,15 @@ mod tests {
             id: "session".to_string(),
             msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-1".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "first".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
 
         app.chat_widget.handle_codex_event(Event {
             id: "turn-1-started".to_string(),
@@ -3214,6 +3241,15 @@ mod tests {
             id: "turn-1-complete".to_string(),
             msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
                 last_agent_message: Some("answer first".to_string()),
+            }),
+        });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-2".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "second".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
         });
 
@@ -3275,6 +3311,15 @@ mod tests {
             id: "session".to_string(),
             msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-1".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "first".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
         app.chat_widget.handle_codex_event(Event {
             id: "turn-1-started".to_string(),
             msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
@@ -3294,6 +3339,15 @@ mod tests {
                 last_agent_message: Some("answer first".to_string()),
             }),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-2".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "second".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
         app.chat_widget.handle_codex_event(Event {
             id: "turn-2-started".to_string(),
             msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
@@ -3309,6 +3363,15 @@ mod tests {
             id: "turn-2-complete".to_string(),
             msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
                 last_agent_message: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-3".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "third".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
         });
         app.chat_widget.handle_codex_event(Event {
@@ -3387,6 +3450,15 @@ mod tests {
 
         let mut transcript_cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
         for turn in 1..=300 {
+            app.chat_widget.handle_codex_event_replay(Event {
+                id: format!("user-{turn}"),
+                msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                    message: format!("user {turn}"),
+                    images: None,
+                    text_elements: Vec::new(),
+                    local_images: Vec::new(),
+                }),
+            });
             app.chat_widget.handle_codex_event(Event {
                 id: format!("agent-{turn}"),
                 msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
@@ -3433,6 +3505,15 @@ mod tests {
 
         let mut transcript_cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
         for turn in 1..=300 {
+            app.chat_widget.handle_codex_event_replay(Event {
+                id: format!("user-{turn}"),
+                msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                    message: format!("user {turn}"),
+                    images: None,
+                    text_elements: Vec::new(),
+                    local_images: Vec::new(),
+                }),
+            });
             app.chat_widget.handle_codex_event(Event {
                 id: format!("agent-{turn}"),
                 msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
@@ -3476,6 +3557,15 @@ mod tests {
             id: "session".to_string(),
             msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-1".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "first".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
         app.chat_widget.handle_codex_event(Event {
             id: "turn-1-started".to_string(),
             msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
@@ -3495,6 +3585,15 @@ mod tests {
                 last_agent_message: Some("Context compacted".to_string()),
             }),
         });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-2".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "second".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
         app.chat_widget.handle_codex_event(Event {
             id: "turn-2-started".to_string(),
             msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
@@ -3510,6 +3609,15 @@ mod tests {
             id: "turn-2-complete".to_string(),
             msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
                 last_agent_message: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-3".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "third".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
         });
         app.chat_widget.handle_codex_event(Event {
@@ -3576,6 +3684,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_can_drop_surviving_turn_complete_only_copy_source_after_non_user_task() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: "session".to_string(),
+            msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
+        });
+
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-1".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "first".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
+
+        // User turn 1: normal agent message.
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-1".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "answer first".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-1-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer first".to_string()),
+            }),
+        });
+
+        // Non-user task completion (e.g. /compact) should not shift user-turn ordinals.
+        app.chat_widget.handle_codex_event(Event {
+            id: "non-user-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "non-user-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("compact summary".to_string()),
+            }),
+        });
+
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-2".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "second".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
+
+        // User turn 2: copy source comes only from TurnComplete.last_agent_message.
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-2-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("plan-only answer".to_string()),
+            }),
+        });
+
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-3".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "third".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
+
+        // User turn 3: normal response to be rolled back.
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-started".to_string(),
+            msg: EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+                model_context_window: None,
+                collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-3".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "answer third".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-3-complete".to_string(),
+            msg: EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+                last_agent_message: Some("answer third".to_string()),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("answer first".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(new_info_event("plan details".to_string(), None)) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "third".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("answer third".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some("answer third"),
+        );
+
+        // Roll back the third user turn, preserving the first two user turns.
+        app.apply_backtrack_rollback(crate::app_backtrack::BacktrackSelection {
+            nth_user_message: 2,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        });
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            codex_core::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        ));
+
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some("plan-only answer"),
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_to_first_user_clears_copy_source() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
@@ -3627,6 +3896,18 @@ mod tests {
             msg: EventMsg::SessionConfigured(make_session_configured_event(thread_id)),
         });
 
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-main".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message:
+                    "Can you create a new worktree and branch from upstream/main and apply only the Alt+C hotkey feature?"
+                        .to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
+
         // Simulate resumed history where a single user turn contains multiple agent updates.
         let first_turn_updates = [
             "I'll do this in three steps: inspect commits on your current branch to isolate the Alt+C hotkey change, create a new worktree/branch from `upstream/main`, and then apply only that feature there. I'm starting by checking remotes, branch state, and recent commits.",
@@ -3642,6 +3923,16 @@ mod tests {
                 }),
             });
         }
+
+        app.chat_widget.handle_codex_event_replay(Event {
+            id: "user-hi".to_string(),
+            msg: EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "hi".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+        });
 
         app.chat_widget.handle_codex_event(Event {
             id: "agent-hi".to_string(),

@@ -631,7 +631,10 @@ pub(crate) struct ChatWidget {
     last_agent_markdown: Option<String>,
     /// Raw markdown for each completed agent response in this session timeline.
     agent_turn_markdowns: Vec<AgentTurnMarkdown>,
-    /// Number of completed turns observed in this session timeline.
+    /// Number of user-message turns observed in this session timeline.
+    ///
+    /// This counter advances when a user prompt is committed to transcript
+    /// history and provides the ordinal domain for copy-history rollback sync.
     completed_turn_count: usize,
     /// Whether this turn already emitted a full `AgentMessage`.
     ///
@@ -680,7 +683,9 @@ pub(crate) struct UserMessage {
 /// transcript rollback.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AgentTurnMarkdown {
-    /// Monotonically increasing turn number within this session (1-based).
+    /// Monotonically increasing user-turn number within this session.
+    ///
+    /// Ordinal `0` is reserved for turns not tied to a user message.
     ordinal: usize,
     /// The raw markdown text of the agent response for this turn.
     markdown: String,
@@ -1052,7 +1057,13 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
-        let turn_ordinal = self.completed_turn_count.saturating_add(1);
+        let turn_ordinal = if self.completed_turn_count == 0 && !self.agent_turn_running {
+            self.agent_turn_markdowns
+                .last()
+                .map_or(1, |entry| entry.ordinal.saturating_add(1))
+        } else {
+            self.completed_turn_count
+        };
         if self
             .agent_turn_markdowns
             .last()
@@ -1408,7 +1419,6 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
-        let turn_was_running = self.agent_turn_running;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -1461,13 +1471,6 @@ impl ChatWidget {
             && !self.saw_agent_message_this_turn
         {
             self.record_agent_markdown(message);
-        }
-        // Advance the turn counter unless the turn never actually ran *and* we
-        // already counted it via the AgentMessage path above.
-        let should_advance_completed_turn_count =
-            turn_was_running || !self.saw_agent_message_this_turn;
-        if should_advance_completed_turn_count {
-            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
         self.saw_agent_message_this_turn = false;
 
@@ -3963,6 +3966,7 @@ impl ChatWidget {
                 text_elements,
                 local_image_paths,
             ));
+            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
 
         self.needs_final_message_separator = false;
@@ -4053,14 +4057,7 @@ impl ChatWidget {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                // During replay (initial_messages) or resumed sessions, AgentMessage events
-                // arrive without a preceding TurnStarted, so agent_turn_running is false.
-                // Treat these as self-contained completed turns for copy-history purposes.
-                let count_as_completed_turn = !self.agent_turn_running && !message.is_empty();
                 self.record_agent_markdown(&message);
-                if count_as_completed_turn {
-                    self.completed_turn_count = self.completed_turn_count.saturating_add(1);
-                }
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
@@ -4273,6 +4270,7 @@ impl ChatWidget {
                 event.text_elements,
                 event.local_images,
             ));
+            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
 
         // User messages reset separator state so the next agent response doesn't add a stray break.
@@ -4410,19 +4408,15 @@ impl ChatWidget {
         {
             self.agent_turn_markdowns.pop();
         }
-        if let Some(fallback) = transcript_fallback
-            .map(|fallback| fallback.trim().to_string())
-            .filter(|fallback| !fallback.is_empty())
+        if self.agent_turn_markdowns.is_empty()
+            && let Some(fallback) = transcript_fallback
+                .map(|fallback| fallback.trim().to_string())
+                .filter(|fallback| !fallback.is_empty())
         {
-            if let Some(last) = self.agent_turn_markdowns.last_mut() {
-                last.ordinal = remaining_turn_count;
-                last.markdown = fallback;
-            } else {
-                self.agent_turn_markdowns.push(AgentTurnMarkdown {
-                    ordinal: remaining_turn_count,
-                    markdown: fallback,
-                });
-            }
+            self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                ordinal: remaining_turn_count,
+                markdown: fallback,
+            });
         }
         self.completed_turn_count = self.completed_turn_count.min(remaining_turn_count);
         self.last_agent_markdown = self

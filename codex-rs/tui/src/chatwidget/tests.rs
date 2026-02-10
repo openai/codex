@@ -457,7 +457,7 @@ async fn copy_history_is_bounded_to_recent_agent_messages() {
 }
 
 #[tokio::test]
-async fn truncate_copy_history_prefers_transcript_fallback_when_nonempty() {
+async fn truncate_copy_history_keeps_surviving_entry_when_nonempty() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -483,8 +483,27 @@ async fn truncate_copy_history_prefers_transcript_fallback_when_nonempty() {
 
     assert_eq!(chat.agent_turn_markdowns.len(), 1);
     assert_eq!(chat.agent_turn_markdowns[0].ordinal, 1);
-    assert_eq!(chat.agent_turn_markdowns[0].markdown, "second");
-    assert_eq!(chat.last_agent_markdown.as_deref(), Some("second"));
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "first");
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("first"));
+}
+
+#[tokio::test]
+async fn truncate_copy_history_uses_transcript_fallback_when_empty() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant-1".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first".to_string(),
+        }),
+    });
+
+    chat.truncate_agent_turn_markdowns_to_turn_count(0, Some("fallback".to_string()));
+
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+    assert_eq!(chat.agent_turn_markdowns[0].ordinal, 0);
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "fallback");
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("fallback"));
 }
 
 #[tokio::test]
