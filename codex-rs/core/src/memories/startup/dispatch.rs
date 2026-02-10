@@ -169,6 +169,7 @@ mod tests {
     use super::run_global_memory_consolidation;
     use crate::CodexAuth;
     use crate::ThreadManager;
+    use crate::agent::control::AgentControl;
     use crate::codex::Session;
     use crate::codex::make_session_and_context;
     use crate::config::Config;
@@ -280,6 +281,14 @@ mod tests {
                 .await
                 .expect("shutdown spawned threads");
         }
+
+        fn user_input_ops_count(&self) -> usize {
+            self.manager
+                .captured_ops()
+                .into_iter()
+                .filter(|(_, op)| matches!(op, Op::UserInput { .. }))
+                .count()
+        }
     }
 
     #[tokio::test]
@@ -311,12 +320,7 @@ mod tests {
             .expect("claim while running");
         assert_eq!(running_claim, Phase2JobClaimOutcome::SkippedRunning);
 
-        let user_input_ops = harness
-            .manager
-            .captured_ops()
-            .into_iter()
-            .filter(|(_, op)| matches!(op, Op::UserInput { .. }))
-            .count();
+        let user_input_ops = harness.user_input_ops_count();
         assert_eq!(user_input_ops, 1);
 
         harness.shutdown_threads().await;
@@ -338,14 +342,115 @@ mod tests {
             "second dispatch should skip while the global lock is running"
         );
 
-        let user_input_ops = harness
-            .manager
-            .captured_ops()
-            .into_iter()
-            .filter(|(_, op)| matches!(op, Op::UserInput { .. }))
-            .count();
+        let user_input_ops = harness.user_input_ops_count();
         assert_eq!(user_input_ops, 1);
 
         harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_dirty_job_and_no_stage1_outputs_skips_spawn_and_clears_dirty_flag() {
+        let harness = DispatchHarness::new().await;
+        harness
+            .state_db
+            .enqueue_global_consolidation(999)
+            .await
+            .expect("enqueue global consolidation");
+
+        let scheduled =
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+        assert!(
+            !scheduled,
+            "dispatch should not spawn when no stage-1 outputs are available"
+        );
+        assert_eq!(harness.user_input_ops_count(), 0);
+
+        let claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after empty dispatch");
+        assert_eq!(
+            claim,
+            Phase2JobClaimOutcome::SkippedNotDirty,
+            "empty dispatch should finalize global job as up-to-date"
+        );
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_marks_job_for_retry_when_spawn_agent_fails() {
+        let codex_home = tempfile::tempdir().expect("create temp codex home");
+        let mut config = test_config();
+        config.codex_home = codex_home.path().to_path_buf();
+        config.cwd = config.codex_home.clone();
+        let config = Arc::new(config);
+
+        let state_db = codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .expect("initialize state db");
+
+        let (mut session, _turn_context) = make_session_and_context().await;
+        session.services.state_db = Some(Arc::clone(&state_db));
+        session.services.agent_control = AgentControl::default();
+        let session = Arc::new(session);
+
+        let thread_id = ThreadId::new();
+        let mut metadata_builder = ThreadMetadataBuilder::new(
+            thread_id,
+            config.codex_home.join(format!("rollout-{thread_id}.jsonl")),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        metadata_builder.cwd = config.cwd.clone();
+        metadata_builder.model_provider = Some(config.model_provider_id.clone());
+        let metadata = metadata_builder.build(&config.model_provider_id);
+        state_db
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert thread metadata");
+
+        let claim = state_db
+            .try_claim_stage1_job(thread_id, session.conversation_id, 100, 3_600, 64)
+            .await
+            .expect("claim stage-1 job");
+        let ownership_token = match claim {
+            codex_state::Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage-1 claim outcome: {other:?}"),
+        };
+        assert!(
+            state_db
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    &ownership_token,
+                    100,
+                    "raw memory",
+                    "rollout summary",
+                )
+                .await
+                .expect("mark stage-1 success"),
+            "stage-1 success should enqueue global consolidation"
+        );
+
+        let scheduled = run_global_memory_consolidation(&session, Arc::clone(&config)).await;
+        assert!(
+            !scheduled,
+            "dispatch should return false when consolidation subagent cannot be spawned"
+        );
+
+        let retry_claim = state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after spawn failure");
+        assert_eq!(
+            retry_claim,
+            Phase2JobClaimOutcome::SkippedNotDirty,
+            "spawn failures should leave the job in retry backoff instead of running"
+        );
     }
 }

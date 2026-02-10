@@ -185,3 +185,21 @@ pub(super) async fn run_memories_startup_pipeline(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_memories_startup_pipeline;
+    use crate::codex::make_session_and_context;
+    use crate::config::test_config;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn startup_pipeline_is_noop_when_state_db_is_unavailable() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let config = Arc::new(test_config());
+        run_memories_startup_pipeline(&session, config)
+            .await
+            .expect("startup pipeline should skip cleanly without state db");
+    }
+}
