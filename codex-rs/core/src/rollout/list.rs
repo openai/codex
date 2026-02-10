@@ -1015,25 +1015,27 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                summary.source = Some(session_meta_line.meta.source.clone());
-                summary.model_provider = session_meta_line.meta.model_provider.clone();
-                summary.thread_id = Some(session_meta_line.meta.id);
-                summary.cwd = Some(session_meta_line.meta.cwd.clone());
-                summary.git_branch = session_meta_line
-                    .git
-                    .as_ref()
-                    .and_then(|git| git.branch.clone());
-                summary.git_sha = session_meta_line
-                    .git
-                    .as_ref()
-                    .and_then(|git| git.commit_hash.clone());
-                summary.git_origin_url = session_meta_line
-                    .git
-                    .as_ref()
-                    .and_then(|git| git.repository_url.clone());
-                summary.cli_version = Some(session_meta_line.meta.cli_version);
-                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
-                summary.saw_session_meta = true;
+                if !summary.saw_session_meta {
+                    summary.source = Some(session_meta_line.meta.source.clone());
+                    summary.model_provider = session_meta_line.meta.model_provider.clone();
+                    summary.thread_id = Some(session_meta_line.meta.id);
+                    summary.cwd = Some(session_meta_line.meta.cwd.clone());
+                    summary.git_branch = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.branch.clone());
+                    summary.git_sha = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.commit_hash.clone());
+                    summary.git_origin_url = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.repository_url.clone());
+                    summary.cli_version = Some(session_meta_line.meta.cli_version);
+                    summary.created_at = Some(session_meta_line.meta.timestamp.clone());
+                    summary.saw_session_meta = true;
+                }
             }
             RolloutItem::ResponseItem(_) => {
                 summary.created_at = summary

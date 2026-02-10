@@ -595,9 +595,9 @@ jobs:
           mkdir -p dist/npm
           patterns=(
             "codex-npm-${version}.tgz"
-            "codex-linux-*-npm-${version}.tgz"
-            "codex-darwin-*-npm-${version}.tgz"
-            "codex-win32-*-npm-${version}.tgz"
+            "codex-npm-linux-*-${version}.tgz"
+            "codex-npm-darwin-*-${version}.tgz"
+            "codex-npm-win32-*-${version}.tgz"
             "codex-responses-api-proxy-npm-${version}.tgz"
             "codex-sdk-npm-${version}.tgz"
           )
@@ -615,20 +615,44 @@ jobs:
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
         run: |
           set -euo pipefail
-          tag_args=()
+          prefix=""
           if [[ -n "${NPM_TAG}" ]]; then
-            tag_args+=(--tag "${NPM_TAG}")
+            prefix="${NPM_TAG}-"
           fi
 
           shopt -s nullglob
-          tarballs=(dist/npm/*-npm-"${VERSION}".tgz)
+          tarballs=(dist/npm/*-"${VERSION}".tgz)
           if [[ ${#tarballs[@]} -eq 0 ]]; then
             echo "No npm tarballs found in dist/npm for version ${VERSION}"
             exit 1
           fi
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/${tarball}" "${tag_args[@]}"
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
           done
 
   update-branch:
