@@ -377,6 +377,7 @@ jobs:
                 setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
                 if [[ -f "$runner_src" && -f "$setup_src" ]]; then
                   cp "$dest/$base" "$bundle_dir/$base"
+                  cp "$dest/$base" "$bundle_dir/codex.exe"
                   cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
                   cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
                   # Use an absolute path so bundle zips land in the real dist
