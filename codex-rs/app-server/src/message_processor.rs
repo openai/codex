@@ -286,14 +286,6 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;
-                    for notification in self.config_warnings.iter().cloned() {
-                        self.outgoing
-                            .send_server_notification(ServerNotification::ConfigWarning(
-                                notification,
-                            ))
-                            .await;
-                    }
-
                     return;
                 }
             }
@@ -379,6 +371,14 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn send_initialize_notifications(&self) {
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification(ServerNotification::ConfigWarning(notification))
+                .await;
+        }
     }
 
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {

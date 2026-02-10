@@ -83,7 +83,10 @@ enum OutboundControlEvent {
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
     /// Mark the connection as initialized, enabling broadcast delivery.
-    Initialized { connection_id: ConnectionId },
+    Initialized {
+        connection_id: ConnectionId,
+        ready: oneshot::Sender<()>,
+    },
 }
 
 fn config_warning_from_error(
@@ -389,10 +392,14 @@ pub async fn run_main_with_transport(
                         OutboundControlEvent::Closed { connection_id } => {
                             outbound_connections.remove(&connection_id);
                         }
-                        OutboundControlEvent::Initialized { connection_id } => {
+                        OutboundControlEvent::Initialized {
+                            connection_id,
+                            ready,
+                        } => {
                             if let Some(connection_state) = outbound_connections.get_mut(&connection_id) {
                                 connection_state.initialized = true;
                             }
+                            let _ = ready.send(());
                         }
                     }
                 }
@@ -474,12 +481,20 @@ pub async fn run_main_with_transport(
                                             )
                                             .await;
                                         if !was_initialized && connection_state.session.initialized {
+                                            let (ready_tx, ready_rx) = oneshot::channel();
                                             let send_result = outbound_control_tx
-                                                .send(OutboundControlEvent::Initialized { connection_id })
+                                                .send(OutboundControlEvent::Initialized {
+                                                    connection_id,
+                                                    ready: ready_tx,
+                                                })
                                                 .await;
                                             if send_result.is_err() {
                                                 break;
                                             }
+                                            if ready_rx.await.is_err() {
+                                                break;
+                                            }
+                                            processor.send_initialize_notifications().await;
                                         }
                                     }
                                     JSONRPCMessage::Response(response) => {
