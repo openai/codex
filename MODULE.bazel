@@ -5,6 +5,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:toolchains_llvm_bootstrapped_mingw_cfguard.patch",
+        "//patches:toolchains_llvm_bootstrapped_mingw_ssp.patch",
         "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
     ],
 )

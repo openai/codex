@@ -1,0 +1,28 @@
+--- a/runtimes/mingw/BUILD.bazel
++++ b/runtimes/mingw/BUILD.bazel
+@@ -284,6 +284,16 @@
+ # TODO(zbarsky): Hack for now until we have real libstdc++ support...
+ stub_library(
+     name = "stdc++",
++)
++
++# Clang may inject -lssp and -lssp_nonshared for windows-gnu links.
++# Provide compatibility archives in the MinGW runtime search directory.
++stub_library(
++    name = "ssp",
++)
++
++stub_library(
++    name = "ssp_nonshared",
+ )
+ 
+ copy_to_directory(
+@@ -293,6 +303,8 @@
+         ":mingwex",
+         ":moldname",
+         ":stdc++",
++        ":ssp",
++        ":ssp_nonshared",
+         ":ucrt",
+         ":ucrtbase",
+         ":ucrtbased",
