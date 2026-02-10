@@ -40,12 +40,12 @@ use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
-use codex_api::Prompt as ApiPrompt;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
 use codex_api::ResponseCreateWsRequest;
+use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
@@ -75,7 +75,6 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -443,28 +442,17 @@ impl ModelClientSession {
                 .swap(true, Ordering::Relaxed)
     }
 
-    fn build_responses_request(prompt: &Prompt) -> Result<ApiPrompt> {
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-        Ok(build_api_prompt(prompt, instructions, tools_json))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Builds shared Responses API request options for both HTTP and WebSocket streaming.
-    ///
-    /// Keeping option construction in one place ensures request-scoped headers are consistent
-    /// regardless of transport choice.
-    fn build_responses_options(
+    fn build_responses_request(
         &self,
+        provider: &codex_api::Provider,
         prompt: &Prompt,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        turn_metadata_header: Option<&str>,
-        compression: Compression,
-    ) -> ApiResponsesOptions {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
-
+    ) -> Result<ResponsesApiRequest> {
+        let instructions = &prompt.base_instructions.text;
+        let input = prompt.get_formatted_input();
+        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
@@ -478,13 +466,11 @@ impl ModelClientSession {
         } else {
             None
         };
-
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             Vec::new()
         };
-
         let verbosity = if model_info.support_verbosity {
             self.client
                 .state
@@ -499,16 +485,39 @@ impl ModelClientSession {
             }
             None
         };
-
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let request = ResponsesApiRequest {
+            model: model_info.slug.clone(),
+            instructions: instructions.clone(),
+            input,
+            tools,
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            reasoning,
+            store: provider.is_azure_responses_endpoint(),
+            stream: true,
+            include,
+            prompt_cache_key,
+            text,
+        };
+        Ok(request)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Builds shared Responses API transport options and request-body options.
+    ///
+    /// Keeping option construction in one place ensures request-scoped headers are consistent
+    /// regardless of transport choice.
+    fn build_responses_options(
+        &self,
+        turn_metadata_header: Option<&str>,
+        compression: Compression,
+    ) -> ApiResponsesOptions {
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.client.state.conversation_id.to_string();
 
         ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key: Some(conversation_id.clone()),
-            text,
-            store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: build_responses_headers(
@@ -559,78 +568,36 @@ impl ModelClientSession {
             .filter(|id| !id.is_empty())
     }
 
-    fn prepare_websocket_create_request(
-        &self,
-        model_slug: &str,
-        api_prompt: &ApiPrompt,
-        options: &ApiResponsesOptions,
-        input: Vec<ResponseItem>,
-        previous_response_id: Option<String>,
-    ) -> ResponsesWsRequest {
-        let ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key,
-            text,
-            store_override,
-            ..
-        } = options;
-
-        let store = store_override.unwrap_or(false);
-        let payload = ResponseCreateWsRequest {
-            model: model_slug.to_string(),
-            instructions: api_prompt.instructions.clone(),
-            previous_response_id,
-            input,
-            tools: api_prompt.tools.clone(),
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: api_prompt.parallel_tool_calls,
-            reasoning: reasoning.clone(),
-            store,
-            stream: true,
-            include: include.clone(),
-            prompt_cache_key: prompt_cache_key.clone(),
-            text: text.clone(),
-        };
-
-        ResponsesWsRequest::ResponseCreate(payload)
-    }
-
     fn prepare_websocket_request(
         &mut self,
-        model_slug: &str,
-        api_prompt: &ApiPrompt,
-        options: &ApiResponsesOptions,
-    ) -> ResponsesWsRequest {
+        payload: ResponseCreateWsRequest,
+    ) -> (ResponsesWsRequest, Vec<ResponseItem>) {
+        let full_input = payload.input.clone();
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
-        let incremental_items = self.get_incremental_items(&api_prompt.input);
+        let incremental_items = self.get_incremental_items(&full_input);
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled
                 && let Some(previous_response_id) = self.websocket_previous_response_id()
             {
-                return self.prepare_websocket_create_request(
-                    model_slug,
-                    api_prompt,
-                    options,
-                    append_items,
-                    Some(previous_response_id),
-                );
+                let payload = ResponseCreateWsRequest {
+                    previous_response_id: Some(previous_response_id),
+                    input: append_items,
+                    ..payload
+                };
+                return (ResponsesWsRequest::ResponseCreate(payload), full_input);
             }
 
             if !responses_websockets_v2_enabled {
-                return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                    input: append_items,
-                });
+                return (
+                    ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+                        input: append_items,
+                    }),
+                    full_input,
+                );
             }
         }
 
-        self.prepare_websocket_create_request(
-            model_slug,
-            api_prompt,
-            options,
-            api_prompt.input.clone(),
-            None,
-        )
+        (ResponsesWsRequest::ResponseCreate(payload), full_input)
     }
 
     /// Opportunistically warms a websocket for this turn-scoped client session.
@@ -744,8 +711,6 @@ impl ModelClientSession {
         }
 
         let auth_manager = self.client.state.auth_manager.clone();
-        let api_prompt = Self::build_responses_request(prompt)?;
-
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(super::auth::AuthManager::unauthorized_recovery);
@@ -754,26 +719,22 @@ impl ModelClientSession {
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
+            let options = self.build_responses_options(turn_metadata_header, compression);
 
+            let request = self.build_responses_request(
+                &client_setup.api_provider,
+                prompt,
+                model_info,
+                effort,
+                summary,
+            )?;
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let options = self.build_responses_options(
-                prompt,
-                model_info,
-                effort,
-                summary,
-                turn_metadata_header,
-                compression,
-            );
-
-            let stream_result = client
-                .stream_prompt(&model_info.slug, &api_prompt, options)
-                .await;
+            let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
                 Ok(stream) => {
@@ -802,7 +763,6 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
-        let api_prompt = Self::build_responses_request(prompt)?;
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -811,14 +771,15 @@ impl ModelClientSession {
             let client_setup = self.client.current_client_setup().await?;
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
-            let options = self.build_responses_options(
+            let options = self.build_responses_options(turn_metadata_header, compression);
+            let request = self.build_responses_request(
+                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort,
                 summary,
-                turn_metadata_header,
-                compression,
-            );
+            )?;
+            let ws_payload = ResponseCreateWsRequest::from(&request);
 
             match self
                 .websocket_connection(
@@ -845,7 +806,7 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
+            let (request, request_input) = self.prepare_websocket_request(ws_payload);
 
             let stream_result = self
                 .connection
@@ -858,7 +819,7 @@ impl ModelClientSession {
                 .stream_request(request)
                 .await
                 .map_err(map_api_error)?;
-            self.websocket_last_items = api_prompt.input.clone();
+            self.websocket_last_items = request_input;
             let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
             self.websocket_last_response_id_rx = Some(last_response_id_receiver);
             let mut last_response_id_sender = Some(last_response_id_sender);
@@ -970,17 +931,6 @@ impl ModelClientSession {
             self.websocket_last_items.clear();
         }
         activated
-    }
-}
-
-/// Adapts the core `Prompt` type into the `codex-api` payload shape.
-fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
-    ApiPrompt {
-        instructions,
-        input: prompt.get_formatted_input(),
-        tools: tools_json,
-        parallel_tool_calls: prompt.parallel_tool_calls,
-        output_schema: prompt.output_schema.clone(),
     }
 }
 

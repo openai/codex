@@ -5130,9 +5130,9 @@ async fn apply_patch_manual_flow_snapshot() {
 }
 
 #[tokio::test]
-async fn apply_patch_approval_sends_op_with_submission_id() {
+async fn apply_patch_approval_sends_op_with_call_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    // Simulate receiving an approval request with a distinct submission id and call id
+    // Simulate receiving an approval request with a distinct event id and call id.
     let mut changes = HashMap::new();
     changes.insert(
         PathBuf::from("file.rs"),
@@ -5155,11 +5155,11 @@ async fn apply_patch_approval_sends_op_with_submission_id() {
     // Approve via key press 'y'
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
-    // Expect a CodexOp with PatchApproval carrying the submission id, not call id
+    // Expect a CodexOp with PatchApproval carrying the call id.
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
-            assert_eq!(id, "sub-123");
+            assert_eq!(id, "call-999");
             assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
             found = true;
             break;
@@ -5207,7 +5207,7 @@ async fn apply_patch_full_flow_integration_like() {
         .expect("expected op forwarded to codex channel");
     match forwarded {
         Op::PatchApproval { id, decision } => {
-            assert_eq!(id, "sub-xyz");
+            assert_eq!(id, "call-1");
             assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
