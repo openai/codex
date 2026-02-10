@@ -153,6 +153,7 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const MAX_AGENT_COPY_HISTORY: usize = 256;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -1026,9 +1027,12 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
-        let markdown = message.to_string();
-        self.last_agent_markdown = Some(markdown.clone());
-        self.agent_turn_markdowns.push(markdown);
+        self.agent_turn_markdowns.push(message.to_string());
+        if self.agent_turn_markdowns.len() > MAX_AGENT_COPY_HISTORY {
+            let overflow = self.agent_turn_markdowns.len() - MAX_AGENT_COPY_HISTORY;
+            self.agent_turn_markdowns.drain(0..overflow);
+        }
+        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
         self.saw_agent_message_this_turn = true;
     }
 

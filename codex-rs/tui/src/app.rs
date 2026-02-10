@@ -3212,6 +3212,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_ignores_context_compacted_marker_when_recomputing_copy_source() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: "session".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-1".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "answer first".to_string(),
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "compacted".to_string(),
+            msg: EventMsg::ContextCompacted(codex_core::protocol::ContextCompactedEvent),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "agent-2".to_string(),
+            msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                message: "answer second".to_string(),
+            }),
+        });
+
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("answer first".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("Context compacted".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "third".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("answer second".to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>,
+        ];
+
+        app.apply_backtrack_rollback(crate::app_backtrack::BacktrackSelection {
+            nth_user_message: 2,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        });
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            codex_core::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        ));
+
+        assert_eq!(app.chat_widget.agent_turn_markdown_count(), 1);
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some("answer first"),
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_to_first_user_clears_copy_source() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 

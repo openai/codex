@@ -45,6 +45,8 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 
+const CONTEXT_COMPACTED_MARKER: &str = "Context compacted";
+
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
 pub(crate) struct BacktrackState {
@@ -583,8 +585,29 @@ fn agent_group_positions_iter(
         .skip(start)
         .filter_map(move |(idx, cell)| {
             let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
-            (is_agent && !cell.is_stream_continuation()).then_some(idx)
+            let is_copy_source_group =
+                is_agent && !cell.is_stream_continuation() && !is_compaction_marker_cell(cell);
+            is_copy_source_group.then_some(idx)
         })
+}
+
+fn is_compaction_marker_cell(cell: &Arc<dyn crate::history_cell::HistoryCell>) -> bool {
+    let Some(agent_cell) = cell.as_any().downcast_ref::<AgentMessageCell>() else {
+        return false;
+    };
+    let rendered_lines = crate::history_cell::HistoryCell::display_lines(agent_cell, u16::MAX);
+    let Some(first_line) = rendered_lines.first() else {
+        return false;
+    };
+
+    line_text(first_line).trim_start_matches(['•', ' ']).trim() == CONTEXT_COMPACTED_MARKER
+}
+
+fn line_text(line: &ratatui::text::Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 #[cfg(test)]
@@ -707,6 +730,22 @@ mod tests {
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(agent_group_count(&cells), 2);
+    }
+
+    #[test]
+    fn agent_group_count_ignores_context_compacted_marker() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(AgentMessageCell::new(vec![Line::from("first")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("Context compacted")],
+                true,
+            )) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
                 as Arc<dyn HistoryCell>,
         ];

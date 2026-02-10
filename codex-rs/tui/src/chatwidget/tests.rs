@@ -419,6 +419,34 @@ async fn session_configured_resets_copy_state_before_replay() {
 }
 
 #[tokio::test]
+async fn copy_history_is_bounded_to_recent_agent_messages() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let total_messages = MAX_AGENT_COPY_HISTORY + 5;
+
+    for index in 0..total_messages {
+        chat.handle_codex_event(Event {
+            id: format!("assistant-{index}"),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: format!("reply {index}"),
+            }),
+        });
+    }
+
+    let first_retained_index = total_messages - MAX_AGENT_COPY_HISTORY;
+    let expected_first = format!("reply {first_retained_index}");
+    let expected_last = format!("reply {}", total_messages - 1);
+    assert_eq!(chat.agent_turn_markdowns.len(), MAX_AGENT_COPY_HISTORY);
+    assert_eq!(
+        chat.agent_turn_markdowns.first().map(String::as_str),
+        Some(expected_first.as_str())
+    );
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some(expected_last.as_str())
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
