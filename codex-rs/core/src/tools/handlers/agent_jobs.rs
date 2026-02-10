@@ -47,6 +47,7 @@ struct SpawnAgentsOnCsvArgs {
     output_csv_path: Option<String>,
     output_schema: Option<Value>,
     max_concurrency: Option<usize>,
+    max_workers: Option<usize>,
     max_runtime_seconds: Option<u64>,
 }
 
@@ -314,7 +315,8 @@ mod spawn_agents_on_csv {
                 FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
             })?;
 
-        let options = match build_runner_options(&session, &turn, args.max_concurrency).await {
+        let requested_concurrency = args.max_concurrency.or(args.max_workers);
+        let options = match build_runner_options(&session, &turn, requested_concurrency).await {
             Ok(options) => options,
             Err(err) => {
                 let error_message = err.to_string();
@@ -331,7 +333,6 @@ mod spawn_agents_on_csv {
                     "failed to transition agent job {job_id} to running: {err}"
                 ))
             })?;
-        let requested_concurrency = args.max_concurrency;
         let max_threads = turn.config.agent_max_threads;
         let effective_concurrency = options.max_concurrency;
         let message = format!(
