@@ -5,7 +5,7 @@ use codex_protocol::protocol::RolloutItem;
 
 /// Bitmask selector for `ResponseItem` variants retained from rollout JSONL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StageOneResponseItemKinds(u16);
+pub(super) struct StageOneResponseItemKinds(u16);
 
 impl StageOneResponseItemKinds {
     const MESSAGE: u16 = 1 << 0;
@@ -20,7 +20,7 @@ impl StageOneResponseItemKinds {
     const COMPACTION: u16 = 1 << 9;
     const OTHER: u16 = 1 << 10;
 
-    pub(crate) const fn all() -> Self {
+    pub(super) const fn all() -> Self {
         Self(
             Self::MESSAGE
                 | Self::REASONING
@@ -37,7 +37,7 @@ impl StageOneResponseItemKinds {
     }
 
     #[cfg(test)]
-    pub(crate) const fn messages_only() -> Self {
+    pub(super) const fn messages_only() -> Self {
         Self(Self::MESSAGE)
     }
 
@@ -72,19 +72,19 @@ impl Default for StageOneResponseItemKinds {
 
 /// Controls which rollout item kinds are retained for stage-1 memory extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StageOneRolloutFilter {
+pub(super) struct StageOneRolloutFilter {
     /// Keep `RolloutItem::ResponseItem` entries.
-    pub(crate) keep_response_items: bool,
+    pub(super) keep_response_items: bool,
     /// Keep `RolloutItem::Compacted` entries (converted to assistant messages).
-    pub(crate) keep_compacted_items: bool,
+    pub(super) keep_compacted_items: bool,
     /// Restricts kept `ResponseItem` entries by variant.
-    pub(crate) response_item_kinds: StageOneResponseItemKinds,
+    pub(super) response_item_kinds: StageOneResponseItemKinds,
     /// Optional cap on retained items after filtering.
-    pub(crate) max_items: Option<usize>,
+    pub(super) max_items: Option<usize>,
 }
 
 impl StageOneRolloutFilter {
-    pub(crate) const fn response_and_compacted_items() -> Self {
+    pub(super) const fn response_and_compacted_items() -> Self {
         Self {
             keep_response_items: true,
             keep_compacted_items: true,
@@ -104,7 +104,7 @@ impl Default for StageOneRolloutFilter {
 ///
 /// `RolloutItem::Compacted` entries are converted to assistant messages so the
 /// model sees the same response-item shape as normal transcript content.
-pub(crate) fn filter_rollout_response_items(
+pub(super) fn filter_rollout_response_items(
     items: &[RolloutItem],
     filter: StageOneRolloutFilter,
 ) -> Vec<ResponseItem> {
@@ -139,7 +139,7 @@ pub(crate) fn filter_rollout_response_items(
 }
 
 /// Serializes filtered stage-1 memory items for prompt inclusion.
-pub(crate) fn serialize_filtered_rollout_response_items(
+pub(super) fn serialize_filtered_rollout_response_items(
     items: &[RolloutItem],
     filter: StageOneRolloutFilter,
 ) -> Result<String> {

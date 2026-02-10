@@ -1,17 +1,17 @@
-use super::MEMORY_SCOPE_KIND_CWD;
-use super::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS;
-use super::StageOneResponseItemKinds;
-use super::StageOneRolloutFilter;
-use super::ensure_layout;
-use super::memory_root_for_cwd;
-use super::memory_scope_key_for_cwd;
-use super::memory_summary_file;
-use super::parse_stage_one_output;
-use super::prune_to_recent_memories_and_rebuild_summary;
-use super::raw_memories_dir;
-use super::select_rollout_candidates_from_db;
-use super::serialize_filtered_rollout_response_items;
-use super::wipe_consolidation_outputs;
+use super::rollout::StageOneResponseItemKinds;
+use super::rollout::StageOneRolloutFilter;
+use super::rollout::serialize_filtered_rollout_response_items;
+use super::selection::select_rollout_candidates_from_db;
+use super::stage_one::parse_stage_one_output;
+use super::storage::rebuild_memory_summary_from_memories;
+use super::storage::sync_raw_memories_from_memories;
+use super::storage::wipe_consolidation_outputs;
+use crate::memories::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS;
+use crate::memories::layout::ensure_layout;
+use crate::memories::layout::memory_root_for_cwd;
+use crate::memories::layout::memory_scope_key_for_cwd;
+use crate::memories::layout::memory_summary_file;
+use crate::memories::layout::raw_memories_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -19,7 +19,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
-use codex_state::ThreadMemory;
+use codex_state::Stage1Output;
 use codex_state::ThreadMetadata;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -296,22 +296,20 @@ async fn prune_and_rebuild_summary_keeps_latest_memories_only() {
         .await
         .expect("write drop");
 
-    let memories = vec![ThreadMemory {
+    let memories = vec![Stage1Output {
         thread_id: ThreadId::try_from(keep_id.clone()).expect("thread id"),
-        scope_kind: MEMORY_SCOPE_KIND_CWD.to_string(),
-        scope_key: "scope".to_string(),
+        source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
         raw_memory: "raw memory".to_string(),
-        memory_summary: "short summary".to_string(),
-        updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
-        last_used_at: None,
-        used_count: 0,
-        invalidated_at: None,
-        invalid_reason: None,
+        summary: "short summary".to_string(),
+        generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
-    prune_to_recent_memories_and_rebuild_summary(&root, &memories)
+    sync_raw_memories_from_memories(&root, &memories)
         .await
-        .expect("prune and rebuild");
+        .expect("sync raw memories");
+    rebuild_memory_summary_from_memories(&root, &memories)
+        .await
+        .expect("rebuild memory summary");
 
     assert!(keep_path.is_file());
     assert!(!drop_path.exists());

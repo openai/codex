@@ -9,7 +9,7 @@ use super::types::RolloutCandidate;
 ///
 /// A rollout is selected when it is not the active thread and was updated
 /// within the configured max age window.
-pub(crate) fn select_rollout_candidates_from_db(
+pub(super) fn select_rollout_candidates_from_db(
     items: &[ThreadMetadata],
     current_thread_id: ThreadId,
     max_items: usize,
@@ -35,7 +35,7 @@ pub(crate) fn select_rollout_candidates_from_db(
             thread_id: item.id,
             rollout_path: item.rollout_path.clone(),
             cwd: item.cwd.clone(),
-            updated_at: Some(item.updated_at.to_rfc3339()),
+            source_updated_at: item.updated_at.timestamp(),
         });
 
         if candidates.len() >= max_items {

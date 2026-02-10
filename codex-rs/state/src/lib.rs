@@ -27,15 +27,15 @@ pub use model::BackfillStats;
 pub use model::BackfillStatus;
 pub use model::ExtractionOutcome;
 pub use model::SortKey;
-pub use model::ThreadMemory;
+pub use model::Stage1Output;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
-pub use runtime::DirtyMemoryScope;
-pub use runtime::Phase1JobClaimOutcome;
+pub use runtime::PendingScopeConsolidation;
 pub use runtime::Phase2JobClaimOutcome;
 pub use runtime::STATE_DB_FILENAME;
 pub use runtime::STATE_DB_VERSION;
+pub use runtime::Stage1JobClaimOutcome;
 pub use runtime::state_db_filename;
 pub use runtime::state_db_path;
 
