@@ -529,12 +529,6 @@ async fn run_agent_job_loop(
                 )
                 .await?;
             for item in pending_items {
-                if !db
-                    .mark_agent_job_item_running(job_id.as_str(), item.item_id.as_str())
-                    .await?
-                {
-                    continue;
-                }
                 let prompt = build_worker_prompt(&job, &item)?;
                 let thread_id = match session
                     .services
@@ -571,19 +565,13 @@ async fn run_agent_job_loop(
                     }
                 };
                 let assigned = db
-                    .set_agent_job_item_thread(
+                    .mark_agent_job_item_running_with_thread(
                         job_id.as_str(),
                         item.item_id.as_str(),
                         thread_id.to_string().as_str(),
                     )
                     .await?;
                 if !assigned {
-                    db.mark_agent_job_item_failed(
-                        job_id.as_str(),
-                        item.item_id.as_str(),
-                        "failed to assign worker thread to job item",
-                    )
-                    .await?;
                     let _ = session
                         .services
                         .agent_control

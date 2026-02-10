@@ -1204,6 +1204,36 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn mark_agent_job_item_running_with_thread(
+        &self,
+        job_id: &str,
+        item_id: &str,
+        thread_id: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let result = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = ?,
+    attempt_count = attempt_count + 1,
+    updated_at = ?,
+    last_error = NULL
+WHERE job_id = ? AND item_id = ? AND status = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Running.as_str())
+        .bind(thread_id)
+        .bind(now)
+        .bind(job_id)
+        .bind(item_id)
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn mark_agent_job_item_pending(
         &self,
         job_id: &str,
@@ -1273,19 +1303,17 @@ SET
     result_json = ?,
     reported_at = ?,
     updated_at = ?,
-    assigned_thread_id = COALESCE(assigned_thread_id, ?),
     last_error = NULL
 WHERE
     job_id = ?
     AND item_id = ?
     AND status = ?
-    AND (assigned_thread_id IS NULL OR assigned_thread_id = ?)
+    AND assigned_thread_id = ?
             "#,
         )
         .bind(serialized)
         .bind(now)
         .bind(now)
-        .bind(reporting_thread_id)
         .bind(job_id)
         .bind(item_id)
         .bind(AgentJobItemStatus::Running.as_str())
