@@ -701,7 +701,7 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     );
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agents_on_csv".to_string(),
-        description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object (matching `output_schema` when provided). This call blocks until all rows finish and automatically exports results to `output_csv_path` (or a default path)."
+        description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object (matching `output_schema` when provided); missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` (or a default path)."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
