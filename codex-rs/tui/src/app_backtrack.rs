@@ -28,8 +28,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
-#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
+use crate::history_cell::HistoryCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -514,8 +514,9 @@ impl App {
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
         let remaining_turns = user_count(&self.transcript_cells);
+        let fallback_markdown = last_agent_markdown_from_transcript(&self.transcript_cells);
         self.chat_widget
-            .truncate_agent_turn_markdowns_to_turn_count(remaining_turns);
+            .truncate_agent_turn_markdowns_to_turn_count(remaining_turns, fallback_markdown);
     }
 }
 
@@ -562,6 +563,41 @@ fn user_positions_iter(
         .enumerate()
         .skip(start)
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
+}
+
+fn last_agent_markdown_from_transcript(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+) -> Option<String> {
+    let session_start_type = TypeId::of::<SessionInfoCell>();
+    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
+
+    let start = cells
+        .iter()
+        .rposition(|cell| type_of(cell) == session_start_type)
+        .map_or(0, |idx| idx + 1);
+    let visible_cells = &cells[start..];
+
+    let group_start = visible_cells.iter().rposition(|cell| {
+        cell.as_any().downcast_ref::<AgentMessageCell>().is_some() && !cell.is_stream_continuation()
+    })?;
+
+    let mut blocks: Vec<String> = Vec::new();
+    for (offset, cell) in visible_cells[group_start..].iter().enumerate() {
+        let Some(agent_cell) = cell.as_any().downcast_ref::<AgentMessageCell>() else {
+            break;
+        };
+        if offset > 0 && !agent_cell.is_stream_continuation() {
+            break;
+        }
+        blocks.push(agent_cell.plain_text());
+    }
+
+    let merged = blocks
+        .into_iter()
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<String>>()
+        .join("\n");
+    (!merged.is_empty()).then_some(merged)
 }
 
 #[cfg(test)]

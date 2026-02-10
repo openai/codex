@@ -3489,6 +3489,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_deep_past_bounded_history_keeps_copy_source() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: "session".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let mut transcript_cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+        for turn in 1..=300 {
+            app.chat_widget.handle_codex_event(Event {
+                id: format!("agent-{turn}"),
+                msg: EventMsg::AgentMessage(codex_core::protocol::AgentMessageEvent {
+                    message: format!("answer {turn}"),
+                }),
+            });
+            transcript_cells.push(Arc::new(UserHistoryCell {
+                message: format!("user {turn}"),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>);
+            transcript_cells.push(Arc::new(AgentMessageCell::new(
+                vec![Line::from(format!("answer {turn}"))],
+                true,
+            )) as Arc<dyn HistoryCell>);
+        }
+        app.transcript_cells = transcript_cells;
+
+        app.apply_backtrack_rollback(crate::app_backtrack::BacktrackSelection {
+            nth_user_message: 20,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        });
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            codex_core::protocol::ThreadRolledBackEvent { num_turns: 280 },
+        ));
+
+        assert_eq!(
+            app.chat_widget.last_agent_markdown_text(),
+            Some("answer 20"),
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_preserves_real_context_compacted_reply() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 

@@ -4354,6 +4354,7 @@ impl ChatWidget {
     pub(crate) fn truncate_agent_turn_markdowns_to_turn_count(
         &mut self,
         remaining_turn_count: usize,
+        transcript_fallback: Option<String>,
     ) {
         while self
             .agent_turn_markdown_turn_ordinals
@@ -4363,6 +4364,15 @@ impl ChatWidget {
         {
             self.agent_turn_markdown_turn_ordinals.pop();
             self.agent_turn_markdowns.pop();
+        }
+        if self.agent_turn_markdowns.is_empty()
+            && let Some(fallback) = transcript_fallback
+                .map(|fallback| fallback.trim().to_string())
+                .filter(|fallback| !fallback.is_empty())
+        {
+            self.agent_turn_markdowns.push(fallback);
+            self.agent_turn_markdown_turn_ordinals
+                .push(remaining_turn_count);
         }
         self.completed_turn_count = self.completed_turn_count.min(remaining_turn_count);
         self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
