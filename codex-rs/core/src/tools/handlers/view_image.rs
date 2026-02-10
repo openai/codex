@@ -22,18 +22,6 @@ pub struct ViewImageHandler;
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
 
-impl ViewImageHandler {
-    fn ensure_supported(&self, model_supports_image_input: bool) -> Result<(), FunctionCallError> {
-        if model_supports_image_input {
-            Ok(())
-        } else {
-            Err(FunctionCallError::RespondToModel(
-                VIEW_IMAGE_UNSUPPORTED_MESSAGE.to_string(),
-            ))
-        }
-    }
-}
-
 #[derive(Deserialize)]
 struct ViewImageArgs {
     path: String,
@@ -46,8 +34,16 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let model_supports_image_input = invocation.turn.model_info.input_modalities.contains(&InputModality::Image);
-        self.ensure_supported(model_supports_image_input)?;
+        if !invocation
+            .turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                VIEW_IMAGE_UNSUPPORTED_MESSAGE.to_string(),
+            ));
+        }
 
         let ToolInvocation {
             session,
