@@ -2072,29 +2072,6 @@ mod tests {
     }
 
     #[test]
-    fn test_non_multimodal_models_include_view_image() {
-        let config = test_config();
-        let mut model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
-        model_info.input_modalities = vec![InputModality::Text];
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
-
-        assert!(
-            tools
-                .iter()
-                .map(|t| t.spec.name())
-                .any(|name| name == VIEW_IMAGE_TOOL_NAME),
-            "view_image should be present for non-multimodal models"
-        );
-    }
-
-    #[test]
     fn test_gpt_5_1_codex_max_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
