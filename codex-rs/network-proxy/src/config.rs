@@ -15,6 +15,7 @@ pub struct NetworkProxyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
@@ -22,13 +23,10 @@ pub struct NetworkProxySettings {
     pub proxy_url: String,
     #[serde(default = "default_admin_url")]
     pub admin_url: String,
-    #[serde(default)]
     pub enable_socks5: bool,
     #[serde(default = "default_socks_url")]
     pub socks_url: String,
-    #[serde(default)]
     pub enable_socks5_udp: bool,
-    #[serde(default)]
     pub allow_upstream_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
@@ -42,7 +40,6 @@ pub struct NetworkProxySettings {
     pub denied_domains: Vec<String>,
     #[serde(default)]
     pub allow_unix_sockets: Vec<String>,
-    #[serde(default)]
     pub allow_local_binding: bool,
 }
 
@@ -350,6 +347,24 @@ mod tests {
                 allow_local_binding: true,
             }
         );
+    }
+
+    #[test]
+    fn partial_network_config_uses_struct_defaults_for_missing_fields() {
+        let config: NetworkProxyConfig = serde_json::from_str(
+            r#"{
+                "network": {
+                    "enabled": true
+                }
+            }"#,
+        )
+        .unwrap();
+        let expected = NetworkProxySettings {
+            enabled: true,
+            ..NetworkProxySettings::default()
+        };
+
+        assert_eq!(config.network, expected);
     }
 
     #[test]
