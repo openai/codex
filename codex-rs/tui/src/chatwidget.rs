@@ -781,6 +781,14 @@ pub(crate) struct ChatWidget {
     pending_turn_copyable_output: Option<String>,
     /// Raw markdown of the most recently completed agent response.
     last_agent_markdown: Option<String>,
+    /// Raw markdown for each completed agent response in this session timeline.
+    agent_turn_markdowns: Vec<String>,
+    /// Whether this turn already emitted a full `AgentMessage`.
+    ///
+    /// Some models only provide `TurnComplete.last_agent_message`. This flag lets us use
+    /// `TurnComplete` as a fallback source without duplicating entries when `AgentMessage` was
+    /// already received in the same turn.
+    saw_agent_message_this_turn: bool,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
@@ -1931,8 +1939,21 @@ impl ChatWidget {
         }
     }
 
+    fn record_agent_markdown(&mut self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let markdown = message.to_string();
+        self.last_agent_markdown = Some(markdown.clone());
+        self.agent_turn_markdowns.push(markdown);
+        self.saw_agent_message_this_turn = true;
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.last_agent_markdown = None;
+        self.agent_turn_markdowns.clear();
+        self.saw_agent_message_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(/*skills*/ None);
@@ -2009,6 +2030,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.saw_agent_message_this_turn = false;
         self.submit_op(AppCommand::list_skills(
             Vec::new(),
             /*force_reload*/ true,
@@ -2280,6 +2302,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
+        self.saw_agent_message_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2315,10 +2338,14 @@ impl ChatWidget {
         if let Some(message) = copyable_turn_output.as_ref() {
             self.last_copyable_output = Some(message.clone());
         }
-        self.last_agent_markdown = last_agent_message
+        if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
-            .cloned();
+            && !self.saw_agent_message_this_turn
+        {
+            self.record_agent_markdown(message);
+        }
+        self.saw_agent_message_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -4661,6 +4688,8 @@ impl ChatWidget {
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
             last_agent_markdown: None,
+            agent_turn_markdowns: Vec::new(),
+            saw_agent_message_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -5031,6 +5060,21 @@ impl ChatWidget {
             )),
         }
         self.request_redraw();
+    }
+
+    pub(crate) fn truncate_agent_turn_markdowns(&mut self, remaining: usize) {
+        self.agent_turn_markdowns.truncate(remaining);
+        self.last_agent_markdown = self.agent_turn_markdowns.last().cloned();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
+        self.last_agent_markdown.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn agent_turn_markdown_count(&self) -> usize {
+        self.agent_turn_markdowns.len()
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -6894,14 +6938,14 @@ impl ChatWidget {
                     && !self.is_review_mode =>
             {
                 if !message.is_empty() {
-                    self.last_agent_markdown = Some(message);
+                    self.record_agent_markdown(&message);
                 }
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if from_replay || self.is_review_mode =>
             {
                 if !message.is_empty() {
-                    self.last_agent_markdown = Some(message.clone());
+                    self.record_agent_markdown(&message);
                 }
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
@@ -6910,7 +6954,7 @@ impl ChatWidget {
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 if !message.is_empty() {
-                    self.last_agent_markdown = Some(message);
+                    self.record_agent_markdown(&message);
                 }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {

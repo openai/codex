@@ -30,6 +30,7 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -480,6 +481,9 @@ impl App {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
+        let remaining = agent_group_count(&self.transcript_cells);
+        self.chat_widget
+            .truncate_agent_turn_markdowns(remaining);
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -501,6 +505,9 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
+            let remaining = agent_group_count(&self.transcript_cells);
+            self.chat_widget
+                .truncate_agent_turn_markdowns(remaining);
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
@@ -633,6 +640,31 @@ fn user_positions_iter(
         .enumerate()
         .skip(start)
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
+}
+
+fn agent_group_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
+    agent_group_positions_iter(cells).count()
+}
+
+fn agent_group_positions_iter(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+) -> impl Iterator<Item = usize> + '_ {
+    let session_start_type = TypeId::of::<SessionInfoCell>();
+    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
+
+    let start = cells
+        .iter()
+        .rposition(|cell| type_of(cell) == session_start_type)
+        .map_or(0, |idx| idx + 1);
+
+    cells
+        .iter()
+        .enumerate()
+        .skip(start)
+        .filter_map(move |(idx, cell)| {
+            let is_agent = cell.as_any().downcast_ref::<AgentMessageCell>().is_some();
+            (is_agent && !cell.is_stream_continuation()).then_some(idx)
+        })
 }
 
 #[cfg(test)]
