@@ -51,6 +51,7 @@ fn is_ssh_session() -> bool {
 /// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
 /// terminal, that stray output corrupts the display. We temporarily redirect
 /// fd 2 to `/dev/null` around the call to keep the screen clean.
+#[cfg(not(target_os = "android"))]
 fn arboard_copy(text: &str) -> Result<(), String> {
     let _guard = SuppressStderr::new();
     let mut clipboard =
@@ -60,12 +61,19 @@ fn arboard_copy(text: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to set clipboard text: {e}"))
 }
 
+#[cfg(target_os = "android")]
+fn arboard_copy(_text: &str) -> Result<(), String> {
+    Err("native clipboard unavailable on Android".to_string())
+}
+
 /// RAII guard that redirects stderr (fd 2) to `/dev/null` on creation and
 /// restores the original fd on drop.
+#[cfg(target_os = "macos")]
 struct SuppressStderr {
     saved_fd: Option<libc::c_int>,
 }
 
+#[cfg(target_os = "macos")]
 impl SuppressStderr {
     fn new() -> Self {
         unsafe {
@@ -87,6 +95,7 @@ impl SuppressStderr {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for SuppressStderr {
     fn drop(&mut self) {
         if let Some(saved) = self.saved_fd {
@@ -95,6 +104,16 @@ impl Drop for SuppressStderr {
                 libc::close(saved);
             }
         }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+struct SuppressStderr;
+
+#[cfg(not(target_os = "macos"))]
+impl SuppressStderr {
+    fn new() -> Self {
+        Self
     }
 }
 
