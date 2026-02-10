@@ -1428,6 +1428,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mark_stage1_job_succeeded_normalizes_cwd_scope_job_key() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let workspace = codex_home.join("workspace");
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .expect("create workspace");
+        let canonical_scope_key = workspace
+            .canonicalize()
+            .expect("canonicalize workspace")
+            .display()
+            .to_string();
+        let cwd_alias = workspace.join(".");
+
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id b");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_a, workspace))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(&codex_home, thread_b, cwd_alias))
+            .await
+            .expect("upsert thread b");
+
+        let claim_a = runtime
+            .try_claim_stage1_job(thread_a, owner, 100, 3600)
+            .await
+            .expect("claim stage1 a");
+        let token_a = match claim_a {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for thread a: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw-a", "summary-a")
+                .await
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output for thread a"
+        );
+
+        let claim_b = runtime
+            .try_claim_stage1_job(thread_b, owner, 101, 3600)
+            .await
+            .expect("claim stage1 b");
+        let token_b = match claim_b {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome for thread b: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw-b", "summary-b")
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output for thread b"
+        );
+
+        let pending_scopes = runtime
+            .list_pending_scope_consolidations(10)
+            .await
+            .expect("list pending scopes");
+        let cwd_scopes = pending_scopes
+            .iter()
+            .filter(|scope| scope.scope_kind == "cwd")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(cwd_scopes.len(), 1);
+        assert_eq!(cwd_scopes[0].scope_key, canonical_scope_key);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn list_pending_scope_consolidations_omits_unclaimable_jobs() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)

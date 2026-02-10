@@ -409,10 +409,14 @@ WHERE id = ?
         .await?
         {
             let cwd: String = thread_row.try_get("cwd")?;
+            let normalized_cwd = normalize_cwd_for_scope_matching(&cwd)
+                .unwrap_or_else(|| PathBuf::from(&cwd))
+                .display()
+                .to_string();
             enqueue_scope_consolidation_with_executor(
                 &mut *tx,
                 MEMORY_SCOPE_KIND_CWD,
-                &cwd,
+                &normalized_cwd,
                 source_updated_at,
             )
             .await?;
