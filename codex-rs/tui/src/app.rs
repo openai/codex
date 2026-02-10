@@ -3628,7 +3628,7 @@ mod tests {
         });
 
         // Simulate resumed history where a single user turn contains multiple agent updates.
-        let first_turn_updates = vec![
+        let first_turn_updates = [
             "I'll do this in three steps: inspect commits on your current branch to isolate the Alt+C hotkey change, create a new worktree/branch from `upstream/main`, and then apply only that feature there. I'm starting by checking remotes, branch state, and recent commits.",
             "I found local uncommitted edits in two TUI files, so I'll avoid touching them and work from committed history. Next I'm fetching upstream/main and identifying exactly which commit(s) represent the Alt+C hotkey feature.",
             "I committed the extracted Alt+C-only implementation on the new branch after formatting and full codex-tui test validation. I'm now collecting the exact worktree path, branch, and commit hash for you.",
