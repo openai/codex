@@ -636,12 +636,13 @@ pub(crate) struct ChatWidget {
     /// This counter advances when a user prompt is committed to transcript
     /// history and provides the ordinal domain for copy-history rollback sync.
     completed_turn_count: usize,
-    /// Whether this turn already emitted a full `AgentMessage`.
+    /// Whether this turn already recorded a copyable markdown source.
     ///
-    /// Some models only provide `TurnComplete.last_agent_message`. This flag lets us use
-    /// `TurnComplete` as a fallback source without duplicating entries when `AgentMessage` was
-    /// already received in the same turn.
-    saw_agent_message_this_turn: bool,
+    /// This is set by `record_agent_markdown` for finalized output regardless
+    /// of source (`AgentMessage`, `TurnComplete.last_agent_message`, or plan
+    /// item completion), preventing duplicate copy-history entries for the same
+    /// turn.
+    saw_copy_source_this_turn: bool,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -683,9 +684,10 @@ pub(crate) struct UserMessage {
 /// transcript rollback.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AgentTurnMarkdown {
-    /// Monotonically increasing user-turn number within this session.
+    /// Monotonically increasing turn number within this session.
     ///
-    /// Ordinal `0` is reserved for turns not tied to a user message.
+    /// User-tied turns use the user-turn ordinal (`1`-based). Ordinal `0` is
+    /// used only for synthesized transcript fallback entries.
     ordinal: usize,
     /// The raw markdown text of the agent response for this turn.
     markdown: String,
@@ -1046,8 +1048,8 @@ impl ChatWidget {
 
     /// Record or update the raw markdown for the current turn's agent response.
     ///
-    /// If the current turn ordinal already has an entry (because a second
-    /// `AgentMessage` arrived in the same turn), the entry is replaced rather
+    /// If the current turn ordinal already has an entry (because another
+    /// finalized copy source arrived in the same turn), the entry is replaced rather
     /// than appended — each turn has at most one copy-source entry.
     ///
     /// The timeline is bounded to [`MAX_AGENT_COPY_HISTORY`] entries by
@@ -1086,7 +1088,7 @@ impl ChatWidget {
             .agent_turn_markdowns
             .last()
             .map(|entry| entry.markdown.clone());
-        self.saw_agent_message_this_turn = true;
+        self.saw_copy_source_this_turn = true;
     }
 
     // --- Small event handlers ---
@@ -1094,7 +1096,7 @@ impl ChatWidget {
         self.last_agent_markdown = None;
         self.agent_turn_markdowns.clear();
         self.completed_turn_count = 0;
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
@@ -1131,7 +1133,7 @@ impl ChatWidget {
         }
         // replay_initial_messages may have set this flag; clear it so the first
         // live turn doesn't think an AgentMessage has already been recorded.
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
@@ -1399,7 +1401,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1464,18 +1466,19 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
         // Use TurnComplete.last_agent_message as a fallback copy source only when
-        // no AgentMessage event arrived during this turn.  Some model providers
-        // deliver the full response only via TurnComplete; others emit both
-        // AgentMessage and TurnComplete.  The `saw_agent_message_this_turn` flag
-        // prevents recording a duplicate entry in the latter case.
+        // no copy source has been recorded for this turn yet. Some model
+        // providers deliver the full response only via TurnComplete; others emit
+        // both AgentMessage and TurnComplete. The
+        // `saw_copy_source_this_turn` flag prevents duplicate entries in the
+        // latter case.
         if let Some(message) = last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
-            && !self.saw_agent_message_this_turn
+            && !self.saw_copy_source_this_turn
         {
             self.record_agent_markdown(message);
         }
-        self.saw_agent_message_this_turn = false;
+        self.saw_copy_source_this_turn = false;
 
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation();
@@ -2783,7 +2786,7 @@ impl ChatWidget {
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
             completed_turn_count: 0,
-            saw_agent_message_this_turn: false,
+            saw_copy_source_this_turn: false,
         };
 
         widget.prefetch_rate_limits();
@@ -2952,7 +2955,7 @@ impl ChatWidget {
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
             completed_turn_count: 0,
-            saw_agent_message_this_turn: false,
+            saw_copy_source_this_turn: false,
         };
 
         widget.prefetch_rate_limits();
@@ -3110,7 +3113,7 @@ impl ChatWidget {
             last_agent_markdown: None,
             agent_turn_markdowns: Vec::new(),
             completed_turn_count: 0,
-            saw_agent_message_this_turn: false,
+            saw_copy_source_this_turn: false,
         };
 
         widget.prefetch_rate_limits();

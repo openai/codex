@@ -742,13 +742,15 @@ mod tests {
                 as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("first-b")], false))
                 as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
+            Arc::new(AgentMessageCell::new(vec![Line::from("second-a")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("second-b")], false))
                 as Arc<dyn HistoryCell>,
         ];
 
         assert_eq!(
             last_agent_markdown_from_transcript(&cells),
-            Some("second".to_string())
+            Some("second-a\nsecond-b".to_string())
         );
     }
 

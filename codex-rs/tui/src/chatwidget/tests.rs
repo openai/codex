@@ -1487,7 +1487,7 @@ async fn make_chatwidget_manual(
         last_agent_markdown: None,
         agent_turn_markdowns: Vec::new(),
         completed_turn_count: 0,
-        saw_agent_message_this_turn: false,
+        saw_copy_source_this_turn: false,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
