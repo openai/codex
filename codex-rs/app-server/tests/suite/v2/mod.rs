@@ -4,7 +4,6 @@ mod app_list;
 mod collaboration_mode_list;
 mod compaction;
 mod config_rpc;
-mod connection_handling_websocket;
 mod dynamic_tools;
 mod experimental_api;
 mod experimental_feature_list;

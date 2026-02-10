@@ -881,6 +881,7 @@ async fn test_list_threads_scans_past_head_for_user_event() {
     .unwrap();
 
     assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].thread_id, Some(thread_id_from_uuid(uuid)));
 }
 
 #[tokio::test]

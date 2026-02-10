@@ -307,7 +307,7 @@ async fn forward_ops(
 /// Handle an ExecApprovalRequest by consulting the parent session and replying.
 async fn handle_exec_approval(
     codex: &Codex,
-    id: String,
+    turn_id: String,
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ExecApprovalRequestEvent,
@@ -321,6 +321,7 @@ async fn handle_exec_approval(
         proposed_execpolicy_amendment,
         ..
     } = event;
+    let approval_id = call_id.clone();
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
@@ -330,21 +331,22 @@ async fn handle_exec_approval(
         reason,
         proposed_execpolicy_amendment,
     );
-    let decision = await_approval_with_cancel(
-        approval_fut,
-        parent_session,
-        &parent_ctx.sub_id,
-        cancel_token,
-    )
-    .await;
+    let decision =
+        await_approval_with_cancel(approval_fut, parent_session, &approval_id, cancel_token).await;
 
-    let _ = codex.submit(Op::ExecApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::ExecApproval {
+            id: approval_id,
+            turn_id: Some(turn_id),
+            decision,
+        })
+        .await;
 }
 
 /// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.
 async fn handle_patch_approval(
     codex: &Codex,
-    id: String,
+    _id: String,
     parent_session: &Session,
     parent_ctx: &TurnContext,
     event: ApplyPatchApprovalRequestEvent,
@@ -357,17 +359,23 @@ async fn handle_patch_approval(
         grant_root,
         ..
     } = event;
+    let approval_id = call_id.clone();
     let decision_rx = parent_session
         .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
         .await;
     let decision = await_approval_with_cancel(
         async move { decision_rx.await.unwrap_or_default() },
         parent_session,
-        &parent_ctx.sub_id,
+        &approval_id,
         cancel_token,
     )
     .await;
-    let _ = codex.submit(Op::PatchApproval { id, decision }).await;
+    let _ = codex
+        .submit(Op::PatchApproval {
+            id: approval_id,
+            decision,
+        })
+        .await;
 }
 
 async fn handle_request_user_input(
@@ -423,7 +431,7 @@ where
 async fn await_approval_with_cancel<F>(
     fut: F,
     parent_session: &Session,
-    sub_id: &str,
+    approval_id: &str,
     cancel_token: &CancellationToken,
 ) -> codex_protocol::protocol::ReviewDecision
 where
@@ -433,7 +441,7 @@ where
         biased;
         _ = cancel_token.cancelled() => {
             parent_session
-                .notify_approval(sub_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
                 .await;
             codex_protocol::protocol::ReviewDecision::Abort
         }

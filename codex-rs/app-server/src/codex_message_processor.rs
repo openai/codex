@@ -3,8 +3,6 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
-use crate::outgoing_message::ConnectionId;
-use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
@@ -85,6 +83,7 @@ use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResumeConversationParams;
 use codex_app_server_protocol::ResumeConversationResponse;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
@@ -253,10 +252,10 @@ use uuid::Uuid;
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 
-type PendingInterruptQueue = Vec<(ConnectionRequestId, ApiVersion)>;
+type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
 
-pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, ConnectionRequestId>>>;
+pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, RequestId>>>;
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -487,137 +486,103 @@ impl CodexMessageProcessor {
         Ok((review_request, hint))
     }
 
-    pub async fn process_request(&mut self, connection_id: ConnectionId, request: ClientRequest) {
-        let to_connection_request_id = |request_id| ConnectionRequestId {
-            connection_id,
-            request_id,
-        };
-
+    pub async fn process_request(&mut self, request: ClientRequest) {
         match request {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
             }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
-                self.thread_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_start(request_id, params).await;
             }
             ClientRequest::ThreadResume { request_id, params } => {
-                self.thread_resume(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_resume(request_id, params).await;
             }
             ClientRequest::ThreadFork { request_id, params } => {
-                self.thread_fork(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_fork(request_id, params).await;
             }
             ClientRequest::ThreadArchive { request_id, params } => {
-                self.thread_archive(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_archive(request_id, params).await;
             }
             ClientRequest::ThreadSetName { request_id, params } => {
-                self.thread_set_name(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_set_name(request_id, params).await;
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
-                self.thread_unarchive(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_unarchive(request_id, params).await;
             }
             ClientRequest::ThreadCompactStart { request_id, params } => {
-                self.thread_compact_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_compact_start(request_id, params).await;
             }
             ClientRequest::ThreadBackgroundTerminalsClean { request_id, params } => {
-                self.thread_background_terminals_clean(
-                    to_connection_request_id(request_id),
-                    params,
-                )
-                .await;
+                self.thread_background_terminals_clean(request_id, params)
+                    .await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
-                self.thread_rollback(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_rollback(request_id, params).await;
             }
             ClientRequest::ThreadList { request_id, params } => {
-                self.thread_list(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_list(request_id, params).await;
             }
             ClientRequest::ThreadLoadedList { request_id, params } => {
-                self.thread_loaded_list(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_loaded_list(request_id, params).await;
             }
             ClientRequest::ThreadRead { request_id, params } => {
-                self.thread_read(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_read(request_id, params).await;
             }
             ClientRequest::SkillsList { request_id, params } => {
-                self.skills_list(to_connection_request_id(request_id), params)
-                    .await;
+                self.skills_list(request_id, params).await;
             }
             ClientRequest::SkillsRemoteRead { request_id, params } => {
-                self.skills_remote_read(to_connection_request_id(request_id), params)
-                    .await;
+                self.skills_remote_read(request_id, params).await;
             }
             ClientRequest::SkillsRemoteWrite { request_id, params } => {
-                self.skills_remote_write(to_connection_request_id(request_id), params)
-                    .await;
+                self.skills_remote_write(request_id, params).await;
             }
             ClientRequest::AppsList { request_id, params } => {
-                self.apps_list(to_connection_request_id(request_id), params)
-                    .await;
+                self.apps_list(request_id, params).await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
-                self.skills_config_write(to_connection_request_id(request_id), params)
-                    .await;
+                self.skills_config_write(request_id, params).await;
             }
             ClientRequest::TurnStart { request_id, params } => {
-                self.turn_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_start(request_id, params).await;
             }
             ClientRequest::TurnSteer { request_id, params } => {
-                self.turn_steer(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_steer(request_id, params).await;
             }
             ClientRequest::TurnInterrupt { request_id, params } => {
-                self.turn_interrupt(to_connection_request_id(request_id), params)
-                    .await;
+                self.turn_interrupt(request_id, params).await;
             }
             ClientRequest::ReviewStart { request_id, params } => {
-                self.review_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.review_start(request_id, params).await;
             }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
                 // asynchronously because we need to ensure the conversation is
                 // created before processing any subsequent messages.
-                self.process_new_conversation(to_connection_request_id(request_id), params)
-                    .await;
+                self.process_new_conversation(request_id, params).await;
             }
             ClientRequest::GetConversationSummary { request_id, params } => {
-                self.get_thread_summary(to_connection_request_id(request_id), params)
-                    .await;
+                self.get_thread_summary(request_id, params).await;
             }
             ClientRequest::ListConversations { request_id, params } => {
-                self.handle_list_conversations(to_connection_request_id(request_id), params)
-                    .await;
+                self.handle_list_conversations(request_id, params).await;
             }
             ClientRequest::ModelList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
                 let thread_manager = self.thread_manager.clone();
                 let config = self.config.clone();
-                let request_id = to_connection_request_id(request_id);
 
                 tokio::spawn(async move {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
                 });
             }
             ClientRequest::ExperimentalFeatureList { request_id, params } => {
-                self.experimental_feature_list(to_connection_request_id(request_id), params)
-                    .await;
+                self.experimental_feature_list(request_id, params).await;
             }
             ClientRequest::CollaborationModeList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
                 let thread_manager = self.thread_manager.clone();
-                let request_id = to_connection_request_id(request_id);
 
                 tokio::spawn(async move {
                     Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
@@ -625,136 +590,109 @@ impl CodexMessageProcessor {
                 });
             }
             ClientRequest::MockExperimentalMethod { request_id, params } => {
-                self.mock_experimental_method(to_connection_request_id(request_id), params)
-                    .await;
+                self.mock_experimental_method(request_id, params).await;
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
-                self.mcp_server_oauth_login(to_connection_request_id(request_id), params)
-                    .await;
+                self.mcp_server_oauth_login(request_id, params).await;
             }
             ClientRequest::McpServerRefresh { request_id, params } => {
-                self.mcp_server_refresh(to_connection_request_id(request_id), params)
-                    .await;
+                self.mcp_server_refresh(request_id, params).await;
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
-                self.list_mcp_server_status(to_connection_request_id(request_id), params)
-                    .await;
+                self.list_mcp_server_status(request_id, params).await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
-                self.login_v2(to_connection_request_id(request_id), params)
-                    .await;
+                self.login_v2(request_id, params).await;
             }
             ClientRequest::LogoutAccount {
                 request_id,
                 params: _,
             } => {
-                self.logout_v2(to_connection_request_id(request_id)).await;
+                self.logout_v2(request_id).await;
             }
             ClientRequest::CancelLoginAccount { request_id, params } => {
-                self.cancel_login_v2(to_connection_request_id(request_id), params)
-                    .await;
+                self.cancel_login_v2(request_id, params).await;
             }
             ClientRequest::GetAccount { request_id, params } => {
-                self.get_account(to_connection_request_id(request_id), params)
-                    .await;
+                self.get_account(request_id, params).await;
             }
             ClientRequest::ResumeConversation { request_id, params } => {
-                self.handle_resume_conversation(to_connection_request_id(request_id), params)
-                    .await;
+                self.handle_resume_conversation(request_id, params).await;
             }
             ClientRequest::ForkConversation { request_id, params } => {
-                self.handle_fork_conversation(to_connection_request_id(request_id), params)
-                    .await;
+                self.handle_fork_conversation(request_id, params).await;
             }
             ClientRequest::ArchiveConversation { request_id, params } => {
-                self.archive_conversation(to_connection_request_id(request_id), params)
-                    .await;
+                self.archive_conversation(request_id, params).await;
             }
             ClientRequest::SendUserMessage { request_id, params } => {
-                self.send_user_message(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_message(request_id, params).await;
             }
             ClientRequest::SendUserTurn { request_id, params } => {
-                self.send_user_turn(to_connection_request_id(request_id), params)
-                    .await;
+                self.send_user_turn(request_id, params).await;
             }
             ClientRequest::InterruptConversation { request_id, params } => {
-                self.interrupt_conversation(to_connection_request_id(request_id), params)
-                    .await;
+                self.interrupt_conversation(request_id, params).await;
             }
             ClientRequest::AddConversationListener { request_id, params } => {
-                self.add_conversation_listener(to_connection_request_id(request_id), params)
-                    .await;
+                self.add_conversation_listener(request_id, params).await;
             }
             ClientRequest::RemoveConversationListener { request_id, params } => {
-                self.remove_thread_listener(to_connection_request_id(request_id), params)
-                    .await;
+                self.remove_thread_listener(request_id, params).await;
             }
             ClientRequest::GitDiffToRemote { request_id, params } => {
-                self.git_diff_to_origin(to_connection_request_id(request_id), params.cwd)
-                    .await;
+                self.git_diff_to_origin(request_id, params.cwd).await;
             }
             ClientRequest::LoginApiKey { request_id, params } => {
-                self.login_api_key_v1(to_connection_request_id(request_id), params)
-                    .await;
+                self.login_api_key_v1(request_id, params).await;
             }
             ClientRequest::LoginChatGpt {
                 request_id,
                 params: _,
             } => {
-                self.login_chatgpt_v1(to_connection_request_id(request_id))
-                    .await;
+                self.login_chatgpt_v1(request_id).await;
             }
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
-                self.cancel_login_chatgpt(to_connection_request_id(request_id), params.login_id)
-                    .await;
+                self.cancel_login_chatgpt(request_id, params.login_id).await;
             }
             ClientRequest::LogoutChatGpt {
                 request_id,
                 params: _,
             } => {
-                self.logout_v1(to_connection_request_id(request_id)).await;
+                self.logout_v1(request_id).await;
             }
             ClientRequest::GetAuthStatus { request_id, params } => {
-                self.get_auth_status(to_connection_request_id(request_id), params)
-                    .await;
+                self.get_auth_status(request_id, params).await;
             }
             ClientRequest::GetUserSavedConfig {
                 request_id,
                 params: _,
             } => {
-                self.get_user_saved_config(to_connection_request_id(request_id))
-                    .await;
+                self.get_user_saved_config(request_id).await;
             }
             ClientRequest::SetDefaultModel { request_id, params } => {
-                self.set_default_model(to_connection_request_id(request_id), params)
-                    .await;
+                self.set_default_model(request_id, params).await;
             }
             ClientRequest::GetUserAgent {
                 request_id,
                 params: _,
             } => {
-                self.get_user_agent(to_connection_request_id(request_id))
-                    .await;
+                self.get_user_agent(request_id).await;
             }
             ClientRequest::UserInfo {
                 request_id,
                 params: _,
             } => {
-                self.get_user_info(to_connection_request_id(request_id))
-                    .await;
+                self.get_user_info(request_id).await;
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
-                self.fuzzy_file_search(to_connection_request_id(request_id), params)
-                    .await;
+                self.fuzzy_file_search(request_id, params).await;
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
-                self.exec_one_off_command(to_connection_request_id(request_id), params)
-                    .await;
+                self.exec_one_off_command(request_id, params).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
-                self.exec_one_off_command(to_connection_request_id(request_id), params.into())
-                    .await;
+                self.exec_one_off_command(request_id, params.into()).await;
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
@@ -768,17 +706,15 @@ impl CodexMessageProcessor {
                 request_id,
                 params: _,
             } => {
-                self.get_account_rate_limits(to_connection_request_id(request_id))
-                    .await;
+                self.get_account_rate_limits(request_id).await;
             }
             ClientRequest::FeedbackUpload { request_id, params } => {
-                self.upload_feedback(to_connection_request_id(request_id), params)
-                    .await;
+                self.upload_feedback(request_id, params).await;
             }
         }
     }
 
-    async fn login_v2(&mut self, request_id: ConnectionRequestId, params: LoginAccountParams) {
+    async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
@@ -856,11 +792,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key_v1(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: LoginApiKeyParams,
-    ) {
+    async fn login_api_key_v1(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
                 self.outgoing
@@ -884,11 +816,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key_v2(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: LoginApiKeyParams,
-    ) {
+    async fn login_api_key_v2(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
                 let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
@@ -952,7 +880,7 @@ impl CodexMessageProcessor {
     }
 
     // Deprecated in favor of login_chatgpt_v2.
-    async fn login_chatgpt_v1(&mut self, request_id: ConnectionRequestId) {
+    async fn login_chatgpt_v1(&mut self, request_id: RequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match run_login_server(opts) {
                 Ok(server) => {
@@ -1058,7 +986,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_chatgpt_v2(&mut self, request_id: ConnectionRequestId) {
+    async fn login_chatgpt_v2(&mut self, request_id: RequestId) {
         match self.login_chatgpt_common().await {
             Ok(opts) => match run_login_server(opts) {
                 Ok(server) => {
@@ -1182,7 +1110,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn cancel_login_chatgpt(&mut self, request_id: ConnectionRequestId, login_id: Uuid) {
+    async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
         match self.cancel_login_chatgpt_common(login_id).await {
             Ok(()) => {
                 self.outgoing
@@ -1200,11 +1128,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn cancel_login_v2(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: CancelLoginAccountParams,
-    ) {
+    async fn cancel_login_v2(&mut self, request_id: RequestId, params: CancelLoginAccountParams) {
         let login_id = params.login_id;
         match Uuid::parse_str(&login_id) {
             Ok(uuid) => {
@@ -1228,7 +1152,7 @@ impl CodexMessageProcessor {
 
     async fn login_chatgpt_auth_tokens(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
@@ -1343,7 +1267,7 @@ impl CodexMessageProcessor {
             .map(CodexAuth::api_auth_mode))
     }
 
-    async fn logout_v1(&mut self, request_id: ConnectionRequestId) {
+    async fn logout_v1(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
                 self.outgoing
@@ -1363,7 +1287,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn logout_v2(&mut self, request_id: ConnectionRequestId) {
+    async fn logout_v2(&mut self, request_id: RequestId) {
         match self.logout_common().await {
             Ok(current_auth_method) => {
                 self.outgoing
@@ -1392,7 +1316,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn get_auth_status(&self, request_id: ConnectionRequestId, params: GetAuthStatusParams) {
+    async fn get_auth_status(&self, request_id: RequestId, params: GetAuthStatusParams) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
@@ -1441,7 +1365,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_account(&self, request_id: ConnectionRequestId, params: GetAccountParams) {
+    async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;
@@ -1493,13 +1417,13 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_user_agent(&self, request_id: ConnectionRequestId) {
+    async fn get_user_agent(&self, request_id: RequestId) {
         let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
+    async fn get_account_rate_limits(&self, request_id: RequestId) {
         match self.fetch_account_rate_limits().await {
             Ok(rate_limits) => {
                 let response = GetAccountRateLimitsResponse {
@@ -1547,7 +1471,7 @@ impl CodexMessageProcessor {
             })
     }
 
-    async fn get_user_saved_config(&self, request_id: ConnectionRequestId) {
+    async fn get_user_saved_config(&self, request_id: RequestId) {
         let service = ConfigService::new_with_defaults(self.config.codex_home.clone());
         let user_saved_config: UserSavedConfig = match service.load_user_saved_config().await {
             Ok(config) => config,
@@ -1568,7 +1492,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_user_info(&self, request_id: ConnectionRequestId) {
+    async fn get_user_info(&self, request_id: RequestId) {
         // Read alleged user email from cached auth (best-effort; not verified).
         let alleged_user_email = self
             .auth_manager
@@ -1579,11 +1503,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn set_default_model(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SetDefaultModelParams,
-    ) {
+    async fn set_default_model(&self, request_id: RequestId, params: SetDefaultModelParams) {
         let SetDefaultModelParams {
             model,
             reasoning_effort,
@@ -1610,14 +1530,8 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn exec_one_off_command(
-        &self,
-        request_id: ConnectionRequestId,
-        params: CommandExecParams,
-    ) {
+    async fn exec_one_off_command(&self, request_id: RequestId, params: CommandExecParams) {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
-
-        let request = request_id.clone();
 
         if params.command.is_empty() {
             let error = JSONRPCErrorError {
@@ -1625,7 +1539,7 @@ impl CodexMessageProcessor {
                 message: "command must not be empty".to_string(),
                 data: None,
             };
-            self.outgoing.send_error(request, error).await;
+            self.outgoing.send_error(request_id, error).await;
             return;
         }
 
@@ -1643,7 +1557,7 @@ impl CodexMessageProcessor {
                         message: format!("failed to start managed network proxy: {err}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request, error).await;
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -1674,7 +1588,7 @@ impl CodexMessageProcessor {
                         message: format!("invalid sandbox policy: {err}"),
                         data: None,
                     };
-                    self.outgoing.send_error(request, error).await;
+                    self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             },
@@ -1683,7 +1597,7 @@ impl CodexMessageProcessor {
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
-        let request_for_task = request;
+        let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
         let started_network_proxy_for_task = started_network_proxy;
         let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
@@ -1706,7 +1620,7 @@ impl CodexMessageProcessor {
                         stdout: output.stdout.text,
                         stderr: output.stderr.text,
                     };
-                    outgoing.send_response(request_for_task, response).await;
+                    outgoing.send_response(req_id, response).await;
                 }
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1714,7 +1628,7 @@ impl CodexMessageProcessor {
                         message: format!("exec failed: {err}"),
                         data: None,
                     };
-                    outgoing.send_error(request_for_task, error).await;
+                    outgoing.send_error(req_id, error).await;
                 }
             }
         });
@@ -1722,7 +1636,7 @@ impl CodexMessageProcessor {
 
     async fn process_new_conversation(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: NewConversationParams,
     ) {
         let NewConversationParams {
@@ -1823,7 +1737,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_start(&mut self, request_id: ConnectionRequestId, params: ThreadStartParams) {
+    async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
         let ThreadStartParams {
             model,
             model_provider,
@@ -1988,11 +1902,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_archive(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadArchiveParams,
-    ) {
+    async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
         // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -2042,7 +1952,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_set_name(&self, request_id: ConnectionRequestId, params: ThreadSetNameParams) {
+    async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
         let Some(name) = codex_core::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
@@ -2072,11 +1982,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn thread_unarchive(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadUnarchiveParams,
-    ) {
+    async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
         // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
@@ -2253,11 +2159,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_rollback(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: ThreadRollbackParams,
-    ) {
+    async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
         let ThreadRollbackParams {
             thread_id,
             num_turns,
@@ -2277,20 +2179,18 @@ impl CodexMessageProcessor {
             }
         };
 
-        let request = request_id.clone();
-
         {
             let mut map = self.pending_rollbacks.lock().await;
             if map.contains_key(&thread_id) {
                 self.send_invalid_request_error(
-                    request.clone(),
+                    request_id,
                     "rollback already in progress for this thread".to_string(),
                 )
                 .await;
                 return;
             }
 
-            map.insert(thread_id, request.clone());
+            map.insert(thread_id, request_id.clone());
         }
 
         if let Err(err) = thread.submit(Op::ThreadRollback { num_turns }).await {
@@ -2299,16 +2199,12 @@ impl CodexMessageProcessor {
             let mut map = self.pending_rollbacks.lock().await;
             map.remove(&thread_id);
 
-            self.send_internal_error(request, format!("failed to start rollback: {err}"))
+            self.send_internal_error(request_id, format!("failed to start rollback: {err}"))
                 .await;
         }
     }
 
-    async fn thread_compact_start(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ThreadCompactStartParams,
-    ) {
+    async fn thread_compact_start(&self, request_id: RequestId, params: ThreadCompactStartParams) {
         let ThreadCompactStartParams { thread_id } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
@@ -2334,7 +2230,7 @@ impl CodexMessageProcessor {
 
     async fn thread_background_terminals_clean(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ThreadBackgroundTerminalsCleanParams,
     ) {
         let ThreadBackgroundTerminalsCleanParams { thread_id } = params;
@@ -2363,7 +2259,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
+    async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
         let ThreadListParams {
             cursor,
             limit,
@@ -2404,11 +2300,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_loaded_list(
-        &self,
-        request_id: ConnectionRequestId,
-        params: ThreadLoadedListParams,
-    ) {
+    async fn thread_loaded_list(&self, request_id: RequestId, params: ThreadLoadedListParams) {
         let ThreadLoadedListParams { cursor, limit } = params;
         let mut data = self
             .thread_manager
@@ -2463,7 +2355,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn thread_read(&mut self, request_id: ConnectionRequestId, params: ThreadReadParams) {
+    async fn thread_read(&mut self, request_id: RequestId, params: ThreadReadParams) {
         let ThreadReadParams {
             thread_id,
             include_turns,
@@ -2614,7 +2506,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
+    async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
             thread_id,
             history,
@@ -2822,7 +2714,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_fork(&mut self, request_id: ConnectionRequestId, params: ThreadForkParams) {
+    async fn thread_fork(&mut self, request_id: RequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
             path,
@@ -3027,7 +2919,7 @@ impl CodexMessageProcessor {
 
     async fn get_thread_summary(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: GetConversationSummaryParams,
     ) {
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
@@ -3093,7 +2985,7 @@ impl CodexMessageProcessor {
 
     async fn handle_list_conversations(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ListConversationsParams,
     ) {
         let ListConversationsParams {
@@ -3261,7 +3153,7 @@ impl CodexMessageProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ModelListParams,
     ) {
         let ModelListParams { limit, cursor } = params;
@@ -3324,7 +3216,7 @@ impl CodexMessageProcessor {
     async fn list_collaboration_modes(
         outgoing: Arc<OutgoingMessageSender>,
         thread_manager: Arc<ThreadManager>,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: CollaborationModeListParams,
     ) {
         let CollaborationModeListParams {} = params;
@@ -3335,7 +3227,7 @@ impl CodexMessageProcessor {
 
     async fn experimental_feature_list(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ExperimentalFeatureListParams,
     ) {
         let ExperimentalFeatureListParams { cursor, limit } = params;
@@ -3445,7 +3337,7 @@ impl CodexMessageProcessor {
 
     async fn mock_experimental_method(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: MockExperimentalMethodParams,
     ) {
         let MockExperimentalMethodParams { value } = params;
@@ -3453,7 +3345,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
+    async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -3506,7 +3398,7 @@ impl CodexMessageProcessor {
 
     async fn mcp_server_oauth_login(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: McpServerOauthLoginParams,
     ) {
         let config = match self.load_latest_config().await {
@@ -3603,28 +3495,26 @@ impl CodexMessageProcessor {
 
     async fn list_mcp_server_status(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ListMcpServerStatusParams,
     ) {
-        let request = request_id.clone();
-
         let outgoing = Arc::clone(&self.outgoing);
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
-                self.outgoing.send_error(request, error).await;
+                self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(outgoing, request, params, config).await;
+            Self::list_mcp_server_status_task(outgoing, request_id, params, config).await;
         });
     }
 
     async fn list_mcp_server_status_task(
         outgoing: Arc<OutgoingMessageSender>,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ListMcpServerStatusParams,
         config: Config,
     ) {
@@ -3707,7 +3597,7 @@ impl CodexMessageProcessor {
 
     async fn handle_resume_conversation(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ResumeConversationParams,
     ) {
         let ResumeConversationParams {
@@ -3915,7 +3805,7 @@ impl CodexMessageProcessor {
 
     async fn handle_fork_conversation(
         &self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ForkConversationParams,
     ) {
         let ForkConversationParams {
@@ -4111,7 +4001,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn send_invalid_request_error(&self, request_id: ConnectionRequestId, message: String) {
+    async fn send_invalid_request_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INVALID_REQUEST_ERROR_CODE,
             message,
@@ -4120,7 +4010,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_error(request_id, error).await;
     }
 
-    async fn send_internal_error(&self, request_id: ConnectionRequestId, message: String) {
+    async fn send_internal_error(&self, request_id: RequestId, message: String) {
         let error = JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message,
@@ -4131,7 +4021,7 @@ impl CodexMessageProcessor {
 
     async fn archive_conversation(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: ArchiveConversationParams,
     ) {
         let ArchiveConversationParams {
@@ -4280,11 +4170,7 @@ impl CodexMessageProcessor {
         })
     }
 
-    async fn send_user_message(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SendUserMessageParams,
-    ) {
+    async fn send_user_message(&self, request_id: RequestId, params: SendUserMessageParams) {
         let SendUserMessageParams {
             conversation_id,
             items,
@@ -4328,7 +4214,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn send_user_turn(&self, request_id: ConnectionRequestId, params: SendUserTurnParams) {
+    async fn send_user_turn(&self, request_id: RequestId, params: SendUserTurnParams) {
         let SendUserTurnParams {
             conversation_id,
             items,
@@ -4386,7 +4272,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
+    async fn apps_list(&self, request_id: RequestId, params: AppsListParams) {
         let mut config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -4433,7 +4319,7 @@ impl CodexMessageProcessor {
 
     async fn apps_list_task(
         outgoing: Arc<OutgoingMessageSender>,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: AppsListParams,
         config: Config,
     ) {
@@ -4604,7 +4490,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
+    async fn skills_list(&self, request_id: RequestId, params: SkillsListParams) {
         let SkillsListParams {
             cwds,
             force_reload,
@@ -4670,11 +4556,7 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn skills_remote_read(
-        &self,
-        request_id: ConnectionRequestId,
-        _params: SkillsRemoteReadParams,
-    ) {
+    async fn skills_remote_read(&self, request_id: RequestId, _params: SkillsRemoteReadParams) {
         match list_remote_skills(&self.config).await {
             Ok(skills) => {
                 let data = skills
@@ -4699,11 +4581,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn skills_remote_write(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SkillsRemoteWriteParams,
-    ) {
+    async fn skills_remote_write(&self, request_id: RequestId, params: SkillsRemoteWriteParams) {
         let SkillsRemoteWriteParams {
             hazelnut_id,
             is_preload,
@@ -4733,11 +4611,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn skills_config_write(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SkillsConfigWriteParams,
-    ) {
+    async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
         let SkillsConfigWriteParams { path, enabled } = params;
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -4770,7 +4644,7 @@ impl CodexMessageProcessor {
 
     async fn interrupt_conversation(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: InterruptConversationParams,
     ) {
         let InterruptConversationParams { conversation_id } = params;
@@ -4784,21 +4658,19 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let request = request_id.clone();
-
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
             map.entry(conversation_id)
                 .or_default()
-                .push((request, ApiVersion::V1));
+                .push((request_id, ApiVersion::V1));
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
         let _ = conversation.submit(Op::Interrupt).await;
     }
 
-    async fn turn_start(&self, request_id: ConnectionRequestId, params: TurnStartParams) {
+    async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -4884,7 +4756,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_steer(&self, request_id: ConnectionRequestId, params: TurnSteerParams) {
+    async fn turn_steer(&self, request_id: RequestId, params: TurnSteerParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
@@ -4965,7 +4837,7 @@ impl CodexMessageProcessor {
 
     async fn emit_review_started(
         &self,
-        request_id: &ConnectionRequestId,
+        request_id: &RequestId,
         turn: Turn,
         parent_thread_id: String,
         review_thread_id: String,
@@ -4989,7 +4861,7 @@ impl CodexMessageProcessor {
 
     async fn start_inline_review(
         &self,
-        request_id: &ConnectionRequestId,
+        request_id: &RequestId,
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
@@ -5019,7 +4891,7 @@ impl CodexMessageProcessor {
 
     async fn start_detached_review(
         &mut self,
-        request_id: &ConnectionRequestId,
+        request_id: &RequestId,
         parent_thread_id: ThreadId,
         review_request: ReviewRequest,
         display_text: &str,
@@ -5111,7 +4983,7 @@ impl CodexMessageProcessor {
         Ok(())
     }
 
-    async fn review_start(&mut self, request_id: ConnectionRequestId, params: ReviewStartParams) {
+    async fn review_start(&mut self, request_id: RequestId, params: ReviewStartParams) {
         let ReviewStartParams {
             thread_id,
             target,
@@ -5165,11 +5037,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn turn_interrupt(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: TurnInterruptParams,
-    ) {
+    async fn turn_interrupt(&mut self, request_id: RequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, .. } = params;
 
         let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
@@ -5180,14 +5048,12 @@ impl CodexMessageProcessor {
             }
         };
 
-        let request = request_id.clone();
-
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
             map.entry(thread_uuid)
                 .or_default()
-                .push((request, ApiVersion::V2));
+                .push((request_id, ApiVersion::V2));
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
@@ -5196,7 +5062,7 @@ impl CodexMessageProcessor {
 
     async fn add_conversation_listener(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: AddConversationListenerParams,
     ) {
         let AddConversationListenerParams {
@@ -5219,7 +5085,7 @@ impl CodexMessageProcessor {
 
     async fn remove_thread_listener(
         &mut self,
-        request_id: ConnectionRequestId,
+        request_id: RequestId,
         params: RemoveConversationListenerParams,
     ) {
         let RemoveConversationListenerParams { subscription_id } = params;
@@ -5349,7 +5215,7 @@ impl CodexMessageProcessor {
         Ok(subscription_id)
     }
 
-    async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {
+    async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
         let diff = git_diff_to_remote(&cwd).await;
         match diff {
             Some(value) => {
@@ -5370,11 +5236,7 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fuzzy_file_search(
-        &mut self,
-        request_id: ConnectionRequestId,
-        params: FuzzyFileSearchParams,
-    ) {
+    async fn fuzzy_file_search(&mut self, request_id: RequestId, params: FuzzyFileSearchParams) {
         let FuzzyFileSearchParams {
             query,
             roots,
@@ -5414,7 +5276,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn upload_feedback(&self, request_id: ConnectionRequestId, params: FeedbackUploadParams) {
+    async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {
         if !self.config.feedback_enabled {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
