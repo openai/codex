@@ -1952,7 +1952,13 @@ impl ChatWidget {
         if message.is_empty() {
             return;
         }
-        let turn_ordinal = self.completed_turn_count.saturating_add(1);
+        let turn_ordinal = if self.completed_turn_count == 0 && !self.agent_turn_running {
+            self.agent_turn_markdowns
+                .last()
+                .map_or(1, |entry| entry.ordinal.saturating_add(1))
+        } else {
+            self.completed_turn_count
+        };
         if self
             .agent_turn_markdowns
             .last()
@@ -2369,7 +2375,6 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
-        let turn_was_running = self.agent_turn_running;
         self.submit_pending_steers_after_interrupt = false;
         let copyable_turn_output = last_agent_message
             .as_ref()
@@ -2385,11 +2390,6 @@ impl ChatWidget {
             && !self.saw_agent_message_this_turn
         {
             self.record_agent_markdown(message);
-        }
-        let should_advance_completed_turn_count =
-            turn_was_running || !self.saw_agent_message_this_turn;
-        if should_advance_completed_turn_count {
-            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
         self.saw_agent_message_this_turn = false;
         // If a stream is currently active, finalize it.
@@ -5124,19 +5124,15 @@ impl ChatWidget {
         {
             self.agent_turn_markdowns.pop();
         }
-        if let Some(fallback) = transcript_fallback
-            .map(|fallback| fallback.trim().to_string())
-            .filter(|fallback| !fallback.is_empty())
+        if self.agent_turn_markdowns.is_empty()
+            && let Some(fallback) = transcript_fallback
+                .map(|fallback| fallback.trim().to_string())
+                .filter(|fallback| !fallback.is_empty())
         {
-            if let Some(last) = self.agent_turn_markdowns.last_mut() {
-                last.ordinal = remaining_turn_count;
-                last.markdown = fallback;
-            } else {
-                self.agent_turn_markdowns.push(AgentTurnMarkdown {
-                    ordinal: remaining_turn_count,
-                    markdown: fallback,
-                });
-            }
+            self.agent_turn_markdowns.push(AgentTurnMarkdown {
+                ordinal: remaining_turn_count,
+                markdown: fallback,
+            });
         }
         self.completed_turn_count = self.completed_turn_count.min(remaining_turn_count);
         self.last_agent_markdown = self
@@ -7015,23 +7011,15 @@ impl ChatWidget {
                 if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
                     && !self.is_review_mode =>
             {
-                let count_as_completed_turn = !self.agent_turn_running && !message.is_empty();
                 if !message.is_empty() {
                     self.record_agent_markdown(&message);
-                }
-                if count_as_completed_turn {
-                    self.completed_turn_count = self.completed_turn_count.saturating_add(1);
                 }
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if from_replay || self.is_review_mode =>
             {
-                let count_as_completed_turn = !self.agent_turn_running && !message.is_empty();
                 if !message.is_empty() {
                     self.record_agent_markdown(&message);
-                }
-                if count_as_completed_turn {
-                    self.completed_turn_count = self.completed_turn_count.saturating_add(1);
                 }
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
@@ -7039,12 +7027,8 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
-                let count_as_completed_turn = !self.agent_turn_running && !message.is_empty();
                 if !message.is_empty() {
                     self.record_agent_markdown(&message);
-                }
-                if count_as_completed_turn {
-                    self.completed_turn_count = self.completed_turn_count.saturating_add(1);
                 }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
@@ -7389,6 +7373,7 @@ impl ChatWidget {
                 event.local_images,
                 remote_image_urls,
             ));
+            self.completed_turn_count = self.completed_turn_count.saturating_add(1);
         }
 
         // User messages reset separator state so the next agent response doesn't add a stray break.
