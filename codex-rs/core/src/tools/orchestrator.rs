@@ -146,7 +146,6 @@ impl ToolOrchestrator {
                 if !can_retry_without_sandbox(
                     tool.wants_no_sandbox_approval(approval_policy),
                     approval_policy,
-                    &turn_ctx.sandbox_policy,
                     retry_details.network_approval_context.is_some(),
                 ) {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
@@ -243,23 +242,10 @@ fn should_prompt_for_network_approval(turn_ctx: &crate::codex::TurnContext) -> b
 fn can_retry_without_sandbox(
     tool_wants_no_sandbox_approval: bool,
     approval_policy: AskForApproval,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
     has_network_approval_context: bool,
 ) -> bool {
-    if tool_wants_no_sandbox_approval {
-        return true;
-    }
-
-    if !matches!(approval_policy, AskForApproval::OnRequest) || !has_network_approval_context {
-        return false;
-    }
-
-    // Keep retry prompting aligned with command exec approvals for OnRequest:
-    // only restricted sandbox modes (ReadOnly/WorkspaceWrite) should prompt.
-    matches!(
-        default_exec_approval_requirement(approval_policy, sandbox_policy),
-        ExecApprovalRequirement::NeedsApproval { .. }
-    )
+    tool_wants_no_sandbox_approval
+        || (matches!(approval_policy, AskForApproval::OnRequest) && has_network_approval_context)
 }
 
 fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<NetworkApprovalContext> {
@@ -373,7 +359,6 @@ mod tests {
         assert!(!can_retry_without_sandbox(
             false,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
             false
         ));
     }
@@ -383,17 +368,6 @@ mod tests {
         assert!(can_retry_without_sandbox(
             false,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
-            true
-        ));
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_blocks_on_request_for_network_context_in_danger_full_access() {
-        assert!(!can_retry_without_sandbox(
-            false,
-            AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             true
         ));
     }
@@ -403,7 +377,6 @@ mod tests {
         assert!(!can_retry_without_sandbox(
             false,
             AskForApproval::Never,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
             true
         ));
     }
@@ -413,7 +386,6 @@ mod tests {
         assert!(can_retry_without_sandbox(
             true,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
             false
         ));
     }
