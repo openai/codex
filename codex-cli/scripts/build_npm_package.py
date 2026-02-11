@@ -15,6 +15,7 @@ REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 CODEX_NPM_NAME = "@openai/codex"
+CODEX_SDK_NPM_NAME = "@openai/codex-sdk"
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
 # The underlying package published to npm is always `@openai/codex`.
@@ -63,8 +64,56 @@ CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     },
 }
 
+# `npm_name` is the local optional-dependency alias consumed by `sdk/typescript/src/exec.ts`.
+# The underlying package published to npm is always `@openai/codex-sdk`.
+CODEX_SDK_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
+    "codex-sdk-linux-x64": {
+        "npm_name": "@openai/codex-sdk-linux-x64",
+        "npm_tag": "linux-x64",
+        "target_triple": "x86_64-unknown-linux-musl",
+        "os": "linux",
+        "cpu": "x64",
+    },
+    "codex-sdk-linux-arm64": {
+        "npm_name": "@openai/codex-sdk-linux-arm64",
+        "npm_tag": "linux-arm64",
+        "target_triple": "aarch64-unknown-linux-musl",
+        "os": "linux",
+        "cpu": "arm64",
+    },
+    "codex-sdk-darwin-x64": {
+        "npm_name": "@openai/codex-sdk-darwin-x64",
+        "npm_tag": "darwin-x64",
+        "target_triple": "x86_64-apple-darwin",
+        "os": "darwin",
+        "cpu": "x64",
+    },
+    "codex-sdk-darwin-arm64": {
+        "npm_name": "@openai/codex-sdk-darwin-arm64",
+        "npm_tag": "darwin-arm64",
+        "target_triple": "aarch64-apple-darwin",
+        "os": "darwin",
+        "cpu": "arm64",
+    },
+    "codex-sdk-win32-x64": {
+        "npm_name": "@openai/codex-sdk-win32-x64",
+        "npm_tag": "win32-x64",
+        "target_triple": "x86_64-pc-windows-msvc",
+        "os": "win32",
+        "cpu": "x64",
+    },
+    "codex-sdk-win32-arm64": {
+        "npm_name": "@openai/codex-sdk-win32-arm64",
+        "npm_tag": "win32-arm64",
+        "target_triple": "aarch64-pc-windows-msvc",
+        "os": "win32",
+        "cpu": "arm64",
+    },
+}
+
 PACKAGE_EXPANSIONS: dict[str, list[str]] = {
     "codex": ["codex", *CODEX_PLATFORM_PACKAGES],
+    "codex-sdk": ["codex-sdk", *CODEX_SDK_PLATFORM_PACKAGES],
 }
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
@@ -76,13 +125,25 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    "codex-sdk": ["codex"],
+    "codex-sdk": [],
+    "codex-sdk-linux-x64": ["codex"],
+    "codex-sdk-linux-arm64": ["codex"],
+    "codex-sdk-darwin-x64": ["codex"],
+    "codex-sdk-darwin-arm64": ["codex"],
+    "codex-sdk-win32-x64": ["codex", "codex-windows-sandbox-setup", "codex-command-runner"],
+    "codex-sdk-win32-arm64": ["codex", "codex-windows-sandbox-setup", "codex-command-runner"],
 }
 
 PACKAGE_TARGET_FILTERS: dict[str, str] = {
     package_name: package_config["target_triple"]
     for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
 }
+PACKAGE_TARGET_FILTERS.update(
+    {
+        package_name: package_config["target_triple"]
+        for package_name, package_config in CODEX_SDK_PLATFORM_PACKAGES.items()
+    }
+)
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
@@ -194,7 +255,7 @@ def main() -> int:
                     "Verify the responses API proxy:\n"
                     f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
                 )
-            elif package in CODEX_PLATFORM_PACKAGES:
+            elif package in CODEX_PLATFORM_PACKAGES or package in CODEX_SDK_PLATFORM_PACKAGES:
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify native payload contents:\n"
@@ -205,7 +266,6 @@ def main() -> int:
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the SDK contents:\n"
                     f"    ls {staging_dir_str}/dist\n"
-                    f"    ls {staging_dir_str}/vendor\n"
                     "    node -e \"import('./dist/index.js').then(() => console.log('ok'))\"\n\n"
                 )
         else:
@@ -280,6 +340,39 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         package_manager = codex_package_json.get("packageManager")
         if isinstance(package_manager, str):
             package_json["packageManager"] = package_manager
+    elif package in CODEX_SDK_PLATFORM_PACKAGES:
+        platform_package = CODEX_SDK_PLATFORM_PACKAGES[package]
+        platform_npm_tag = platform_package["npm_tag"]
+        platform_version = compute_platform_package_version(version, platform_npm_tag)
+
+        readme_src = CODEX_SDK_ROOT / "README.md"
+        if readme_src.exists():
+            shutil.copy2(readme_src, staging_dir / "README.md")
+
+        license_src = REPO_ROOT / "LICENSE"
+        if license_src.exists():
+            shutil.copy2(license_src, staging_dir / "LICENSE")
+
+        with open(CODEX_SDK_ROOT / "package.json", "r", encoding="utf-8") as fh:
+            codex_sdk_package_json = json.load(fh)
+
+        package_json = {
+            "name": CODEX_SDK_NPM_NAME,
+            "version": platform_version,
+            "license": codex_sdk_package_json.get("license", "Apache-2.0"),
+            "os": [platform_package["os"]],
+            "cpu": [platform_package["cpu"]],
+            "files": ["vendor"],
+            "repository": codex_sdk_package_json.get("repository"),
+        }
+
+        engines = codex_sdk_package_json.get("engines")
+        if isinstance(engines, dict):
+            package_json["engines"] = engines
+
+        package_manager = codex_sdk_package_json.get("packageManager")
+        if isinstance(package_manager, str):
+            package_json["packageManager"] = package_manager
     elif package == "codex-responses-api-proxy":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -318,12 +411,15 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
 
-        files = package_json.get("files")
-        if isinstance(files, list):
-            if "vendor" not in files:
-                files.append("vendor")
-        else:
-            package_json["files"] = ["dist", "vendor"]
+        package_json["files"] = ["dist"]
+        package_json["optionalDependencies"] = {
+            CODEX_SDK_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
+                f"npm:{CODEX_SDK_NPM_NAME}@"
+                f"{compute_platform_package_version(version, CODEX_SDK_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
+            )
+            for platform_package in PACKAGE_EXPANSIONS["codex-sdk"]
+            if platform_package != "codex-sdk"
+        }
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)

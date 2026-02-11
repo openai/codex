@@ -601,6 +601,9 @@ jobs:
             "codex-npm-win32-*-${version}.tgz"
             "codex-responses-api-proxy-npm-${version}.tgz"
             "codex-sdk-npm-${version}.tgz"
+            "codex-sdk-npm-linux-*-${version}.tgz"
+            "codex-sdk-npm-darwin-*-${version}.tgz"
+            "codex-sdk-npm-win32-*-${version}.tgz"
           )
           for pattern in "${patterns[@]}"; do
             gh release download "$tag" \
@@ -635,6 +638,11 @@ jobs:
             case "${filename}" in
               codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
                 platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-sdk-npm-linux-*-"${VERSION}".tgz|codex-sdk-npm-darwin-*-"${VERSION}".tgz|codex-sdk-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-sdk-npm-}"
                 platform="${platform%-${VERSION}.tgz}"
                 tag="${prefix}${platform}"
                 ;;

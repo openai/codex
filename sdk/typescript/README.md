@@ -11,6 +11,7 @@ npm install @openai/codex-sdk
 ```
 
 Requires Node.js 18+.
+The package installs a platform-specific native Codex binary via optional dependencies.
 
 ## Quickstart
 

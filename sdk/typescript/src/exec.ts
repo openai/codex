@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -41,6 +43,7 @@ export type CodexExecArgs = {
 
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+const nodeRequire = createRequire(import.meta.url);
 
 export class CodexExec {
   private executablePath: string;
@@ -300,6 +303,14 @@ function isPlainObject(value: unknown): value is CodexConfigObject {
 
 const scriptFileName = fileURLToPath(import.meta.url);
 const scriptDirName = path.dirname(scriptFileName);
+const PLATFORM_PACKAGE_BY_TARGET = {
+  "x86_64-unknown-linux-musl": "@openai/codex-sdk-linux-x64",
+  "aarch64-unknown-linux-musl": "@openai/codex-sdk-linux-arm64",
+  "x86_64-apple-darwin": "@openai/codex-sdk-darwin-x64",
+  "aarch64-apple-darwin": "@openai/codex-sdk-darwin-arm64",
+  "x86_64-pc-windows-msvc": "@openai/codex-sdk-win32-x64",
+  "aarch64-pc-windows-msvc": "@openai/codex-sdk-win32-arm64",
+};
 
 function findCodexPath() {
   const { platform, arch } = process;
@@ -351,10 +362,30 @@ function findCodexPath() {
     throw new Error(`Unsupported platform: ${platform} (${arch})`);
   }
 
-  const vendorRoot = path.join(scriptDirName, "..", "vendor");
-  const archRoot = path.join(vendorRoot, targetTriple);
-  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-  const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+  const platformPackage = PLATFORM_PACKAGE_BY_TARGET[targetTriple as keyof typeof PLATFORM_PACKAGE_BY_TARGET];
+  if (!platformPackage) {
+    throw new Error(`Unsupported target triple: ${targetTriple}`);
+  }
 
-  return binaryPath;
+  const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const localVendorRoot = path.join(scriptDirName, "..", "vendor");
+  const localBinaryPath = path.join(localVendorRoot, targetTriple, "codex", codexBinaryName);
+
+  let vendorRoot: string | null = null;
+  try {
+    const packageJsonPath = nodeRequire.resolve(`${platformPackage}/package.json`);
+    vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
+  } catch {
+    if (existsSync(localBinaryPath)) {
+      vendorRoot = localVendorRoot;
+    }
+  }
+
+  if (!vendorRoot) {
+    throw new Error(
+      `Missing optional dependency ${platformPackage}. Reinstall @openai/codex-sdk: npm install @openai/codex-sdk`,
+    );
+  }
+
+  return path.join(vendorRoot, targetTriple, "codex", codexBinaryName);
 }
