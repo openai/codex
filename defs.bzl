@@ -35,9 +35,11 @@ def codex_rust_crate(
         crate_srcs = None,
         crate_edition = None,
         proc_macro = False,
+        build_script_enabled = True,
         build_script_data = [],
         compile_data = [],
         lib_data_extra = [],
+        rustc_flags_extra = [],
         rustc_env = {},
         deps_extra = [],
         integration_deps_extra = [],
@@ -97,7 +99,7 @@ def codex_rust_crate(
 
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
-    if native.glob(["build.rs"], allow_empty = True):
+    if build_script_enabled and native.glob(["build.rs"], allow_empty = True):
         cargo_build_script(
             name = name + "-build-script",
             srcs = ["build.rs"],
@@ -122,6 +124,7 @@ def codex_rust_crate(
             data = lib_data_extra,
             srcs = lib_srcs,
             edition = crate_edition,
+            rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
             visibility = ["//visibility:public"],
         )
@@ -132,6 +135,7 @@ def codex_rust_crate(
             env = test_env,
             deps = deps + dev_deps,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags,
@@ -155,6 +159,7 @@ def codex_rust_crate(
             deps = maybe_lib + deps,
             proc_macro_deps = proc_macro_deps,
             edition = crate_edition,
+            rustc_flags = rustc_flags_extra,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
@@ -177,6 +182,7 @@ def codex_rust_crate(
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = maybe_lib + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
             env = test_env | cargo_env,
             tags = test_tags,
