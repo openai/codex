@@ -94,9 +94,7 @@ impl WsStream {
                         match message {
                             Ok(Message::Ping(payload)) => {
                                 if let Err(err) = inner.send(Message::Pong(payload)).await {
-                                    if tx_message.send(Err(err)).is_err() {
-                                        break;
-                                    }
+                                    let _ = tx_message.send(Err(err));
                                     break;
                                 }
                             }
@@ -105,8 +103,11 @@ impl WsStream {
                             | Message::Binary(_)
                             | Message::Close(_)
                             | Message::Frame(_))) => {
-                                let should_break = matches!(message, Message::Close(_));
-                                if tx_message.send(Ok(message)).is_err() || should_break {
+                                let is_close = matches!(message, Message::Close(_));
+                                if tx_message.send(Ok(message)).is_err() {
+                                    break;
+                                }
+                                if is_close {
                                     break;
                                 }
                             }
@@ -127,36 +128,25 @@ impl WsStream {
         }
     }
 
-    async fn send(&mut self, message: Message) -> Result<(), WsError> {
+    async fn request(
+        &self,
+        make_command: impl FnOnce(oneshot::Sender<Result<(), WsError>>) -> WsCommand,
+    ) -> Result<(), WsError> {
         let (tx_result, rx_result) = oneshot::channel();
-        if self
-            .tx_command
-            .send(WsCommand::Send { message, tx_result })
-            .await
-            .is_err()
-        {
+        if self.tx_command.send(make_command(tx_result)).await.is_err() {
             return Err(WsError::ConnectionClosed);
         }
-        match rx_result.await {
-            Ok(result) => result,
-            Err(_) => Err(WsError::ConnectionClosed),
-        }
+        rx_result.await.unwrap_or(Err(WsError::ConnectionClosed))
     }
 
-    async fn close(&mut self) -> Result<(), WsError> {
-        let (tx_result, rx_result) = oneshot::channel();
-        if self
-            .tx_command
-            .send(WsCommand::Close { tx_result })
+    async fn send(&self, message: Message) -> Result<(), WsError> {
+        self.request(|tx_result| WsCommand::Send { message, tx_result })
             .await
-            .is_err()
-        {
-            return Err(WsError::ConnectionClosed);
-        }
-        match rx_result.await {
-            Ok(result) => result,
-            Err(_) => Err(WsError::ConnectionClosed),
-        }
+    }
+
+    async fn close(&self) -> Result<(), WsError> {
+        self.request(|tx_result| WsCommand::Close { tx_result })
+            .await
     }
 
     async fn next(&mut self) -> Option<Result<Message, WsError>> {
