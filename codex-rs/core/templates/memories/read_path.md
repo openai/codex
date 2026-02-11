@@ -12,27 +12,27 @@ Memory layout (general -> specific):
   - scripts/ (optional helper scripts)
   - examples/ (optional example outputs)
   - templates/ (optional templates)
-- {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
+- {{ base_path }}/rollout_summaries/ (per-thread recaps + evidence snippets)
 
 Mandatory startup protocol (for any non-trivial and related task):
-1) Skim MEMORY_SUMMARY in this prompt and extract some relevant keywords that are relevant to the user task
+1) Skim MEMORY_SUMMARY in this prompt and extract relevant keywords for the user task
    (e.g. repo name, component, error strings, tool names).
-2) Search MEMORY.md for those keywords and for any referenced rollout ids or summary files.
-3) If a **Related skills** pointer appears, open the skill folder:
+2) Search MEMORY.md for those keywords and any referenced thread ids or summary files.
+3) If a **Related skill(s)** pointer appears, open the skill folder:
    - Read {{ base_path }}/skills/<skill-name>/SKILL.md first.
    - Only open supporting files (scripts/examples/templates) if SKILL.md references them.
-4) If you find relevant rollout summary files, open the matching files.
+4) If you find relevant rollout summaries, open matching files.
 5) If nothing relevant is found, proceed without using memory.
 
-Example for how to search memory (use shell tool):
+Example memory search commands (rg-first):
 * Search notes example (fast + line numbers):
 `rg -n -i "<pattern>" "{{ base_path }}/MEMORY.md"`
 
 * Search across memory (notes + skills + rollout summaries):
 `rg -n -i "<pattern>" "{{ base_path }}" | head -n 50`
 
-* Open a rollout summary example (find by rollout_id, then read a slice):
-`rg --files "{{ base_path }}/rollout_summaries" | rg "<rollout_id>"`
+* Open rollout summary examples (find by thread id/rollout id, then read slices):
+`rg --files "{{ base_path }}/rollout_summaries" | rg "<thread_id_or_rollout_id>"`
 `sed -n '<START>,<END>p' "{{ base_path }}/rollout_summaries/<file>"`
 (Common slices: `sed -n '1,200p' ...` or `sed -n '200,400p' ...`)
 
@@ -41,7 +41,14 @@ Example for how to search memory (use shell tool):
 * If SKILL.md references supporting files, open them directly by path.
 
 During execution: if you hit repeated errors or confusion, return to memory and check MEMORY.md/skills/rollout_summaries again.
-If you found stale or contradicting guidance with the current environment, update the memory files accordingly.
+If you find stale or contradicting guidance with the current environment, update the memory files accordingly.
+
+Memory citation requirements (append at the VERY END of the final reply; last line only):
+- If ANY relevant memory files were used: output exactly one final line:
+  Memory used: `<file1>:<line_start>-<line_end>`, `<file2>:<line_start>-<line_end>`, ...
+  - Citations are only allowed for memory files under `{{ base_path }}`.
+  - Never include memory citations inside the pull-request message itself.
+  - Never cite blank lines; double-check ranges.
 
 ========= MEMORY_SUMMARY BEGINS =========
 {{ memory_summary }}
