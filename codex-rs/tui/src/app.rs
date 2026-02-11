@@ -2333,8 +2333,6 @@ impl App {
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
-        // Replay rollback markers are routed via AppEvent so they can be
-        // applied in queue order relative to replayed history cell inserts.
         self.chat_widget.handle_codex_event_replay(event);
     }
 
