@@ -432,6 +432,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_command_position_with_leading_operator() {
+        assert!(parse_seq("&& ls").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_command_position_with_double_separator() {
+        assert!(parse_seq("ls ;; pwd").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_command_position_with_empty_pipeline_segment() {
+        assert!(parse_seq("ls | | wc").is_none());
+    }
+
+    #[test]
     fn parse_zsh_lc_plain_commands() {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();

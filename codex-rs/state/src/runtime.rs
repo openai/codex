@@ -1611,6 +1611,82 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
+    async fn mark_stage1_job_succeeded_no_output_tracks_watermark_without_persisting_output() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded_no_output(thread_id, ownership_token.as_str())
+                .await
+                .expect("mark stage1 succeeded without output"),
+            "stage1 no-output success should complete the job"
+        );
+
+        let output_row_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("load stage1 output count")
+                .try_get::<i64, _>("count")
+                .expect("stage1 output count");
+        assert_eq!(
+            output_row_count, 0,
+            "stage1 no-output success should not persist empty stage1 outputs"
+        );
+
+        let up_to_date = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .await
+            .expect("claim stage1 up-to-date");
+        assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
+
+        let claim_phase2 = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (phase2_token, phase2_input_watermark) = match claim_phase2 {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome after no-output success: {other:?}"),
+        };
+        assert_eq!(phase2_input_watermark, 100);
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(phase2_token.as_str(), phase2_input_watermark,)
+                .await
+                .expect("mark phase2 succeeded after no-output")
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn phase2_global_consolidation_reruns_when_watermark_advances() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
@@ -1746,6 +1822,74 @@ WHERE kind = 'memory_stage1'
         assert_eq!(outputs[0].rollout_summary, "summary b");
         assert_eq!(outputs[1].thread_id, thread_id_a);
         assert_eq!(outputs[1].rollout_summary, "summary a");
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn list_stage1_outputs_for_global_skips_empty_payloads() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_non_empty =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_empty =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_non_empty,
+                codex_home.join("workspace-non-empty"),
+            ))
+            .await
+            .expect("upsert non-empty thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_empty,
+                codex_home.join("workspace-empty"),
+            ))
+            .await
+            .expect("upsert empty thread");
+
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at)
+VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id_non_empty.to_string())
+        .bind(100_i64)
+        .bind("raw memory")
+        .bind("summary")
+        .bind(100_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert non-empty stage1 output");
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at)
+VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(thread_id_empty.to_string())
+        .bind(101_i64)
+        .bind("")
+        .bind("")
+        .bind(101_i64)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("insert empty stage1 output");
+
+        let outputs = runtime
+            .list_stage1_outputs_for_global(1)
+            .await
+            .expect("list stage1 outputs for global");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].thread_id, thread_id_non_empty);
+        assert_eq!(outputs[0].rollout_summary, "summary");
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

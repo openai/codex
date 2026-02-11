@@ -343,6 +343,7 @@ async fn run_websocket_response_stream(
             )));
         }
     };
+    trace!("websocket request: {request_text}");
 
     let request_start = Instant::now();
     let result = ws_stream

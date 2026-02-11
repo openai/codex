@@ -77,16 +77,15 @@ use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
-mod constraint;
 pub mod edit;
 mod network_proxy_spec;
 pub mod profile;
 pub mod schema;
 pub mod service;
 pub mod types;
-pub use constraint::Constrained;
-pub use constraint::ConstraintError;
-pub use constraint::ConstraintResult;
+pub use codex_config::Constrained;
+pub use codex_config::ConstraintError;
+pub use codex_config::ConstraintResult;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;

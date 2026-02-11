@@ -3,7 +3,7 @@ mod exit_status;
 pub mod login;
 
 use clap::Parser;
-use codex_common::CliConfigOverrides;
+use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
 pub struct SeatbeltCommand {

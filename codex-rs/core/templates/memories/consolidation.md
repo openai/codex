@@ -1,27 +1,54 @@
-## Memory Consolidation
-Consolidate Codex memories in this directory: {{ memory_root }}
+## Memory Phase 2 (Consolidation)
+Consolidate Codex memories in: {{ memory_root }}
 
-Phase-1 inputs already prepared in this same directory:
-- `rollout_summaries/` contains per-thread rollout summary markdown files (`<thread_id>.md`).
-- `raw_memories.md` contains merged raw memory content from recent stage-1 outputs.
+You are in Phase 2 (Consolidation / cleanup pass).
+Integrate Phase 1 artifacts into a stable, retrieval-friendly memory hierarchy with minimal churn.
 
-Consolidation goals:
-1. Read `rollout_summaries/` first to route quickly, then cross-check details in `raw_memories.md`.
-2. Resolve conflicts explicitly:
-   - prefer newer guidance by default;
-   - if older guidance has stronger evidence, keep both with a verification note.
-3. Extract only reusable, high-signal knowledge:
-   - proven first steps;
-   - failure modes and pivots;
-   - concrete commands/paths/errors;
-   - verification and stop rules;
-   - unresolved follow-ups.
-4. Deduplicate aggressively and remove generic advice.
+Primary inputs in this directory:
+- `rollout_summaries/` (per-thread summaries from Phase 1)
+- `raw_memories.md` (merged Stage 1 raw memories; latest first)
+- Existing outputs if present:
+  - `MEMORY.md`
+  - `memory_summary.md`
+  - `skills/*`
 
-Expected outputs for this directory (create/update as needed):
-- `MEMORY.md`: merged durable memory registry for this shared memory root.
-- `skills/<skill-name>/...`: optional skill folders when there is clear reusable procedure value.
+Operating mode:
+- `INIT`: outputs are missing or nearly empty.
+- `INCREMENTAL`: outputs already exist; integrate net-new signal without unnecessary rewrites.
 
-Do not rewrite phase-1 artifacts except when adding explicit cross-references:
-- keep `rollout_summaries/` as phase-1 output;
-- keep `raw_memories.md` as the merged stage-1 raw-memory artifact.
+Core rules (strict):
+- Treat Phase 1 artifacts as immutable evidence.
+- Prefer targeted edits over broad rewrites.
+- No-op is valid when there is no meaningful net-new signal.
+- Deduplicate aggressively and remove generic/filler guidance.
+- Keep only reusable, high-signal memory:
+  - decision triggers and efficient first steps
+  - failure shields (`symptom -> cause -> fix/mitigation`)
+  - concrete commands/paths/errors/contracts
+  - verification checks and stop rules
+- Resolve conflicts explicitly:
+  - prefer newer guidance by default
+  - if older guidance is better-evidenced, keep both with a brief verification note
+- Keep clustering light:
+  - cluster only strongly related tasks
+  - avoid large, weakly related mega-clusters
+
+Expected outputs (create/update only these):
+- `MEMORY.md`
+- `memory_summary.md`
+- `skills/<skill-name>/...` (optional, when a reusable procedure is clearly warranted)
+
+Workflow (order matters):
+1. Determine mode (`INIT` vs `INCREMENTAL`) from artifact availability/content.
+2. Read `rollout_summaries/` first for routing, then validate details in `raw_memories.md`.
+3. Read existing `MEMORY.md`, `memory_summary.md`, and `skills/` for continuity.
+4. Update `skills/` only for reliable, repeatable procedures with clear verification.
+5. Update `MEMORY.md` as the durable registry; add clear related-skill pointers in note bodies when useful.
+6. Write `memory_summary.md` last as a compact, high-signal routing layer.
+7. Optional housekeeping:
+  - remove duplicate or low-signal rollout summaries when clearly redundant
+  - keep one best summary per thread when duplicates exist
+8. Final consistency pass:
+  - remove cross-file duplication
+  - ensure referenced skills exist
+  - keep output concise and retrieval-friendly

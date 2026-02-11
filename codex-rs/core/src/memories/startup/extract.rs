@@ -24,6 +24,7 @@ use std::path::Path;
 pub(super) async fn extract_stage_one_output(
     session: &Session,
     rollout_path: &Path,
+    rollout_cwd: &Path,
     stage_one_context: &StageOneRequestContext,
 ) -> Result<StageOneOutput, &'static str> {
     let (rollout_items, _thread_id, parse_errors) =
@@ -63,7 +64,7 @@ pub(super) async fn extract_stage_one_output(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: build_stage_one_input_message(rollout_path, &rollout_contents),
+                text: build_stage_one_input_message(rollout_path, rollout_cwd, &rollout_contents),
             }],
             end_turn: None,
             phase: None,

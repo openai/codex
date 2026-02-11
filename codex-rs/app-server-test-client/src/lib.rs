@@ -52,6 +52,8 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -112,6 +114,13 @@ enum CliCommand {
         /// User message to send to Codex.
         user_message: String,
     },
+    /// Resume a V2 thread by id, then send a user message.
+    ResumeMessageV2 {
+        /// Existing thread id to resume.
+        thread_id: String,
+        /// User message to send to Codex.
+        user_message: String,
+    },
     /// Start a V2 turn that elicits an ExecCommand approval.
     #[command(name = "trigger-cmd-approval")]
     TriggerCmdApproval {
@@ -161,6 +170,16 @@ pub fn run() -> Result<()> {
         CliCommand::SendMessageV2 { user_message } => {
             send_message_v2(&codex_bin, &config_overrides, user_message, &dynamic_tools)
         }
+        CliCommand::ResumeMessageV2 {
+            thread_id,
+            user_message,
+        } => resume_message_v2(
+            &codex_bin,
+            &config_overrides,
+            thread_id,
+            user_message,
+            &dynamic_tools,
+        ),
         CliCommand::TriggerCmdApproval { user_message } => {
             trigger_cmd_approval(&codex_bin, &config_overrides, user_message, &dynamic_tools)
         }
@@ -231,6 +250,41 @@ pub fn send_message_v2(
         None,
         dynamic_tools,
     )
+}
+
+fn resume_message_v2(
+    codex_bin: &Path,
+    config_overrides: &[String],
+    thread_id: String,
+    user_message: String,
+    dynamic_tools: &Option<Vec<DynamicToolSpec>>,
+) -> Result<()> {
+    ensure_dynamic_tools_unused(dynamic_tools, "resume-message-v2")?;
+
+    let mut client = CodexClient::spawn(codex_bin, config_overrides)?;
+
+    let initialize = client.initialize()?;
+    println!("< initialize response: {initialize:?}");
+
+    let resume_response = client.thread_resume(ThreadResumeParams {
+        thread_id,
+        ..Default::default()
+    })?;
+    println!("< thread/resume response: {resume_response:?}");
+
+    let turn_response = client.turn_start(TurnStartParams {
+        thread_id: resume_response.thread.id.clone(),
+        input: vec![V2UserInput::Text {
+            text: user_message,
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })?;
+    println!("< turn/start response: {turn_response:?}");
+
+    client.stream_turn(&resume_response.thread.id, &turn_response.turn.id)?;
+
+    Ok(())
 }
 
 fn trigger_cmd_approval(
@@ -590,6 +644,16 @@ impl CodexClient {
         };
 
         self.send_request(request, request_id, "thread/start")
+    }
+
+    fn thread_resume(&mut self, params: ThreadResumeParams) -> Result<ThreadResumeResponse> {
+        let request_id = self.request_id();
+        let request = ClientRequest::ThreadResume {
+            request_id: request_id.clone(),
+            params,
+        };
+
+        self.send_request(request, request_id, "thread/resume")
     }
 
     fn turn_start(&mut self, params: TurnStartParams) -> Result<TurnStartResponse> {

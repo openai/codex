@@ -1,4 +1,4 @@
-use crate::config_loader::ConfigRequirementsToml;
+use crate::config_requirements::ConfigRequirementsToml;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
