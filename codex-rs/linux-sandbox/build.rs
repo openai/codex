@@ -5,7 +5,6 @@ use std::path::PathBuf;
 fn main() {
     // Tell rustc/clippy that this is an expected cfg value.
     println!("cargo:rustc-check-cfg=cfg(vendored_bwrap_available)");
-    println!("cargo:rerun-if-env-changed=CODEX_BWRAP_ENABLE_FFI");
     println!("cargo:rerun-if-env-changed=CODEX_BWRAP_SOURCE_DIR");
 
     // Rebuild if the vendored bwrap sources change.
@@ -33,15 +32,8 @@ fn main() {
         return;
     }
 
-    // Opt-in: do not attempt to fetch/compile bwrap unless explicitly enabled.
-    let enable_ffi = matches!(env::var("CODEX_BWRAP_ENABLE_FFI"), Ok(value) if value == "1");
-    if !enable_ffi {
-        return;
-    }
-
     if let Err(err) = try_build_vendored_bwrap() {
-        // Keep normal builds working even if the experiment fails.
-        println!("cargo:warning=build-time bubblewrap disabled: {err}");
+        panic!("failed to compile vendored bubblewrap for Linux target: {err}");
     }
 }
 

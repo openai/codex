@@ -99,9 +99,6 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # Keep cargo-based CI independent of system bwrap build deps.
-      # The bwrap FFI path is validated in Bazel workflows.
-      CODEX_BWRAP_ENABLE_FFI: "0"
 
     strategy:
       fail-fast: false
@@ -447,9 +444,6 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # Keep cargo-based CI independent of system bwrap build deps.
-      # The bwrap FFI path is validated in Bazel workflows.
-      CODEX_BWRAP_ENABLE_FFI: "0"
 
     strategy:
       fail-fast: false
