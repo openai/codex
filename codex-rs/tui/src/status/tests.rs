@@ -7,7 +7,6 @@ use chrono::Utc;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::RateLimitSnapshot;
@@ -197,7 +196,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
         .single()
         .expect("timestamp");
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
 
     let composite = new_status_output(
         &config,
@@ -228,7 +227,7 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
 
     assert_eq!(
         permissions_text,
-        Some("Custom (workspace-write, on-request)")
+        Some("Custom (workspace-write with network access, on-request)")
     );
 }
 
