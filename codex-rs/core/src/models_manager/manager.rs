@@ -303,7 +303,6 @@ impl ModelsManager {
         mut remote_models: Vec<ModelInfo>,
         config: &Config,
     ) -> Vec<ModelPreset> {
-        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
         remote_models = remote_models
             .into_iter()
             .map(|remote_model| {
@@ -311,6 +310,7 @@ impl ModelsManager {
                 model_info::with_model_info_patch(remote_model, &remote_slug, config)
             })
             .collect();
+        remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
