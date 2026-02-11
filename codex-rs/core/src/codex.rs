@@ -4314,28 +4314,9 @@ fn has_codex_apps_mcp_tools(
         .any(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
 }
 
-/// Determines whether the turn input requests at least one app connector through explicit app
-/// paths, user-message mentions, or tool-output mentions.
-fn input_requests_app_connector(input: &[ResponseItem], explicit_app_paths: &[String]) -> bool {
-    if explicit_app_paths
-        .iter()
-        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        return true;
-    }
-
-    let user_messages = collect_user_messages(input);
-    let message_mentions = collect_tool_mentions_from_messages(&user_messages);
-    if message_mentions
-        .paths
-        .iter()
-        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
-    {
-        return true;
-    }
-
-    let tool_output_paths = collect_tool_paths_from_tool_outputs(input);
-    tool_output_paths
+/// Determines whether the current turn explicitly requests at least one app connector.
+fn input_requests_app_connector(explicit_app_paths: &[String]) -> bool {
+    explicit_app_paths
         .iter()
         .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
 }
@@ -4452,7 +4433,7 @@ async fn run_sampling_request(
 
     if turn_context.config.features.enabled(Feature::Apps)
         && !has_codex_apps_mcp_tools(&mcp_tools)
-        && input_requests_app_connector(&input, tool_selection.explicit_app_paths)
+        && input_requests_app_connector(tool_selection.explicit_app_paths)
     {
         let codex_apps_ready = sess
             .services
@@ -5653,31 +5634,23 @@ mod tests {
 
     #[test]
     fn input_requests_app_connector_returns_true_for_explicit_app_path() {
-        let input = vec![user_message("hello")];
         let explicit_app_paths = vec!["app://connector-id".to_string()];
 
-        assert!(input_requests_app_connector(&input, &explicit_app_paths));
+        assert!(input_requests_app_connector(&explicit_app_paths));
     }
 
     #[test]
-    fn input_requests_app_connector_returns_true_for_tool_output_path() {
-        let input = vec![ResponseItem::FunctionCallOutput {
-            call_id: "call-1".to_string(),
-            output: FunctionCallOutputPayload::from_text(
-                "L1: use [$GoogleCalendar](app://connector-id)".to_string(),
-            ),
-        }];
+    fn input_requests_app_connector_returns_false_for_empty_app_paths() {
         let explicit_app_paths = Vec::new();
 
-        assert!(input_requests_app_connector(&input, &explicit_app_paths));
+        assert!(!input_requests_app_connector(&explicit_app_paths));
     }
 
     #[test]
-    fn input_requests_app_connector_returns_false_without_app_mentions() {
-        let input = vec![user_message("use $alpha-skill for this task")];
-        let explicit_app_paths = Vec::new();
+    fn input_requests_app_connector_returns_false_for_non_app_path() {
+        let explicit_app_paths = vec!["skill:///tmp/skills/alpha/SKILL.md".to_string()];
 
-        assert!(!input_requests_app_connector(&input, &explicit_app_paths));
+        assert!(!input_requests_app_connector(&explicit_app_paths));
     }
 
     #[tokio::test]
