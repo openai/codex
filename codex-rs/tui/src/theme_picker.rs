@@ -356,12 +356,13 @@ pub(crate) fn build_theme_picker_params(
         })
         .collect();
 
-    // Capture theme names from the stable entry list built above so the
-    // preview closure indexes into the same ordering the picker uses.
-    let preview_names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
+    // Derive preview targets from the final `items` list (not from `entries`)
+    // so preview ordering stays aligned if item construction/sorting changes.
+    let preview_theme_names: Vec<Option<String>> =
+        items.iter().map(|item| item.search_value.clone()).collect();
     let preview_home = codex_home_owned.clone();
     let on_selection_changed = Some(Box::new(move |idx: usize, _tx: &_| {
-        if let Some(name) = preview_names.get(idx)
+        if let Some(Some(name)) = preview_theme_names.get(idx)
             && let Some(theme) = highlight::resolve_theme_by_name(name, preview_home.as_deref())
         {
             highlight::set_syntax_theme(theme);
@@ -469,6 +470,15 @@ mod tests {
         assert_eq!(params.side_content_width, SideContentWidth::Half);
         assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
         assert!(params.stacked_side_content.is_some());
+    }
+
+    #[test]
+    fn theme_picker_items_include_search_values_for_preview_mapping() {
+        let params = build_theme_picker_params(None, None, None);
+        assert!(
+            params.items.iter().all(|item| item.search_value.is_some()),
+            "theme picker preview mapping relies on item search_value to stay aligned with final item order"
+        );
     }
 
     #[test]
