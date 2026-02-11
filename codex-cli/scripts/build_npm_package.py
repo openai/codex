@@ -76,7 +76,7 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    "codex-sdk": ["codex"],
+    "codex-sdk": [],
 }
 
 PACKAGE_TARGET_FILTERS: dict[str, str] = {
@@ -157,7 +157,7 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package)
+        stage_sources(staging_dir, version, package, is_release=release_version is not None)
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
@@ -205,7 +205,6 @@ def main() -> int:
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the SDK contents:\n"
                     f"    ls {staging_dir_str}/dist\n"
-                    f"    ls {staging_dir_str}/vendor\n"
                     "    node -e \"import('./dist/index.js').then(() => console.log('ok'))\"\n\n"
                 )
         else:
@@ -234,7 +233,7 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str) -> None:
+def stage_sources(staging_dir: Path, version: str, package: str, *, is_release: bool) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
@@ -318,12 +317,12 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
 
-        files = package_json.get("files")
-        if isinstance(files, list):
-            if "vendor" not in files:
-                files.append("vendor")
-        else:
-            package_json["files"] = ["dist", "vendor"]
+        if is_release:
+            dependencies = package_json.get("dependencies")
+            if not isinstance(dependencies, dict):
+                dependencies = {}
+            dependencies[CODEX_NPM_NAME] = version
+            package_json["dependencies"] = dependencies
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
