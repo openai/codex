@@ -27,6 +27,7 @@ pub struct LoaderOverrides {
 pub struct ConfigLayerEntry {
     pub name: ConfigLayerSource,
     pub config: TomlValue,
+    pub raw_toml: Option<String>,
     pub version: String,
     pub disabled_reason: Option<String>,
 }
@@ -37,6 +38,18 @@ impl ConfigLayerEntry {
         Self {
             name,
             config,
+            raw_toml: None,
+            version,
+            disabled_reason: None,
+        }
+    }
+
+    pub fn new_with_raw_toml(name: ConfigLayerSource, config: TomlValue, raw_toml: String) -> Self {
+        let version = version_for_toml(&config);
+        Self {
+            name,
+            config,
+            raw_toml: Some(raw_toml),
             version,
             disabled_reason: None,
         }
@@ -51,6 +64,7 @@ impl ConfigLayerEntry {
         Self {
             name,
             config,
+            raw_toml: None,
             version,
             disabled_reason: Some(disabled_reason.into()),
         }
@@ -58,6 +72,10 @@ impl ConfigLayerEntry {
 
     pub fn is_disabled(&self) -> bool {
         self.disabled_reason.is_some()
+    }
+
+    pub fn raw_toml(&self) -> Option<&str> {
+        self.raw_toml.as_deref()
     }
 
     pub fn metadata(&self) -> ConfigLayerMetadata {
