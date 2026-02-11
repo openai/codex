@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format!(\"## Remote Post-Compaction History Request\\n{}\",\nrequest_input_shape(&follow_up_request))"
+expression: "format!(\"## Remote Post-Compaction History Layout\\n{}\",\nrequest_input_shape(&follow_up_request))"
 ---
-## Remote Post-Compaction History Request
+## Remote Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT>
