@@ -106,6 +106,18 @@ through that shared tracing pipeline.
 OTEL resolution follows the same defaults as Codex core (`environment = "dev"`,
 `exporter = "none"`, `trace_exporter = exporter`, `metrics_exporter = "statsig"`), and
 `log_user_prompt` is accepted for compatibility but ignored by the proxy.
+Standalone mode also honors top-level `[analytics].enabled`; when it is `false`, metrics export is
+disabled (`metrics_exporter = "none"`), even if a metrics exporter is configured under `[otel]`.
+
+Example:
+
+```toml
+[analytics]
+enabled = false
+
+[otel]
+metrics_exporter = "statsig" # ignored while analytics is disabled
+```
 
 To filter proxy logs locally, use:
 

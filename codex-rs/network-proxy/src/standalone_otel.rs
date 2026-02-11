@@ -82,12 +82,17 @@ pub(crate) fn parse_otel_config(raw: &str) -> Result<StandaloneOtelConfigToml, t
 
 pub(crate) fn resolve_otel_config(
     config: StandaloneOtelConfigToml,
+    analytics_enabled: bool,
 ) -> ResolvedStandaloneOtelConfig {
     let exporter = config.exporter.unwrap_or(StandaloneOtelExporterKind::None);
     let trace_exporter = config.trace_exporter.unwrap_or_else(|| exporter.clone());
-    let metrics_exporter = config
-        .metrics_exporter
-        .unwrap_or(StandaloneOtelExporterKind::Statsig);
+    let metrics_exporter = if analytics_enabled {
+        config
+            .metrics_exporter
+            .unwrap_or(StandaloneOtelExporterKind::Statsig)
+    } else {
+        StandaloneOtelExporterKind::None
+    };
 
     ResolvedStandaloneOtelConfig {
         environment: config
@@ -101,10 +106,11 @@ pub(crate) fn resolve_otel_config(
 
 pub(crate) fn build_provider(
     config: StandaloneOtelConfigToml,
+    analytics_enabled: bool,
     codex_home: PathBuf,
     service_version: &str,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
-    let resolved = resolve_otel_config(config);
+    let resolved = resolve_otel_config(config, analytics_enabled);
     let settings = OtelSettings {
         environment: resolved.environment,
         service_name: STANDALONE_SERVICE_NAME.to_string(),
@@ -175,7 +181,7 @@ enabled = true
 "#,
         )
         .unwrap();
-        let resolved = resolve_otel_config(parsed);
+        let resolved = resolve_otel_config(parsed, true);
 
         assert_eq!(
             resolved,
@@ -198,7 +204,7 @@ exporter = { otlp-http = { endpoint = "https://collector.example/v1/logs", proto
 "#,
         )
         .unwrap();
-        let resolved = resolve_otel_config(parsed);
+        let resolved = resolve_otel_config(parsed, true);
 
         assert_eq!(
             resolved,
@@ -230,7 +236,7 @@ trace_exporter = { otlp-grpc = { endpoint = "https://collector.example:4317" } }
 "#,
         )
         .unwrap();
-        let resolved = resolve_otel_config(parsed);
+        let resolved = resolve_otel_config(parsed, true);
 
         assert_eq!(
             resolved,
@@ -256,7 +262,7 @@ log_user_prompt = true
 "#,
         )
         .unwrap();
-        let resolved = resolve_otel_config(parsed);
+        let resolved = resolve_otel_config(parsed, true);
 
         assert_eq!(
             resolved,
@@ -278,7 +284,7 @@ future_field = "ignored"
 "#,
         )
         .unwrap();
-        let resolved = resolve_otel_config(parsed);
+        let resolved = resolve_otel_config(parsed, true);
 
         assert_eq!(
             resolved,
@@ -287,6 +293,50 @@ future_field = "ignored"
                 exporter: StandaloneOtelExporterKind::None,
                 trace_exporter: StandaloneOtelExporterKind::None,
                 metrics_exporter: StandaloneOtelExporterKind::Statsig,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_metrics_exporter_defaults_to_none_when_analytics_disabled() {
+        let parsed = parse_otel_config(
+            r#"
+[otel]
+environment = "staging"
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_otel_config(parsed, false);
+
+        assert_eq!(
+            resolved,
+            ResolvedStandaloneOtelConfig {
+                environment: "staging".to_string(),
+                exporter: StandaloneOtelExporterKind::None,
+                trace_exporter: StandaloneOtelExporterKind::None,
+                metrics_exporter: StandaloneOtelExporterKind::None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_metrics_exporter_is_none_when_analytics_disabled_even_if_explicitly_set() {
+        let parsed = parse_otel_config(
+            r#"
+[otel]
+metrics_exporter = { otlp-grpc = { endpoint = "https://collector.example:4317" } }
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_otel_config(parsed, false);
+
+        assert_eq!(
+            resolved,
+            ResolvedStandaloneOtelConfig {
+                environment: "dev".to_string(),
+                exporter: StandaloneOtelExporterKind::None,
+                trace_exporter: StandaloneOtelExporterKind::None,
+                metrics_exporter: StandaloneOtelExporterKind::None,
             }
         );
     }

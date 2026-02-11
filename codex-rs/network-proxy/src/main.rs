@@ -30,6 +30,12 @@ struct StandaloneConfig {
     config_missing: bool,
     network: NetworkProxyConfig,
     otel: standalone_otel::StandaloneOtelConfigToml,
+    analytics_enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StandaloneAnalyticsConfigToml {
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -38,6 +44,8 @@ struct StandaloneConfigToml {
     network: NetworkProxyConfig,
     #[serde(default)]
     otel: standalone_otel::StandaloneOtelConfigToml,
+    #[serde(default)]
+    analytics: Option<StandaloneAnalyticsConfigToml>,
 }
 
 #[tokio::main]
@@ -50,10 +58,16 @@ async fn main() -> Result<()> {
         config_missing,
         network,
         otel: otel_config,
+        analytics_enabled,
     } = config;
 
     let otel_provider = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        standalone_otel::build_provider(otel_config, codex_home, env!("CARGO_PKG_VERSION"))
+        standalone_otel::build_provider(
+            otel_config,
+            analytics_enabled,
+            codex_home,
+            env!("CARGO_PKG_VERSION"),
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(err)) => {
@@ -122,15 +136,21 @@ async fn load_standalone_config() -> Result<StandaloneConfig> {
         }
     };
 
-    let (network, otel, config_missing) = match raw {
+    let (network, otel, analytics_enabled, config_missing) = match raw {
         Some(raw) => {
             let parsed: StandaloneConfigToml = toml::from_str(&raw)
                 .with_context(|| format!("failed to parse {}", config_path.display()))?;
-            (parsed.network, parsed.otel, false)
+            let StandaloneConfigToml {
+                network,
+                otel,
+                analytics,
+            } = parsed;
+            (network, otel, resolve_analytics_enabled(analytics), false)
         }
         None => (
             NetworkProxyConfig::default(),
             standalone_otel::StandaloneOtelConfigToml::default(),
+            true,
             true,
         ),
     };
@@ -141,7 +161,12 @@ async fn load_standalone_config() -> Result<StandaloneConfig> {
         config_missing,
         network,
         otel,
+        analytics_enabled,
     })
+}
+
+fn resolve_analytics_enabled(analytics: Option<StandaloneAnalyticsConfigToml>) -> bool {
+    analytics.and_then(|a| a.enabled).unwrap_or(true)
 }
 
 struct StandaloneConfigReloader;
@@ -160,5 +185,37 @@ impl ConfigReloader for StandaloneConfigReloader {
         Err(anyhow::anyhow!(
             "config reload is not supported in standalone mode"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn standalone_config_analytics_defaults_enabled_when_omitted() {
+        let parsed: StandaloneConfigToml = toml::from_str(
+            r#"
+[network]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_analytics_enabled(parsed.analytics), true);
+    }
+
+    #[test]
+    fn standalone_config_analytics_respects_disabled_flag() {
+        let parsed: StandaloneConfigToml = toml::from_str(
+            r#"
+[analytics]
+enabled = false
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_analytics_enabled(parsed.analytics), false);
     }
 }
