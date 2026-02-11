@@ -26,6 +26,8 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::popup_content_width;
+use crate::bottom_pane::side_by_side_layout_widths;
 use crate::diff_render::DiffLineType;
 use crate::diff_render::line_number_width;
 use crate::diff_render::push_wrapped_diff_line;
@@ -133,15 +135,6 @@ const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
 const PREVIEW_FRAME_PADDING: u16 = 1;
 
 const PREVIEW_FALLBACK_SUBTITLE: &str = "Move up/down to live preview themes";
-
-/// Shared menu-surface horizontal inset (2 cells per side) used by selection popups.
-const MENU_SURFACE_HORIZONTAL_INSET: u16 = 4;
-
-/// Horizontal gap between list and side panel when side-by-side layout is active.
-const SIDE_CONTENT_GAP: u16 = 2;
-
-/// Minimum list width required for side-by-side mode in the selection popup.
-const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 
 /// Side-by-side preview: syntax-highlighted Rust diff snippet, vertically
 /// centered with a 2-column left inset.  Fills the entire side panel height.
@@ -261,12 +254,12 @@ impl Renderable for ThemePreviewNarrowRenderable {
 
 fn subtitle_available_width(terminal_width: Option<u16>) -> usize {
     let width = terminal_width.unwrap_or(80);
-    let content_width = width.saturating_sub(MENU_SURFACE_HORIZONTAL_INSET);
-    let side_width = content_width.saturating_sub(SIDE_CONTENT_GAP) / 2;
-    let list_width = content_width.saturating_sub(SIDE_CONTENT_GAP + side_width);
-    let side_by_side =
-        side_width >= WIDE_PREVIEW_MIN_WIDTH && list_width >= MIN_LIST_WIDTH_FOR_SIDE;
-    if side_by_side {
+    let content_width = popup_content_width(width);
+    if let Some((list_width, _side_width)) = side_by_side_layout_widths(
+        content_width,
+        SideContentWidth::Half,
+        WIDE_PREVIEW_MIN_WIDTH,
+    ) {
         list_width as usize
     } else {
         content_width as usize
@@ -299,9 +292,9 @@ fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>)
 ///
 /// `current_name` should be the value of `Config::tui_theme` (the persisted
 /// preference).  When it names a theme that is currently available the picker
-/// pre-selects it; otherwise the picker falls back to the active runtime theme
-/// (from adaptive auto-detection) so opening the picker without a persisted
-/// preference still highlights the correct entry.
+/// pre-selects it; otherwise the picker falls back to the configured name (or
+/// adaptive default) so opening the picker without a persisted preference still
+/// highlights the most likely intended entry.
 pub(crate) fn build_theme_picker_params(
     current_name: Option<&str>,
     codex_home: Option<&Path>,
@@ -314,14 +307,14 @@ pub(crate) fn build_theme_picker_params(
     let codex_home_owned = codex_home.map(Path::to_path_buf);
 
     // Resolve the effective theme name: honor explicit config only when it is
-    // currently available; otherwise fall back to the active runtime theme so
-    // opening `/theme` does not auto-preview an unrelated first entry.
+    // currently available; otherwise fall back to configured/default selection
+    // so opening `/theme` does not auto-preview an unrelated first entry.
     let effective_name = if let Some(name) = current_name
         && entries.iter().any(|entry| entry.name == name)
     {
         name.to_string()
     } else {
-        highlight::current_theme_name()
+        highlight::configured_theme_name()
     };
 
     // Track the index of the current theme so we can pre-select it.
@@ -611,8 +604,8 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_configured_theme_falls_back_to_active_theme_selection() {
-        let active_theme = highlight::current_theme_name();
+    fn unavailable_configured_theme_falls_back_to_configured_or_default_selection() {
+        let configured_or_default_theme = highlight::configured_theme_name();
         let params = build_theme_picker_params(Some("not-a-real-theme"), None, Some(120));
         let selected_idx = params
             .initial_selected_idx
@@ -622,6 +615,6 @@ mod tests {
             .as_deref()
             .expect("expected search value to contain canonical theme name");
 
-        assert_eq!(selected_name, active_theme);
+        assert_eq!(selected_name, configured_or_default_theme);
     }
 }

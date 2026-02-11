@@ -241,10 +241,12 @@ pub(crate) fn current_syntax_theme() -> Theme {
     }
 }
 
-/// Return the kebab-case name of the currently active theme.
-/// This accounts for the user override, custom .tmTheme files, and the
-/// adaptive auto-detection fallback.
-pub(crate) fn current_theme_name() -> String {
+/// Return the configured kebab-case theme name when it resolves; otherwise
+/// return the adaptive auto-detected default theme name.
+///
+/// This intentionally reflects persisted configuration/default selection, not
+/// transient runtime swaps applied via `set_syntax_theme`.
+pub(crate) fn configured_theme_name() -> String {
     // Explicit user override?
     if let Some(Some(name)) = THEME_OVERRIDE.get() {
         if parse_theme_name(name).is_some() {
