@@ -4318,7 +4318,7 @@ fn has_codex_apps_mcp_tools(
 fn input_requests_app_connector(explicit_app_paths: &[String]) -> bool {
     explicit_app_paths
         .iter()
-        .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+        .any(|path| app_id_from_path(path).is_some())
 }
 
 /// Collects explicit app mention paths from structured user mentions and linked/plain
@@ -5389,6 +5389,13 @@ mod tests {
         }
     }
 
+    fn text_input(text: &str) -> UserInput {
+        UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }
+    }
+
     fn make_connector(id: &str, name: &str) -> AppInfo {
         AppInfo {
             id: id.to_string(),
@@ -5651,6 +5658,72 @@ mod tests {
         let explicit_app_paths = vec!["skill:///tmp/skills/alpha/SKILL.md".to_string()];
 
         assert!(!input_requests_app_connector(&explicit_app_paths));
+    }
+
+    #[test]
+    fn input_requests_app_connector_returns_false_for_malformed_app_path() {
+        let explicit_app_paths = vec!["app://".to_string()];
+
+        assert!(!input_requests_app_connector(&explicit_app_paths));
+    }
+
+    #[test]
+    fn collect_explicit_app_paths_from_linked_text_mentions() {
+        let input = vec![text_input("use [$calendar](app://calendar)")];
+
+        let explicit_app_paths = collect_explicit_app_paths(&input);
+
+        assert_eq!(explicit_app_paths, vec!["app://calendar".to_string()]);
+    }
+
+    #[test]
+    fn collect_explicit_app_paths_ignores_non_app_paths() {
+        let input = vec![
+            text_input(
+                "use [$docs](mcp://docs) and [$skill](skill://team/skill) and [$file](/tmp/file.txt)",
+            ),
+            UserInput::Mention {
+                name: "docs".to_string(),
+                path: "mcp://docs".to_string(),
+            },
+            UserInput::Mention {
+                name: "skill".to_string(),
+                path: "skill://team/skill".to_string(),
+            },
+            UserInput::Mention {
+                name: "file".to_string(),
+                path: "/tmp/file.txt".to_string(),
+            },
+        ];
+
+        let explicit_app_paths = collect_explicit_app_paths(&input);
+
+        assert_eq!(explicit_app_paths, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn resolve_turn_mentions_dedupes_structured_and_linked_app_paths() {
+        let input = vec![
+            text_input("use [$calendar](app://calendar)"),
+            UserInput::Mention {
+                name: "calendar".to_string(),
+                path: "app://calendar".to_string(),
+            },
+        ];
+        let resolution = resolve_turn_mentions(
+            &input,
+            None,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &Vec::new(),
+        )
+        .await;
+
+        assert_eq!(
+            resolution.explicit_app_paths,
+            vec!["app://calendar".to_string()]
+        );
     }
 
     #[tokio::test]
