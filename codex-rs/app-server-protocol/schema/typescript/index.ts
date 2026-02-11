@@ -123,6 +123,8 @@ export type { McpToolCallEndEvent } from "./McpToolCallEndEvent";
 export type { MessagePhase } from "./MessagePhase";
 export type { ModeKind } from "./ModeKind";
 export type { NetworkAccess } from "./NetworkAccess";
+export type { NetworkApprovalContext } from "./NetworkApprovalContext";
+export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
 export type { NewConversationParams } from "./NewConversationParams";
 export type { NewConversationResponse } from "./NewConversationResponse";
 export type { ParsedCommand } from "./ParsedCommand";
