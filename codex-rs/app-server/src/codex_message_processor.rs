@@ -2637,8 +2637,24 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    /// Best-effort: attach a listener for thread_id if missing.
-    pub(crate) async fn try_attach_thread_listener(&mut self, _thread_id: ThreadId) {}
+    /// Best-effort: ensure initialized connections are subscribed to this thread.
+    pub(crate) async fn try_attach_thread_listener(
+        &mut self,
+        thread_id: ThreadId,
+        connection_ids: Vec<ConnectionId>,
+    ) {
+        for connection_id in connection_ids {
+            if let Err(err) = self
+                .ensure_conversation_listener(thread_id, connection_id, false, ApiVersion::V2)
+                .await
+            {
+                warn!(
+                    "failed to auto-attach listener for thread {thread_id}: {message}",
+                    message = err.message
+                );
+            }
+        }
+    }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
@@ -6377,14 +6393,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_any_listener_clears_active_listener_for_thread() -> Result<()> {
+    async fn removing_one_listener_does_not_cancel_other_subscriptions_for_same_thread()
+    -> Result<()> {
         let mut manager = ThreadStateManager::new();
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
         let connection_a = ConnectionId(1);
         let connection_b = ConnectionId(2);
-        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
         manager
             .set_listener(listener_a, thread_id, connection_a)
@@ -6398,8 +6415,13 @@ mod tests {
         }
 
         assert_eq!(manager.remove_listener(listener_a).await, Some(thread_id));
-        assert_eq!(cancel_rx.await, Ok(()));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
+                .await
+                .is_err()
+        );
         assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
+        assert_eq!(cancel_rx.await, Ok(()));
         Ok(())
     }
 }

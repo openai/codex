@@ -94,11 +94,13 @@ impl ThreadStateManager {
     pub(crate) async fn remove_listener(&mut self, subscription_id: Uuid) -> Option<ThreadId> {
         let thread_id = self.thread_id_by_subscription.remove(&subscription_id)?;
         if let Some(thread_state) = self.thread_states.get(&thread_id) {
-            let mut state = thread_state.lock().await;
-            // Back-compat: removing any subscription clears the active listener task for the
-            // thread, but we intentionally do not delete other subscription IDs here.
-            // TODO: Revisit once v1 listener lifecycle semantics are cleaned up.
-            state.clear_listener();
+            let has_remaining_subscriptions = self
+                .thread_id_by_subscription
+                .values()
+                .any(|existing_thread_id| *existing_thread_id == thread_id);
+            if !has_remaining_subscriptions {
+                thread_state.lock().await.clear_listener();
+            }
         }
         Some(thread_id)
     }
