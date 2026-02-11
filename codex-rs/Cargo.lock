@@ -1374,7 +1374,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1534,7 +1534,7 @@ dependencies = [
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
  "tracing",
 ]
 
@@ -1575,7 +1575,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
  "tracing",
 ]
 
@@ -1635,7 +1635,27 @@ dependencies = [
  "codex-utils-absolute-path",
  "pretty_assertions",
  "serde",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
+]
+
+[[package]]
+name = "codex-config"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
+ "codex-execpolicy",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "futures",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.5",
 ]
 
 [[package]]
@@ -1660,6 +1680,7 @@ dependencies = [
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
+ "codex-config",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1696,7 +1717,6 @@ dependencies = [
  "landlock",
  "libc",
  "maplit",
- "multimap",
  "notify",
  "once_cell",
  "openssl-sys",
@@ -1728,7 +1748,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
  "toml_edit 0.24.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
@@ -2304,7 +2324,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2380,7 +2400,7 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "serde_json",
- "toml 0.9.12+spec-1.1.0",
+ "toml 0.9.5",
 ]
 
 [[package]]
@@ -9296,12 +9316,12 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.12+spec-1.1.0"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
+checksum = "75129e1dc5000bfbaa9fee9d1b21f974f9fbad9daec557a521ee6e080825f6e8"
 dependencies = [
  "indexmap 2.13.0",
- "serde_core",
+ "serde",
  "serde_spanned",
  "toml_datetime",
  "toml_parser",

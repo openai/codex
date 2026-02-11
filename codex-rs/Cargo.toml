@@ -16,6 +16,7 @@ members = [
     "cloud-tasks-client",
     "cli",
     "common",
+    "config",
     "shell-command",
     "core",
     "hooks",
@@ -83,6 +84,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
+codex-config = { path = "config" }
 codex-shell-command = { path = "shell-command" }
 codex-core = { path = "core" }
 codex-hooks = { path = "hooks" }
@@ -239,7 +241,7 @@ tokio-test = "0.4"
 tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 tokio-util = "0.7.18"
-toml = "0.9.5"
+toml = "=0.9.5"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
