@@ -5,7 +5,6 @@
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
 mod prompts;
-mod rollout;
 mod stage_one;
 mod startup;
 mod storage;
