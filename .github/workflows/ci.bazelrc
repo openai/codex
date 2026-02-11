@@ -18,9 +18,9 @@ common:linux --config=remote
 common:linux --strategy=remote
 common:linux --platforms=//:rbe
 
-# On mac, we can run all the build actions remotely but test actions locally.
-common:macos --config=remote
-common:macos --strategy=remote
+# On mac, some crates (e.g., coreaudio-sys) require macOS-native build scripts,
+# so keep both build and test actions local.
+common:macos --strategy=local
 common:macos --strategy=TestRunner=darwin-sandbox,local
 
 # On windows we cannot cross-build the tests but run them locally due to what appears to be a Bazel bug
