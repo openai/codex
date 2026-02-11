@@ -84,11 +84,11 @@ pub(super) async fn run_global_memory_consolidation(
     let root = memory_root(&config.codex_home);
     let completion_watermark = completion_watermark(claimed_watermark, &latest_memories);
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
-        warn!("failed syncing phase-1 rollout summaries for global consolidation: {err}");
+        warn!("failed syncing local memory artifacts for global consolidation: {err}");
         let _ = state_db
             .mark_global_phase2_job_failed(
                 &ownership_token,
-                "failed syncing phase-1 rollout summaries",
+                "failed syncing local memory artifacts",
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
             )
             .await;
@@ -107,7 +107,7 @@ pub(super) async fn run_global_memory_consolidation(
         return false;
     }
     if latest_memories.is_empty() {
-        debug!("memory phase-2 has no stage-1 outputs; finalized local memory artifacts only");
+        debug!("memory phase-2 has no stage-1 outputs; finalized local memory artifacts");
         let _ = state_db
             .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await;
@@ -410,6 +410,25 @@ mod tests {
         tokio::fs::write(&raw_memories_path, "stale raw memories\n")
             .await
             .expect("write stale raw memories");
+        let memory_index_path = root.join("MEMORY.md");
+        tokio::fs::write(&memory_index_path, "stale memory index\n")
+            .await
+            .expect("write stale memory index");
+        let memory_summary_path = root.join("memory_summary.md");
+        tokio::fs::write(&memory_summary_path, "stale memory summary\n")
+            .await
+            .expect("write stale memory summary");
+        let stale_skill_file = root.join("skills/demo/SKILL.md");
+        tokio::fs::create_dir_all(
+            stale_skill_file
+                .parent()
+                .expect("skills subdirectory parent should exist"),
+        )
+        .await
+        .expect("create stale skills dir");
+        tokio::fs::write(&stale_skill_file, "stale skill\n")
+            .await
+            .expect("write stale skill");
 
         harness
             .state_db
@@ -434,6 +453,30 @@ mod tests {
             .await
             .expect("read rebuilt raw memories");
         assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
+        assert!(
+            !tokio::fs::try_exists(&memory_index_path)
+                .await
+                .expect("check memory index existence"),
+            "empty consolidation should remove stale MEMORY.md"
+        );
+        assert!(
+            !tokio::fs::try_exists(&memory_summary_path)
+                .await
+                .expect("check memory summary existence"),
+            "empty consolidation should remove stale memory_summary.md"
+        );
+        assert!(
+            !tokio::fs::try_exists(&stale_skill_file)
+                .await
+                .expect("check stale skill existence"),
+            "empty consolidation should remove stale skills artifacts"
+        );
+        assert!(
+            !tokio::fs::try_exists(root.join("skills"))
+                .await
+                .expect("check skills dir existence"),
+            "empty consolidation should remove stale skills directory"
+        );
 
         harness.shutdown_threads().await;
     }

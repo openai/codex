@@ -36,9 +36,28 @@ pub(super) async fn sync_rollout_summaries_from_memories(
         .collect::<BTreeSet<_>>();
     prune_rollout_summaries(root, &keep).await?;
 
-    for memory in retained {
+    for memory in &retained {
         write_rollout_summary_for_thread(root, memory).await?;
     }
+
+    if retained.is_empty() {
+        for file_name in ["MEMORY.md", "memory_summary.md"] {
+            let path = root.join(file_name);
+            if let Err(err) = tokio::fs::remove_file(path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(err);
+            }
+        }
+
+        let skills_dir = root.join("skills");
+        if let Err(err) = tokio::fs::remove_dir_all(skills_dir).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(err);
+        }
+    }
+
     Ok(())
 }
 
