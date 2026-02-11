@@ -3104,7 +3104,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once pre-turn compaction includes incoming user input on main.
+// TODO(ccunningham): Update once pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {
     skip_if_no_network!();
 
@@ -3194,7 +3194,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(
-            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded on main.",
+            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.",
             &[
                 ("Local Compaction Request", &requests[2]),
                 ("Local Post-Compaction History Layout", &requests[3]),
@@ -3211,7 +3211,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     );
     assert!(
         !compact_shape.contains("USER_THREE"),
-        "current main behavior excludes incoming user message from pre-turn compaction input"
+        "current behavior excludes incoming user message from pre-turn compaction input"
     );
     let follow_up_has_incoming_image = requests[3].inputs_of_type("message").iter().any(|item| {
         if item.get("role").and_then(Value::as_str) != Some("user") {
@@ -3242,7 +3242,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
-// user input and emits richer oversized-input messaging on main.
+// user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     skip_if_no_network!();
 
@@ -3316,9 +3316,9 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
         sectioned_request_shapes(
-            "Pre-turn auto-compaction context-window failure on main: compaction request excludes the incoming user message and the turn errors.",
+            "Pre-turn auto-compaction context-window failure : compaction request excludes the incoming user message and the turn errors.",
             &[(
-                "Local Compaction Request (Incoming User Excluded on main)",
+                "Local Compaction Request (Incoming User Excluded)",
                 &requests[1]
             ),]
         )
@@ -3326,7 +3326,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     assert!(
         !include_attempt_shape.contains("USER_TWO"),
-        "current main behavior excludes incoming user message from pre-turn compaction input"
+        "current behavior excludes incoming user message from pre-turn compaction input"
     );
     assert!(
         error_message.contains("ran out of room in the model's context window"),
