@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellCommandToolCallParams;
@@ -48,46 +49,25 @@ struct UnifiedExecCommandArgs {
     login: bool,
 }
 
-/// Builds rewrite context for a specific tool call by first extracting all file paths that
-/// the call is expected to read.
-pub(crate) async fn mention_rewrite_context_for_tool_call(
-    session: &Session,
-    turn: &TurnContext,
-    tool_name: &str,
-    payload: &ToolPayload,
-) -> Option<MentionRewriteContext> {
-    let read_paths = read_paths_for_tool_call(session, turn, tool_name, payload);
-    mention_rewrite_context_for_read_paths(session, turn, read_paths).await
+/// Turn-scoped data used by mention rewriting: one canonical rewrite context and the
+/// skill set used to decide whether a tool call should be rewritten at all.
+pub(crate) struct TurnMentionRewriteData {
+    context: Arc<MentionRewriteContext>,
+    skills: Arc<[SkillMetadata]>,
 }
 
-/// Builds mention rewrite context for a set of read paths when at least one path targets
-/// skill-related content and there are loaded skills in the current cwd.
-pub(crate) async fn mention_rewrite_context_for_read_paths(
+/// Loads turn-scoped rewrite data once (skills + connectors + canonical lookup maps).
+/// Callers still decide per tool call whether rewriting applies by checking read paths.
+pub(crate) async fn load_turn_mention_rewrite_data(
     session: &Session,
     turn: &TurnContext,
-    read_paths: Vec<PathBuf>,
-) -> Option<MentionRewriteContext> {
-    if read_paths.is_empty() {
-        return None;
-    }
-
+) -> Option<TurnMentionRewriteData> {
     let skills_outcome = session
         .services
         .skills_manager
         .skills_for_cwd(&turn.cwd, false)
         .await;
     if skills_outcome.skills.is_empty() {
-        return None;
-    }
-
-    let canonical_paths = read_paths
-        .into_iter()
-        .map(|path| dunce::canonicalize(&path).unwrap_or(path))
-        .collect::<Vec<_>>();
-    if !canonical_paths
-        .iter()
-        .any(|path| should_rewrite_mentions_for_path(path, &skills_outcome.skills))
-    {
         return None;
     }
 
@@ -107,14 +87,48 @@ pub(crate) async fn mention_rewrite_context_for_read_paths(
     };
     let connector_slug_counts = build_connector_slug_counts(&connectors);
 
-    Some(build_mention_rewrite_context(
+    let context = build_mention_rewrite_context(
         &skills_outcome.skills,
         &skills_outcome.disabled_paths,
         &skill_name_counts,
         &skill_name_counts_lower,
         &connector_slug_counts,
         &connectors,
-    ))
+    );
+
+    Some(TurnMentionRewriteData {
+        context: Arc::new(context),
+        skills: skills_outcome.skills.into(),
+    })
+}
+
+/// Returns the cached turn-scoped rewrite context when any read path points to skill-related
+/// content; otherwise returns `None`.
+pub(crate) fn mention_rewrite_context_for_read_paths(
+    read_paths: Vec<PathBuf>,
+    turn_data: &TurnMentionRewriteData,
+) -> Option<Arc<MentionRewriteContext>> {
+    if should_rewrite_mentions_for_read_paths(&read_paths, turn_data.skills.as_ref()) {
+        Some(Arc::clone(&turn_data.context))
+    } else {
+        None
+    }
+}
+
+/// Returns whether any read path points to skill-related content that should have mentions
+/// rewritten.
+pub(crate) fn should_rewrite_mentions_for_read_paths(
+    read_paths: &[PathBuf],
+    skills: &[SkillMetadata],
+) -> bool {
+    if read_paths.is_empty() {
+        return false;
+    }
+
+    read_paths
+        .iter()
+        .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .any(|path| should_rewrite_mentions_for_path(&path, skills))
 }
 
 /// Rewrites successful function-call output text in place based on tool-specific output format
@@ -190,7 +204,7 @@ pub(crate) fn rewrite_text_with_mentions(text: &str, context: &MentionRewriteCon
 }
 
 /// Routes each supported tool payload shape to the corresponding read-path extraction logic.
-fn read_paths_for_tool_call(
+pub(crate) fn read_paths_for_tool_call(
     session: &Session,
     turn: &TurnContext,
     tool_name: &str,
@@ -434,6 +448,7 @@ mod tests {
     use super::command_read_paths;
     use super::rewrite_tool_response_mentions;
     use super::should_rewrite_mentions_for_path;
+    use super::should_rewrite_mentions_for_read_paths;
 
     /// Builds a test skill descriptor with the fields required by rewrite-context helpers.
     fn make_skill(name: &str, path: &str) -> SkillMetadata {
@@ -502,6 +517,26 @@ mod tests {
         assert_eq!(
             false,
             should_rewrite_mentions_for_path(Path::new("/tmp/random/README.md"), &skills)
+        );
+    }
+
+    #[test]
+    fn should_rewrite_mentions_for_read_paths_rewrites_only_skill_related_paths() {
+        let skills = vec![make_skill("alpha-skill", "/tmp/skills/alpha/SKILL.md")];
+
+        assert_eq!(
+            true,
+            should_rewrite_mentions_for_read_paths(
+                &[PathBuf::from("/tmp/skills/alpha/references/context.md")],
+                &skills,
+            )
+        );
+        assert_eq!(
+            false,
+            should_rewrite_mentions_for_read_paths(
+                &[PathBuf::from("/tmp/random/README.md")],
+                &skills
+            )
         );
     }
 

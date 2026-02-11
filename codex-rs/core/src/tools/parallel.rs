@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +16,10 @@ use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
-use crate::tools::mention_rewrite::mention_rewrite_context_for_tool_call;
+use crate::tools::mention_rewrite::TurnMentionRewriteData;
+use crate::tools::mention_rewrite::load_turn_mention_rewrite_data;
+use crate::tools::mention_rewrite::mention_rewrite_context_for_read_paths;
+use crate::tools::mention_rewrite::read_paths_for_tool_call;
 use crate::tools::mention_rewrite::rewrite_tool_response_mentions;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
@@ -30,6 +34,8 @@ pub(crate) struct ToolCallRuntime {
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
+    // Lazily populated once per turn and reused across tool calls.
+    mention_rewrite_data: Arc<OnceCell<Option<TurnMentionRewriteData>>>,
 }
 
 impl ToolCallRuntime {
@@ -45,6 +51,7 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
+            mention_rewrite_data: Arc::new(OnceCell::new()),
         }
     }
 
@@ -61,6 +68,7 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
+        let mention_rewrite_data = Arc::clone(&self.mention_rewrite_data);
         let started = Instant::now();
 
         let dispatch_span = trace_span!(
@@ -80,13 +88,25 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
-                        let rewrite_context = mention_rewrite_context_for_tool_call(
+                        let read_paths = read_paths_for_tool_call(
                             session.as_ref(),
                             turn.as_ref(),
                             &call.tool_name,
                             &call.payload,
-                        )
-                        .await;
+                        );
+                        let rewrite_context = if read_paths.is_empty() {
+                            None
+                        } else {
+                            // Build turn-scoped mention rewrite data once, then reuse.
+                            let turn_data = mention_rewrite_data
+                                .get_or_init(|| async {
+                                    load_turn_mention_rewrite_data(session.as_ref(), turn.as_ref()).await
+                                })
+                                .await;
+                            turn_data
+                                .as_ref()
+                                .and_then(|data| mention_rewrite_context_for_read_paths(read_paths, data))
+                        };
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {
@@ -98,11 +118,11 @@ impl ToolCallRuntime {
                             .instrument(dispatch_span.clone())
                             .await?;
 
-                        if let Some(context) = rewrite_context {
+                        if let Some(context) = rewrite_context.as_ref() {
                             rewrite_tool_response_mentions(
                                 &mut response,
                                 &call.tool_name,
-                                &context,
+                                context.as_ref(),
                             );
                         }
 
