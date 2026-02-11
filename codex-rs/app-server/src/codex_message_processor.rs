@@ -2637,11 +2637,7 @@ impl CodexMessageProcessor {
     }
 
     /// Best-effort: attach a listener for thread_id if missing.
-    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
-        if self.thread_state_manager.has_listener_for_thread(thread_id) {
-            return;
-        }
-    }
+    pub(crate) async fn try_attach_thread_listener(&mut self, _thread_id: ThreadId) {}
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {

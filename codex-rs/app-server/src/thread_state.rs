@@ -84,12 +84,6 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) fn has_listener_for_thread(&self, thread_id: ThreadId) -> bool {
-        self.thread_id_by_subscription
-            .values()
-            .any(|existing| *existing == thread_id)
-    }
-
     pub(crate) fn thread_state(&mut self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
         self.thread_states
             .entry(thread_id)
