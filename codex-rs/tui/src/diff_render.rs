@@ -618,9 +618,11 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
             for ch in remaining.chars() {
                 // Tabs have no Unicode width; treat them as TAB_WIDTH columns.
                 let w = ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 0 });
-                if col + chars_col + w > max_cols && byte_end > 0 {
-                    // Adding this character would exceed the line width and we
-                    // already have some content — break here.
+                if col + chars_col + w > max_cols {
+                    // Adding this character would exceed the line width.
+                    // Break here; if this is the first character in `remaining`
+                    // we will flush/start a new line in the `byte_end == 0`
+                    // branch below before consuming it.
                     break;
                 }
                 byte_end += ch.len_utf8();
@@ -1090,6 +1092,35 @@ mod tests {
             "tab + 5 chars should exceed 8 cols and wrap, got {} line(s): {result:?}",
             result.len()
         );
+    }
+
+    #[test]
+    fn wrap_styled_spans_wraps_before_first_overflowing_char() {
+        let spans = vec![RtSpan::raw("abcd\t界")];
+        let result = wrap_styled_spans(&spans, 5);
+
+        let line_text: Vec<String> = result
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(line_text, vec!["abcd", "\t", "界"]);
+
+        let line_width = |line: &[RtSpan<'static>]| -> usize {
+            line.iter()
+                .flat_map(|span| span.content.chars())
+                .map(|ch| ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 0 }))
+                .sum()
+        };
+        for line in &result {
+            assert!(
+                line_width(line) <= 5,
+                "wrapped line exceeded width 5: {line:?}"
+            );
+        }
     }
 
     #[test]
