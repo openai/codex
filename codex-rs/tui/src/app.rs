@@ -1596,18 +1596,22 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAppLink {
+                app_id,
                 title,
                 description,
                 instructions,
                 url,
                 is_installed,
+                is_enabled,
             } => {
                 self.chat_widget.open_app_link_view(
+                    app_id,
                     title,
                     description,
                     instructions,
                     url,
                     is_installed,
+                    is_enabled,
                 );
             }
             AppEvent::OpenUrlInBrowser { url } => {
@@ -2210,6 +2214,51 @@ impl App {
                         let path_display = path.display();
                         self.chat_widget.add_error_message(format!(
                             "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::SetAppEnabled { id, enabled } => {
+                let edits = if enabled {
+                    vec![
+                        ConfigEdit::ClearPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                        },
+                        ConfigEdit::ClearPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                        },
+                    ]
+                } else {
+                    vec![
+                        ConfigEdit::SetPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                            value: false.into(),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                            value: "user".into(),
+                        },
+                    ]
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_connector_enabled(&id, enabled);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update app config for {id}: {err}"
                         ));
                     }
                 }

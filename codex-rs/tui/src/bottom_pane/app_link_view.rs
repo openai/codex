@@ -33,11 +33,13 @@ enum AppLinkScreen {
 }
 
 pub(crate) struct AppLinkView {
+    app_id: String,
     title: String,
     description: Option<String>,
     instructions: String,
     url: String,
     is_installed: bool,
+    is_enabled: bool,
     app_event_tx: AppEventSender,
     screen: AppLinkScreen,
     selected_action: usize,
@@ -46,19 +48,23 @@ pub(crate) struct AppLinkView {
 
 impl AppLinkView {
     pub(crate) fn new(
+        app_id: String,
         title: String,
         description: Option<String>,
         instructions: String,
         url: String,
         is_installed: bool,
+        is_enabled: bool,
         app_event_tx: AppEventSender,
     ) -> Self {
         Self {
+            app_id,
             title,
             description,
             instructions,
             url,
             is_installed,
+            is_enabled,
             app_event_tx,
             screen: AppLinkScreen::Link,
             selected_action: 0,
@@ -66,16 +72,24 @@ impl AppLinkView {
         }
     }
 
-    fn action_labels(&self) -> [&'static str; 2] {
+    fn action_labels(&self) -> Vec<&'static str> {
         match self.screen {
             AppLinkScreen::Link => {
                 if self.is_installed {
-                    ["Manage on ChatGPT", "Back"]
+                    vec![
+                        "Manage on ChatGPT",
+                        if self.is_enabled {
+                            "Disable app"
+                        } else {
+                            "Enable app"
+                        },
+                        "Back",
+                    ]
                 } else {
-                    ["Install on ChatGPT", "Back"]
+                    vec!["Install on ChatGPT", "Back"]
                 }
             }
-            AppLinkScreen::InstallConfirmation => ["I already Installed it", "Back"],
+            AppLinkScreen::InstallConfirmation => vec!["I already Installed it", "Back"],
         }
     }
 
@@ -87,42 +101,47 @@ impl AppLinkView {
         self.selected_action = (self.selected_action + 1).min(self.action_labels().len() - 1);
     }
 
-    fn handle_primary_action(&mut self) {
-        match self.screen {
-            AppLinkScreen::Link => {
-                self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
-                    url: self.url.clone(),
-                });
-                if !self.is_installed {
-                    self.screen = AppLinkScreen::InstallConfirmation;
-                    self.selected_action = 0;
-                }
-            }
-            AppLinkScreen::InstallConfirmation => {
-                self.app_event_tx.send(AppEvent::RefreshConnectors {
-                    force_refetch: true,
-                });
-                self.complete = true;
-            }
+    fn open_chatgpt_link(&mut self) {
+        self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
+            url: self.url.clone(),
+        });
+        if !self.is_installed {
+            self.screen = AppLinkScreen::InstallConfirmation;
+            self.selected_action = 0;
         }
     }
 
-    fn handle_secondary_action(&mut self) {
-        match self.screen {
-            AppLinkScreen::Link => {
-                self.complete = true;
-            }
-            AppLinkScreen::InstallConfirmation => {
-                self.screen = AppLinkScreen::Link;
-                self.selected_action = 0;
-            }
-        }
+    fn refresh_connectors_and_close(&mut self) {
+        self.app_event_tx.send(AppEvent::RefreshConnectors {
+            force_refetch: true,
+        });
+        self.complete = true;
+    }
+
+    fn back_to_link_screen(&mut self) {
+        self.screen = AppLinkScreen::Link;
+        self.selected_action = 0;
+    }
+
+    fn toggle_enabled(&mut self) {
+        self.is_enabled = !self.is_enabled;
+        self.app_event_tx.send(AppEvent::SetAppEnabled {
+            id: self.app_id.clone(),
+            enabled: self.is_enabled,
+        });
     }
 
     fn activate_selected_action(&mut self) {
-        match self.selected_action {
-            0 => self.handle_primary_action(),
-            _ => self.handle_secondary_action(),
+        match self.screen {
+            AppLinkScreen::Link => match self.selected_action {
+                0 => self.open_chatgpt_link(),
+                1 if self.is_installed => self.toggle_enabled(),
+                _ => self.complete = true,
+            },
+            AppLinkScreen::InstallConfirmation => match self.selected_action {
+                0 => self.refresh_connectors_and_close(),
+                _ => self.back_to_link_screen(),
+            },
         }
     }
 
@@ -308,20 +327,19 @@ impl BottomPaneView for AppLinkView {
                 ..
             } => self.move_selection_next(),
             KeyEvent {
-                code: KeyCode::Char('1'),
+                code: KeyCode::Char(c),
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.selected_action = 0;
-                self.activate_selected_action();
-            }
-            KeyEvent {
-                code: KeyCode::Char('2'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.selected_action = 1;
-                self.activate_selected_action();
+                if let Some(index) = c
+                    .to_digit(10)
+                    .and_then(|digit| digit.checked_sub(1))
+                    .map(|index| index as usize)
+                    && index < self.action_labels().len()
+                {
+                    self.selected_action = index;
+                    self.activate_selected_action();
+                }
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -400,5 +418,65 @@ impl crate::render::renderable::Renderable for AppLinkView {
             };
             self.hint_line().dim().render(hint_area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn installed_app_has_toggle_action() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            "connector_1".to_string(),
+            "Notion".to_string(),
+            None,
+            "Manage app".to_string(),
+            "https://example.test/notion".to_string(),
+            true,
+            true,
+            tx,
+        );
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Disable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn toggle_action_sends_set_app_enabled_and_updates_label() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            "connector_1".to_string(),
+            "Notion".to_string(),
+            None,
+            "Manage app".to_string(),
+            "https://example.test/notion".to_string(),
+            true,
+            true,
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetAppEnabled { id, enabled }) => {
+                assert_eq!(id, "connector_1");
+                assert!(!enabled);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Enable app", "Back"]
+        );
     }
 }

@@ -3731,6 +3731,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                 distribution_channel: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -3746,6 +3747,10 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
         before.contains("Installed 1 of 1 available apps."),
         "expected initial apps popup snapshot, got:\n{before}"
     );
+    assert!(
+        before.contains("Installed. Press Enter to open the app page"),
+        "expected selected app description to explain the app page action, got:\n{before}"
+    );
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
@@ -3759,6 +3764,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     distribution_channel: None,
                     install_url: Some("https://example.test/notion".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
                 codex_chatgpt::connectors::AppInfo {
                     id: "connector_2".to_string(),
@@ -3769,6 +3775,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     distribution_channel: None,
                     install_url: Some("https://example.test/linear".to_string()),
                     is_accessible: true,
+                    is_enabled: true,
                 },
             ],
         }),
@@ -3802,6 +3809,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             distribution_channel: None,
             install_url: Some("https://example.test/notion".to_string()),
             is_accessible: true,
+            is_enabled: true,
         },
         codex_chatgpt::connectors::AppInfo {
             id: "connector_2".to_string(),
@@ -3812,6 +3820,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             distribution_channel: None,
             install_url: Some("https://example.test/linear".to_string()),
             is_accessible: false,
+            is_enabled: true,
         },
     ];
     chat.on_connectors_loaded(
@@ -3832,6 +3841,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
                 distribution_channel: None,
                 install_url: Some("https://example.test/notion".to_string()),
                 is_accessible: true,
+                is_enabled: true,
             }],
         }),
         false,
@@ -3848,6 +3858,76 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     assert!(
         popup.contains("Installed 1 of 2 available apps."),
         "expected previous full snapshot to be preserved, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: false,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected selected app description to include disabled status, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("enable/disable this app."),
+        "expected selected app description to mention enable/disable action, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_popup_for_not_installed_app_uses_install_only_selected_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_2".to_string(),
+                name: "Linear".to_string(),
+                description: Some("Project tracking".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://example.test/linear".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            }],
+        }),
+        true,
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Can be installed. Press Enter to open the app page to install"),
+        "expected selected app description to be install-only for not-installed apps, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("enable/disable this app."),
+        "did not expect enable/disable text for not-installed apps, got:\n{popup}"
     );
 }
 
