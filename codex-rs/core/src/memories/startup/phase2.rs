@@ -43,7 +43,7 @@ pub(super) fn spawn_phase2_completion_task(
             }
         };
 
-        run_phase2_completion_task(
+        let final_status = run_phase2_completion_task(
             Arc::clone(&state_db),
             ownership_token,
             completion_watermark,
@@ -51,6 +51,17 @@ pub(super) fn spawn_phase2_completion_task(
             status_rx,
         )
         .await;
+        if matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
+            return;
+        }
+
+        tokio::spawn(async move {
+            if let Err(err) = agent_control.shutdown_agent(consolidation_agent_id).await {
+                warn!(
+                    "failed to auto-close global memory consolidation agent {consolidation_agent_id}: {err}"
+                );
+            }
+        });
     });
 }
 
@@ -60,7 +71,7 @@ async fn run_phase2_completion_task(
     completion_watermark: i64,
     consolidation_agent_id: ThreadId,
     mut status_rx: watch::Receiver<AgentStatus>,
-) {
+) -> AgentStatus {
     let final_status = {
         let mut heartbeat_interval =
             tokio::time::interval(Duration::from_secs(PHASE_TWO_JOB_HEARTBEAT_SECONDS));
@@ -131,7 +142,7 @@ async fn run_phase2_completion_task(
                 );
             }
         }
-        return;
+        return final_status;
     }
 
     let failure_reason = phase2_failure_reason(&final_status);
@@ -139,6 +150,7 @@ async fn run_phase2_completion_task(
     warn!(
         "memory phase-2 global consolidation agent finished with non-success status: agent_id={consolidation_agent_id} final_status={final_status:?}"
     );
+    final_status
 }
 
 async fn mark_phase2_failed_with_recovery(
