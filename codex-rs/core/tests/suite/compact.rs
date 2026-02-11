@@ -5,6 +5,8 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::features::Feature;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -16,9 +18,18 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -108,6 +119,37 @@ fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider
+}
+
+fn test_remote_model_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: format!("{slug} display"),
+        description: Some(format!("{slug} description")),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(context_window),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1548,6 +1590,359 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         compact_requests[0].path(),
         "/v1/responses/compact",
         "remote compaction should hit the compact endpoint"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let large_model = "test-large-context-model";
+    let small_model = "test-small-context-model";
+    let compact_summary = "SMALL_CONTEXT_PRE_SAMPLING_SUMMARY";
+    let over_small_model_limit_tokens = 115_000;
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                test_remote_model_with_context_window(large_model, 273_000),
+                test_remote_model_with_context_window(small_model, 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: compact_summary.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_SMALL_CONTEXT_PRE_SAMPLING_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock_1 = mount_compact_json_once(
+        &server,
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+    let compact_mock_2 =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", over_small_model_limit_tokens),
+        ]),
+    )
+    .await;
+
+    let follow_up_user = "smaller model follow up";
+    let follow_up_mock = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            body.contains(follow_up_user) && body.contains(compact_summary)
+        },
+        sse(vec![
+            ev_assistant_message("m2", FINAL_REPLY),
+            ev_completed("r2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(large_model.to_string());
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    let models_manager = test.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let model_requests = models_mock.requests();
+    assert_eq!(
+        model_requests.len(),
+        1,
+        "expected a single /models request for online model metadata"
+    );
+    assert_eq!(model_requests[0].url.path(), "/v1/models");
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "first turn on large model".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: large_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: follow_up_user.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: small_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ContextCompacted(_))
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut compact_requests = compact_mock_1.requests();
+    compact_requests.extend(compact_mock_2.requests());
+    assert!(
+        !compact_requests.is_empty(),
+        "expected compaction before follow-up request on the smaller model"
+    );
+    assert_eq!(compact_requests[0].path(), "/v1/responses/compact");
+    let first_compact_body = compact_requests[0].body_json();
+    assert_eq!(
+        first_compact_body
+            .get("model")
+            .and_then(|value| value.as_str()),
+        Some(large_model),
+        "expected first pre-sampling compact to run with previous larger model"
+    );
+
+    let follow_up_requests = follow_up_mock.requests();
+    assert!(
+        !follow_up_requests.is_empty(),
+        "expected at least one follow-up /responses request"
+    );
+    let follow_up_request = follow_up_requests
+        .last()
+        .expect("follow-up request")
+        .body_json();
+    assert_eq!(
+        follow_up_request
+            .get("model")
+            .and_then(|value| value.as_str()),
+        Some(small_model),
+        "expected follow-up response request to use the smaller model"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_context_window_model()
+ {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let large_model = "test-large-context-model";
+    let small_model = "test-small-context-model";
+    let compact_summary = "RESUMED_SMALL_CONTEXT_PRE_SAMPLING_SUMMARY";
+    let over_small_model_limit_tokens = 115_000;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                test_remote_model_with_context_window(large_model, 273_000),
+                test_remote_model_with_context_window(small_model, 125_000),
+            ],
+        },
+    )
+    .await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("m1", FIRST_REPLY),
+            ev_completed_with_tokens("r1", over_small_model_limit_tokens),
+        ]),
+    )
+    .await;
+
+    let mut start_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(large_model.to_string());
+        });
+    let initial = start_builder.build(&server).await.unwrap();
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let models_manager = initial.thread_manager.get_models_manager();
+    let _ = models_manager
+        .list_models(&initial.config, RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    initial
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "first turn on large model".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: initial.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: large_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: compact_summary.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_RESUMED_SMALL_CONTEXT_PRE_SAMPLING_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock_1 = mount_compact_json_once(
+        &server,
+        serde_json::json!({ "output": compacted_history.clone() }),
+    )
+    .await;
+    let compact_mock_2 =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let follow_up_user = "smaller model follow up after resume";
+    let follow_up_mock = mount_sse_once_match(
+        &server,
+        move |req: &wiremock::Request| {
+            let body = std::str::from_utf8(&req.body).unwrap_or("");
+            body.contains(follow_up_user) && body.contains(compact_summary)
+        },
+        sse(vec![
+            ev_assistant_message("m2", FINAL_REPLY),
+            ev_completed("r2"),
+        ]),
+    )
+    .await;
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(large_model.to_string());
+        });
+    let resumed = resume_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .unwrap();
+
+    resumed
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: follow_up_user.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: resumed.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: small_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::ContextCompacted(_))
+    })
+    .await;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let mut compact_requests = compact_mock_1.requests();
+    compact_requests.extend(compact_mock_2.requests());
+    assert!(
+        !compact_requests.is_empty(),
+        "expected compaction before follow-up request after resume"
+    );
+    assert_eq!(compact_requests[0].path(), "/v1/responses/compact");
+    let first_compact_body = compact_requests[0].body_json();
+    assert_eq!(
+        first_compact_body
+            .get("model")
+            .and_then(|value| value.as_str()),
+        Some(large_model),
+        "expected first resumed pre-sampling compact to use previous larger model"
+    );
+
+    let follow_up_requests = follow_up_mock.requests();
+    assert!(
+        !follow_up_requests.is_empty(),
+        "expected at least one resumed follow-up /responses request"
+    );
+    let follow_up_request = follow_up_requests
+        .last()
+        .expect("resumed follow-up request")
+        .body_json();
+    assert_eq!(
+        follow_up_request
+            .get("model")
+            .and_then(|value| value.as_str()),
+        Some(small_model),
+        "expected resumed follow-up response request to use smaller model"
     );
 }
 

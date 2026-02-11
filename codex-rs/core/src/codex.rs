@@ -3858,15 +3858,16 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit
-        && run_auto_compact(&sess, &turn_context).await.is_err()
+
+    if run_pre_sampling_compact(&sess, &turn_context)
+        .await
+        .is_err()
     {
         return None;
     }
@@ -4113,6 +4114,52 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
         run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
     Ok(())
+}
+
+async fn run_pre_sampling_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    // Compact with previous model if the model was switched and previous context window is larger than the new one
+    if let Some(previous_turn_context) = sess.previous_turn_context().await
+        && should_run_inline_compact_with_previous_context(
+            total_usage_tokens,
+            &previous_turn_context,
+            turn_context.as_ref(),
+        ) {
+            run_auto_compact(sess, &previous_turn_context).await?;
+        }
+    // Compact if the total usage tokens are greater than the auto compact limit
+    if total_usage_tokens >= auto_compact_limit {
+        run_auto_compact(sess, turn_context).await?;
+    }
+    Ok(())
+}
+
+fn should_run_inline_compact_with_previous_context(
+    total_usage_tokens: i64,
+    previous_turn_context: &TurnContext,
+    turn_context: &TurnContext,
+) -> bool {
+    let Some(old_context_window) = previous_turn_context.model_context_window() else {
+        return false;
+    };
+    let Some(new_context_window) = turn_context.model_context_window() else {
+        return false;
+    };
+    let new_auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+
+    total_usage_tokens > new_auto_compact_limit
+        && previous_turn_context.model_info.slug != turn_context.model_info.slug
+        && old_context_window > new_context_window
 }
 
 fn filter_connectors_for_input(
