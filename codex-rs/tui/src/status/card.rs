@@ -167,12 +167,16 @@ impl StatusHistoryCell {
                 }
             }
         };
-        let permissions = match (config.approval_policy.value(), config.sandbox_policy.get()) {
-            (AskForApproval::OnRequest, SandboxPolicy::WorkspaceWrite { .. }) => {
-                "Default".to_string()
-            }
-            (AskForApproval::Never, SandboxPolicy::DangerFullAccess) => "Full Access".to_string(),
-            _ => format!("Custom ({sandbox}, {approval})"),
+        let permissions = if config.approval_policy.value() == AskForApproval::OnRequest
+            && *config.sandbox_policy.get() == SandboxPolicy::new_workspace_write_policy()
+        {
+            "Default".to_string()
+        } else if config.approval_policy.value() == AskForApproval::Never
+            && *config.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+        {
+            "Full Access".to_string()
+        } else {
+            format!("Custom ({sandbox}, {approval})")
         };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
