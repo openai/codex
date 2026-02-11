@@ -326,7 +326,10 @@ mod tests {
     #[test]
     fn restricted_sandbox_requires_exec_approval_on_request() {
         assert_eq!(
-            default_exec_approval_requirement(AskForApproval::OnRequest, &SandboxPolicy::ReadOnly),
+            default_exec_approval_requirement(
+                AskForApproval::OnRequest,
+                &SandboxPolicy::new_read_only_policy()
+            ),
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: None,

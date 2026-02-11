@@ -138,7 +138,7 @@ impl ThreadMetadataBuilder {
             model_provider: None,
             cwd: PathBuf::new(),
             cli_version: None,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             approval_mode: AskForApproval::OnRequest,
             archived_at: None,
             git_sha: None,
