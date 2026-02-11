@@ -62,6 +62,13 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {
+        if !sandbox_policy.has_full_disk_read_access() {
+            return Err(CodexErr::UnsupportedOperation(
+                "Restricted read-only access is not supported by the legacy Linux Landlock filesystem backend."
+                    .to_string(),
+            ));
+        }
+
         let writable_roots = sandbox_policy
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
@@ -69,9 +76,6 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
             .collect();
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
-
-    // TODO(ragona): Add appropriate restrictions if
-    // `sandbox_policy.has_full_disk_read_access()` is `false`.
 
     Ok(())
 }
@@ -222,11 +226,11 @@ mod tests {
     #[test]
     fn restricted_network_policy_always_installs_seccomp() {
         assert!(should_install_network_seccomp(
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             false
         ));
         assert!(should_install_network_seccomp(
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             true
         ));
     }
