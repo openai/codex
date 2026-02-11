@@ -3417,11 +3417,15 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 
     let server = start_mock_server().await;
 
-    let follow_up_turn = sse(vec![
-        ev_assistant_message("m1", FINAL_REPLY),
-        ev_completed_with_tokens("r1", 80),
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "MANUAL_EMPTY_SUMMARY"),
+        ev_completed_with_tokens("r1", 90),
     ]);
-    let request_log = mount_sse_once(&server, follow_up_turn).await;
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r2", 80),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![compact_turn, follow_up_turn]).await;
 
     let model_provider = non_openai_model_provider(&server);
     let codex = test_codex()
@@ -3450,19 +3454,31 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let requests = request_log.requests();
-    assert_eq!(requests.len(), 1, "expected only follow-up turn request");
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected manual /compact request and follow-up turn request"
+    );
 
-    let follow_up_shape = request_input_shape(&requests[0]);
+    let compact_shape = request_input_shape(&requests[0]);
+    let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
         sectioned_request_shapes(
-            "Manual /compact with no prior user turn behaves as a no-op and follow-up turn carries only canonical initial context plus the new user message.",
-            &[("Local Post-Compaction History Layout", &requests[0]),]
+            "Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.",
+            &[
+                ("Local Compaction Request", &requests[0]),
+                ("Local Post-Compaction History Layout", &requests[1]),
+            ]
         )
     );
     assert!(
-        !follow_up_shape.contains("<SUMMARY:MANUAL_EMPTY_SUMMARY>"),
-        "follow-up request should not include compact summary after no-op /compact"
+        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        "manual /compact request should include summarization prompt"
+    );
+    assert!(
+        follow_up_shape.contains("AFTER_MANUAL_EMPTY_COMPACT"),
+        "follow-up request should include the submitted user message"
     );
 }
 

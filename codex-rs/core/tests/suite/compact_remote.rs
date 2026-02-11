@@ -1532,7 +1532,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     let compacted_history = vec![
         user_message_item("USER_ONE"),
         user_message_item("USER_TWO"),
-        user_message_item("USER_THREE"),
         user_message_item(&summary_with_prefix("REMOTE_PRE_TURN_SUMMARY")),
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -1601,6 +1600,11 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     assert!(
         follow_up_shape.contains("<SUMMARY:REMOTE_PRE_TURN_SUMMARY>"),
         "post-compaction request should include remote summary"
+    );
+    assert_eq!(
+        follow_up_shape.matches("USER_THREE").count(),
+        1,
+        "post-compaction request should contain incoming user exactly once from runtime append"
     );
 
     Ok(())
