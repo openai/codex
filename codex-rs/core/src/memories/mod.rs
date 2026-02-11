@@ -4,16 +4,14 @@
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
-mod prompts;
+pub(crate) mod prompts;
 mod stage_one;
 mod startup;
 mod storage;
-mod text;
 
 #[cfg(test)]
 mod tests;
 
-use serde::Deserialize;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -42,24 +40,6 @@ const PHASE_TWO_JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
 /// Heartbeat interval (seconds) for phase-2 running jobs.
 const PHASE_TWO_JOB_HEARTBEAT_SECONDS: u64 = 30;
 
-/// Parsed stage-1 model output payload.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StageOneOutput {
-    /// Detailed markdown raw memory for a single rollout.
-    #[serde(rename = "raw_memory")]
-    raw_memory: String,
-    /// Compact summary line used for routing and indexing.
-    #[serde(rename = "rollout_summary")]
-    rollout_summary: String,
-    /// Optional slug accepted from stage-1 output for forward compatibility.
-    ///
-    /// This is currently ignored by downstream storage and naming, which remain
-    /// thread-id based.
-    #[serde(default, rename = "rollout_slug")]
-    _rollout_slug: Option<String>,
-}
-
 pub fn memory_root(codex_home: &Path) -> PathBuf {
     codex_home.join("memories")
 }
@@ -76,7 +56,6 @@ async fn ensure_layout(root: &Path) -> std::io::Result<()> {
     tokio::fs::create_dir_all(rollout_summaries_dir(root)).await
 }
 
-pub(crate) use prompts::build_memory_tool_developer_instructions;
 /// Starts the memory startup pipeline for eligible root sessions.
 ///
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
