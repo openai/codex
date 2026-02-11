@@ -53,6 +53,12 @@ struct StageOneOutput {
     /// Compact summary line used for routing and indexing.
     #[serde(rename = "rollout_summary")]
     rollout_summary: String,
+    /// Optional slug accepted from stage-1 output for forward compatibility.
+    ///
+    /// This is currently ignored by downstream storage and naming, which remain
+    /// thread-id based.
+    #[serde(default, rename = "rollout_slug")]
+    _rollout_slug: Option<String>,
 }
 
 fn memory_root(codex_home: &Path) -> PathBuf {

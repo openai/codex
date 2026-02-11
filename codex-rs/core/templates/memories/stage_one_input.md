@@ -1,4 +1,4 @@
-Analyze this rollout and produce `raw_memory` and `rollout_summary` as JSON.
+Analyze this rollout and produce JSON with `raw_memory`, `rollout_summary`, and optional `rollout_slug`.
 
 rollout_context:
 - rollout_path: {{ rollout_path }}

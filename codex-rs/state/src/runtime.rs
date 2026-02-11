@@ -1611,7 +1611,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn mark_stage1_job_succeeded_no_output_does_not_persist_stage1_output() {
+    async fn mark_stage1_job_succeeded_no_output_persists_stage1_checkpoint() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
             .await
@@ -1619,6 +1619,7 @@ WHERE kind = 'memory_stage1'
 
         let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
         let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
         runtime
             .upsert_thread(&test_thread_metadata(
                 &codex_home,
@@ -1644,14 +1645,37 @@ WHERE kind = 'memory_stage1'
             "stage1 no-output success should complete the job"
         );
 
-        let count = sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
+        let output = sqlx::query(
+            "SELECT source_updated_at, raw_memory, rollout_summary FROM stage1_outputs WHERE thread_id = ?",
+        )
             .bind(thread_id.to_string())
             .fetch_one(runtime.pool.as_ref())
             .await
-            .expect("count stage1 outputs")
-            .try_get::<i64, _>("count")
-            .expect("count value");
-        assert_eq!(count, 0);
+            .expect("load stage1 output checkpoint");
+        assert_eq!(
+            output
+                .try_get::<i64, _>("source_updated_at")
+                .expect("source_updated_at value"),
+            100
+        );
+        assert_eq!(
+            output
+                .try_get::<String, _>("raw_memory")
+                .expect("raw_memory value"),
+            ""
+        );
+        assert_eq!(
+            output
+                .try_get::<String, _>("rollout_summary")
+                .expect("rollout_summary value"),
+            ""
+        );
+
+        let up_to_date = runtime
+            .try_claim_stage1_job(thread_id, owner_b, 100, 3600, 64)
+            .await
+            .expect("claim stage1 up-to-date");
+        assert_eq!(up_to_date, Stage1JobClaimOutcome::SkippedUpToDate);
 
         let claim_phase2 = runtime
             .try_claim_global_phase2_job(owner, 3600)

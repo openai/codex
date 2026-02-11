@@ -379,6 +379,7 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
 
+        let mut tx = self.pool.begin().await?;
         let rows_affected = sqlx::query(
             r#"
 UPDATE jobs
@@ -396,11 +397,56 @@ WHERE kind = ? AND job_key = ?
         .bind(JOB_KIND_MEMORY_STAGE1)
         .bind(thread_id.as_str())
         .bind(ownership_token)
-        .execute(self.pool.as_ref())
+        .execute(&mut *tx)
         .await?
         .rows_affected();
 
-        Ok(rows_affected > 0)
+        if rows_affected == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        let source_updated_at = sqlx::query(
+            r#"
+SELECT input_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ? AND ownership_token = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .fetch_one(&mut *tx)
+        .await?
+        .try_get::<i64, _>("input_watermark")?;
+
+        sqlx::query(
+            r#"
+INSERT INTO stage1_outputs (
+    thread_id,
+    source_updated_at,
+    raw_memory,
+    rollout_summary,
+    generated_at
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(thread_id) DO UPDATE SET
+    source_updated_at = excluded.source_updated_at,
+    raw_memory = excluded.raw_memory,
+    rollout_summary = excluded.rollout_summary,
+    generated_at = excluded.generated_at
+WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .bind(source_updated_at)
+        .bind("")
+        .bind("")
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(true)
     }
 
     pub async fn mark_stage1_job_failed(

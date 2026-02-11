@@ -49,6 +49,14 @@ fn parse_stage_one_output_accepts_empty_pair_for_skip() {
 }
 
 #[test]
+fn parse_stage_one_output_accepts_optional_rollout_slug() {
+    let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert_eq!(parsed.raw_memory, "abc");
+    assert_eq!(parsed.rollout_summary, "short");
+}
+
+#[test]
 fn serialize_filtered_rollout_response_items_keeps_response_and_compacted() {
     let input = vec![
         RolloutItem::ResponseItem(ResponseItem::Message {
