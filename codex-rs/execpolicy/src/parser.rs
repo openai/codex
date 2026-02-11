@@ -18,6 +18,9 @@ use std::sync::Arc;
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+use crate::rule::NetworkRule;
+use crate::rule::NetworkRuleDecision;
+use crate::rule::NetworkRuleProtocol;
 use crate::rule::PatternToken;
 use crate::rule::PrefixPattern;
 use crate::rule::PrefixRule;
@@ -71,12 +74,14 @@ impl PolicyParser {
 #[derive(Debug, ProvidesStaticType)]
 struct PolicyBuilder {
     rules_by_program: MultiMap<String, RuleRef>,
+    network_rules: Vec<NetworkRule>,
 }
 
 impl PolicyBuilder {
     fn new() -> Self {
         Self {
             rules_by_program: MultiMap::new(),
+            network_rules: Vec::new(),
         }
     }
 
@@ -85,8 +90,12 @@ impl PolicyBuilder {
             .insert(rule.program().to_string(), rule);
     }
 
+    fn add_network_rule(&mut self, rule: NetworkRule) {
+        self.network_rules.push(rule);
+    }
+
     fn build(self) -> crate::policy::Policy {
-        crate::policy::Policy::new(self.rules_by_program)
+        crate::policy::Policy::new(self.rules_by_program, self.network_rules)
     }
 }
 
@@ -264,6 +273,37 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         validate_match_examples(&rules, &matches)?;
 
         rules.into_iter().for_each(|rule| builder.add_rule(rule));
+        Ok(NoneType)
+    }
+
+    fn network_rule<'v>(
+        host: &'v str,
+        protocol: &'v str,
+        decision: &'v str,
+        justification: Option<&'v str>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneType> {
+        let host = host.trim();
+        if host.is_empty() {
+            return Err(Error::InvalidRule("host cannot be empty".to_string()).into());
+        }
+
+        let justification = match justification {
+            Some(raw) if raw.trim().is_empty() => {
+                return Err(Error::InvalidRule("justification cannot be empty".to_string()).into());
+            }
+            Some(raw) => Some(raw.to_string()),
+            None => None,
+        };
+
+        let rule = NetworkRule {
+            host: host.to_string(),
+            protocol: NetworkRuleProtocol::parse(protocol)?,
+            decision: NetworkRuleDecision::parse(decision)?,
+            justification,
+        };
+
+        policy_builder(eval).add_network_rule(rule);
         Ok(NoneType)
     }
 }
