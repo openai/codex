@@ -7,12 +7,14 @@ use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
+use crate::status::format_directory_display;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthStr;
 
 /// Rust snippet for the theme preview — compact enough to fit in the picker,
 /// varied enough to exercise keywords, types, strings, and macros.
@@ -39,6 +41,17 @@ const WIDE_PREVIEW_LEFT_INSET: u16 = 2;
 
 /// Minimum frame padding used for vertically centered wide preview.
 const PREVIEW_FRAME_PADDING: u16 = 1;
+
+const PREVIEW_FALLBACK_SUBTITLE: &str = "Move up/down to live preview themes";
+
+/// Shared menu-surface horizontal inset (2 cells per side) used by selection popups.
+const MENU_SURFACE_HORIZONTAL_INSET: u16 = 4;
+
+/// Horizontal gap between list and side panel when side-by-side layout is active.
+const SIDE_CONTENT_GAP: u16 = 2;
+
+/// Minimum list width required for side-by-side mode in the selection popup.
+const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 
 /// Renders a syntax-highlighted code snippet below the theme list so users can
 /// preview what each theme looks like on real code.
@@ -133,6 +146,39 @@ impl Renderable for ThemePreviewNarrowRenderable {
     }
 }
 
+fn subtitle_available_width(terminal_width: Option<u16>) -> usize {
+    let width = terminal_width.unwrap_or(80);
+    let content_width = width.saturating_sub(MENU_SURFACE_HORIZONTAL_INSET);
+    let side_width = content_width.saturating_sub(SIDE_CONTENT_GAP) / 2;
+    let list_width = content_width.saturating_sub(SIDE_CONTENT_GAP + side_width);
+    let side_by_side =
+        side_width >= WIDE_PREVIEW_MIN_WIDTH && list_width >= MIN_LIST_WIDTH_FOR_SIDE;
+    if side_by_side {
+        list_width as usize
+    } else {
+        content_width as usize
+    }
+}
+
+fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>) -> String {
+    let themes_dir = codex_home.map(|home| home.join("themes"));
+    let themes_dir_display = themes_dir
+        .as_deref()
+        .map(|path| format_directory_display(path, None));
+    let available_width = subtitle_available_width(terminal_width);
+
+    if let Some(path) = themes_dir_display
+        && path.starts_with('~')
+    {
+        let subtitle = format!("Custom .tmTheme files can be added to the {path} directory.");
+        if UnicodeWidthStr::width(subtitle.as_str()) <= available_width {
+            return subtitle;
+        }
+    }
+
+    PREVIEW_FALLBACK_SUBTITLE.to_string()
+}
+
 /// Builds [`SelectionViewParams`] for the `/theme` picker dialog.
 ///
 /// Lists all bundled themes plus custom `.tmTheme` files, with live preview
@@ -140,6 +186,7 @@ impl Renderable for ThemePreviewNarrowRenderable {
 pub(crate) fn build_theme_picker_params(
     current_name: Option<&str>,
     codex_home: Option<&Path>,
+    terminal_width: Option<u16>,
 ) -> SelectionViewParams {
     // Snapshot the current theme so we can restore on cancel.
     let original_theme = highlight::current_syntax_theme();
@@ -204,17 +251,11 @@ pub(crate) fn build_theme_picker_params(
         highlight::set_syntax_theme(original_theme.clone());
     })
         as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>);
-    let themes_dir_display = codex_home_owned
-        .as_ref()
-        .map(|home| home.join("themes"))
-        .unwrap_or_else(|| Path::new("$CODEX_HOME").join("themes"))
-        .display()
-        .to_string();
-
     SelectionViewParams {
         title: Some("Select Syntax Theme".to_string()),
-        subtitle: Some(format!(
-            "Custom .tmTheme files can be added to the {themes_dir_display} directory."
+        subtitle: Some(theme_picker_subtitle(
+            codex_home_owned.as_deref(),
+            terminal_width,
         )),
         footer_hint: Some(standard_popup_hint_line()),
         items,
@@ -271,7 +312,7 @@ mod tests {
 
     #[test]
     fn theme_picker_uses_half_width_with_stacked_fallback_preview() {
-        let params = build_theme_picker_params(None, None);
+        let params = build_theme_picker_params(None, None, None);
         assert_eq!(params.side_content_width, SideContentWidth::Half);
         assert_eq!(params.side_content_min_width, WIDE_PREVIEW_MIN_WIDTH);
         assert!(params.stacked_side_content.is_some());
@@ -327,5 +368,43 @@ mod tests {
             first_numbered.starts_with("1 fn greet"),
             "expected narrow preview line numbers to start at the left edge"
         );
+    }
+
+    #[test]
+    fn subtitle_uses_tilde_path_when_codex_home_under_home_directory() {
+        let home = dirs::home_dir().expect("home directory should be available");
+        let codex_home = home.join(".codex");
+
+        let subtitle = theme_picker_subtitle(Some(&codex_home), Some(200));
+
+        assert!(subtitle.contains("~"));
+        assert!(subtitle.contains("directory"));
+    }
+
+    #[test]
+    fn subtitle_falls_back_when_tilde_path_subtitle_is_too_wide() {
+        let home = dirs::home_dir().expect("home directory should be available");
+        let long_segment = "a".repeat(120);
+        let codex_home = home.join(long_segment).join(".codex");
+
+        let subtitle = theme_picker_subtitle(Some(&codex_home), Some(140));
+
+        assert_eq!(subtitle, PREVIEW_FALLBACK_SUBTITLE);
+    }
+
+    #[test]
+    fn subtitle_falls_back_to_preview_instructions_without_tilde_path() {
+        let subtitle = theme_picker_subtitle(None, None);
+        assert_eq!(subtitle, PREVIEW_FALLBACK_SUBTITLE);
+    }
+
+    #[test]
+    fn subtitle_falls_back_for_94_column_terminal_side_by_side_layout() {
+        let home = dirs::home_dir().expect("home directory should be available");
+        let codex_home = home.join(".codex");
+
+        let subtitle = theme_picker_subtitle(Some(&codex_home), Some(94));
+
+        assert_eq!(subtitle, PREVIEW_FALLBACK_SUBTITLE);
     }
 }
