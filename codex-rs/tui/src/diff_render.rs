@@ -737,6 +737,71 @@ mod tests {
         assert_snapshot!(name, text);
     }
 
+    fn diff_gallery_changes() -> HashMap<PathBuf, FileChange> {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+
+        let rust_original =
+            "fn greet(name: &str) {\n    println!(\"hello\");\n    println!(\"bye\");\n}\n";
+        let rust_modified = "fn greet(name: &str) {\n    println!(\"hello {name}\");\n    println!(\"emoji: 🚀✨ and CJK: 你好世界\");\n}\n";
+        let rust_patch = diffy::create_patch(rust_original, rust_modified).to_string();
+        changes.insert(
+            PathBuf::from("src/lib.rs"),
+            FileChange::Update {
+                unified_diff: rust_patch,
+                move_path: None,
+            },
+        );
+
+        let py_original = "def add(a, b):\n\treturn a + b\n\nprint(add(1, 2))\n";
+        let py_modified = "def add(a, b):\n\treturn a + b + 42\n\nprint(add(1, 2))\n";
+        let py_patch = diffy::create_patch(py_original, py_modified).to_string();
+        changes.insert(
+            PathBuf::from("scripts/calc.txt"),
+            FileChange::Update {
+                unified_diff: py_patch,
+                move_path: Some(PathBuf::from("scripts/calc.py")),
+            },
+        );
+
+        changes.insert(
+            PathBuf::from("assets/banner.txt"),
+            FileChange::Add {
+                content: "HEADER\tVALUE\nrocket\t🚀\ncity\t東京\n".to_string(),
+            },
+        );
+        changes.insert(
+            PathBuf::from("examples/new_sample.rs"),
+            FileChange::Add {
+                content: "pub fn greet(name: &str) {\n    println!(\"Hello, {name}!\");\n}\n"
+                    .to_string(),
+            },
+        );
+
+        changes.insert(
+            PathBuf::from("tmp/obsolete.log"),
+            FileChange::Delete {
+                content: "old line 1\nold line 2\nold line 3\n".to_string(),
+            },
+        );
+        changes.insert(
+            PathBuf::from("legacy/old_script.py"),
+            FileChange::Delete {
+                content: "def legacy(x):\n    return x + 1\nprint(legacy(3))\n".to_string(),
+            },
+        );
+
+        changes
+    }
+
+    fn snapshot_diff_gallery(name: &str, width: u16, height: u16) {
+        let lines = create_diff_summary(
+            &diff_gallery_changes(),
+            &PathBuf::from("/"),
+            usize::from(width),
+        );
+        snapshot_lines(name, lines, width, height);
+    }
+
     #[test]
     fn display_path_prefers_cwd_without_git_repo() {
         let cwd = if cfg!(windows) {
@@ -1007,6 +1072,65 @@ mod tests {
         );
 
         snapshot_lines_text("syntax_highlighted_insert_wraps_text", &lines);
+    }
+
+    #[test]
+    fn ui_snapshot_diff_gallery_80x24() {
+        snapshot_diff_gallery("diff_gallery_80x24", 80, 24);
+    }
+
+    #[test]
+    fn ui_snapshot_diff_gallery_94x35() {
+        snapshot_diff_gallery("diff_gallery_94x35", 94, 35);
+    }
+
+    #[test]
+    fn ui_snapshot_diff_gallery_120x40() {
+        snapshot_diff_gallery("diff_gallery_120x40", 120, 40);
+    }
+
+    #[test]
+    fn add_diff_uses_path_extension_for_highlighting() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("highlight_add.rs"),
+            FileChange::Add {
+                content: "pub fn sum(a: i32, b: i32) -> i32 { a + b }\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+        let has_rgb = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+        });
+        assert!(
+            has_rgb,
+            "add diff for .rs file should produce syntax-highlighted (RGB) spans"
+        );
+    }
+
+    #[test]
+    fn delete_diff_uses_path_extension_for_highlighting() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("highlight_delete.py"),
+            FileChange::Delete {
+                content: "def scale(x):\n    return x * 2\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+        let has_rgb = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+        });
+        assert!(
+            has_rgb,
+            "delete diff for .py file should produce syntax-highlighted (RGB) spans"
+        );
     }
 
     #[test]
