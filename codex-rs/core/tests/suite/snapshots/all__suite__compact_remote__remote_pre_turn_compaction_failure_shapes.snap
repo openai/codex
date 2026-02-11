@@ -1,0 +1,11 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "sectioned_request_shapes(&[(\"Remote Compaction Request (Including Incoming User Message)\",\n&include_attempt_request),])"
+---
+## Remote Compaction Request (Including Incoming User Message)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT>
+03:message/user:USER_ONE
+04:message/assistant:REMOTE_FIRST_REPLY
+05:message/user:USER_TWO
