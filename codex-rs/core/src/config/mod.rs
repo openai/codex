@@ -97,6 +97,8 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CODEX_TOML_FILE: &str = "codex.toml";
+pub const CONFIG_FILENAMES: &[&str] = &[CODEX_TOML_FILE, CONFIG_TOML_FILE];
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {

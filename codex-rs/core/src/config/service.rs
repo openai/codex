@@ -1,3 +1,4 @@
+use super::CODEX_TOML_FILE;
 use super::CONFIG_TOML_FILE;
 use super::ConfigToml;
 use crate::config::edit::ConfigEdit;
@@ -246,9 +247,31 @@ impl ConfigService {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
-        let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home)
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
+
+        let allowed_path = match layers.get_user_layer() {
+            Some(layer) => match &layer.name {
+                ConfigLayerSource::User { file } => file.clone(),
+                _ => {
+                    return Err(ConfigServiceError::write(
+                        ConfigWriteErrorCode::ConfigLayerReadonly,
+                        "User config layer is not file-based",
+                    ));
+                }
+            },
+            None => {
+                // If no user layer found (unlikely), fallback to codex.toml
+                AbsolutePathBuf::resolve_path_against_base(
+                    crate::config::CODEX_TOML_FILE,
+                    &self.codex_home,
+                )
+                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?
+            }
+        };
+
         let provided_path = match file_path {
             Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
                 .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,
@@ -262,10 +285,6 @@ impl ConfigService {
             ));
         }
 
-        let layers = self
-            .load_thread_agnostic_config()
-            .await
-            .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
             None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
@@ -346,7 +365,7 @@ impl ConfigService {
                 .with_edits(config_edits)
                 .apply()
                 .await
-                .map_err(|err| ConfigServiceError::anyhow("failed to persist config.toml", err))?;
+                .map_err(|err| ConfigServiceError::anyhow("failed to persist config", err))?;
         }
 
         let overridden = first_overridden_edit(&updated_layers, &effective, &parsed_segments);
@@ -620,7 +639,7 @@ fn override_message(layer: &ConfigLayerSource) -> String {
             format!("Overridden by managed config (system): {}", file.display())
         }
         ConfigLayerSource::Project { dot_codex_folder } => format!(
-            "Overridden by project config: {}/{CONFIG_TOML_FILE}",
+            "Overridden by project config in {}",
             dot_codex_folder.display(),
         ),
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),

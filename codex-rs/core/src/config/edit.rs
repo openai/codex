@@ -1,3 +1,4 @@
+use crate::config::CODEX_TOML_FILE;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
@@ -637,7 +638,13 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let mut config_path = codex_home.join(CODEX_TOML_FILE);
+    if !config_path.exists() {
+        let legacy_path = codex_home.join(CONFIG_TOML_FILE);
+        if legacy_path.exists() {
+            config_path = legacy_path;
+        }
+    }
     let write_paths = resolve_symlink_write_paths(&config_path)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {

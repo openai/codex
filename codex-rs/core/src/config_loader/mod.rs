@@ -13,6 +13,8 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+use crate::config::CODEX_TOML_FILE;
+use crate::config::CONFIG_FILENAMES;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
 use crate::config::deserialize_config_toml_with_base;
@@ -65,6 +67,7 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// Note that /etc/codex/ is treated as a "config folder," so subfolders such
 /// as skills/ and rules/ will also be honored.
 pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
+pub const SYSTEM_CODEX_TOML_FILE_UNIX: &str = "/etc/codex/codex.toml";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
@@ -147,34 +150,47 @@ pub async fn load_config_layers_state(
         Some(overrides::build_cli_overrides_layer(cli_overrides))
     };
 
-    // Include an entry for the "system" config folder, loading its config.toml,
-    // if it exists.
-    let system_config_toml_file = if cfg!(unix) {
-        Some(AbsolutePathBuf::from_absolute_path(
-            SYSTEM_CONFIG_TOML_FILE_UNIX,
-        )?)
-    } else {
-        // TODO(gt): Determine the path to load on Windows.
-        None
-    };
-    if let Some(system_config_toml_file) = system_config_toml_file {
-        let system_layer =
-            load_config_toml_for_required_layer(&system_config_toml_file, |config_toml| {
-                ConfigLayerEntry::new(
-                    ConfigLayerSource::System {
-                        file: system_config_toml_file.clone(),
-                    },
-                    config_toml,
-                )
-            })
-            .await?;
-        layers.push(system_layer);
+    // Include an entry for the "system" config folder, loading its configuration.
+    // Check for codex.toml first, then fall back to config.toml.
+    if cfg!(unix) {
+        for filename in &[SYSTEM_CODEX_TOML_FILE_UNIX, SYSTEM_CONFIG_TOML_FILE_UNIX] {
+            if let Ok(system_config_file) = AbsolutePathBuf::from_absolute_path(filename) {
+                if tokio::fs::try_exists(&system_config_file).await.unwrap_or(false) {
+                    let system_layer = load_config_toml_for_required_layer(
+                        &system_config_file,
+                        |config_toml| {
+                            ConfigLayerEntry::new(
+                                ConfigLayerSource::System {
+                                    file: system_config_file.clone(),
+                                },
+                                config_toml,
+                            )
+                        },
+                    )
+                    .await?;
+                    layers.push(system_layer);
+                    break;
+                }
+            }
+        }
     }
 
-    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
-    // exists, but is malformed, then this error should be propagated to the
-    // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+    // Add a layer for $CODEX_HOME/codex.toml or $CODEX_HOME/config.toml if it exists.
+    // Note if the file exists, but is malformed, then this error should be
+    // propagated to the user.
+    // Priority: codex.toml > config.toml
+    let mut user_file = AbsolutePathBuf::resolve_path_against_base(CODEX_TOML_FILE, codex_home)?;
+    if !tokio::fs::try_exists(&user_file).await.unwrap_or(false) {
+        let fallback = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+        // Use config.toml if it exists, or if neither exists (fallback default)
+        if tokio::fs::try_exists(&fallback).await.unwrap_or(false) {
+            user_file = fallback;
+        } else {
+            // Default to codex.toml if neither exists, so new users get the new filename.
+            user_file = AbsolutePathBuf::resolve_path_against_base(CODEX_TOML_FILE, codex_home)?;
+        }
+    }
+
     let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -715,7 +731,12 @@ async fn load_project_layers(
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
             continue;
         }
-        let config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+
+        let mut config_file = dot_codex_abs.join(CODEX_TOML_FILE)?;
+        if !tokio::fs::try_exists(&config_file).await.unwrap_or(false) {
+            config_file = dot_codex_abs.join(CONFIG_TOML_FILE)?;
+        }
+
         match tokio::fs::read_to_string(&config_file).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
