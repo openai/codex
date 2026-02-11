@@ -151,10 +151,18 @@ use std::time::Instant;
 // Heuristic thresholds for detecting paste-like input bursts.
 // Detect quickly to avoid showing typed prefix before paste is recognized
 const PASTE_BURST_MIN_CHARS: u16 = 3;
-const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
-// Slower paste burts have been observed in windows environments, but ideally
-// we want to keep this low
+
+// Maximum delay between consecutive chars to be considered part of a paste burst.
+// Windows terminals (especially VS Code integrated terminal) deliver paste events
+// more slowly than native terminals, so we use a higher threshold there.
+#[cfg(not(windows))]
+const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
+#[cfg(windows)]
+const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(30);
+
+// Idle timeout before flushing buffered paste content.
+// Slower paste bursts have been observed in Windows environments.
 #[cfg(not(windows))]
 const PASTE_BURST_ACTIVE_IDLE_TIMEOUT: Duration = Duration::from_millis(8);
 #[cfg(windows)]
