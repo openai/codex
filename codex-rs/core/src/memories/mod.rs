@@ -22,8 +22,6 @@ use std::path::PathBuf;
 const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
 const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
 const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
-const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
-const SKILLS_SUBDIR: &str = "skills";
 /// Maximum number of rollout candidates processed per startup pass.
 const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.

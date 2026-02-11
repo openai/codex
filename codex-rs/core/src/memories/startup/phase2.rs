@@ -109,7 +109,12 @@ async fn run_phase2_completion_task(
         }
     };
 
-    if is_phase2_success(&final_status) {
+    let phase2_success = is_phase2_success(&final_status);
+    info!(
+        "memory phase-2 global consolidation complete: agent_id={consolidation_agent_id} success={phase2_success} final_status={final_status:?}"
+    );
+
+    if phase2_success {
         match state_db
             .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await
@@ -126,9 +131,6 @@ async fn run_phase2_completion_task(
                 );
             }
         }
-        info!(
-            "memory phase-2 global consolidation agent finished: agent_id={consolidation_agent_id} final_status={final_status:?}"
-        );
         return;
     }
 

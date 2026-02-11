@@ -2,6 +2,7 @@ Analyze this rollout and produce `raw_memory` and `rollout_summary` as JSON.
 
 rollout_context:
 - rollout_path: {{ rollout_path }}
+- rollout_cwd: {{ rollout_cwd }}
 
 rendered conversation:
 {{ rollout_contents }}

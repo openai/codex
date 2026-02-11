@@ -5,8 +5,6 @@ use std::path::Path;
 use tracing::warn;
 
 use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
-use super::MEMORY_REGISTRY_FILENAME;
-use super::SKILLS_SUBDIR;
 use super::ensure_layout;
 use super::raw_memories_file;
 use super::rollout_summaries_dir;
@@ -41,33 +39,6 @@ pub(super) async fn sync_rollout_summaries_from_memories(
     for memory in retained {
         write_rollout_summary_for_thread(root, memory).await?;
     }
-    Ok(())
-}
-
-/// Clears consolidation outputs so a fresh consolidation run can regenerate them.
-///
-/// Phase-1 artifacts (`rollout_summaries/` and `raw_memories.md`) are preserved.
-pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<()> {
-    let path = root.join(MEMORY_REGISTRY_FILENAME);
-    if let Err(err) = tokio::fs::remove_file(&path).await
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            "failed removing consolidation file {}: {err}",
-            path.display()
-        );
-    }
-
-    let skills_dir = root.join(SKILLS_SUBDIR);
-    if let Err(err) = tokio::fs::remove_dir_all(&skills_dir).await
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            "failed removing consolidation skills directory {}: {err}",
-            skills_dir.display()
-        );
-    }
-
     Ok(())
 }
 

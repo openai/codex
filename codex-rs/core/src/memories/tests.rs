@@ -4,7 +4,6 @@ use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use super::storage::wipe_consolidation_outputs;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -39,6 +38,14 @@ fn parse_stage_one_output_accepts_fenced_json() {
 fn parse_stage_one_output_rejects_legacy_keys() {
     let raw = r#"{"rawMemory":"abc","summary":"short"}"#;
     assert!(parse_stage_one_output(raw).is_err());
+}
+
+#[test]
+fn parse_stage_one_output_accepts_empty_pair_for_skip() {
+    let raw = r#"{"raw_memory":"","rollout_summary":""}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert_eq!(parsed.raw_memory, "");
+    assert_eq!(parsed.rollout_summary, "");
 }
 
 #[test]
@@ -181,28 +188,4 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
-}
-
-#[tokio::test]
-async fn wipe_consolidation_outputs_removes_registry_and_skills() {
-    let dir = tempdir().expect("tempdir");
-    let root = dir.path().join("memory");
-    ensure_layout(&root).await.expect("ensure layout");
-
-    let memory_registry = root.join("MEMORY.md");
-    let skills_dir = root.join("skills").join("example");
-
-    tokio::fs::create_dir_all(&skills_dir)
-        .await
-        .expect("create skills dir");
-    tokio::fs::write(&memory_registry, "memory")
-        .await
-        .expect("write memory registry");
-
-    wipe_consolidation_outputs(&root)
-        .await
-        .expect("wipe consolidation outputs");
-
-    assert!(!memory_registry.exists());
-    assert!(!root.join("skills").exists());
 }

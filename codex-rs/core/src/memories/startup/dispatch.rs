@@ -16,7 +16,6 @@ use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
 use super::super::prompts::build_consolidation_prompt;
 use super::super::storage::rebuild_raw_memories_file_from_memories;
 use super::super::storage::sync_rollout_summaries_from_memories;
-use super::super::storage::wipe_consolidation_outputs;
 use super::phase2::spawn_phase2_completion_task;
 
 pub(super) async fn run_global_memory_consolidation(
@@ -84,7 +83,6 @@ pub(super) async fn run_global_memory_consolidation(
         .map(|memory| memory.source_updated_at.timestamp())
         .max()
         .unwrap_or(claimed_watermark);
-
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
         warn!("failed syncing phase-1 rollout summaries for global consolidation: {err}");
         let _ = state_db
@@ -103,18 +101,6 @@ pub(super) async fn run_global_memory_consolidation(
             .mark_global_phase2_job_failed(
                 &ownership_token,
                 "failed rebuilding raw memories aggregate",
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
-            )
-            .await;
-        return false;
-    }
-
-    if let Err(err) = wipe_consolidation_outputs(&root).await {
-        warn!("failed to wipe previous global consolidation outputs: {err}");
-        let _ = state_db
-            .mark_global_phase2_job_failed(
-                &ownership_token,
-                "failed to wipe previous consolidation outputs",
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
             )
             .await;

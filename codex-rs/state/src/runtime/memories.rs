@@ -371,6 +371,38 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         Ok(true)
     }
 
+    pub async fn mark_stage1_job_succeeded_no_output(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let thread_id = thread_id.to_string();
+
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = input_watermark
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
     pub async fn mark_stage1_job_failed(
         &self,
         thread_id: ThreadId,
