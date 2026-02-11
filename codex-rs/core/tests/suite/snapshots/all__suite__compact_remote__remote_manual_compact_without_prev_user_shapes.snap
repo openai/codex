@@ -5,12 +5,12 @@ expression: "sectioned_request_shapes(\"Remote manual /compact with no prior use
 Scenario: Remote manual /compact with no prior user turn still issues a compact request on main; follow-up turn carries canonical context and new user message.
 
 ## Remote Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=<none>]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=<none>]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=<none>]
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
 03:message/user:USER_ONE
