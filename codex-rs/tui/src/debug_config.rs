@@ -474,44 +474,46 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
-        let mut requirements = ConfigRequirements::default();
-        requirements.approval_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(AskForApproval::OnRequest),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.sandbox_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(SandboxPolicy::ReadOnly),
-            Some(RequirementSource::SystemRequirementsToml {
-                file: requirements_file.clone(),
-            }),
-        );
-        requirements.mcp_servers = Some(Sourced::new(
-            BTreeMap::from([(
-                "docs".to_string(),
-                McpServerRequirement {
-                    identity: McpServerIdentity::Command {
-                        command: "codex-mcp".to_string(),
+        let requirements = ConfigRequirements {
+            approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(AskForApproval::OnRequest),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            sandbox_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(SandboxPolicy::ReadOnly),
+                Some(RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                }),
+            ),
+            mcp_servers: Some(Sourced::new(
+                BTreeMap::from([(
+                    "docs".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
                     },
+                )]),
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+            )),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(Some(ResidencyRequirement::Us)),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            network: Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    ..Default::default()
                 },
-            )]),
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-        ));
-        requirements.enforce_residency = ConstrainedWithSource::new(
-            Constrained::allow_any(Some(ResidencyRequirement::Us)),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Cached),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allowed_domains: Some(vec!["example.com".to_string()]),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
+                RequirementSource::CloudRequirements,
+            )),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -631,11 +633,13 @@ approval_policy = "never"
 
     #[test]
     fn debug_config_output_normalizes_empty_web_search_mode_list() {
-        let mut requirements = ConfigRequirements::default();
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Disabled),
-            Some(RequirementSource::CloudRequirements),
-        );
+        let requirements = ConfigRequirements {
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Disabled),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,

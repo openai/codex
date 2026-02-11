@@ -33,6 +33,7 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
+codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
@@ -62,7 +63,6 @@ indexmap = { workspace = true }
 indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
-multimap = { workspace = true }
 notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }

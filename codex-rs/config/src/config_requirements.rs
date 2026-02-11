@@ -10,8 +10,8 @@ use std::fmt;
 
 use super::requirements_exec_policy::RequirementsExecPolicy;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
-use crate::config::Constrained;
-use crate::config::ConstraintError;
+use crate::Constrained;
+use crate::ConstraintError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
@@ -80,7 +80,7 @@ pub struct ConfigRequirements {
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
-    pub(crate) exec_policy: Option<Sourced<RequirementsExecPolicy>>,
+    pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
@@ -560,7 +560,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_loader::system_requirements_toml_file;
     use anyhow::Result;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
@@ -572,6 +571,12 @@ mod tests {
 
     fn tokens(cmd: &[&str]) -> Vec<String> {
         cmd.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    fn system_requirements_toml_file_for_test() -> Result<AbsolutePathBuf> {
+        Ok(AbsolutePathBuf::try_from(
+            std::env::temp_dir().join("requirements.toml"),
+        )?)
     }
 
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
@@ -732,7 +737,7 @@ mod tests {
             "#,
         )?;
 
-        let requirements_toml_file = system_requirements_toml_file()?;
+        let requirements_toml_file = system_requirements_toml_file_for_test()?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };
@@ -1149,7 +1154,7 @@ mod tests {
             ]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
-        let requirements_toml_file = system_requirements_toml_file()?;
+        let requirements_toml_file = system_requirements_toml_file_for_test()?;
         let source_location = RequirementSource::SystemRequirementsToml {
             file: requirements_toml_file,
         };
