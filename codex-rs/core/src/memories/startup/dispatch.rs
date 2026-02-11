@@ -68,6 +68,42 @@ pub(super) async fn run_global_memory_consolidation(
         }
     };
 
+    let root = memory_root(&config.codex_home);
+    let consolidation_config = {
+        let mut consolidation_config = config.as_ref().clone();
+        consolidation_config.cwd = root.clone();
+        consolidation_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        let mut writable_roots = Vec::new();
+        match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
+            Ok(codex_home) => writable_roots.push(codex_home),
+            Err(err) => warn!(
+                "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
+                consolidation_config.codex_home.display()
+            ),
+        }
+        let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        if let Err(err) = consolidation_config
+            .sandbox_policy
+            .set(consolidation_sandbox_policy)
+        {
+            warn!("memory phase-2 consolidation sandbox policy was rejected by constraints: {err}");
+            let _ = state_db
+                .mark_global_phase2_job_failed(
+                    &ownership_token,
+                    "consolidation sandbox policy was rejected by constraints",
+                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                )
+                .await;
+            return false;
+        }
+        consolidation_config
+    };
+
     let latest_memories = match state_db
         .list_stage1_outputs_for_global(MAX_RAW_MEMORIES_FOR_GLOBAL)
         .await
@@ -85,7 +121,6 @@ pub(super) async fn run_global_memory_consolidation(
             return false;
         }
     };
-    let root = memory_root(&config.codex_home);
     let completion_watermark = completion_watermark(claimed_watermark, &latest_memories);
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
         warn!("failed syncing local memory artifacts for global consolidation: {err}");
@@ -123,23 +158,6 @@ pub(super) async fn run_global_memory_consolidation(
         text: prompt,
         text_elements: vec![],
     }];
-    let mut consolidation_config = config.as_ref().clone();
-    consolidation_config.cwd = root.clone();
-    consolidation_config.approval_policy = Constrained::allow_any(AskForApproval::Never);
-    let mut writable_roots = Vec::new();
-    match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
-        Ok(codex_home) => writable_roots.push(codex_home),
-        Err(err) => warn!(
-            "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
-            consolidation_config.codex_home.display()
-        ),
-    }
-    consolidation_config.sandbox_policy = Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
-        writable_roots,
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    });
     let source = SessionSource::SubAgent(SubAgentSource::Other(
         MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
     ));
