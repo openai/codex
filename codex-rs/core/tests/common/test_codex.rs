@@ -170,7 +170,7 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let thread_manager = ThreadManager::with_models_provider_and_home(
+        let thread_manager = codex_core::test_support::thread_manager_with_models_provider_and_home(
             auth.clone(),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -179,7 +179,7 @@ impl TestCodexBuilder {
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
+                let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 thread_manager
                     .resume_thread_from_rollout(config.clone(), path, auth_manager)
                     .await?
