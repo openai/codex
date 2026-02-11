@@ -6,6 +6,9 @@ fn main() {
     // Tell rustc/clippy that this is an expected cfg value.
     println!("cargo:rustc-check-cfg=cfg(vendored_bwrap_available)");
     println!("cargo:rerun-if-env-changed=CODEX_BWRAP_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_ALLOW_CROSS");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR");
 
     // Rebuild if the vendored bwrap sources change.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());

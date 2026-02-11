@@ -175,3 +175,13 @@ echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
+
+# Allow pkg-config resolution during cross-compilation.
+echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+
+if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
+  echo "PKG_CONFIG_SYSROOT_DIR=${sysroot}" >> "$GITHUB_ENV"
+  pkg_config_sysroot_var="PKG_CONFIG_SYSROOT_DIR_${TARGET}"
+  pkg_config_sysroot_var="${pkg_config_sysroot_var//-/_}"
+  echo "${pkg_config_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
+fi
