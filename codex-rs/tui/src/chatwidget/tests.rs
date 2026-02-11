@@ -588,7 +588,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -652,7 +652,7 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     chat.handle_codex_event(Event {
         id: "interrupt".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -3534,7 +3534,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     chat.handle_codex_event(Event {
         id: "call-int".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -3570,7 +3570,7 @@ async fn interrupted_turn_error_message_snapshot() {
     chat.handle_codex_event(Event {
         id: "task-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4634,7 +4634,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4673,7 +4673,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4702,7 +4702,7 @@ async fn interrupt_clears_unified_exec_processes() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -4723,7 +4723,7 @@ async fn review_ended_keeps_unified_exec_processes() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::ReviewEnded,
         }),
     });
@@ -4768,7 +4768,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });
@@ -5638,7 +5638,7 @@ async fn status_line_branch_refreshes_after_interrupt() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }),
     });

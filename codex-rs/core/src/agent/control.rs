@@ -299,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn on_event_updates_status_from_turn_aborted() {
         let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: "turn-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }));
 

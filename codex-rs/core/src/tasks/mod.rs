@@ -294,7 +294,7 @@ impl Session {
         }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: task.turn_context.sub_id.clone(),
+            turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
         });
         self.send_event(task.turn_context.as_ref(), event).await;

@@ -85,10 +85,9 @@ impl ThreadHistoryBuilder {
         // User messages should stay in explicitly opened turns. For backward
         // compatibility with older streams that did not open turns explicitly,
         // close any implicit/inactive turn and start a fresh one for this input.
-        if self
-            .current_turn
-            .as_ref()
-            .is_none_or(|turn| !turn.opened_explicitly)
+        if let Some(turn) = self.current_turn.as_ref()
+            && !turn.opened_explicitly
+            && !(turn.saw_compaction && turn.items.is_empty())
         {
             self.finish_current_turn();
         }
@@ -479,7 +478,7 @@ mod tests {
                 message: "Working...".into(),
             }),
             EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id: "turn-1".into(),
+                turn_id: Some("turn-1".into()),
                 reason: TurnAbortReason::Replaced,
             }),
             EventMsg::UserMessage(UserMessageEvent {

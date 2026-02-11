@@ -2406,7 +2406,7 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnAbortedEvent {
-    pub turn_id: String,
+    pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
 }
 
@@ -2691,6 +2691,24 @@ mod tests {
                 "text_elements": [],
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn turn_aborted_event_deserializes_without_turn_id() -> Result<()> {
+        let event: EventMsg = serde_json::from_value(json!({
+            "type": "turn_aborted",
+            "reason": "interrupted",
+        }))?;
+
+        match event {
+            EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) => {
+                assert_eq!(turn_id, None);
+                assert_eq!(reason, TurnAbortReason::Interrupted);
+            }
+            _ => panic!("expected turn_aborted event"),
+        }
 
         Ok(())
     }
