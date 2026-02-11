@@ -1,3 +1,4 @@
+use askama::Template;
 use std::path::Path;
 use tracing::warn;
 
@@ -5,17 +6,36 @@ use super::text::prefix_at_char_boundary;
 use super::text::suffix_at_char_boundary;
 
 const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 1_000_000;
-const CONSOLIDATION_PROMPT_TEMPLATE: &str =
-    include_str!("../../templates/memories/consolidation.md");
-const STAGE_ONE_INPUT_PROMPT_TEMPLATE: &str =
-    include_str!("../../templates/memories/stage_one_input.md");
+
+#[derive(Template)]
+#[template(path = "memories/consolidation.md", escape = "none")]
+struct ConsolidationPromptTemplate<'a> {
+    memory_root: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "memories/stage_one_input.md", escape = "none")]
+struct StageOneInputTemplate<'a> {
+    rollout_path: &'a str,
+    rollout_contents: &'a str,
+}
 
 /// Builds the consolidation subagent prompt for a specific memory root.
 ///
 /// Falls back to a simple string replacement if Askama rendering fails.
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
-    CONSOLIDATION_PROMPT_TEMPLATE.replace("{{ memory_root }}", &memory_root)
+    let template = ConsolidationPromptTemplate {
+        memory_root: &memory_root,
+    };
+    match template.render() {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            warn!("failed to render memories consolidation prompt template: {err}");
+            include_str!("../../templates/memories/consolidation.md")
+                .replace("{{ memory_root }}", &memory_root)
+        }
+    }
 }
 
 /// Builds the stage-1 user message containing rollout metadata and content.
@@ -33,9 +53,19 @@ pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_content
     }
 
     let rollout_path = rollout_path.display().to_string();
-    STAGE_ONE_INPUT_PROMPT_TEMPLATE
-        .replace("{{ rollout_path }}", &rollout_path)
-        .replace("{{ rollout_contents }}", &rollout_contents)
+    let template = StageOneInputTemplate {
+        rollout_path: &rollout_path,
+        rollout_contents: &rollout_contents,
+    };
+    match template.render() {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            warn!("failed to render memories stage-one input template: {err}");
+            include_str!("../../templates/memories/stage_one_input.md")
+                .replace("{{ rollout_path }}", &rollout_path)
+                .replace("{{ rollout_contents }}", &rollout_contents)
+        }
+    }
 }
 
 fn truncate_rollout_for_prompt(input: &str) -> (String, bool) {
