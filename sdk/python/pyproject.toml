@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.26.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openai-codex-sdk"
+version = "0.0.0.dev0"
+description = "Python SDK for Codex APIs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "OpenAI" }]
+keywords = ["openai", "codex", "sdk", "python", "api"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4.0", "pytest-asyncio>=0.23.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openai_codex_sdk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
