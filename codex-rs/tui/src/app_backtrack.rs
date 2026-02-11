@@ -455,6 +455,15 @@ impl App {
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(rollback) => {
+                // `pending_rollback` is set only after this UI sends `Op::ThreadRollback`
+                // from the backtrack flow. In that case, finish immediately using the
+                // stored selection (nth user message) so local trim matches the exact
+                // backtrack target.
+                //
+                // When it is `None`, rollback came from replay or another source. We
+                // queue an AppEvent so rollback trim runs in FIFO order with
+                // `InsertHistoryCell` events, avoiding races with in-flight transcript
+                // inserts.
                 if self.backtrack.pending_rollback.is_some() {
                     self.finish_pending_backtrack();
                 } else {
