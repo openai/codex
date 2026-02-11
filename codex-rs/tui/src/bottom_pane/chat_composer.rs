@@ -874,8 +874,13 @@ impl ChatComposer {
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
-        let image_placeholders_in_order =
-            image_placeholders_in_element_order(&text, &text_elements);
+        let local_image_count = local_image_paths.len();
+        let image_placeholders_in_order = image_placeholders_in_element_order(
+            &text,
+            &text_elements,
+            self.remote_image_urls.len(),
+            local_image_count,
+        );
         if image_placeholders_in_order.is_empty() {
             for (idx, path) in local_image_paths.into_iter().enumerate() {
                 let placeholder = local_image_label_text(self.remote_image_urls.len() + idx + 1);
@@ -3743,24 +3748,25 @@ impl ChatComposer {
     }
 }
 
-fn parse_image_placeholder_number(text: &str) -> Option<usize> {
-    let number = text
-        .trim()
-        .strip_prefix("[Image #")?
-        .strip_suffix(']')?
-        .parse::<usize>()
-        .ok()?;
-    (number > 0).then_some(number)
-}
-
-fn image_placeholders_in_element_order(text: &str, text_elements: &[TextElement]) -> Vec<String> {
+fn image_placeholders_in_element_order(
+    text: &str,
+    text_elements: &[TextElement],
+    remote_image_count: usize,
+    local_image_count: usize,
+) -> Vec<String> {
+    if local_image_count == 0 {
+        return Vec::new();
+    }
+    let known_placeholders: HashSet<String> = (1..=(remote_image_count + local_image_count))
+        .map(local_image_label_text)
+        .collect();
     let mut ordered = text_elements.to_vec();
     ordered.sort_by_key(|elem| elem.byte_range.start);
     let mut seen = HashSet::new();
     let mut placeholders = Vec::new();
     for elem in ordered {
         if let Some(placeholder) = elem.placeholder(text).map(str::to_string)
-            && parse_image_placeholder_number(&placeholder).is_some()
+            && known_placeholders.contains(&placeholder)
             && seen.insert(placeholder.clone())
         {
             placeholders.push(placeholder);
