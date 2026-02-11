@@ -131,11 +131,13 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
 }
 
 fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
-    if !path.is_absolute() {
-        return None;
-    }
-    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    AbsolutePathBuf::from_absolute_path(normalized).ok()
+    let absolute_path = AbsolutePathBuf::from_absolute_path(path).ok()?;
+    let normalized_path = absolute_path
+        .as_path()
+        .canonicalize()
+        .ok()
+        .and_then(|canonical_path| AbsolutePathBuf::from_absolute_path(canonical_path).ok());
+    normalized_path.or(Some(absolute_path))
 }
 
 fn escape_seatbelt_string(value: &str) -> String {
@@ -494,8 +496,14 @@ mod tests {
     }
 
     #[test]
-    fn normalize_path_for_sandbox_rejects_relative_paths() {
-        assert_eq!(normalize_path_for_sandbox(Path::new("relative.sock")), None);
+    fn normalize_path_for_sandbox_resolves_relative_paths() {
+        let normalized =
+            normalize_path_for_sandbox(Path::new("relative.sock")).expect("relative path");
+        assert!(normalized.as_path().is_absolute());
+        assert!(
+            normalized.as_path().ends_with("relative.sock"),
+            "normalized path should preserve input suffix"
+        );
     }
 
     #[test]
