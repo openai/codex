@@ -88,19 +88,17 @@ mod tests {
     #[test]
     fn build_stage_one_input_message_truncates_rollout_with_standard_policy() {
         let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
+        let expected_truncated = truncate_text(&input, TruncationPolicy::Tokens(150_000));
         let message = build_stage_one_input_message(
             Path::new("/tmp/rollout.jsonl"),
             Path::new("/tmp"),
             &input,
         )
         .unwrap();
-        let (_, truncated_rollout) = message
-            .split_once("rendered conversation:")
-            .expect("stage-one prompt must include rendered conversation section");
-        let truncated_rollout = truncated_rollout.trim_matches(['\r', '\n']);
 
-        assert!(truncated_rollout.contains("tokens truncated"));
-        assert!(truncated_rollout.starts_with('a'));
-        assert!(truncated_rollout.ends_with('z'));
+        assert!(expected_truncated.contains("tokens truncated"));
+        assert!(expected_truncated.starts_with('a'));
+        assert!(expected_truncated.ends_with('z'));
+        assert!(message.contains(&expected_truncated));
     }
 }
