@@ -108,7 +108,7 @@ fn is_write_patch_constrained_to_writable_paths(
 ) -> bool {
     // Early‑exit if there are no declared writable roots.
     let writable_roots = match sandbox_policy {
-        SandboxPolicy::ReadOnly => {
+        SandboxPolicy::ReadOnly { .. } => {
             return false;
         }
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
@@ -195,6 +195,7 @@ mod tests {
         // only `cwd` is writable by default.
         let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -216,6 +217,7 @@ mod tests {
         // outside write should be permitted.
         let policy_with_parent = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![AbsolutePathBuf::try_from(parent).unwrap()],
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
