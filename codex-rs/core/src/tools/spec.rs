@@ -165,10 +165,10 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             "justification".to_string(),
             JsonSchema::String {
                 description: Some(
-                    r#"Only set if sandbox_permissions is \"require_escalated\". 
-                    Request approval from the user to run this command outside the sandbox. 
-                    Phrased as a simple question that summarizes the purpose of the 
-                    command as it relates to the task at hand - e.g. 'Do you want to 
+                    r#"Only set if sandbox_permissions is \"require_escalated\".
+                    Request approval from the user to run this command outside the sandbox.
+                    Phrased as a simple question that summarizes the purpose of the
+                    command as it relates to the task at hand - e.g. 'Do you want to
                     fetch and pull the latest version of this git branch?'"#
                     .to_string(),
                 ),
@@ -182,7 +182,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             JsonSchema::Array {
                 items: Box::new(JsonSchema::String { description: None }),
                 description: Some(
-                    r#"Only specify when sandbox_permissions is `require_escalated`. 
+                    r#"Only specify when sandbox_permissions is `require_escalated`.
                     Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
                     Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
                 ),
@@ -339,7 +339,7 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
@@ -402,7 +402,7 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
@@ -1766,7 +1766,8 @@ mod tests {
     #[test]
     fn test_build_specs_collab_tools_enabled() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
         features.enable(Feature::CollaborationModes);
@@ -1791,7 +1792,8 @@ mod tests {
     #[test]
     fn request_user_input_requires_collaboration_modes_feature() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1851,7 +1853,8 @@ mod tests {
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1873,7 +1876,8 @@ mod tests {
     #[test]
     fn web_search_mode_live_sets_external_web_access_true() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2098,7 +2102,7 @@ mod tests {
     #[test]
     fn test_build_specs_default_shell_present() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2120,7 +2124,8 @@ mod tests {
     #[ignore]
     fn test_parallel_support_flags() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2175,7 +2180,7 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_converted() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2260,7 +2265,7 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2304,7 +2309,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2356,7 +2362,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2404,7 +2411,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ApplyPatchFreeform);
@@ -2456,7 +2464,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_anyof_defaults_to_string() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2516,7 +2525,7 @@ mod tests {
 
         let expected = if cfg!(windows) {
             r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
@@ -2546,7 +2555,7 @@ Examples of valid command strings:
 
         let expected = if cfg!(windows) {
             r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
@@ -2565,7 +2574,8 @@ Examples of valid command strings:
     #[test]
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
