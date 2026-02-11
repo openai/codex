@@ -9,11 +9,13 @@ use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
 use crate::message_processor::MessageProcessor;
@@ -79,6 +81,7 @@ enum OutboundControlEvent {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
         initialized: Arc<AtomicBool>,
+        opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
@@ -381,10 +384,15 @@ pub async fn run_main_with_transport(
                             connection_id,
                             writer,
                             initialized,
+                            opted_out_notification_methods,
                         } => {
                             outbound_connections.insert(
                                 connection_id,
-                                OutboundConnectionState::new(writer, initialized),
+                                OutboundConnectionState::new(
+                                    writer,
+                                    initialized,
+                                    opted_out_notification_methods,
+                                ),
                             );
                         }
                         OutboundControlEvent::Closed { connection_id } => {
@@ -449,18 +457,29 @@ pub async fn run_main_with_transport(
                         match event {
                             TransportEvent::ConnectionOpened { connection_id, writer } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
+                                let outbound_opted_out_notification_methods =
+                                    Arc::new(RwLock::new(HashSet::new()));
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
                                         initialized: Arc::clone(&outbound_initialized),
+                                        opted_out_notification_methods: Arc::clone(
+                                            &outbound_opted_out_notification_methods,
+                                        ),
                                     })
                                     .await
                                     .is_err()
                                 {
                                     break;
                                 }
-                                connections.insert(connection_id, ConnectionState::new(outbound_initialized));
+                                connections.insert(
+                                    connection_id,
+                                    ConnectionState::new(
+                                        outbound_initialized,
+                                        outbound_opted_out_notification_methods,
+                                    ),
+                                );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
                                 if outbound_control_tx
@@ -491,6 +510,19 @@ pub async fn run_main_with_transport(
                                                 &connection_state.outbound_initialized,
                                             )
                                             .await;
+                                        if let Ok(mut opted_out_notification_methods) = connection_state
+                                            .outbound_opted_out_notification_methods
+                                            .write()
+                                        {
+                                            *opted_out_notification_methods = connection_state
+                                                .session
+                                                .opted_out_notification_methods
+                                                .clone();
+                                        } else {
+                                            warn!(
+                                                "failed to update outbound opted-out notifications"
+                                            );
+                                        }
                                         if !was_initialized && connection_state.session.initialized {
                                             processor.send_initialize_notifications().await;
                                         }

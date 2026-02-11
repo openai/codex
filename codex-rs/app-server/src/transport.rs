@@ -12,11 +12,13 @@ use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use owo_colors::Style;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -145,13 +147,18 @@ pub(crate) enum TransportEvent {
 
 pub(crate) struct ConnectionState {
     pub(crate) outbound_initialized: Arc<AtomicBool>,
+    pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) session: ConnectionSessionState,
 }
 
 impl ConnectionState {
-    pub(crate) fn new(outbound_initialized: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        outbound_initialized: Arc<AtomicBool>,
+        outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+    ) -> Self {
         Self {
             outbound_initialized,
+            outbound_opted_out_notification_methods,
             session: ConnectionSessionState::default(),
         }
     }
@@ -159,13 +166,19 @@ impl ConnectionState {
 
 pub(crate) struct OutboundConnectionState {
     pub(crate) initialized: Arc<AtomicBool>,
+    pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) writer: mpsc::Sender<OutgoingMessage>,
 }
 
 impl OutboundConnectionState {
-    pub(crate) fn new(writer: mpsc::Sender<OutgoingMessage>, initialized: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        writer: mpsc::Sender<OutgoingMessage>,
+        initialized: Arc<AtomicBool>,
+        opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+    ) -> Self {
         Self {
             initialized,
+            opted_out_notification_methods,
             writer,
         }
     }
@@ -428,21 +441,22 @@ fn serialize_outgoing_message(outgoing_message: OutgoingMessage) -> Option<Strin
 }
 
 fn should_skip_notification_for_connection(
-    connection_state: &ConnectionState,
+    connection_state: &OutboundConnectionState,
     message: &OutgoingMessage,
 ) -> bool {
+    let Ok(opted_out_notification_methods) = connection_state.opted_out_notification_methods.read()
+    else {
+        warn!("failed to read outbound opted-out notifications");
+        return false;
+    };
     match message {
         OutgoingMessage::AppServerNotification(notification) => {
             let method = notification.to_string();
-            connection_state
-                .session
-                .opted_out_notification_methods
-                .contains(method.as_str())
+            opted_out_notification_methods.contains(method.as_str())
         }
-        OutgoingMessage::Notification(notification) => connection_state
-            .session
-            .opted_out_notification_methods
-            .contains(notification.method.as_str()),
+        OutgoingMessage::Notification(notification) => {
+            opted_out_notification_methods.contains(notification.method.as_str())
+        }
         _ => false,
     }
 }
@@ -473,7 +487,9 @@ pub(crate) async fn route_outgoing_envelope(
             let target_connections: Vec<ConnectionId> = connections
                 .iter()
                 .filter_map(|(connection_id, connection_state)| {
-                    if connection_state.initialized.load(Ordering::Acquire) {
+                    if connection_state.initialized.load(Ordering::Acquire)
+                        && !should_skip_notification_for_connection(connection_state, &message)
+                    {
                         Some(*connection_id)
                     } else {
                         None
