@@ -226,9 +226,11 @@ fn theme_lock() -> &'static RwLock<Theme> {
 
 /// Swap the active syntax theme at runtime (for live preview).
 pub(crate) fn set_syntax_theme(theme: Theme) {
-    if let Ok(mut guard) = theme_lock().write() {
-        *guard = theme;
-    }
+    let mut guard = match theme_lock().write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = theme;
 }
 
 /// Clone the current syntax theme (e.g. to save for cancel-restore).
@@ -316,6 +318,9 @@ pub(crate) fn list_available_themes(codex_home: Option<&Path>) -> Vec<ThemeEntry
             }
         }
     }
+
+    // Keep picker ordering stable across platforms/filesystems.
+    entries.sort_by(|a, b| (a.is_custom, a.name.as_str()).cmp(&(b.is_custom, b.name.as_str())));
 
     entries
 }
@@ -996,6 +1001,30 @@ mod tests {
                 .iter()
                 .any(|entry| entry.name == "broken-custom" && entry.is_custom),
             "expected invalid custom theme to be excluded from list"
+        );
+    }
+
+    #[test]
+    fn list_available_themes_returns_stable_sorted_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes_dir = dir.path().join("themes");
+        std::fs::create_dir(&themes_dir).unwrap();
+        write_minimal_tmtheme(&themes_dir.join("zzz-custom.tmTheme"));
+        write_minimal_tmtheme(&themes_dir.join("aaa-custom.tmTheme"));
+        write_minimal_tmtheme(&themes_dir.join("mmm-custom.tmTheme"));
+
+        let entries = list_available_themes(Some(dir.path()));
+        let actual: Vec<(bool, String)> = entries
+            .iter()
+            .map(|entry| (entry.is_custom, entry.name.clone()))
+            .collect();
+
+        let mut expected = actual.clone();
+        expected.sort_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
+
+        assert_eq!(
+            actual, expected,
+            "theme entries should be stable and sorted (builtins first, then custom by name)"
         );
     }
 
