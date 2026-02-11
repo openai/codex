@@ -467,12 +467,16 @@ mod windows_impl {
         use crate::policy::SandboxPolicy;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: Vec::new(),
-                network_access,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
+            let mut policy = SandboxPolicy::new_workspace_write_policy();
+            let SandboxPolicy::WorkspaceWrite {
+                network_access: policy_network_access,
+                ..
+            } = &mut policy
+            else {
+                panic!("workspace-write policy expected");
+            };
+            *policy_network_access = network_access;
+            policy
         }
 
         #[test]
