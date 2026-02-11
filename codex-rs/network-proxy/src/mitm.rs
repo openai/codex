@@ -34,13 +34,12 @@ use rama_http_backend::server::layer::upgrade::Upgraded;
 use rama_net::proxy::ProxyTarget;
 use rama_net::stream::SocketInfo;
 use rama_net::tls::ApplicationProtocol;
-use rama_net::tls::DataEncoding;
-use rama_net::tls::server::ServerAuth;
-use rama_net::tls::server::ServerAuthData;
-use rama_net::tls::server::ServerConfig;
-use rama_tls_boring::server::TlsAcceptorData;
-use rama_tls_boring::server::TlsAcceptorLayer;
-use rama_utils::str::NonEmptyStr;
+use rama_tls_rustls::dep::pki_types::CertificateDer;
+use rama_tls_rustls::dep::pki_types::PrivateKeyDer;
+use rama_tls_rustls::dep::pki_types::pem::PemObject;
+use rama_tls_rustls::dep::rustls;
+use rama_tls_rustls::server::TlsAcceptorData;
+use rama_tls_rustls::server::TlsAcceptorLayer;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -55,16 +54,17 @@ use std::time::UNIX_EPOCH;
 use tracing::info;
 use tracing::warn;
 
-use rcgen_rama::BasicConstraints;
-use rcgen_rama::CertificateParams;
-use rcgen_rama::DistinguishedName;
-use rcgen_rama::DnType;
-use rcgen_rama::ExtendedKeyUsagePurpose;
-use rcgen_rama::IsCa;
-use rcgen_rama::Issuer;
-use rcgen_rama::KeyPair;
-use rcgen_rama::KeyUsagePurpose;
-use rcgen_rama::SanType;
+use rama_tls_rustls::dep::rcgen::BasicConstraints;
+use rama_tls_rustls::dep::rcgen::CertificateParams;
+use rama_tls_rustls::dep::rcgen::DistinguishedName;
+use rama_tls_rustls::dep::rcgen::DnType;
+use rama_tls_rustls::dep::rcgen::ExtendedKeyUsagePurpose;
+use rama_tls_rustls::dep::rcgen::IsCa;
+use rama_tls_rustls::dep::rcgen::Issuer;
+use rama_tls_rustls::dep::rcgen::KeyPair;
+use rama_tls_rustls::dep::rcgen::KeyUsagePurpose;
+use rama_tls_rustls::dep::rcgen::PKCS_ECDSA_P256_SHA256;
+use rama_tls_rustls::dep::rcgen::SanType;
 
 pub struct MitmState {
     issuer: Issuer<'static, KeyPair>,
@@ -109,25 +109,21 @@ impl MitmState {
 
     fn tls_acceptor_data_for_host(&self, host: &str) -> Result<TlsAcceptorData> {
         let (cert_pem, key_pem) = issue_host_certificate_pem(host, &self.issuer)?;
-        let cert_chain = DataEncoding::Pem(
-            NonEmptyStr::try_from(cert_pem.as_str()).context("failed to encode host cert PEM")?,
-        );
-        let private_key = DataEncoding::Pem(
-            NonEmptyStr::try_from(key_pem.as_str()).context("failed to encode host key PEM")?,
-        );
-        let auth = ServerAuthData {
-            private_key,
-            cert_chain,
-            ocsp: None,
-        };
+        let cert = CertificateDer::from_pem_slice(cert_pem.as_bytes())
+            .context("failed to parse host cert PEM")?;
+        let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+            .context("failed to parse host key PEM")?;
+        let mut server_config =
+            rustls::ServerConfig::builder_with_protocol_versions(rustls::ALL_VERSIONS)
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .context("failed to build rustls server config")?;
+        server_config.alpn_protocols = vec![
+            ApplicationProtocol::HTTP_2.as_bytes().to_vec(),
+            ApplicationProtocol::HTTP_11.as_bytes().to_vec(),
+        ];
 
-        let mut server_config = ServerConfig::new(ServerAuth::Single(auth));
-        server_config.application_layer_protocol_negotiation = Some(vec![
-            ApplicationProtocol::HTTP_2,
-            ApplicationProtocol::HTTP_11,
-        ]);
-
-        TlsAcceptorData::try_from(server_config).context("failed to build boring acceptor config")
+        Ok(TlsAcceptorData::from(server_config))
     }
 
     pub fn inspect_enabled(&self) -> bool {
@@ -453,7 +449,7 @@ fn issue_host_certificate_pem(
         KeyUsagePurpose::KeyEncipherment,
     ];
 
-    let key_pair = KeyPair::generate_for(&rcgen_rama::PKCS_ECDSA_P256_SHA256)
+    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .map_err(|err| anyhow!("failed to generate host key pair: {err}"))?;
     let cert = params
         .signed_by(&key_pair, issuer)
@@ -519,7 +515,7 @@ fn generate_ca() -> Result<(String, String)> {
     dn.push(DnType::CommonName, "network_proxy MITM CA");
     params.distinguished_name = dn;
 
-    let key_pair = KeyPair::generate_for(&rcgen_rama::PKCS_ECDSA_P256_SHA256)
+    let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
         .map_err(|err| anyhow!("failed to generate CA key pair: {err}"))?;
     let cert = params
         .self_signed(&key_pair)

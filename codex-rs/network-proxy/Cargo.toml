@@ -18,7 +18,6 @@ clap = { workspace = true, features = ["derive"] }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 globset = { workspace = true }
-rcgen-rama = { package = "rcgen", version = "0.14", default-features = false, features = ["pem", "x509-parser", "ring"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -32,9 +31,7 @@ rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
 rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
 rama-socks5 = { version = "=0.3.0-alpha.4" }
 rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
-rama-tls-boring = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
-rama-utils = { version = "=0.3.0-alpha.4" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
