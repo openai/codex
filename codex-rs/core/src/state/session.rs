@@ -26,7 +26,7 @@ pub(crate) struct SessionState {
     /// timestamp when resuming a session. Remove this once SQLite is in place.
     pub(crate) initial_context_seeded: bool,
     /// Previous model seen by the session, used for model-switch handling on task start.
-    pub(crate) previous_model: Option<String>,
+    previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
