@@ -76,16 +76,6 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
@@ -115,21 +105,6 @@ jobs:
           echo "Total RAM: $(sysctl -n hw.memsize | awk '{printf \"%.1f GiB\\n\", $1 / 1024 / 1024 / 1024}')"
           echo "Disk usage:"
           df -h .
-      - name: Print runner specs (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        shell: powershell
-        run: |
-          $computer = Get-CimInstance Win32_ComputerSystem
-          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-          $ramGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
-          Write-Host "Runner: $env:RUNNER_NAME"
-          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
-          Write-Host "CPU: $($cpu.Name)"
-          Write-Host "Logical CPUs: $($computer.NumberOfLogicalProcessors)"
-          Write-Host "Physical CPUs: $($computer.NumberOfProcessors)"
-          Write-Host "Total RAM: $ramGiB GiB"
-          Write-Host "Disk usage:"
-          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
       - name: Install Linux bwrap build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -242,11 +217,7 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
-          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
-          else
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
-          fi
+          cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -254,18 +225,6 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
-
-      - if: ${{ contains(matrix.target, 'windows') }}
-        name: Sign Windows binaries with Azure Trusted Signing
-        uses: ./.github/actions/windows-code-sign
-        with:
-          target: ${{ matrix.target }}
-          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
@@ -345,15 +304,8 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
-          else
-            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
-          fi
+          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
@@ -364,34 +316,18 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - if: ${{ matrix.runner == 'windows-arm64' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
-
       - name: Compress artifacts
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
-          repo_root=$PWD
-
-          # We want to ship the raw Windows executables in the GitHub Release
-          # in addition to the compressed archives. Keep the originals for
-          # Windows targets; remove them elsewhere to limit the number of
-          # artifacts that end up in the GitHub Release.
-          keep_originals=false
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            keep_originals=true
-          fi
 
           # For compatibility with environments that lack the `zstd` tool we
-          # additionally create a `.tar.gz` for all platforms and `.zip` for
-          # Windows alongside every single binary that we publish. The end result is:
+          # additionally create a `.tar.gz` alongside every binary we publish.
+          # The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   codex-<target>.zip          (only for Windows)
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -411,43 +347,9 @@ jobs:
             # Create per-binary tar.gz
             tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
 
-            # Create zip archive for Windows binaries
-            # Must run from inside the dest dir so 7z won't
-            # embed the directory path inside the zip.
-            if [[ "${{ matrix.runner }}" == windows* ]]; then
-              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
-                # Bundle the sandbox helper binaries into the main codex zip so
-                # WinGet installs include the required helpers next to codex.exe.
-                # Fall back to the single-binary zip if the helpers are missing
-                # to avoid breaking releases.
-                bundle_dir="$(mktemp -d)"
-                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
-                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
-                  cp "$dest/$base" "$bundle_dir/$base"
-                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
-                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
-                  # Use an absolute path so bundle zips land in the real dist
-                  # dir even when 7z runs from a temp directory.
-                  (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
-                else
-                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
-                  echo "warning: expected $runner_src and $setup_src"
-                  (cd "$dest" && 7z a "${base}.zip" "$base")
-                fi
-                rm -rf "$bundle_dir"
-              else
-                (cd "$dest" && 7z a "${base}.zip" "$base")
-              fi
-            fi
-
-            # Also create .zst (existing behaviour) *and* remove the original
-            # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
+            # Also create .zst and remove the uncompressed binaries to keep
+            # non-Windows artifact directories small.
+            zstd -T0 -19 --rm "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
@@ -457,6 +359,13 @@ jobs:
           # equivalents we generated in the previous step.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-windows:
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+    secrets: inherit
 
   shell-tool-mcp:
     name: shell-tool-mcp
@@ -470,6 +379,7 @@ jobs:
   release:
     needs:
       - build
+      - build-windows
       - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
@@ -518,6 +428,7 @@ jobs:
       - name: Delete entries from dist/ that should not go in the release
         run: |
           rm -rf dist/shell-tool-mcp*
+          rm -rf dist/windows-binaries*
 
           ls -R dist/
 
