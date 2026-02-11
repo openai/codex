@@ -70,7 +70,9 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
 
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
-        REASON_NOT_ALLOWED => "Codex blocked this request: domain not in allowlist.",
+        REASON_NOT_ALLOWED => {
+            "Codex blocked this request: domain not in allowlist (this is not a denylist block)."
+        }
         REASON_NOT_ALLOWED_LOCAL => {
             "Codex blocked this request: local/private addresses not allowed."
         }
@@ -160,7 +162,7 @@ mod tests {
         assert_eq!(
             message,
             r#"CODEX_NETWORK_POLICY_DECISION {"decision":"deny","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"api.example.com","port":80}
-Codex blocked this request: domain not in allowlist."#
+Codex blocked this request: domain not in allowlist (this is not a denylist block)."#
         );
     }
 }
