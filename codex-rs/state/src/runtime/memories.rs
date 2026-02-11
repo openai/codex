@@ -16,20 +16,6 @@ const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
-const STAGE1_CLAIM_LOCK_RETRY_ATTEMPTS: usize = 3;
-
-fn is_sqlite_lock_retryable(err: &sqlx::Error) -> bool {
-    if let sqlx::Error::Database(db_err) = err {
-        if db_err
-            .code()
-            .is_some_and(|code| matches!(code.as_ref(), "5" | "517"))
-        {
-            return true;
-        }
-        return db_err.message().contains("database is locked");
-    }
-    false
-}
 
 impl StateRuntime {
     pub async fn claim_stage1_jobs_for_startup(
@@ -181,44 +167,12 @@ LIMIT ?
         lease_seconds: i64,
         max_running_jobs: usize,
     ) -> anyhow::Result<Stage1JobClaimOutcome> {
-        let thread_id = thread_id.to_string();
-        let worker_id = worker_id.to_string();
-        for attempt in 1..=STAGE1_CLAIM_LOCK_RETRY_ATTEMPTS {
-            match self
-                .try_claim_stage1_job_once(
-                    thread_id.as_str(),
-                    worker_id.as_str(),
-                    source_updated_at,
-                    lease_seconds,
-                    max_running_jobs,
-                )
-                .await
-            {
-                Ok(outcome) => return Ok(outcome),
-                Err(err)
-                    if attempt < STAGE1_CLAIM_LOCK_RETRY_ATTEMPTS
-                        && is_sqlite_lock_retryable(&err) =>
-                {
-                    tokio::task::yield_now().await;
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-        unreachable!();
-    }
-
-    async fn try_claim_stage1_job_once(
-        &self,
-        thread_id: &str,
-        worker_id: &str,
-        source_updated_at: i64,
-        lease_seconds: i64,
-        max_running_jobs: usize,
-    ) -> Result<Stage1JobClaimOutcome, sqlx::Error> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
         let max_running_jobs = max_running_jobs as i64;
         let ownership_token = Uuid::new_v4().to_string();
+        let thread_id = thread_id.to_string();
+        let worker_id = worker_id.to_string();
 
         let mut tx = self.pool.begin().await?;
 
@@ -226,10 +180,10 @@ LIMIT ?
             r#"
 SELECT source_updated_at
 FROM stage1_outputs
-        WHERE thread_id = ?
+WHERE thread_id = ?
             "#,
         )
-        .bind(thread_id)
+        .bind(thread_id.as_str())
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(existing_output) = existing_output {
@@ -292,8 +246,8 @@ WHERE
             "#,
         )
         .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(thread_id)
-        .bind(worker_id)
+        .bind(thread_id.as_str())
+        .bind(worker_id.as_str())
         .bind(ownership_token.as_str())
         .bind(now)
         .bind(lease_until)
@@ -320,7 +274,7 @@ WHERE kind = ? AND job_key = ?
             "#,
         )
         .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(thread_id)
+        .bind(thread_id.as_str())
         .fetch_optional(&mut *tx)
         .await?;
 
