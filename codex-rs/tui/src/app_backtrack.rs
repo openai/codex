@@ -483,6 +483,19 @@ impl App {
         }
     }
 
+    /// Apply rollback semantics for rollback events that were not initiated by this backtrack
+    /// flow.
+    ///
+    /// Returns `true` when local transcript state changed.
+    pub(crate) fn apply_non_pending_thread_rollback(&mut self, num_turns: u32) -> bool {
+        if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
+            return false;
+        }
+        self.sync_overlay_after_transcript_trim();
+        self.backtrack_render_pending = true;
+        true
+    }
+
     /// Finish a pending rollback by applying the local trim and scheduling a scrollback refresh.
     ///
     /// We ignore events that do not correspond to the currently active thread to avoid applying
@@ -495,8 +508,10 @@ impl App {
             // Ignore rollbacks targeting a prior thread.
             return;
         }
-        self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
-        self.backtrack_render_pending = true;
+        if self.trim_transcript_for_backtrack(pending.selection.nth_user_message) {
+            self.sync_overlay_after_transcript_trim();
+            self.backtrack_render_pending = true;
+        }
     }
 
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {
@@ -527,22 +542,49 @@ impl App {
     }
 
     /// Trim `transcript_cells` to preserve only content before the selected user message.
-    fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
+    ///
+    /// Returns `true` when local transcript state changed.
+    fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) -> bool {
+        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message)
+    }
+
+    fn sync_overlay_after_transcript_trim(&mut self) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.replace_cells(self.transcript_cells.clone());
+        }
+        if self.backtrack.overlay_preview_active {
+            let total_users = user_count(&self.transcript_cells);
+            let next_selection = if total_users == 0 {
+                usize::MAX
+            } else if self.backtrack.nth_user_message == usize::MAX {
+                total_users.saturating_sub(1)
+            } else {
+                self.backtrack
+                    .nth_user_message
+                    .min(total_users.saturating_sub(1))
+            };
+            self.apply_backtrack_selection_internal(next_selection);
+        }
+        // While an overlay is open, new history cells are buffered here before flush on close.
+        // After a trim, old buffered lines may no longer exist in transcript state.
+        self.deferred_history_lines.clear();
     }
 }
 
 fn trim_transcript_cells_to_nth_user(
     transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
     nth_user_message: usize,
-) {
+) -> bool {
     if nth_user_message == usize::MAX {
-        return;
+        return false;
     }
 
     if let Some(cut_idx) = nth_user_position(transcript_cells, nth_user_message) {
+        let original_len = transcript_cells.len();
         transcript_cells.truncate(cut_idx);
+        return transcript_cells.len() != original_len;
     }
+    false
 }
 
 pub(crate) fn trim_transcript_cells_drop_last_n_user_turns(
