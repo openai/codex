@@ -193,6 +193,11 @@
           "default": false,
           "type": "boolean"
         },
+        "isEnabled": {
+          "default": true,
+          "description": "Whether this app is enabled in the loaded config.",
+          "type": "boolean"
+        },
         "logoUrl": {
           "type": [
             "string",

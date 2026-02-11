@@ -3899,7 +3899,10 @@ pub(crate) async fn run_turn(
             Ok(mcp_tools) => mcp_tools,
             Err(_) => return None,
         };
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn_context.config,
+        );
         build_connector_slug_counts(&connectors)
     } else {
         HashMap::new()
@@ -4129,6 +4132,14 @@ fn filter_connectors_for_input(
     explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
+    let connectors = connectors
+        .into_iter()
+        .filter(|connector| connector.is_enabled)
+        .collect::<Vec<_>>();
+    if connectors.is_empty() {
+        return Vec::new();
+    }
+
     let user_messages = collect_user_messages(input);
     if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
         return Vec::new();
@@ -4360,7 +4371,10 @@ async fn built_tools(
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn_context.config,
+        );
         Some(filter_connectors_for_input(
             connectors,
             input,
@@ -5211,6 +5225,7 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: true,
+            is_enabled: true,
         }
     }
 
@@ -5327,6 +5342,22 @@ mod tests {
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_disabled_connectors() {
+        let mut connector = make_connector("calendar", "Calendar");
+        connector.is_enabled = false;
+        let input = vec![user_message("use $calendar")];
+        let explicitly_enabled_connectors = HashSet::new();
+        let selected = filter_connectors_for_input(
+            vec![connector],
+            &input,
+            &explicitly_enabled_connectors,
+            &HashMap::new(),
         );
 
         assert_eq!(selected, Vec::new());

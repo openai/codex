@@ -5,4 +5,8 @@
 /**
  * EXPERIMENTAL - app metadata returned by app-list APIs.
  */
-export type AppInfo = { id: string, name: string, description: string | null, logoUrl: string | null, logoUrlDark: string | null, distributionChannel: string | null, installUrl: string | null, isAccessible: boolean, };
+export type AppInfo = { id: string, name: string, description: string | null, logoUrl: string | null, logoUrlDark: string | null, distributionChannel: string | null, installUrl: string | null, isAccessible: boolean, 
+/**
+ * Whether this app is enabled in the loaded config.
+ */
+isEnabled: boolean, };
