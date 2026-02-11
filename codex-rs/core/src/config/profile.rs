@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::types::Personality;
+use crate::config::types::WindowsToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -40,6 +41,8 @@ pub struct ConfigProfile {
     pub tools_view_image: Option<bool>,
     pub web_search: Option<WebSearchMode>,
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
+    #[serde(default)]
+    pub windows: Option<WindowsToml>,
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.

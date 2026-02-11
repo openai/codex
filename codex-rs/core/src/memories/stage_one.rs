@@ -29,9 +29,10 @@ pub(super) fn stage_one_output_schema() -> Value {
         "type": "object",
         "properties": {
             "rollout_summary": { "type": "string" },
+            "rollout_slug": { "type": "string" },
             "raw_memory": { "type": "string" }
         },
-        "required": ["rollout_summary", "raw_memory"],
+        "required": ["rollout_summary", "rollout_slug", "raw_memory"],
         "additionalProperties": false
     })
 }
@@ -96,6 +97,15 @@ fn parse_json_object_loose(raw: &str) -> Result<Value> {
 fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutput> {
     output.raw_memory = output.raw_memory.trim().to_string();
     output.rollout_summary = output.rollout_summary.trim().to_string();
+    output._rollout_slug = output
+        ._rollout_slug
+        .map(|slug| slug.trim().to_string())
+        .filter(|slug| !slug.is_empty());
+
+    if output.raw_memory.is_empty() && output.rollout_summary.is_empty() {
+        // Empty pair is a deliberate "no meaningful signal" sentinel.
+        return Ok(output);
+    }
 
     if output.raw_memory.is_empty() {
         return Err(CodexErr::InvalidRequest(
@@ -189,6 +199,7 @@ mod tests {
         let output = StageOneOutput {
             raw_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
             rollout_summary: "password = mysecret123456\n\nsmall".to_string(),
+            _rollout_slug: None,
         };
 
         let normalized = normalize_stage_one_output(output).expect("normalized");
@@ -209,5 +220,30 @@ mod tests {
         assert!(normalized.contains("## Task:"));
         assert!(normalized.contains("Outcome: uncertain"));
         assert!(normalized.contains("loose notes only"));
+    }
+
+    #[test]
+    fn normalize_stage_one_output_allows_empty_pair_for_skip() {
+        let output = StageOneOutput {
+            raw_memory: String::new(),
+            rollout_summary: String::new(),
+            _rollout_slug: None,
+        };
+
+        let normalized = normalize_stage_one_output(output).expect("normalized");
+        assert_eq!(normalized.raw_memory, "");
+        assert_eq!(normalized.rollout_summary, "");
+    }
+
+    #[test]
+    fn normalize_stage_one_output_rejects_partial_empty_values() {
+        let output = StageOneOutput {
+            raw_memory: String::new(),
+            rollout_summary: "summary".to_string(),
+            _rollout_slug: None,
+        };
+
+        let err = normalize_stage_one_output(output).expect_err("should reject");
+        assert_eq!(err.to_string(), "stage-1 memory output missing raw_memory");
     }
 }

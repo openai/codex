@@ -11,12 +11,12 @@
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
-use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
@@ -209,6 +209,12 @@ pub(crate) enum AppEvent {
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
+        preset: ApprovalPreset,
+    },
+
+    /// Begin the non-elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxLegacySetup {
         preset: ApprovalPreset,
     },
 

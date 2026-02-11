@@ -371,25 +371,6 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         _ => false,
     })
     .await;
-    // On slower CI hosts, the final AgentMessage can arrive immediately after
-    // TurnComplete. Drain a brief tail window to make ordering nondeterminism
-    // harmless while still enforcing "exactly one final AgentMessage".
-    while let Ok(Ok(event)) =
-        tokio::time::timeout(std::time::Duration::from_millis(200), codex.next_event()).await
-    {
-        match event.msg {
-            EventMsg::AgentMessage(_) => agent_messages += 1,
-            EventMsg::EnteredReviewMode(_) => saw_entered = true,
-            EventMsg::ExitedReviewMode(_) => saw_exited = true,
-            EventMsg::AgentMessageContentDelta(_) => {
-                panic!("unexpected AgentMessageContentDelta surfaced during review")
-            }
-            EventMsg::AgentMessageDelta(_) => {
-                panic!("unexpected AgentMessageDelta surfaced during review")
-            }
-            _ => {}
-        }
-    }
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 

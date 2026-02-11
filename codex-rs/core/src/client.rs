@@ -81,6 +81,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::trace;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -185,6 +186,7 @@ pub struct ModelClientSession {
 struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
+    can_append: bool,
 }
 
 enum WebsocketStreamOutcome {
@@ -356,7 +358,7 @@ impl ModelClient {
     /// Returns whether websocket transport has been permanently disabled for this session.
     ///
     /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
-    fn disable_websockets(&self) -> bool {
+    fn websockets_disabled(&self) -> bool {
         self.state.disable_websockets.load(Ordering::Relaxed)
     }
 
@@ -550,6 +552,9 @@ impl ModelClientSession {
         let mut request_without_input = request.clone();
         request_without_input.input.clear();
         if previous_without_input != request_without_input {
+            trace!(
+                "incremental request failed, properties didn't match {previous_without_input:?} != {request_without_input:?}"
+            );
             return None;
         }
 
@@ -565,6 +570,7 @@ impl ModelClientSession {
         {
             Some(request.input[baseline_len..].to_vec())
         } else {
+            trace!("incremental request failed, items didn't match");
             None
         }
     }
@@ -583,18 +589,19 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
-        let last_response = self.get_last_response();
+        let Some(last_response) = self.get_last_response() else {
+            return ResponsesWsRequest::ResponseCreate(payload);
+        };
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
-        let incremental_items = self.get_incremental_items(request, last_response.as_ref());
+        if !responses_websockets_v2_enabled && !last_response.can_append {
+            trace!("incremental request failed, can't append");
+            return ResponsesWsRequest::ResponseCreate(payload);
+        }
+        let incremental_items = self.get_incremental_items(request, Some(&last_response));
         if let Some(append_items) = incremental_items {
-            if responses_websockets_v2_enabled
-                && let Some(previous_response_id) = last_response
-                    .as_ref()
-                    .map(|last_response| last_response.response_id.clone())
-                    .filter(|id| !id.is_empty())
-            {
+            if responses_websockets_v2_enabled && !last_response.response_id.is_empty() {
                 let payload = ResponseCreateWsRequest {
-                    previous_response_id: Some(previous_response_id),
+                    previous_response_id: Some(last_response.response_id),
                     input: append_items,
                     ..payload
                 };
@@ -620,7 +627,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) || self.client.disable_websockets()
+        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
         {
             return Ok(());
         }
@@ -879,7 +886,7 @@ impl ModelClientSession {
         match wire_api {
             WireApi::Responses => {
                 let websocket_enabled = self.client.responses_websocket_enabled(model_info)
-                    && !self.client.disable_websockets();
+                    && !self.client.websockets_disabled();
 
                 if websocket_enabled {
                     match self
@@ -1014,6 +1021,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    can_append,
                 }) => {
                     if let Some(usage) = &token_usage {
                         otel_manager.sse_event_completed(
@@ -1028,12 +1036,14 @@ where
                         let _ = sender.send(LastResponse {
                             response_id: response_id.clone(),
                             items_added: std::mem::take(&mut items_added),
+                            can_append,
                         });
                     }
                     if tx_event
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            can_append,
                         }))
                         .await
                         .is_err()

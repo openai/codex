@@ -1,11 +1,13 @@
-use askama::Template;
-use std::path::Path;
-use tracing::warn;
-
 use super::text::prefix_at_char_boundary;
 use super::text::suffix_at_char_boundary;
+use crate::memories::memory_root;
+use askama::Template;
+use std::path::Path;
+use tokio::fs;
+use tracing::warn;
 
-const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 1_000_000;
+// TODO(jif) use proper truncation
+const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 100_000;
 
 #[derive(Template)]
 #[template(path = "memories/consolidation.md", escape = "none")]
@@ -17,32 +19,39 @@ struct ConsolidationPromptTemplate<'a> {
 #[template(path = "memories/stage_one_input.md", escape = "none")]
 struct StageOneInputTemplate<'a> {
     rollout_path: &'a str,
+    rollout_cwd: &'a str,
     rollout_contents: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "memories/read_path.md", escape = "none")]
+struct MemoryToolDeveloperInstructionsTemplate<'a> {
+    base_path: &'a str,
+    memory_summary: &'a str,
 }
 
 /// Builds the consolidation subagent prompt for a specific memory root.
 ///
-/// Falls back to a simple string replacement if Askama rendering fails.
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     let template = ConsolidationPromptTemplate {
         memory_root: &memory_root,
     };
-    match template.render() {
-        Ok(prompt) => prompt,
-        Err(err) => {
-            warn!("failed to render memories consolidation prompt template: {err}");
-            include_str!("../../templates/memories/consolidation.md")
-                .replace("{{ memory_root }}", &memory_root)
-        }
-    }
+    template.render().unwrap_or_else(|err| {
+        warn!("failed to render memories consolidation prompt template: {err}");
+        format!("## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}")
+    })
 }
 
 /// Builds the stage-1 user message containing rollout metadata and content.
 ///
 /// Large rollout payloads are truncated to a bounded byte budget while keeping
 /// both head and tail context.
-pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_contents: &str) -> String {
+pub(super) fn build_stage_one_input_message(
+    rollout_path: &Path,
+    rollout_cwd: &Path,
+    rollout_contents: &str,
+) -> String {
     let (rollout_contents, truncated) = truncate_rollout_for_prompt(rollout_contents);
     if truncated {
         warn!(
@@ -53,19 +62,37 @@ pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_content
     }
 
     let rollout_path = rollout_path.display().to_string();
+    let rollout_cwd = rollout_cwd.display().to_string();
     let template = StageOneInputTemplate {
         rollout_path: &rollout_path,
+        rollout_cwd: &rollout_cwd,
         rollout_contents: &rollout_contents,
     };
-    match template.render() {
-        Ok(prompt) => prompt,
-        Err(err) => {
-            warn!("failed to render memories stage-one input template: {err}");
-            include_str!("../../templates/memories/stage_one_input.md")
-                .replace("{{ rollout_path }}", &rollout_path)
-                .replace("{{ rollout_contents }}", &rollout_contents)
-        }
+    template.render().unwrap_or_else(|err| {
+        warn!("failed to render memories stage-one input template: {err}");
+        format!(
+            "Analyze this rollout and produce JSON with `raw_memory`, `rollout_summary`, and optional `rollout_slug`.\n\nrollout_context:\n- rollout_path: {rollout_path}\n- rollout_cwd: {rollout_cwd}\n\nrendered conversation:\n{rollout_contents}"
+        )
+    })
+}
+
+pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
+    let base_path = memory_root(codex_home);
+    let memory_summary_path = base_path.join("memory_summary.md");
+    let memory_summary = fs::read_to_string(&memory_summary_path)
+        .await
+        .ok()?
+        .trim()
+        .to_string();
+    if memory_summary.is_empty() {
+        return None;
     }
+    let base_path = base_path.display().to_string();
+    let template = MemoryToolDeveloperInstructionsTemplate {
+        base_path: &base_path,
+        memory_summary: &memory_summary,
+    };
+    template.render().ok()
 }
 
 fn truncate_rollout_for_prompt(input: &str) -> (String, bool) {

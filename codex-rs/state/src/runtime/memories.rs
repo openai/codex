@@ -146,6 +146,7 @@ WHERE thread_id = ?
             r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
 FROM stage1_outputs AS so
+WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
             "#,
@@ -174,7 +175,7 @@ LIMIT ?
         let thread_id = thread_id.to_string();
         let worker_id = worker_id.to_string();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let existing_output = sqlx::query(
             r#"
@@ -189,6 +190,25 @@ WHERE thread_id = ?
         if let Some(existing_output) = existing_output {
             let existing_source_updated_at: i64 = existing_output.try_get("source_updated_at")?;
             if existing_source_updated_at >= source_updated_at {
+                tx.commit().await?;
+                return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
+            }
+        }
+        let existing_job = sqlx::query(
+            r#"
+SELECT last_success_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(existing_job) = existing_job {
+            let last_success_watermark =
+                existing_job.try_get::<Option<i64>, _>("last_success_watermark")?;
+            if last_success_watermark.is_some_and(|watermark| watermark >= source_updated_at) {
                 tx.commit().await?;
                 return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
             }
@@ -371,6 +391,71 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         Ok(true)
     }
 
+    pub async fn mark_stage1_job_succeeded_no_output(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let thread_id = thread_id.to_string();
+
+        let mut tx = self.pool.begin().await?;
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = input_watermark
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        let source_updated_at = sqlx::query(
+            r#"
+SELECT input_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ? AND ownership_token = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .fetch_one(&mut *tx)
+        .await?
+        .try_get::<i64, _>("input_watermark")?;
+
+        sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .execute(&mut *tx)
+        .await?;
+
+        enqueue_global_consolidation_with_executor(&mut *tx, source_updated_at).await?;
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn mark_stage1_job_failed(
         &self,
         thread_id: ThreadId,
@@ -424,7 +509,7 @@ WHERE kind = ? AND job_key = ?
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let existing_job = sqlx::query(
             r#"

@@ -331,6 +331,14 @@
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
+        },
+        "windows": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WindowsToml"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -1144,6 +1152,22 @@
       ],
       "type": "string"
     },
+    "WindowsSandboxModeToml": {
+      "enum": [
+        "elevated",
+        "unelevated"
+      ],
+      "type": "string"
+    },
+    "WindowsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "sandbox": {
+          "$ref": "#/definitions/WindowsSandboxModeToml"
+        }
+      },
+      "type": "object"
+    },
     "WireApi": {
       "description": "Wire protocol that the provider speaks.",
       "oneOf": [
@@ -1635,6 +1659,15 @@
         }
       ],
       "description": "Controls the web search tool mode: disabled, cached, or live."
+    },
+    "windows": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WindowsToml"
+        }
+      ],
+      "default": null,
+      "description": "Windows-specific configuration."
     },
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",

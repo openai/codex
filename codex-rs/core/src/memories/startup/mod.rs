@@ -127,6 +127,7 @@ pub(super) async fn run_memories_startup_pipeline(
                     let stage_one_output = match extract::extract_stage_one_output(
                         session.as_ref(),
                         &thread.rollout_path,
+                        &thread.cwd,
                         &stage_one_context,
                     )
                     .await
@@ -150,6 +151,15 @@ pub(super) async fn run_memories_startup_pipeline(
                     let Some(state_db) = session.services.state_db.as_deref() else {
                         return false;
                     };
+
+                    if stage_one_output.raw_memory.is_empty()
+                        && stage_one_output.rollout_summary.is_empty()
+                    {
+                        return state_db
+                            .mark_stage1_job_succeeded_no_output(thread.id, &claim.ownership_token)
+                            .await
+                            .unwrap_or(false);
+                    }
 
                     state_db
                         .mark_stage1_job_succeeded(

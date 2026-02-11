@@ -944,6 +944,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        should_prompt_windows_sandbox_nux_at_startup: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -1107,7 +1108,8 @@ impl App {
             }
         };
 
-        chat_widget.maybe_prompt_windows_sandbox_enable();
+        chat_widget
+            .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
@@ -1788,6 +1790,42 @@ impl App {
                     let _ = preset;
                 }
             }
+            AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let policy = preset.sandbox.clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = policy_cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    self.chat_widget.show_windows_sandbox_setup_status();
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(err) = codex_core::windows_sandbox::run_legacy_setup_preflight(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        ) {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to preflight non-admin Windows sandbox setup"
+                            );
+                        }
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Legacy,
+                        });
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
+            }
             AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
                 #[cfg(target_os = "windows")]
                 {
@@ -1800,33 +1838,26 @@ impl App {
                         );
                     }
                     let profile = self.active_profile.as_deref();
-                    let feature_key = Feature::WindowsSandbox.key();
-                    let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    let mut builder =
-                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
-                    if elevated_enabled {
-                        builder = builder.set_feature_enabled(elevated_key, true);
-                    } else {
-                        builder = builder
-                            .set_feature_enabled(feature_key, true)
-                            .set_feature_enabled(elevated_key, false);
-                    }
+                    let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                        .with_profile(profile)
+                        .set_windows_sandbox_mode(if elevated_enabled {
+                            "elevated"
+                        } else {
+                            "unelevated"
+                        })
+                        .clear_legacy_windows_sandbox_keys();
                     match builder.apply().await {
                         Ok(()) => {
                             if elevated_enabled {
+                                self.config.set_windows_sandbox_enabled(false);
                                 self.config.set_windows_elevated_sandbox_enabled(true);
-                                self.chat_widget
-                                    .set_feature_enabled(Feature::WindowsSandboxElevated, true);
                             } else {
                                 self.config.set_windows_sandbox_enabled(true);
                                 self.config.set_windows_elevated_sandbox_enabled(false);
-                                self.chat_widget
-                                    .set_feature_enabled(Feature::WindowsSandbox, true);
-                                self.chat_widget
-                                    .set_feature_enabled(Feature::WindowsSandboxElevated, false);
                             }
-                            self.chat_widget.clear_forced_auto_mode_downgrade();
+                            self.chat_widget
+                                .set_windows_sandbox_mode(self.config.windows_sandbox_mode);
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -1871,17 +1902,15 @@ impl App {
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
-                                self.chat_widget.add_info_message(
-                                    match mode {
-                                        WindowsSandboxEnableMode::Elevated => {
-                                            "Enabled elevated agent sandbox.".to_string()
-                                        }
-                                        WindowsSandboxEnableMode::Legacy => {
-                                            "Enabled non-elevated agent sandbox.".to_string()
-                                        }
-                                    },
-                                    None,
-                                );
+                                let _ = mode;
+                                self.chat_widget.add_plain_history_lines(vec![
+                                    Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
+                                    Line::from(vec![
+                                        "  ".into(),
+                                        "Codex can now safely edit files and execute commands in your computer"
+                                            .dark_gray(),
+                                    ]),
+                                ]);
                             }
                         }
                         Err(err) => {
@@ -1989,21 +2018,17 @@ impl App {
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
+                #[cfg(target_os = "windows")]
+                let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
+                if let Err(err) = self.config.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || WindowsSandboxLevel::from_config(&self.config)
-                        != WindowsSandboxLevel::Disabled
-                {
-                    self.config.forced_auto_mode_downgraded_on_windows = false;
-                }
-                if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
+                if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
@@ -2624,12 +2649,9 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
-    use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
@@ -2726,14 +2748,17 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
@@ -2779,14 +2804,17 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
@@ -2830,7 +2858,7 @@ mod tests {
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
-        let model_info = ModelsManager::construct_model_info_offline(model, config);
+        let model_info = codex_core::test_support::construct_model_info_offline(model, config);
         OtelManager::new(
             ThreadId::new(),
             model,
@@ -2846,7 +2874,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::models_manager::model_presets::all_model_presets().clone()
+        codex_core::test_support::all_model_presets().clone()
     }
 
     fn model_migration_copy_to_plain_text(

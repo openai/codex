@@ -24,6 +24,19 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsSandboxModeToml {
+    Elevated,
+    Unelevated,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WindowsToml {
+    pub sandbox: Option<WindowsSandboxModeToml>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
     Unknown,

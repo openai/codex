@@ -9,17 +9,22 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 codex-backend-client = { workspace = true }
 codex-core = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+hmac = "0.12.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "sync", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-base64 = { workspace = true }
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
