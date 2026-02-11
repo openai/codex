@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyHandle;
@@ -89,12 +90,21 @@ impl NetworkProxySpec {
     }
 
     pub async fn start_proxy(&self) -> std::io::Result<StartedNetworkProxy> {
+        self.start_proxy_with_audit_metadata(NetworkProxyAuditMetadata::default())
+            .await
+    }
+
+    pub async fn start_proxy_with_audit_metadata(
+        &self,
+        audit_metadata: NetworkProxyAuditMetadata,
+    ) -> std::io::Result<StartedNetworkProxy> {
         let state =
             build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
                 std::io::Error::other(format!("failed to build network proxy state: {err}"))
             })?;
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
-        let state = NetworkProxyState::with_reloader(state, reloader);
+        let state =
+            NetworkProxyState::with_reloader_and_audit_metadata(state, reloader, audit_metadata);
         let proxy = NetworkProxy::builder()
             .state(Arc::new(state))
             .build()

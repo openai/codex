@@ -34,6 +34,7 @@ pub use proxy::has_proxy_url_env_vars;
 pub use proxy::proxy_url_env_value;
 pub use runtime::ConfigReloader;
 pub use runtime::ConfigState;
+pub use runtime::NetworkProxyAuditMetadata;
 pub use runtime::NetworkProxyState;
 pub use state::NetworkProxyConstraintError;
 pub use state::NetworkProxyConstraints;

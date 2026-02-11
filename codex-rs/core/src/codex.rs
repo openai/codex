@@ -47,6 +47,7 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -230,6 +231,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1010,16 +1012,33 @@ impl Session {
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
+        let account_id = auth.and_then(CodexAuth::get_account_id);
+        let account_email = auth.and_then(CodexAuth::get_account_email);
+        let originator = crate::default_client::originator().value;
+        let terminal_type = terminal::user_agent();
+        let model = session_configuration.collaboration_mode.model().to_string();
+        let slug = model.clone();
+        let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
+            conversation_id: Some(conversation_id.to_string()),
+            app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            auth_mode: auth_mode.map(|mode| mode.to_string()),
+            originator: Some(sanitize_metric_tag_value(originator.as_str())),
+            account_id: account_id.clone(),
+            account_email: account_email.clone(),
+            terminal_type: Some(terminal_type.clone()),
+            model: Some(model.clone()),
+            slug: Some(slug.clone()),
+        };
         let otel_manager = OtelManager::new(
             conversation_id,
-            session_configuration.collaboration_mode.model(),
-            session_configuration.collaboration_mode.model(),
-            auth.and_then(CodexAuth::get_account_id),
-            auth.and_then(CodexAuth::get_account_email),
+            model.as_str(),
+            slug.as_str(),
+            account_id,
+            account_email,
             auth_mode,
-            crate::default_client::originator().value,
+            originator,
             config.otel.log_user_prompt,
-            terminal::user_agent(),
+            terminal_type,
             session_configuration.session_source.clone(),
         );
         config.features.emit_metrics(&otel_manager);
@@ -1074,13 +1093,16 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
-        let network_proxy =
-            match config.network.as_ref() {
-                Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
-                    anyhow::anyhow!("failed to start managed network proxy: {err}")
-                })?),
-                None => None,
-            };
+        let network_proxy = match config.network.as_ref() {
+            Some(spec) => Some(
+                spec.start_proxy_with_audit_metadata(network_proxy_audit_metadata)
+                    .await
+                    .map_err(|err| {
+                        anyhow::anyhow!("failed to start managed network proxy: {err}")
+                    })?,
+            ),
+            None => None,
+        };
         let session_network_proxy = network_proxy.as_ref().map(|started| {
             let proxy = started.proxy();
             SessionNetworkProxyRuntime {

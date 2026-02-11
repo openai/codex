@@ -6,6 +6,8 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
+use crate::network_policy::NonDomainDenyAuditEventArgs;
+use crate::network_policy::emit_non_domain_deny_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
@@ -152,6 +154,16 @@ async fn handle_socks5_tcp(
     match app_state.enabled().await {
         Ok(true) => {}
         Ok(false) => {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ProxyState,
+                reason: REASON_PROXY_DISABLED,
+                protocol: NetworkProtocol::Socks5Tcp,
+                host: &host,
+                port,
+                method: None,
+                client_addr: client.as_deref(),
+                metadata: app_state.audit_metadata(),
+            });
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_PROXY_DISABLED,
@@ -182,6 +194,16 @@ async fn handle_socks5_tcp(
 
     match app_state.network_mode().await {
         Ok(NetworkMode::Limited) => {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Socks5Tcp,
+                host: &host,
+                port,
+                method: None,
+                client_addr: client.as_deref(),
+                metadata: app_state.audit_metadata(),
+            });
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_METHOD_NOT_ALLOWED,
@@ -289,6 +311,16 @@ async fn inspect_socks5_udp(
     match state.enabled().await {
         Ok(true) => {}
         Ok(false) => {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ProxyState,
+                reason: REASON_PROXY_DISABLED,
+                protocol: NetworkProtocol::Socks5Udp,
+                host: &host,
+                port,
+                method: None,
+                client_addr: client.as_deref(),
+                metadata: state.audit_metadata(),
+            });
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_PROXY_DISABLED,
@@ -319,6 +351,16 @@ async fn inspect_socks5_udp(
 
     match state.network_mode().await {
         Ok(NetworkMode::Limited) => {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Socks5Udp,
+                host: &host,
+                port,
+                method: None,
+                client_addr: client.as_deref(),
+                metadata: state.audit_metadata(),
+            });
             let details = PolicyDecisionDetails {
                 decision: NetworkPolicyDecision::Deny,
                 reason: REASON_METHOD_NOT_ALLOWED,

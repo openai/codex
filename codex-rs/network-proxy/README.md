@@ -12,7 +12,12 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 
 ### 1) Configure
 
-`codex-network-proxy` reads from Codex's merged `config.toml` (via `codex-core` config loading).
+`codex-network-proxy` has two config-loading modes:
+
+- Standalone binary (`cargo run -p codex-network-proxy --`): reads `network` and `otel`
+  directly from `$CODEX_HOME/config.toml`.
+- Embedded via Codex CLI/core: the proxy is created from Codex-managed network config
+  (`NetworkProxySpec` / managed constraints), rather than using the standalone binary loader.
 
 Example config:
 
@@ -55,6 +60,11 @@ allow_unix_sockets = ["/tmp/example.sock"]
 cargo run -p codex-network-proxy --
 ```
 
+Notes:
+
+- If `network.enabled = false` (default), the process exits without binding listeners.
+- In standalone mode, `POST /reload` is not supported.
+
 ### 3) Point a client at it
 
 For HTTP(S) traffic:
@@ -82,6 +92,79 @@ When a request is blocked, the proxy responds with `403` and includes:
 
 In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
 blocked because they would bypass method enforcement.
+
+### 5) OpenTelemetry logs and audit events
+
+`codex-network-proxy` logs use normal `tracing` targets (for example
+`codex_network_proxy::http_proxy`).
+
+In standalone mode, `codex-network-proxy` reads the top-level `[otel]` section from
+`$CODEX_HOME/config.toml` and initializes OTEL export directly in the binary. If OTEL
+initialization fails, the proxy still starts and keeps stderr logging enabled.
+In embedded (non-standalone) mode, Codex core initializes OTEL, and the proxy emits audit events
+through that shared tracing pipeline.
+OTEL resolution follows the same defaults as Codex core (`environment = "dev"`,
+`exporter = "none"`, `trace_exporter = exporter`, `metrics_exporter = "statsig"`), and
+`log_user_prompt` is accepted for compatibility but ignored by the proxy.
+
+To filter proxy logs locally, use:
+
+```bash
+RUST_LOG=codex_network_proxy=info
+```
+
+The proxy emits structured policy audit events at target `codex_otel.network_proxy` (current
+`OTEL_NETWORK_PROXY_TARGET` constant in code):
+
+Domain-policy event (one per domain policy evaluation):
+
+- `event.name = "codex.network_proxy.domain_policy_decision"`
+- `event.timestamp = <RFC3339 UTC timestamp with milliseconds>`
+- `conversation.id = <thread id>` (optional)
+- `app.version = <codex version>` (optional)
+- `auth_mode = <auth mode>` (optional)
+- `originator = <client originator>` (optional)
+- `user.account_id = <account id>` (optional)
+- `user.email = <account email>` (optional)
+- `terminal.type = <terminal identifier>` (optional)
+- `model = <model>` (optional)
+- `slug = <model slug>` (optional)
+- `network.policy.scope = "domain_rule"`
+- `network.policy.decision = "allow" | "deny" | "ask"`
+- `network.policy.source = "baseline_policy" | "decider"`
+- `network.policy.reason = <policy reason>`
+- `network.transport.protocol = "http" | "https_connect" | "socks5_tcp" | "socks5_udp"`
+- `server.address = <normalized host>`
+- `server.port = <port>`
+- `http.request.method = <method or "none">`
+- `client.address = <client address or "unknown">`
+- `network.policy.override = true|false` (`true` only when decider overrides baseline `not_allowed`)
+
+Supplemental non-domain block event (only when blocked by mode guard or proxy state):
+
+- `event.name = "codex.network_proxy.block_decision"`
+- `event.timestamp = <RFC3339 UTC timestamp with milliseconds>`
+- `conversation.id = <thread id>` (optional)
+- `app.version = <codex version>` (optional)
+- `auth_mode = <auth mode>` (optional)
+- `originator = <client originator>` (optional)
+- `user.account_id = <account id>` (optional)
+- `user.email = <account email>` (optional)
+- `terminal.type = <terminal identifier>` (optional)
+- `model = <model>` (optional)
+- `slug = <model slug>` (optional)
+- `network.policy.scope = "mode_guard" | "proxy_state"`
+- `network.policy.decision = "deny"`
+- `network.policy.source = "mode_guard" | "proxy_state"`
+- `network.policy.reason = "method_not_allowed" | "proxy_disabled" | "not_allowed" | "unix_socket_unsupported"`
+- `network.transport.protocol = "http" | "https_connect" | "socks5_tcp" | "socks5_udp"`
+- `server.address = <host>` (`"unix-socket"` sentinel for unix-socket block paths)
+- `server.port = <port>` (`0` for unix-socket sentinel events)
+- `http.request.method = <method or "none">`
+- `client.address = <client address or "unknown">`
+- `network.policy.override = false`
+
+These audit events are intentionally domain/policy focused and do not include full URLs.
 
 ## Library API
 

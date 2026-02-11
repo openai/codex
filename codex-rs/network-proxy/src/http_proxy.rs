@@ -6,11 +6,14 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
+use crate::network_policy::NonDomainDenyAuditEventArgs;
+use crate::network_policy::emit_non_domain_deny_audit_event;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
+use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
 use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
@@ -174,6 +177,7 @@ async fn http_connect_accept(
             client_addr(&req),
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
+            None,
         )
         .await);
     }
@@ -232,6 +236,16 @@ async fn http_connect_accept(
         .map_err(|err| internal_error("failed to read network mode", err))?;
 
     if mode == NetworkMode::Limited {
+        emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+            source: NetworkDecisionSource::ModeGuard,
+            reason: REASON_METHOD_NOT_ALLOWED,
+            protocol: NetworkProtocol::HttpsConnect,
+            host: &host,
+            port: authority.port,
+            method: Some("CONNECT"),
+            client_addr: client.as_deref(),
+            metadata: app_state.audit_metadata(),
+        });
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
             reason: REASON_METHOD_NOT_ALLOWED,
@@ -405,10 +419,21 @@ async fn http_plain_proxy(
                 client_addr(&req),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
+                Some("unix-socket"),
             )
             .await);
         }
         if !method_allowed {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Http,
+                host: "unix-socket",
+                port: 0,
+                method: Some(req.method().as_str()),
+                client_addr: client.as_deref(),
+                metadata: app_state.audit_metadata(),
+            });
             let client = client.as_deref().unwrap_or_default();
             let method = req.method();
             warn!(
@@ -418,6 +443,16 @@ async fn http_plain_proxy(
         }
 
         if !unix_socket_permissions_supported() {
+            emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                source: NetworkDecisionSource::ProxyState,
+                reason: REASON_UNIX_SOCKET_UNSUPPORTED,
+                protocol: NetworkProtocol::Http,
+                host: "unix-socket",
+                port: 0,
+                method: Some(req.method().as_str()),
+                client_addr: client.as_deref(),
+                metadata: app_state.audit_metadata(),
+            });
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
             return Ok(text_response(
                 StatusCode::NOT_IMPLEMENTED,
@@ -441,6 +476,16 @@ async fn http_plain_proxy(
                 }
             }
             Ok(false) => {
+                emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+                    source: NetworkDecisionSource::ProxyState,
+                    reason: REASON_NOT_ALLOWED,
+                    protocol: NetworkProtocol::Http,
+                    host: "unix-socket",
+                    port: 0,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                    metadata: app_state.audit_metadata(),
+                });
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
                 Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED, None))
@@ -480,6 +525,7 @@ async fn http_plain_proxy(
             client_addr(&req),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
+            None,
         )
         .await);
     }
@@ -530,6 +576,16 @@ async fn http_plain_proxy(
     }
 
     if !method_allowed {
+        emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+            source: NetworkDecisionSource::ModeGuard,
+            reason: REASON_METHOD_NOT_ALLOWED,
+            protocol: NetworkProtocol::Http,
+            host: &host,
+            port,
+            method: Some(req.method().as_str()),
+            client_addr: client.as_deref(),
+            metadata: app_state.audit_metadata(),
+        });
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
             reason: REASON_METHOD_NOT_ALLOWED,
@@ -657,7 +713,19 @@ async fn proxy_disabled_response(
     client: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
+    audit_host: Option<&str>,
 ) -> Response {
+    emit_non_domain_deny_audit_event(NonDomainDenyAuditEventArgs {
+        source: NetworkDecisionSource::ProxyState,
+        reason: REASON_PROXY_DISABLED,
+        protocol,
+        host: audit_host.unwrap_or(host.as_str()),
+        port,
+        method: method.as_deref(),
+        client_addr: client.as_deref(),
+        metadata: app_state.audit_metadata(),
+    });
+
     let blocked_host = host.clone();
     let _ = app_state
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
@@ -718,7 +786,49 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
+    use std::io;
     use std::sync::Arc;
+    use std::sync::Mutex;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct CapturingMakeWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl CapturingMakeWriter {
+        fn from_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
+            Self { buffer }
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturingMakeWriter {
+        type Writer = CapturingWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CapturingWriter {
+                buffer: self.buffer.clone(),
+            }
+        }
+    }
+
+    struct CapturingWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl io::Write for CapturingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
@@ -743,5 +853,92 @@ mod tests {
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-method-policy"
         );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_emits_unix_socket_unsupported_audit_event() {
+        let policy = NetworkProxySettings::default();
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/")
+            .header("x-unix-socket", "/tmp/example.sock")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_level(false)
+            .with_target(true)
+            .without_time()
+            .with_writer(CapturingMakeWriter::from_buffer(buffer.clone()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+        let logs = String::from_utf8(
+            buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )
+        .unwrap();
+        assert!(logs.contains("event.name=\"codex.network_proxy.block_decision\""));
+        assert!(logs.contains("network.policy.source=\"proxy_state\""));
+        assert!(logs.contains("network.policy.reason=\"unix_socket_unsupported\""));
+        assert!(logs.contains("server.address=\"unix-socket\""));
+        assert!(logs.contains("server.port=0"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_plain_proxy_emits_unix_socket_not_allowed_audit_event() {
+        let policy = NetworkProxySettings {
+            allow_unix_sockets: vec!["/tmp/allowed.sock".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+        let mut req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com/")
+            .header("x-unix-socket", "/tmp/not-allowed.sock")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_level(false)
+            .with_target(true)
+            .without_time()
+            .with_writer(CapturingMakeWriter::from_buffer(buffer.clone()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let response = http_plain_proxy(None, req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-allowlist"
+        );
+
+        let logs = String::from_utf8(
+            buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )
+        .unwrap();
+        assert!(logs.contains("event.name=\"codex.network_proxy.block_decision\""));
+        assert!(logs.contains("network.policy.source=\"proxy_state\""));
+        assert!(logs.contains("network.policy.reason=\"not_allowed\""));
+        assert!(logs.contains("server.address=\"unix-socket\""));
+        assert!(logs.contains("server.port=0"));
     }
 }
