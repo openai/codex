@@ -343,6 +343,7 @@ mod tests {
                 allow_upstream_proxy: true,
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_non_loopback_admin: false,
+                dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,
                 allowed_domains: Vec::new(),
                 denied_domains: Vec::new(),
