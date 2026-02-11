@@ -1156,7 +1156,7 @@ impl App {
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1987,7 +1987,7 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
 
                 if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
@@ -1997,9 +1997,11 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || WindowsSandboxLevel::from_config(&self.config)
-                        != WindowsSandboxLevel::Disabled
+                if !matches!(
+                    &policy,
+                    codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                ) || WindowsSandboxLevel::from_config(&self.config)
+                    != WindowsSandboxLevel::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -3053,7 +3055,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3108,7 +3110,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3360,7 +3362,7 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
