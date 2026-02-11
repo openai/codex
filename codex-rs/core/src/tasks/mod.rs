@@ -123,8 +123,6 @@ impl Session {
         self.clear_mcp_tool_selection().await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
-        self.set_previous_model(Some(turn_context.model_info.slug.clone()))
-            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -157,6 +155,11 @@ impl Session {
                         sess.on_task_finished(ctx_for_finish, last_agent_message)
                             .await;
                     }
+                    // Set previous model regardless of completion or interruption for model-switch handling.
+                    session_ctx
+                        .clone_session()
+                        .set_previous_model(Some(ctx_for_finish.model_info.slug.clone()))
+                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
@@ -265,6 +268,10 @@ impl Session {
         }
 
         task.handle.abort();
+
+        // Set previous model even when interrupted so model-switch handling stays correct.
+        self.set_previous_model(Some(task.turn_context.model_info.slug.clone()))
+            .await;
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
