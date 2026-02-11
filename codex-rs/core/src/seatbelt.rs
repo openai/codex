@@ -4,6 +4,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -105,7 +106,7 @@ struct ProxyPolicyInputs {
     ports: Vec<u16>,
     has_proxy_config: bool,
     allow_local_binding: bool,
-    allow_unix_sockets: Vec<String>,
+    allow_unix_sockets: Vec<AbsolutePathBuf>,
     dangerously_allow_all_unix_sockets: bool,
 }
 
@@ -117,7 +118,11 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
             allow_local_binding: network.allow_local_binding(),
-            allow_unix_sockets: network.allow_unix_sockets().to_vec(),
+            allow_unix_sockets: network
+                .allow_unix_sockets()
+                .iter()
+                .filter_map(|path| normalize_path_for_sandbox(Path::new(path)))
+                .collect(),
             dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets(),
         };
     }
@@ -125,11 +130,12 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
     ProxyPolicyInputs::default()
 }
 
-fn normalize_path_for_sandbox(path: &Path) -> Option<PathBuf> {
+fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     if !path.is_absolute() {
         return None;
     }
-    Some(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    AbsolutePathBuf::from_absolute_path(normalized).ok()
 }
 
 fn escape_seatbelt_string(value: &str) -> String {
@@ -141,18 +147,16 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
         return "(allow network* (subpath \"/\"))\n".to_string();
     }
 
-    let mut paths = BTreeSet::new();
-    for socket_path in &proxy.allow_unix_sockets {
-        let Some(normalized_path) = normalize_path_for_sandbox(Path::new(socket_path)) else {
-            continue;
-        };
-        paths.insert(normalized_path);
-    }
+    let paths: BTreeSet<String> = proxy
+        .allow_unix_sockets
+        .iter()
+        .map(|path| path.as_path().to_string_lossy().to_string())
+        .collect();
 
     paths
         .into_iter()
         .map(|path| {
-            let escaped_path = escape_seatbelt_string(path.to_string_lossy().as_ref());
+            let escaped_path = escape_seatbelt_string(path.as_str());
             format!("(allow network* (subpath \"{escaped_path}\"))\n")
         })
         .collect()
@@ -329,8 +333,10 @@ mod tests {
     use super::create_seatbelt_command_args;
     use super::dynamic_network_policy;
     use super::macos_dir_params;
+    use super::normalize_path_for_sandbox;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -346,6 +352,10 @@ mod tests {
                 || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"),
             "unexpected stderr: {stderr}"
         );
+    }
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(Path::new(path)).expect("absolute path")
     }
 
     #[test]
@@ -472,7 +482,7 @@ mod tests {
                 ports: vec![43128],
                 has_proxy_config: true,
                 allow_local_binding: false,
-                allow_unix_sockets: vec!["/tmp/example.sock".to_string()],
+                allow_unix_sockets: vec![absolute_path("/tmp/example.sock")],
                 dangerously_allow_all_unix_sockets: false,
             },
         );
@@ -484,23 +494,8 @@ mod tests {
     }
 
     #[test]
-    fn create_seatbelt_args_ignores_relative_unix_socket_paths() {
-        let policy = dynamic_network_policy(
-            &SandboxPolicy::ReadOnly,
-            false,
-            &ProxyPolicyInputs {
-                ports: vec![43128],
-                has_proxy_config: true,
-                allow_local_binding: false,
-                allow_unix_sockets: vec!["relative.sock".to_string()],
-                dangerously_allow_all_unix_sockets: false,
-            },
-        );
-
-        assert!(
-            !policy.contains("relative.sock"),
-            "policy should ignore relative unix socket paths:\n{policy}"
-        );
+    fn normalize_path_for_sandbox_rejects_relative_paths() {
+        assert_eq!(normalize_path_for_sandbox(Path::new("relative.sock")), None);
     }
 
     #[test]
