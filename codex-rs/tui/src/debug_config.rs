@@ -1,6 +1,7 @@
 use crate::history_cell::PlainHistoryCell;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::Config;
+use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
@@ -11,6 +12,7 @@ use codex_core::config_loader::WebSearchModeRequirement;
 use codex_core::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use toml::Value as TomlValue;
 
 pub(crate) fn new_debug_config_output(
     config: &Config,
@@ -27,12 +29,28 @@ pub(crate) fn new_debug_config_output(
             socks_addr,
             admin_addr,
         } = proxy;
+        let all_proxy = session_all_proxy_url(
+            http_addr,
+            socks_addr,
+            config
+                .network
+                .as_ref()
+                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+        );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
-        lines.push(format!("    - ALL_PROXY   = socks5h://{socks_addr}").into());
+        lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
         lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
     }
 
     PlainHistoryCell::new(lines)
+}
+
+fn session_all_proxy_url(http_addr: &str, socks_addr: &str, socks_enabled: bool) -> String {
+    if socks_enabled {
+        format!("socks5h://{socks_addr}")
+    } else {
+        format!("http://{http_addr}")
+    }
 }
 
 fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
@@ -55,6 +73,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
                 "enabled"
             };
             lines.push(format!("  {}. {source} ({status})", index + 1).into());
+            lines.extend(render_non_file_layer_details(layer));
             if let Some(reason) = &layer.disabled_reason {
                 lines.push(format!("     reason: {reason}").dim().into());
             }
@@ -153,6 +172,80 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
     lines
 }
 
+fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
+    match &layer.name {
+        ConfigLayerSource::SessionFlags => render_session_flag_details(&layer.config),
+        ConfigLayerSource::Mdm { .. } | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
+            render_mdm_layer_details(layer)
+        }
+        ConfigLayerSource::System { .. }
+        | ConfigLayerSource::User { .. }
+        | ConfigLayerSource::Project { .. }
+        | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => Vec::new(),
+    }
+}
+
+fn render_session_flag_details(config: &TomlValue) -> Vec<Line<'static>> {
+    let mut pairs = Vec::new();
+    flatten_toml_key_values(config, None, &mut pairs);
+
+    if pairs.is_empty() {
+        return vec!["     - <none>".dim().into()];
+    }
+
+    pairs
+        .into_iter()
+        .map(|(key, value)| format!("     - {key} = {value}").into())
+        .collect()
+}
+
+fn render_mdm_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
+    let value = layer
+        .raw_toml()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format_toml_value(&layer.config));
+    if value.is_empty() {
+        return vec!["     MDM value: <empty>".dim().into()];
+    }
+
+    if value.contains('\n') {
+        let mut lines = vec!["     MDM value:".into()];
+        lines.extend(value.lines().map(|line| format!("       {line}").into()));
+        lines
+    } else {
+        vec![format!("     MDM value: {value}").into()]
+    }
+}
+
+fn flatten_toml_key_values(
+    value: &TomlValue,
+    prefix: Option<&str>,
+    out: &mut Vec<(String, String)>,
+) {
+    match value {
+        TomlValue::Table(table) => {
+            let mut entries = table.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(key, _)| key.as_str());
+            for (key, child) in entries {
+                let next_prefix = if let Some(prefix) = prefix {
+                    format!("{prefix}.{key}")
+                } else {
+                    key.to_string()
+                };
+                flatten_toml_key_values(child, Some(&next_prefix), out);
+            }
+        }
+        _ => {
+            let key = prefix.unwrap_or("<value>").to_string();
+            out.push((key, format_toml_value(value)));
+        }
+    }
+}
+
+fn format_toml_value(value: &TomlValue) -> String {
+    value.to_string()
+}
+
 fn requirement_line(
     name: &str,
     value: String,
@@ -189,7 +282,7 @@ fn normalize_allowed_web_search_modes(
 fn format_config_layer_source(source: &ConfigLayerSource) -> String {
     match source {
         ConfigLayerSource::Mdm { domain, key } => {
-            format!("mdm ({domain}:{key})")
+            format!("MDM ({domain}:{key})")
         }
         ConfigLayerSource::System { file } => {
             format!("system ({})", file.as_path().display())
@@ -208,7 +301,7 @@ fn format_config_layer_source(source: &ConfigLayerSource) -> String {
             format!("legacy managed_config.toml ({})", file.as_path().display())
         }
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
-            "legacy managed_config.toml (mdm)".to_string()
+            "legacy managed_config.toml (MDM)".to_string()
         }
     }
 }
@@ -288,6 +381,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
 #[cfg(test)]
 mod tests {
     use super::render_debug_config_lines;
+    use super::session_all_proxy_url;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_core::config::Constrained;
     use codex_core::config_loader::ConfigLayerEntry;
@@ -380,44 +474,46 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
-        let mut requirements = ConfigRequirements::default();
-        requirements.approval_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(AskForApproval::OnRequest),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.sandbox_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(SandboxPolicy::ReadOnly),
-            Some(RequirementSource::SystemRequirementsToml {
-                file: requirements_file.clone(),
-            }),
-        );
-        requirements.mcp_servers = Some(Sourced::new(
-            BTreeMap::from([(
-                "docs".to_string(),
-                McpServerRequirement {
-                    identity: McpServerIdentity::Command {
-                        command: "codex-mcp".to_string(),
+        let requirements = ConfigRequirements {
+            approval_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(AskForApproval::OnRequest),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            sandbox_policy: ConstrainedWithSource::new(
+                Constrained::allow_any(SandboxPolicy::ReadOnly),
+                Some(RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                }),
+            ),
+            mcp_servers: Some(Sourced::new(
+                BTreeMap::from([(
+                    "docs".to_string(),
+                    McpServerRequirement {
+                        identity: McpServerIdentity::Command {
+                            command: "codex-mcp".to_string(),
+                        },
                     },
+                )]),
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+            )),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(Some(ResidencyRequirement::Us)),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            network: Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    ..Default::default()
                 },
-            )]),
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-        ));
-        requirements.enforce_residency = ConstrainedWithSource::new(
-            Constrained::allow_any(Some(ResidencyRequirement::Us)),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Cached),
-            Some(RequirementSource::CloudRequirements),
-        );
-        requirements.network = Some(Sourced::new(
-            NetworkConstraints {
-                enabled: Some(true),
-                allowed_domains: Some(vec!["example.com".to_string()]),
-                ..Default::default()
-            },
-            RequirementSource::CloudRequirements,
-        ));
+                RequirementSource::CloudRequirements,
+            )),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
@@ -478,12 +574,72 @@ mod tests {
     }
 
     #[test]
+    fn debug_config_output_lists_session_flag_key_value_pairs() {
+        let session_flags = toml::from_str::<TomlValue>(
+            r#"
+model = "gpt-5"
+[sandbox_workspace_write]
+network_access = true
+writable_roots = ["/tmp"]
+"#,
+        )
+        .expect("session flags");
+
+        let stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                session_flags,
+            )],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains("session-flags (enabled)"));
+        assert!(rendered.contains("     - model = \"gpt-5\""));
+        assert!(rendered.contains("     - sandbox_workspace_write.network_access = true"));
+        assert!(rendered.contains("sandbox_workspace_write.writable_roots"));
+        assert!(rendered.contains("/tmp"));
+    }
+
+    #[test]
+    fn debug_config_output_shows_legacy_mdm_layer_value() {
+        let raw_mdm_toml = r#"
+# managed by MDM
+model = "managed_model"
+approval_policy = "never"
+"#;
+        let mdm_value = toml::from_str::<TomlValue>(raw_mdm_toml).expect("MDM value");
+
+        let stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new_with_raw_toml(
+                ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+                mdm_value,
+                raw_mdm_toml.to_string(),
+            )],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains("legacy managed_config.toml (MDM) (enabled)"));
+        assert!(rendered.contains("MDM value:"));
+        assert!(rendered.contains("# managed by MDM"));
+        assert!(rendered.contains("model = \"managed_model\""));
+        assert!(rendered.contains("approval_policy = \"never\""));
+    }
+
+    #[test]
     fn debug_config_output_normalizes_empty_web_search_mode_list() {
-        let mut requirements = ConfigRequirements::default();
-        requirements.web_search_mode = ConstrainedWithSource::new(
-            Constrained::allow_any(WebSearchMode::Disabled),
-            Some(RequirementSource::CloudRequirements),
-        );
+        let requirements = ConfigRequirements {
+            web_search_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Disabled),
+                Some(RequirementSource::CloudRequirements),
+            ),
+            ..ConfigRequirements::default()
+        };
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: None,
@@ -501,6 +657,22 @@ mod tests {
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(
             rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_socks_when_enabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", true),
+            "socks5h://127.0.0.1:8081".to_string()
+        );
+    }
+
+    #[test]
+    fn session_all_proxy_url_uses_http_when_socks_disabled() {
+        assert_eq!(
+            session_all_proxy_url("127.0.0.1:3128", "127.0.0.1:8081", false),
+            "http://127.0.0.1:3128".to_string()
         );
     }
 }

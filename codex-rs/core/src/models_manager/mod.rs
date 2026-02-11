@@ -4,9 +4,6 @@ pub mod manager;
 pub mod model_info;
 pub mod model_presets;
 
-#[cfg(any(test, feature = "test-support"))]
-pub use collaboration_mode_presets::test_builtin_collaboration_mode_presets;
-
 /// Convert the client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3").
 pub fn client_version_to_whole() -> String {
     format!(
