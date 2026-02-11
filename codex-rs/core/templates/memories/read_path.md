@@ -29,13 +29,6 @@ it's worth redoing the quick memory pass. Treat memory as guidance, not truth: i
 tool outputs, or environment, user feedback, the current state wins. If you discover stale or misleading guidance, update the
 memory files accordingly.
 
-Memory citation requirements (append these at the VERY END of the final reply; last line only):
-- If ANY relevant memory files were used: output exactly one final line:
-  Memory used: `<file1>:<line_start>-<line_end>`, `<file2>:<line_start>-<line_end>`, ...
-  - Citations are ONLY allowed for memory files under `{{ base_path }}`.
-  - Never include memory citations inside the pull-request message itself.
-  - Never cite blank lines; double-check ranges.
-
 ========= MEMORY_SUMMARY BEGINS =========
 {{ memory_summary }}
 ========= MEMORY_SUMMARY ENDS =========
