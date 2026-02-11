@@ -42,6 +42,9 @@ const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 /// panel when side-by-side layout is active.
 const SIDE_CONTENT_GAP: u16 = 2;
 
+/// Shared menu-surface horizontal inset (2 cells per side) used by selection popups.
+const MENU_SURFACE_HORIZONTAL_INSET: u16 = 4;
+
 /// Controls how the side content panel is sized relative to the popup width.
 ///
 /// When the computed side width falls below `side_content_min_width` or the
@@ -61,17 +64,44 @@ impl Default for SideContentWidth {
     }
 }
 
+/// Returns the popup content width after subtracting the shared menu-surface
+/// horizontal inset (2 columns on each side).
+pub(crate) fn popup_content_width(total_width: u16) -> u16 {
+    total_width.saturating_sub(MENU_SURFACE_HORIZONTAL_INSET)
+}
+
+/// Returns side-by-side layout widths as `(list_width, side_width)` when the
+/// layout can fit. Returns `None` when the side panel is disabled/too narrow or
+/// when the remaining list width would become unusably small.
+pub(crate) fn side_by_side_layout_widths(
+    content_width: u16,
+    side_content_width: SideContentWidth,
+    side_content_min_width: u16,
+) -> Option<(u16, u16)> {
+    let side_width = match side_content_width {
+        SideContentWidth::Fixed(0) => return None,
+        SideContentWidth::Fixed(width) => width,
+        SideContentWidth::Half => content_width.saturating_sub(SIDE_CONTENT_GAP) / 2,
+    };
+    if side_width < side_content_min_width {
+        return None;
+    }
+    let list_width = content_width.saturating_sub(SIDE_CONTENT_GAP + side_width);
+    (list_width >= MIN_LIST_WIDTH_FOR_SIDE).then_some((list_width, side_width))
+}
+
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
 /// Callback invoked whenever the highlighted item changes (arrow keys, search
 /// filter, number-key jump).  Receives the *actual* index into the unfiltered
 /// `items` list and the event sender.  Used by the theme picker for live preview.
-pub type OnSelectionChangedCallback = Option<Box<dyn Fn(usize, &AppEventSender) + Send + Sync>>;
+pub(crate) type OnSelectionChangedCallback =
+    Option<Box<dyn Fn(usize, &AppEventSender) + Send + Sync>>;
 
 /// Callback invoked when the picker is dismissed without accepting (Esc or
 /// Ctrl+C).  Used by the theme picker to restore the pre-open theme.
-pub type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
+pub(crate) type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
 
 /// One row in a [`ListSelectionView`] selection list.
 ///
@@ -488,16 +518,12 @@ impl ListSelectionView {
     /// Returns `Some(side_width)` when the content area is wide enough for a
     /// side-by-side layout (list + gap + side panel), `None` otherwise.
     fn side_layout_width(&self, content_width: u16) -> Option<u16> {
-        let side_width = match self.side_content_width {
-            SideContentWidth::Fixed(0) => return None,
-            SideContentWidth::Fixed(width) => width,
-            SideContentWidth::Half => content_width.saturating_sub(SIDE_CONTENT_GAP) / 2,
-        };
-        if side_width < self.side_content_min_width {
-            return None;
-        }
-        let list_width = content_width.saturating_sub(SIDE_CONTENT_GAP + side_width);
-        (list_width >= MIN_LIST_WIDTH_FOR_SIDE).then_some(side_width)
+        side_by_side_layout_widths(
+            content_width,
+            self.side_content_width,
+            self.side_content_min_width,
+        )
+        .map(|(_, side_width)| side_width)
     }
 
     fn skip_disabled_down(&mut self) {
@@ -652,7 +678,7 @@ impl BottomPaneView for ListSelectionView {
 impl Renderable for ListSelectionView {
     fn desired_height(&self, width: u16) -> u16 {
         // Inner content width after menu surface horizontal insets (2 per side).
-        let inner_width = width.saturating_sub(4);
+        let inner_width = popup_content_width(width);
 
         // When side-by-side is active, measure the list at the reduced width
         // that accounts for the gap and side panel.
@@ -734,7 +760,7 @@ impl Renderable for ListSelectionView {
         // Paint the shared menu surface and then layout inside the returned inset.
         let content_area = render_menu_surface(outer_content_area, buf);
 
-        let inner_width = outer_content_area.width.saturating_sub(4);
+        let inner_width = popup_content_width(outer_content_area.width);
         let side_w = self.side_layout_width(inner_width);
 
         // When side-by-side is active, shrink the list to make room.
