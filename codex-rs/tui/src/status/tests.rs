@@ -42,7 +42,7 @@ fn test_auth_manager(config: &Config) -> AuthManager {
 
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
     let context_window =
-        ModelsManager::construct_model_info_offline(model_slug, config).context_window;
+        codex_core::test_support::construct_model_info_offline(model_slug, config).context_window;
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
@@ -124,6 +124,8 @@ async fn status_snapshot_includes_reasoning_details() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -139,7 +141,7 @@ async fn status_snapshot_includes_reasoning_details() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
 
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
@@ -252,7 +254,7 @@ async fn status_snapshot_includes_forked_from() {
         .single()
         .expect("valid time");
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let session_id =
         ThreadId::from_string("0f0f3c13-6cf9-4aa4-8b80-7d49c2f1be2e").expect("session id");
@@ -306,6 +308,8 @@ async fn status_snapshot_includes_monthly_limit() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 12.0,
             window_minutes: Some(43_200),
@@ -317,7 +321,7 @@ async fn status_snapshot_includes_monthly_limit() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -355,6 +359,8 @@ async fn status_snapshot_shows_unlimited_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -365,7 +371,7 @@ async fn status_snapshot_shows_unlimited_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -402,6 +408,8 @@ async fn status_snapshot_shows_positive_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -412,7 +420,7 @@ async fn status_snapshot_shows_positive_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -449,6 +457,8 @@ async fn status_snapshot_hides_zero_credits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -459,7 +469,7 @@ async fn status_snapshot_hides_zero_credits() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -494,6 +504,8 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: Some(CreditsSnapshot {
@@ -504,7 +516,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         plan_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -549,7 +561,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         .single()
         .expect("timestamp");
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -597,6 +609,8 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -608,7 +622,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let reasoning_effort_override = Some(Some(ReasoningEffort::High));
     let composite = new_status_output(
@@ -658,7 +672,7 @@ async fn status_snapshot_shows_missing_limits_message() {
         .single()
         .expect("timestamp");
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -706,6 +720,8 @@ async fn status_snapshot_includes_credits_and_limits() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 45.0,
             window_minutes: Some(300),
@@ -725,7 +741,7 @@ async fn status_snapshot_includes_credits_and_limits() {
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -769,6 +785,8 @@ async fn status_snapshot_shows_empty_limits_message() {
     };
 
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: None,
         secondary: None,
         credits: None,
@@ -780,7 +798,7 @@ async fn status_snapshot_shows_empty_limits_message() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -828,6 +846,8 @@ async fn status_snapshot_shows_stale_limits_message() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 72.5,
             window_minutes: Some(300),
@@ -844,7 +864,7 @@ async fn status_snapshot_shows_stale_limits_message() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -892,6 +912,8 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         .single()
         .expect("timestamp");
     let snapshot = RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
         primary: Some(RateLimitWindow {
             used_percent: 60.0,
             window_minutes: Some(300),
@@ -912,7 +934,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
     let composite = new_status_output(
         &config,
@@ -966,7 +988,7 @@ async fn status_context_window_uses_last_usage() {
         .single()
         .expect("timestamp");
 
-    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let model_slug = codex_core::test_support::get_model_offline(config.model.as_deref());
     let token_info = TokenUsageInfo {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,

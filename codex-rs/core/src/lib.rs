@@ -59,6 +59,7 @@ mod session_prefix;
 mod shell_detect;
 mod stream_events_utils;
 mod tagged_block_parser;
+pub mod test_support;
 mod text_encoding;
 pub mod token_data;
 mod truncate;

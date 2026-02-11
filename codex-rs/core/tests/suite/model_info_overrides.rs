@@ -11,7 +11,7 @@ async fn offline_model_info_without_tool_output_override() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
-    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
     let manager = ModelsManager::new(config.codex_home.clone(), auth_manager);
@@ -30,7 +30,7 @@ async fn offline_model_info_with_tool_output_override() {
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
     config.tool_output_token_limit = Some(123);
-    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
     let manager = ModelsManager::new(config.codex_home.clone(), auth_manager);

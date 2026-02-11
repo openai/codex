@@ -120,7 +120,7 @@ arboard = { workspace = true }
 
 [dev-dependencies]
 codex-cli = { workspace = true }
-codex-core = { workspace = true, features = ["test-support"] }
+codex-core = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }

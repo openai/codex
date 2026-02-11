@@ -2624,12 +2624,9 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
-    use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
@@ -2726,14 +2723,17 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
@@ -2779,14 +2779,17 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
@@ -2830,7 +2833,7 @@ mod tests {
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
-        let model_info = ModelsManager::construct_model_info_offline(model, config);
+        let model_info = codex_core::test_support::construct_model_info_offline(model, config);
         OtelManager::new(
             ThreadId::new(),
             model,
@@ -2846,7 +2849,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::models_manager::model_presets::all_model_presets().clone()
+        codex_core::test_support::all_model_presets().clone()
     }
 
     fn model_migration_copy_to_plain_text(
