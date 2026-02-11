@@ -3,8 +3,10 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::codex::SessionConfiguration;
+use crate::codex::TurnContext;
 use crate::context_manager::ContextManager;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -30,6 +32,7 @@ pub(crate) struct SessionState {
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
+    pub(crate) previous_turn_context: Option<Arc<TurnContext>>,
 }
 
 impl SessionState {
@@ -47,6 +50,7 @@ impl SessionState {
             pending_resume_previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
+            previous_turn_context: None,
         }
     }
 
@@ -168,6 +172,14 @@ impl SessionState {
     pub(crate) fn clear_mcp_tool_selection(&mut self) {
         self.active_mcp_tool_selection = None;
     }
+
+    pub(crate) fn previous_turn_context(&self) -> Option<Arc<TurnContext>> {
+        self.previous_turn_context.clone()
+    }
+
+    pub(crate) fn set_previous_turn_context(&mut self, turn_context: Arc<TurnContext>) {
+        self.previous_turn_context = Some(turn_context);
+    }
 }
 
 // Sometimes new snapshots don't include credits or plan information.
@@ -187,6 +199,7 @@ fn merge_rate_limit_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use crate::codex::make_session_configuration_for_tests;
     use pretty_assertions::assert_eq;
 
@@ -257,5 +270,22 @@ mod tests {
         state.clear_mcp_tool_selection();
 
         assert_eq!(state.get_mcp_tool_selection(), None);
+    }
+
+    #[tokio::test]
+    async fn set_previous_turn_context_stores_context() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+
+        state.set_previous_turn_context(Arc::new(turn_context));
+
+        assert_eq!(
+            state
+                .previous_turn_context()
+                .as_ref()
+                .map(|context| &context.sub_id),
+            Some(&"turn_id".to_string())
+        );
     }
 }

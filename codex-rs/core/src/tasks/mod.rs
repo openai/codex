@@ -148,10 +148,12 @@ impl Session {
                             task_cancellation_token.child_token(),
                         )
                         .await;
-                    session_ctx.clone_session().flush_rollout().await;
+                    let sess = session_ctx.clone_session();
+                    sess.flush_rollout().await;
+                    sess.set_previous_turn_context(Arc::clone(&ctx_for_finish))
+                        .await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        let sess = session_ctx.clone_session();
                         sess.on_task_finished(ctx_for_finish, last_agent_message)
                             .await;
                     }
