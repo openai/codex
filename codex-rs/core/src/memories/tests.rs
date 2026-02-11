@@ -1,4 +1,3 @@
-use super::rollout::StageOneResponseItemKinds;
 use super::rollout::StageOneRolloutFilter;
 use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
@@ -110,7 +109,7 @@ fn serialize_filtered_rollout_response_items_supports_response_only_filter() {
         StageOneRolloutFilter {
             keep_response_items: true,
             keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::all(),
+            response_item_filter: crate::rollout::policy::should_persist_response_item,
             max_items: None,
         },
     )
@@ -146,7 +145,7 @@ fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
         StageOneRolloutFilter {
             keep_response_items: true,
             keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::messages_only(),
+            response_item_filter: |item| matches!(item, ResponseItem::Message { .. }),
             max_items: None,
         },
     )
