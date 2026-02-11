@@ -430,6 +430,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn open_skills_list(&mut self) {
+        self.composer.open_skills_list();
+        self.request_redraw();
+    }
+
     /// Replace the composer text with `text`.
     ///
     /// This is intended for fresh input where mention linkage does not need to
