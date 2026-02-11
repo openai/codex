@@ -31,6 +31,8 @@ use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_done;
+use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
@@ -574,7 +576,7 @@ async fn responses_websocket_appends_on_prefix() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_completed("resp-1"),
+            ev_done(),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -606,6 +608,45 @@ async fn responses_websocket_appends_on_prefix() {
         "input": serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items"),
     });
     assert_eq!(second, expected_append);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_append() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "assistant output"),
+            ev_completed("resp-1"),
+        ],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("msg-1", "assistant output"),
+        message_item("second"),
+    ]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+    stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+    );
 
     server.shutdown().await;
 }
@@ -687,7 +728,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_completed("resp-1"),
+            ev_done_with_id("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
