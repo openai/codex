@@ -895,7 +895,7 @@ mod tests {
     }
 
     fn thread_manager() -> ThreadManager {
-        ThreadManager::with_models_provider(
+        ThreadManager::with_models_provider_for_tests(
             CodexAuth::from_api_key("dummy"),
             built_in_model_providers()["openai"].clone(),
         )
