@@ -15,10 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Permissions,
-    #[strum(
-        serialize = "setup-default-sandbox",
-        serialize = "setup-elevated-sandbox"
-    )]
+    #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     Experimental,
     Skills,

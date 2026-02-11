@@ -24,7 +24,11 @@ pub trait WindowsSandboxLevelExt {
 
 impl WindowsSandboxLevelExt for WindowsSandboxLevel {
     fn from_config(config: &Config) -> WindowsSandboxLevel {
-        Self::from_features(&config.features)
+        match config.windows_sandbox_mode {
+            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
+            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            None => Self::from_features(&config.features),
+        }
     }
 
     fn from_features(features: &Features) -> WindowsSandboxLevel {

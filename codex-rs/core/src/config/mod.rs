@@ -19,6 +19,7 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::WindowsSandboxModeToml;
 use crate::config::types::WindowsToml;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -46,6 +47,7 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -339,6 +341,10 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
+
+    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
+    /// legacy feature keys.
+    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -1438,6 +1444,7 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = {
             use std::env;
 
@@ -1467,7 +1474,11 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
-        let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
+        let windows_sandbox_level = match windows_sandbox_mode {
+            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
+            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            None => WindowsSandboxLevel::from_features(&features),
+        };
         let mut sandbox_policy = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
@@ -1772,6 +1783,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
+            windows_sandbox_mode,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -1877,19 +1889,29 @@ impl Config {
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
-        if value {
-            self.features.enable(Feature::WindowsSandbox);
+        self.windows_sandbox_mode = if value {
+            Some(WindowsSandboxModeToml::Unelevated)
+        } else if matches!(
+            self.windows_sandbox_mode,
+            Some(WindowsSandboxModeToml::Unelevated)
+        ) {
+            None
         } else {
-            self.features.disable(Feature::WindowsSandbox);
-        }
+            self.windows_sandbox_mode
+        };
     }
 
     pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
-        if value {
-            self.features.enable(Feature::WindowsSandboxElevated);
+        self.windows_sandbox_mode = if value {
+            Some(WindowsSandboxModeToml::Elevated)
+        } else if matches!(
+            self.windows_sandbox_mode,
+            Some(WindowsSandboxModeToml::Elevated)
+        ) {
+            None
         } else {
-            self.features.disable(Feature::WindowsSandboxElevated);
-        }
+            self.windows_sandbox_mode
+        };
     }
 }
 
