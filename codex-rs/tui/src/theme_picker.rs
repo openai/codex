@@ -281,7 +281,7 @@ pub(crate) fn build_theme_picker_params(
     let original_theme = highlight::current_syntax_theme();
 
     let entries = highlight::list_available_themes(codex_home);
-    let codex_home_owned = codex_home.map(|p| p.to_path_buf());
+    let codex_home_owned = codex_home.map(Path::to_path_buf);
 
     // Resolve the effective theme name: honor explicit config only when it is
     // currently available; otherwise fall back to the active runtime theme so
@@ -331,10 +331,10 @@ pub(crate) fn build_theme_picker_params(
     let preview_names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
     let preview_home = codex_home_owned.clone();
     let on_selection_changed = Some(Box::new(move |idx: usize, _tx: &_| {
-        if let Some(name) = preview_names.get(idx) {
-            if let Some(theme) = highlight::resolve_theme_by_name(name, preview_home.as_deref()) {
-                highlight::set_syntax_theme(theme);
-            }
+        if let Some(name) = preview_names.get(idx)
+            && let Some(theme) = highlight::resolve_theme_by_name(name, preview_home.as_deref())
+        {
+            highlight::set_syntax_theme(theme);
         }
     })
         as Box<dyn Fn(usize, &crate::app_event_sender::AppEventSender) + Send + Sync>);
@@ -409,7 +409,7 @@ mod tests {
 
     fn preview_line_number(line: &str) -> Option<usize> {
         let trimmed = line.trim_start();
-        let digits_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        let digits_len = trimmed.chars().take_while(char::is_ascii_digit).count();
         if digits_len == 0 {
             return None;
         }
@@ -422,7 +422,7 @@ mod tests {
 
     fn preview_line_marker(line: &str) -> Option<char> {
         let trimmed = line.trim_start();
-        let digits_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        let digits_len = trimmed.chars().take_while(char::is_ascii_digit).count();
         if digits_len == 0 {
             return None;
         }
