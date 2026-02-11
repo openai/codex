@@ -1494,7 +1494,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once remote pre-turn compaction includes incoming user input on main.
+// TODO(ccunningham): Update once remote pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_user_message()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1582,7 +1582,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(
-            "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message on main.",
+            "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 ("Remote Post-Compaction History Layout", &requests[2]),
@@ -1595,7 +1595,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     );
     assert!(
         !compact_shape.contains("USER_THREE"),
-        "current main behavior excludes incoming user message from remote pre-turn compaction input"
+        "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
         follow_up_shape.contains("<SUMMARY:REMOTE_PRE_TURN_SUMMARY>"),
@@ -1607,7 +1607,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once remote pre-turn compaction failure path includes incoming
-// user input on main.
+// user input.
 async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without_retry()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1689,16 +1689,16 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
         sectioned_request_shapes(
-            "Remote pre-turn auto-compaction parse failure on main: compaction request excludes the incoming user message and the turn stops.",
+            "Remote pre-turn auto-compaction parse failure : compaction request excludes the incoming user message and the turn stops.",
             &[(
-                "Remote Compaction Request (Incoming User Excluded on main)",
+                "Remote Compaction Request (Incoming User Excluded)",
                 &include_attempt_request
             ),]
         )
     );
     assert!(
         !include_attempt_shape.contains("USER_TWO"),
-        "current main behavior excludes incoming user message from remote pre-turn compaction input"
+        "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
         error_message.contains("invalid compact payload shape")
@@ -1834,7 +1834,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     assert_eq!(
         compact_mock.requests().len(),
         1,
-        "current main behavior still issues remote compaction for manual /compact without prior user"
+        "current behavior still issues remote compaction for manual /compact without prior user"
     );
     let compact_request = compact_mock.single_request();
     let follow_up_request = responses_mock.single_request();
@@ -1842,7 +1842,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
         sectioned_request_shapes(
-            "Remote manual /compact with no prior user turn still issues a compact request on main; follow-up turn carries canonical context and new user message.",
+            "Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 ("Remote Post-Compaction History Layout", &follow_up_request),
