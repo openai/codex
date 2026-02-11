@@ -6,7 +6,7 @@ codex_rust_crate(
     # TODO(mbolin): Eliminate the use of features in the version of the
     # rust_library() that is used by rust_binary() rules for release artifacts
     # such as the Codex CLI.
-    crate_features = ["deterministic_process_ids", "test-support"],
+    crate_features = ["test-support"],
     compile_data = glob(
         include = ["**"],
         exclude = [

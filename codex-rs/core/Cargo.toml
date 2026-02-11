@@ -114,7 +114,6 @@ wildmatch = { workspace = true }
 zip = { workspace = true }
 
 [features]
-deterministic_process_ids = []
 test-support = []
 
 
@@ -150,9 +149,6 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-core = { path = ".", default-features = false, features = [
-    "deterministic_process_ids",
-] }
 codex-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }
