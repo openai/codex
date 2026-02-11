@@ -12,9 +12,9 @@ use futures::StreamExt;
 use tracing::warn;
 
 use super::StageOneRequestContext;
-use crate::memories::StageOneOutput;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::memories::stage_one::RAW_MEMORY_PROMPT;
+use crate::memories::stage_one::StageOneOutput;
 use crate::memories::stage_one::parse_stage_one_output;
 use crate::memories::stage_one::stage_one_output_schema;
 use crate::rollout::policy::should_persist_response_item;
@@ -61,7 +61,8 @@ pub(super) async fn extract_stage_one_output(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: build_stage_one_input_message(rollout_path, rollout_cwd, &rollout_contents),
+                text: build_stage_one_input_message(rollout_path, rollout_cwd, &rollout_contents)
+                    .map_err(|_e| "error while building the prompt")?,
             }],
             end_turn: None,
             phase: None,

@@ -8,7 +8,6 @@ use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
 use super::ensure_layout;
 use super::raw_memories_file;
 use super::rollout_summaries_dir;
-use super::text::compact_whitespace;
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
@@ -139,7 +138,7 @@ async fn write_rollout_summary_for_thread(
     .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
     writeln!(body)
         .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
-    body.push_str(&compact_whitespace(&memory.rollout_summary));
+    body.push_str(&memory.rollout_summary);
     body.push('\n');
 
     tokio::fs::write(path, body).await

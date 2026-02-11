@@ -46,6 +46,7 @@ use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
+use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -1099,7 +1100,9 @@ impl Session {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
@@ -2308,8 +2311,7 @@ impl Session {
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
-            memories::build_memory_tool_developer_instructions(&turn_context.config.codex_home)
-                .await
+            build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
             && turn_context.features.enabled(Feature::MemoryTool)
         {
             items.push(DeveloperInstructions::new(memory_prompt).into());
@@ -5140,6 +5142,7 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
+use crate::memories::prompts::build_memory_tool_developer_instructions;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]
@@ -6282,7 +6285,9 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
@@ -6425,7 +6430,9 @@ mod tests {
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
             ),
-            hooks: Hooks::new(config.notify.clone()),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
