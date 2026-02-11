@@ -17,7 +17,7 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
 fi
 
 sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" musl-tools pkg-config g++ clang libc++-dev libc++abi-dev lld
+sudo apt-get install -y "${apt_install_args[@]}" musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld
 
 case "${TARGET}" in
   x86_64-unknown-linux-musl)
