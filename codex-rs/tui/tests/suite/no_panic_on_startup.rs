@@ -56,6 +56,8 @@ async fn run_codex_cli(
     codex_home: impl AsRef<Path>,
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
+    const CLI_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
+
     let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
     let mut env = HashMap::new();
     env.insert(
@@ -76,7 +78,7 @@ async fn run_codex_cli(
     let mut output_rx = spawned.output_rx;
     let mut exit_rx = spawned.exit_rx;
     let writer_tx = spawned.session.writer_sender();
-    let exit_code_result = timeout(Duration::from_secs(10), async {
+    let exit_code_result = timeout(CLI_EXIT_TIMEOUT, async {
         // Read PTY output until the process exits while replying to cursor
         // position queries so the TUI can initialize without a real terminal.
         loop {
