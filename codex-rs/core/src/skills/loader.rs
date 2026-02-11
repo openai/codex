@@ -26,6 +26,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 use tracing::error;
+use tracing::warn;
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
@@ -265,6 +266,13 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
                 path: agents_skills,
                 scope: SkillScope::Repo,
             });
+        } else if let Ok(metadata) = fs::symlink_metadata(&agents_skills) {
+            if metadata.is_symlink() {
+                tracing::warn!(
+                    "ignoring invalid skills path (symlink to non-directory or broken): {}",
+                    agents_skills.display()
+                );
+            }
         }
     }
     roots
