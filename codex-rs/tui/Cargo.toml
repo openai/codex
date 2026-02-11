@@ -32,11 +32,6 @@ codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-requirements = { workspace = true }
-codex-common = { workspace = true, features = [
-    "cli",
-    "elapsed",
-    "sandbox_summary",
-] }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
@@ -44,7 +39,13 @@ codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
+codex-utils-approval-presets = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-cli = { workspace = true }
+codex-utils-elapsed = { workspace = true }
+codex-utils-fuzzy-match = { workspace = true }
+codex-utils-oss = { workspace = true }
+codex-utils-sandbox-summary = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }

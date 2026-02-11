@@ -1353,7 +1353,6 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-requirements",
- "codex-common",
  "codex-core",
  "codex-execpolicy",
  "codex-feedback",
@@ -1362,6 +1361,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-utils-absolute-path",
+ "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
  "os_info",
@@ -1485,10 +1485,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-common",
  "codex-core",
  "codex-git",
  "codex-utils-cargo-bin",
+ "codex-utils-cli",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -1512,7 +1512,6 @@ dependencies = [
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
- "codex-common",
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
@@ -1524,6 +1523,7 @@ dependencies = [
  "codex-stdio-to-uds",
  "codex-tui",
  "codex-utils-cargo-bin",
+ "codex-utils-cli",
  "codex-windows-sandbox",
  "libc",
  "owo-colors",
@@ -1589,10 +1589,10 @@ dependencies = [
  "chrono",
  "clap",
  "codex-cloud-tasks-client",
- "codex-common",
  "codex-core",
  "codex-login",
  "codex-tui",
+ "codex-utils-cli",
  "crossterm",
  "owo-colors",
  "pretty_assertions",
@@ -1621,21 +1621,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "codex-common"
-version = "0.0.0"
-dependencies = [
- "clap",
- "codex-core",
- "codex-lmstudio",
- "codex-ollama",
- "codex-protocol",
- "codex-utils-absolute-path",
- "pretty_assertions",
- "serde",
- "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -1765,11 +1750,14 @@ dependencies = [
  "clap",
  "codex-arg0",
  "codex-cloud-requirements",
- "codex-common",
  "codex-core",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-cli",
+ "codex-utils-elapsed",
+ "codex-utils-oss",
+ "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
  "owo-colors",
@@ -1990,9 +1978,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-arg0",
- "codex-common",
  "codex-core",
  "codex-protocol",
+ "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
  "mcp_test_support",
@@ -2259,7 +2247,6 @@ dependencies = [
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
- "codex-common",
  "codex-core",
  "codex-feedback",
  "codex-file-search",
@@ -2268,8 +2255,14 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-absolute-path",
+ "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
+ "codex-utils-cli",
+ "codex-utils-elapsed",
+ "codex-utils-fuzzy-match",
+ "codex-utils-oss",
  "codex-utils-pty",
+ "codex-utils-sandbox-summary",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -2336,6 +2329,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-approval-presets"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+]
+
+[[package]]
 name = "codex-utils-cache"
 version = "0.0.0"
 dependencies = [
@@ -2352,6 +2352,26 @@ dependencies = [
  "runfiles",
  "thiserror 2.0.18",
 ]
+
+[[package]]
+name = "codex-utils-cli"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "codex-core",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "codex-utils-elapsed"
+version = "0.0.0"
+
+[[package]]
+name = "codex-utils-fuzzy-match"
+version = "0.0.0"
 
 [[package]]
 name = "codex-utils-home-dir"
@@ -2381,6 +2401,15 @@ dependencies = [
  "pretty_assertions",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "codex-utils-oss"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-lmstudio",
+ "codex-ollama",
 ]
 
 [[package]]
@@ -2415,6 +2444,15 @@ name = "codex-utils-rustls-provider"
 version = "0.0.0"
 dependencies = [
  "rustls",
+]
+
+[[package]]
+name = "codex-utils-sandbox-summary"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
 ]
 
 [[package]]
