@@ -113,7 +113,7 @@ pub enum CodexErr {
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
-    #[error("Codex is currently experiencing high load.")]
+    #[error("Selected model is at capacity. Please try a different model.")]
     ServerOverloaded,
 
     #[error("{0}")]

@@ -41,6 +41,19 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
             } => {
                 let body_text = body.unwrap_or_default();
 
+                if status == http::StatusCode::SERVICE_UNAVAILABLE
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
+                    && matches!(
+                        value
+                            .get("error")
+                            .and_then(|error| error.get("code"))
+                            .and_then(serde_json::Value::as_str),
+                        Some("server_is_overloaded" | "slow_down")
+                    )
+                {
+                    return CodexErr::ServerOverloaded;
+                }
+
                 if status == http::StatusCode::BAD_REQUEST {
                     if body_text
                         .contains("The image data you provided does not represent a valid image")
@@ -110,10 +123,29 @@ const CF_RAY_HEADER: &str = "cf-ray";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn map_api_error_maps_server_overloaded() {
         let err = map_api_error(ApiError::ServerOverloaded);
+        assert!(matches!(err, CodexErr::ServerOverloaded));
+    }
+
+    #[test]
+    fn map_api_error_maps_server_overloaded_from_503_body() {
+        let body = serde_json::json!({
+            "error": {
+                "code": "server_is_overloaded"
+            }
+        })
+        .to_string();
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: None,
+            body: Some(body),
+        }));
+
         assert!(matches!(err, CodexErr::ServerOverloaded));
     }
 
