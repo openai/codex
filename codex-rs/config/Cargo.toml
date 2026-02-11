@@ -1,0 +1,26 @@
+[package]
+name = "codex-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-app-server-protocol = { workspace = true }
+codex-execpolicy = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+futures = { workspace = true, features = ["alloc", "std"] }
+multimap = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
