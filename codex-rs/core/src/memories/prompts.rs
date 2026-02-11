@@ -24,7 +24,7 @@ struct StageOneInputTemplate<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "memory_tool/developer_instructions.md", escape = "none")]
+#[template(path = "memories/read_path.md", escape = "none")]
 struct MemoryToolDeveloperInstructionsTemplate<'a> {
     base_path: &'a str,
     memory_summary: &'a str,
