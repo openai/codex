@@ -12,6 +12,7 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
+use tracing::warn;
 use url::Url;
 
 use crate::protocol::SandboxPolicy;
@@ -115,15 +116,22 @@ fn proxy_policy_inputs(network: Option<&NetworkProxy>) -> ProxyPolicyInputs {
     if let Some(network) = network {
         let mut env = HashMap::new();
         network.apply_to_env(&mut env);
+        let mut allow_unix_sockets = Vec::new();
+        for socket_path in network.allow_unix_sockets() {
+            match normalize_path_for_sandbox(Path::new(socket_path)) {
+                Some(path) => allow_unix_sockets.push(path),
+                None => {
+                    warn!(
+                        "ignoring network.allow_unix_sockets entry because it could not be normalized: {socket_path}"
+                    );
+                }
+            }
+        }
         return ProxyPolicyInputs {
             ports: proxy_loopback_ports_from_env(&env),
             has_proxy_config: has_proxy_url_env_vars(&env),
             allow_local_binding: network.allow_local_binding(),
-            allow_unix_sockets: network
-                .allow_unix_sockets()
-                .iter()
-                .filter_map(|path| normalize_path_for_sandbox(Path::new(path)))
-                .collect(),
+            allow_unix_sockets,
             dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets(),
         };
     }
