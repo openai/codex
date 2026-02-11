@@ -133,6 +133,7 @@ def codex_rust_crate(
             deps = deps + dev_deps,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
             rustc_env = rustc_env,
+            compile_data = compile_data,
             data = test_data_extra,
             tags = test_tags,
         )
