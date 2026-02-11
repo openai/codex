@@ -140,6 +140,7 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
+                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -158,7 +159,7 @@ impl Session {
                     // Set previous model regardless of completion or interruption for model-switch handling.
                     session_ctx
                         .clone_session()
-                        .set_previous_model(Some(ctx_for_finish.model_info.slug.clone()))
+                        .set_previous_model(Some(model_slug))
                         .await;
                     done_clone.notify_waiters();
                 }
