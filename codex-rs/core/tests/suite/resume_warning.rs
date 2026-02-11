@@ -22,6 +22,7 @@ fn resume_history(
     rollout_path: &std::path::Path,
 ) -> InitialHistory {
     let turn_ctx = TurnContextItem {
+        turn_id: None,
         cwd: config.cwd.clone(),
         approval_policy: config.approval_policy.value(),
         sandbox_policy: config.sandbox_policy.get().clone(),

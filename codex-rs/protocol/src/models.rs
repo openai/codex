@@ -312,7 +312,7 @@ impl DeveloperInstructions {
 
         let (sandbox_mode, writable_roots) = match sandbox_policy {
             SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
             SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
@@ -1223,6 +1223,7 @@ mod tests {
     fn builds_permissions_from_policy() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

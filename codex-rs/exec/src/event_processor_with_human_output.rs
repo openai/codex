@@ -264,7 +264,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
                 let last_message = last_agent_message
                     .as_deref()
                     .or(self.last_proposed_plan.as_deref());

@@ -290,7 +290,7 @@ pub fn render_decision_for_unmatched_command(
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
     let runtime_sandbox_provides_safety =
-        cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly);
+        cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without user approval.
@@ -325,7 +325,7 @@ pub fn render_decision_for_unmatched_command(
                     // command has not been flagged as dangerous.
                     Decision::Allow
                 }
-                SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. } => {
+                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
@@ -345,7 +345,9 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 }
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
-    if let Some(commands) = parse_shell_lc_plain_commands(command) {
+    if let Some(commands) = parse_shell_lc_plain_commands(command)
+        && !commands.is_empty()
+    {
         return (commands, false);
     }
 
@@ -814,6 +816,24 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
+    #[test]
+    fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
+        let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    }
+
+    #[test]
+    fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "  \n\t  ".to_string(),
+        ];
+
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    }
+
     #[tokio::test]
     async fn evaluates_heredoc_script_against_prefix_rules() {
         let policy_src = r#"prefix_rule(pattern=["python3"], decision="allow")"#;
@@ -832,7 +852,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -859,7 +879,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -887,7 +907,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(requested_prefix.clone()),
             })
@@ -1008,7 +1028,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1019,6 +1039,58 @@ prefix_rule(
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_bash_lc_script_falls_back_to_original_command() {
+        let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn whitespace_bash_lc_script_falls_back_to_original_command() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "  \n\t  ".to_string(),
+        ];
+
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
             }
         );
     }
@@ -1038,7 +1110,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
@@ -1149,7 +1221,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1206,7 +1278,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1244,7 +1316,7 @@ prefix_rule(
                 .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                     command: &command,
                     approval_policy: AskForApproval::UnlessTrusted,
-                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
                 })
@@ -1267,7 +1339,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1297,7 +1369,7 @@ prefix_rule(
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1386,7 +1458,7 @@ prefix_rule(
                 .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                     command: &sneaky_command,
                     approval_policy: AskForApproval::OnRequest,
-                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })
@@ -1409,7 +1481,7 @@ prefix_rule(
                 .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                     command: &dangerous_command,
                     approval_policy: AskForApproval::OnRequest,
-                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })
@@ -1428,7 +1500,7 @@ prefix_rule(
                 .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                     command: &dangerous_command,
                     approval_policy: AskForApproval::Never,
-                    sandbox_policy: &SandboxPolicy::ReadOnly,
+                    sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })

@@ -29,6 +29,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
@@ -570,7 +571,11 @@ async fn responses_websocket_appends_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "assistant output"),
+            ev_completed("resp-1"),
+        ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
@@ -578,7 +583,11 @@ async fn responses_websocket_appends_on_prefix() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
-    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("msg-1", "assistant output"),
+        message_item("second"),
+    ]);
 
     stream_until_complete(&mut client_session, &harness, &prompt_one).await;
     stream_until_complete(&mut client_session, &harness, &prompt_two).await;
@@ -594,7 +603,7 @@ async fn responses_websocket_appends_on_prefix() {
     assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
     let expected_append = serde_json::json!({
         "type": "response.append",
-        "input": serde_json::to_value(&prompt_two.input[1..]).expect("serialize append items"),
+        "input": serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items"),
     });
     assert_eq!(second, expected_append);
 
@@ -675,7 +684,11 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "assistant output"),
+            ev_completed("resp-1"),
+        ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
@@ -683,7 +696,11 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     let harness = websocket_harness_with_v2(&server, true).await;
     let mut session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
-    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("msg-1", "assistant output"),
+        message_item("second"),
+    ]);
 
     stream_until_complete(&mut session, &harness, &prompt_one).await;
     stream_until_complete(&mut session, &harness, &prompt_two).await;
@@ -698,7 +715,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[1..]).unwrap()
+        serde_json::to_value(&prompt_two.input[2..]).unwrap()
     );
 
     server.shutdown().await;
@@ -871,6 +888,16 @@ fn message_item(text: &str) -> ResponseItem {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: Some(id.to_string()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText { text: text.into() }],
         end_turn: None,
         phase: None,
     }
