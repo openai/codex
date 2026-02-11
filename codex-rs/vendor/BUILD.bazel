@@ -1,0 +1,8 @@
+filegroup(
+    name = "bubblewrap_sources",
+    srcs = glob([
+        "bubblewrap/*.c",
+        "bubblewrap/*.h",
+    ]),
+    visibility = ["//visibility:public"],
+)
