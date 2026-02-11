@@ -356,7 +356,7 @@ fn render_change(
                                         s,
                                         width,
                                         line_number_width,
-                                        &syn,
+                                        syn,
                                     ));
                                 } else {
                                     out.extend(push_wrapped_diff_line(
@@ -378,7 +378,7 @@ fn render_change(
                                         s,
                                         width,
                                         line_number_width,
-                                        &syn,
+                                        syn,
                                     ));
                                 } else {
                                     out.extend(push_wrapped_diff_line(
@@ -400,7 +400,7 @@ fn render_change(
                                         s,
                                         width,
                                         line_number_width,
-                                        &syn,
+                                        syn,
                                     ));
                                 } else {
                                     out.extend(push_wrapped_diff_line(

@@ -424,7 +424,7 @@ where
             .as_deref()
             .and_then(|s| s.split([',', ' ', '\t']).next())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         self.code_block_lang = lang;
         self.code_block_buffer.clear();
 

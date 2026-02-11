@@ -151,10 +151,10 @@ fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) ->
             return ts.get(theme_name).clone();
         }
         // 2. Try loading {CODEX_HOME}/themes/{name}.tmTheme from disk.
-        if let Some(home) = codex_home {
-            if let Some(theme) = load_custom_theme(name, home) {
-                return theme;
-            }
+        if let Some(home) = codex_home
+            && let Some(theme) = load_custom_theme(name, home)
+        {
+            return theme;
         }
         tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
     }
@@ -190,7 +190,10 @@ pub(crate) fn set_syntax_theme(theme: Theme) {
 
 /// Clone the current syntax theme (e.g. to save for cancel-restore).
 pub(crate) fn current_syntax_theme() -> Theme {
-    theme_lock().read().unwrap().clone()
+    match theme_lock().read() {
+        Ok(theme) => theme.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
 }
 
 /// Return the kebab-case name of the currently active theme.
@@ -224,10 +227,10 @@ pub(crate) fn resolve_theme_by_name(name: &str, codex_home: Option<&Path>) -> Op
         return Some(ts.get(embedded).clone());
     }
     // Custom .tmTheme file?
-    if let Some(home) = codex_home {
-        if let Some(theme) = load_custom_theme(name, home) {
-            return Some(theme);
-        }
+    if let Some(home) = codex_home
+        && let Some(theme) = load_custom_theme(name, home)
+    {
+        return Some(theme);
     }
     None
 }
@@ -255,16 +258,16 @@ pub(crate) fn list_available_themes(codex_home: Option<&Path>) -> Vec<ThemeEntry
         if let Ok(read_dir) = std::fs::read_dir(&themes_dir) {
             for entry in read_dir.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let name = stem.to_string();
-                        let is_valid_theme = ThemeSet::get_theme(&path).is_ok();
-                        if is_valid_theme && !entries.iter().any(|e| e.name == name) {
-                            entries.push(ThemeEntry {
-                                name,
-                                is_custom: true,
-                            });
-                        }
+                if path.extension().and_then(|e| e.to_str()) == Some("tmTheme")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                {
+                    let name = stem.to_string();
+                    let is_valid_theme = ThemeSet::get_theme(&path).is_ok();
+                    if is_valid_theme && !entries.iter().any(|e| e.name == name) {
+                        entries.push(ThemeEntry {
+                            name,
+                            is_custom: true,
+                        });
                     }
                 }
             }
@@ -417,8 +420,11 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
     }
 
     let syntax = find_syntax(lang)?;
-    let theme_guard = theme_lock().read().unwrap();
-    let mut h = HighlightLines::new(syntax, &*theme_guard);
+    let theme_guard = match theme_lock().read() {
+        Ok(theme_guard) => theme_guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let mut h = HighlightLines::new(syntax, &theme_guard);
     let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
 
     for line in LinesWithEndings::from(code) {
