@@ -351,6 +351,52 @@ async fn apply_patch_cli_multiple_chunks() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_crlf_feature_controls_line_endings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let patch = "*** Begin Patch\r\n*** Update File: line_endings.txt\r\n@@\r\n-one\r\n+uno\r\n two\r\n*** End Patch\r\n";
+
+    let harness = apply_patch_harness().await?;
+    harness
+        .write_file("line_endings.txt", b"one\r\ntwo\r\n")
+        .await?;
+    mount_apply_patch(&harness, "apply-crlf-default", patch, "ok").await;
+    harness.submit("apply the CRLF patch").await?;
+    assert_eq!(
+        harness.read_file_text("line_endings.txt").await?,
+        "uno\ntwo\n"
+    );
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_config(|config| {
+            config
+                .features
+                .enable(Feature::ApplyPatchCrlf)
+                .expect("enable apply_patch CRLF support");
+        })
+    })
+    .await?;
+    harness
+        .write_file("line_endings.txt", b"one\r\ntwo\r\n")
+        .await?;
+    mount_apply_patch_model_output(
+        &harness,
+        "apply-crlf-enabled",
+        patch,
+        "ok",
+        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+    )
+    .await;
+    harness.submit("apply the CRLF patch").await?;
+    assert_eq!(
+        harness.read_file_text("line_endings.txt").await?,
+        "uno\r\ntwo\r\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_cli_moves_file_to_new_directory() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

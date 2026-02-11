@@ -24,6 +24,7 @@
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
 use crate::ApplyPatchArgs;
+use crate::ApplyPatchOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -126,12 +127,19 @@ pub struct UpdateFileChunk {
 }
 
 pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
+    parse_patch_with_options(patch, ApplyPatchOptions::default())
+}
+
+pub fn parse_patch_with_options(
+    patch: &str,
+    options: ApplyPatchOptions,
+) -> Result<ApplyPatchArgs, ParseError> {
     let mode = if PARSE_IN_STRICT_MODE {
         ParseMode::Strict
     } else {
         ParseMode::Lenient
     };
-    parse_patch_text(patch, mode)
+    parse_patch_text(&options.patch(patch), mode)
 }
 
 enum ParseMode {
@@ -174,7 +182,7 @@ enum ParseMode {
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
-    let lines: Vec<&str> = patch.trim().lines().collect();
+    let lines: Vec<&str> = patch.trim().split('\n').collect();
     let (patch_lines, hunk_lines) = match mode {
         ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
         ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
@@ -247,7 +255,9 @@ fn check_patch_boundaries_lenient<'a>(
 
     match original_lines {
         [first, .., last] => {
-            if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
+            let first = first.trim_end_matches('\r');
+            let last = last.trim_end_matches('\r');
+            if (first == "<<EOF" || first == "<<'EOF'" || first == "<<\"EOF\"")
                 && last.ends_with("EOF")
                 && original_lines.len() >= 4
             {
@@ -316,7 +326,7 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         let mut parsed_lines = 1;
         let move_path = remaining_lines
             .first()
-            .and_then(|x| x.strip_prefix(MOVE_TO_MARKER));
+            .and_then(|line| line.trim_end_matches('\r').strip_prefix(MOVE_TO_MARKER));
 
         if move_path.is_some() {
             remaining_lines = &remaining_lines[1..];
@@ -384,9 +394,10 @@ fn parse_update_file_chunk(
             line_number,
         });
     }
-    let (change_context, start_index) = if lines[0] == EMPTY_CHANGE_CONTEXT_MARKER {
+    let first_line = lines[0].trim_end_matches('\r');
+    let (change_context, start_index) = if first_line == EMPTY_CHANGE_CONTEXT_MARKER {
         (None, 1)
-    } else if let Some(context) = lines[0].strip_prefix(CHANGE_CONTEXT_MARKER) {
+    } else if let Some(context) = first_line.strip_prefix(CHANGE_CONTEXT_MARKER) {
         (Some(context.to_string()), 1)
     } else {
         if !allow_missing_context {
@@ -414,7 +425,8 @@ fn parse_update_file_chunk(
     };
     let mut parsed_lines = 0;
     for line in &lines[start_index..] {
-        match *line {
+        let line_contents = line.trim_end_matches('\r');
+        match line_contents {
             EOF_MARKER => {
                 if parsed_lines == 0 {
                     return Err(InvalidHunkError {
@@ -426,7 +438,7 @@ fn parse_update_file_chunk(
                 parsed_lines += 1;
                 break;
             }
-            line_contents => {
+            _ => {
                 match line_contents.chars().next() {
                     None => {
                         // Interpret this as an empty line.
@@ -434,14 +446,14 @@ fn parse_update_file_chunk(
                         chunk.new_lines.push(String::new());
                     }
                     Some(' ') => {
-                        chunk.old_lines.push(line_contents[1..].to_string());
-                        chunk.new_lines.push(line_contents[1..].to_string());
+                        chunk.old_lines.push(line[1..].to_string());
+                        chunk.new_lines.push(line[1..].to_string());
                     }
                     Some('+') => {
-                        chunk.new_lines.push(line_contents[1..].to_string());
+                        chunk.new_lines.push(line[1..].to_string());
                     }
                     Some('-') => {
-                        chunk.old_lines.push(line_contents[1..].to_string());
+                        chunk.old_lines.push(line[1..].to_string());
                     }
                     _ => {
                         if parsed_lines == 0 {

@@ -1,6 +1,8 @@
 use std::io::Read;
 use std::io::Write;
 
+const PRESERVE_CRLF_FLAG: &str = "--preserve-crlf";
+
 pub fn main() -> ! {
     let exit_code = run_main();
     std::process::exit(exit_code);
@@ -9,11 +11,19 @@ pub fn main() -> ! {
 /// We would prefer to return `std::process::ExitCode`, but its `exit_process()`
 /// method is still a nightly API and we want main() to return !.
 pub fn run_main() -> i32 {
-    // Expect either one argument (the full apply_patch payload) or read it from stdin.
+    // Expect either one argument (the full apply_patch payload), optionally prefixed
+    // by --preserve-crlf, or read it from stdin.
     let mut args = std::env::args_os();
     let _argv0 = args.next();
+    let first_arg = args.next();
+    let (options, patch_arg) = match first_arg {
+        Some(arg) if arg.to_str() == Some(PRESERVE_CRLF_FLAG) => {
+            (crate::ApplyPatchOptions::preserve_crlf(), args.next())
+        }
+        patch_arg => (crate::ApplyPatchOptions::default(), patch_arg),
+    };
 
-    let patch_arg = match args.next() {
+    let patch_arg = match patch_arg {
         Some(arg) => match arg.into_string() {
             Ok(s) => s,
             Err(_) => {
@@ -27,7 +37,9 @@ pub fn run_main() -> i32 {
             match std::io::stdin().read_to_string(&mut buf) {
                 Ok(_) => {
                     if buf.is_empty() {
-                        eprintln!("Usage: apply_patch 'PATCH'\n       echo 'PATCH' | apply_patch");
+                        eprintln!(
+                            "Usage: apply_patch [--preserve-crlf] 'PATCH'\n       echo 'PATCH' | apply_patch [--preserve-crlf]"
+                        );
                         return 2;
                     }
                     buf
@@ -42,7 +54,7 @@ pub fn run_main() -> i32 {
 
     // Refuse extra args to avoid ambiguity.
     if args.next().is_some() {
-        eprintln!("Error: apply_patch accepts exactly one argument.");
+        eprintln!("Error: apply_patch accepts exactly one PATCH argument.");
         return 2;
     }
 
@@ -65,8 +77,9 @@ pub fn run_main() -> i32 {
             return 1;
         }
     };
-    match runtime.block_on(crate::apply_patch(
+    match runtime.block_on(crate::apply_patch_with_options(
         &patch_arg,
+        options,
         &cwd,
         &mut stdout,
         &mut stderr,

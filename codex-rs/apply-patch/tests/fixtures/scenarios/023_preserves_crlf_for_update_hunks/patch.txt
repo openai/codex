@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: sample.txt
+@@
+-one
++uno
+ two
+*** End Patch

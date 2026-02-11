@@ -4,6 +4,7 @@ mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
@@ -22,11 +23,13 @@ pub use parser::ParseError;
 use parser::ParseError::*;
 pub use parser::UpdateFileChunk;
 pub use parser::parse_patch;
+pub use parser::parse_patch_with_options;
 use similar::TextDiff;
 pub use streaming_parser::StreamingPatchParser;
 use thiserror::Error;
 
 pub use invocation::maybe_parse_apply_patch_verified;
+pub use invocation::maybe_parse_apply_patch_verified_with_options;
 pub use invocation::verify_apply_patch_args;
 pub use standalone_executable::main;
 
@@ -40,6 +43,29 @@ use crate::invocation::ExtractHeredocError;
 /// process-invocation contract for the standalone `apply_patch` command
 /// surface.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
+/// Controls optional behavior when parsing or applying a patch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ApplyPatchOptions {
+    preserve_crlf: bool,
+}
+
+impl ApplyPatchOptions {
+    /// Returns options that preserve CRLF line endings from the patch payload.
+    pub const fn preserve_crlf() -> Self {
+        Self {
+            preserve_crlf: true,
+        }
+    }
+
+    fn patch<'a>(self, patch: &'a str) -> Cow<'a, str> {
+        if self.preserve_crlf || !patch.contains("\r\n") {
+            Cow::Borrowed(patch)
+        } else {
+            Cow::Owned(patch.replace("\r\n", "\n"))
+        }
+    }
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -89,8 +115,7 @@ impl PartialEq for IoError {
     }
 }
 
-/// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
-/// parsed into hunks.
+/// The PATCH text used for applying the patch, parsed into hunks.
 #[derive(Debug, PartialEq)]
 pub struct ApplyPatchArgs {
     pub patch: String,
@@ -282,7 +307,28 @@ pub async fn apply_patch(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
-    let hunks = match parse_patch(patch) {
+    apply_patch_with_options(
+        patch,
+        ApplyPatchOptions::default(),
+        cwd,
+        stdout,
+        stderr,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+pub async fn apply_patch_with_options(
+    patch: &str,
+    options: ApplyPatchOptions,
+    cwd: &AbsolutePathBuf,
+    stdout: &mut impl std::io::Write,
+    stderr: &mut impl std::io::Write,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> Result<AppliedPatchDelta, ApplyPatchFailure> {
+    let hunks = match parse_patch_with_options(patch, options) {
         Ok(source) => source.hunks,
         Err(e) => {
             match &e {

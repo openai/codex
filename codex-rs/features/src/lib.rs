@@ -101,6 +101,8 @@ pub enum Feature {
     TerminalResizeReflow,
     /// Add terminal-specific visualization guidance to TUI developer instructions.
     TerminalVisualizationInstructions,
+    /// Preserve CRLF line endings when applying CRLF patches.
+    ApplyPatchCrlf,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
@@ -880,6 +882,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchCrlf,
+        key: "apply_patch_crlf",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

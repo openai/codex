@@ -20,6 +20,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchOptions;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -228,8 +229,10 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let result = codex_apply_patch::apply_patch(
+        // Parsing already normalizes the patch when CRLF preservation is disabled.
+        let result = codex_apply_patch::apply_patch_with_options(
             &req.action.patch,
+            ApplyPatchOptions::preserve_crlf(),
             &req.action.cwd,
             &mut stdout,
             &mut stderr,

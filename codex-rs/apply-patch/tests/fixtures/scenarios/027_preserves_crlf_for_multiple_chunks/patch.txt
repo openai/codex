@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Update File: multi.txt
+@@
+-two
++dos
+@@
+-four
++cuatro
+*** End Patch

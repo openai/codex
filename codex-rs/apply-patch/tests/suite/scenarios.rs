@@ -43,6 +43,7 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
     // on the exit status here; the scenarios are specified purely in terms of
     // final filesystem state, which we compare below.
     Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
+        .arg("--preserve-crlf")
         .arg(patch)
         .current_dir(tmp.path())
         .output()?;

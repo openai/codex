@@ -37,6 +37,7 @@ use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::ApplyPatchOptions;
 use codex_apply_patch::Hunk;
 use codex_apply_patch::StreamingPatchParser;
 use codex_exec_server::ExecutorFileSystem;
@@ -54,6 +55,15 @@ use codex_tools::ToolSpec;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
+
+fn apply_patch_options(turn: &TurnContext) -> ApplyPatchOptions {
+    if turn.features.enabled(Feature::ApplyPatchCrlf) {
+        ApplyPatchOptions::preserve_crlf()
+    } else {
+        ApplyPatchOptions::default()
+    }
+}
+
 /// Handles freeform `apply_patch` requests and routes verified patches to the
 /// selected environment filesystem.
 #[derive(Default)]
@@ -339,7 +349,8 @@ impl ApplyPatchHandler {
                 "apply_patch handler received unsupported payload".to_string(),
             ));
         };
-        let args = match codex_apply_patch::parse_patch(&patch_input) {
+        let options = apply_patch_options(turn.as_ref());
+        let args = match codex_apply_patch::parse_patch_with_options(&patch_input, options) {
             Ok(args) => args,
             Err(parse_error) => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -523,8 +534,15 @@ pub(crate) async fn intercept_apply_patch(
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     let sandbox = turn.file_system_sandbox_context(/*additional_permissions*/ None, cwd);
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd, fs, Some(&sandbox))
-        .await
+    let options = apply_patch_options(turn.as_ref());
+    match codex_apply_patch::maybe_parse_apply_patch_verified_with_options(
+        command,
+        options,
+        cwd,
+        fs,
+        Some(&sandbox),
+    )
+    .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =

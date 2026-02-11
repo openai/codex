@@ -15,11 +15,14 @@ use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
+use crate::ApplyPatchOptions;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
+#[cfg(test)]
 use crate::parser::parse_patch;
+use crate::parser::parse_patch_with_options;
 use crate::unified_diff_from_chunks;
 use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
@@ -102,18 +105,27 @@ fn extract_apply_patch_from_shell(
     }
 }
 
-// TODO: make private once we remove tests in lib.rs
-pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+#[cfg(test)]
+fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+    maybe_parse_apply_patch_with_options(argv, ApplyPatchOptions::default())
+}
+
+fn maybe_parse_apply_patch_with_options(
+    argv: &[String],
+    options: ApplyPatchOptions,
+) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
-        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
-            Ok(source) => MaybeApplyPatch::Body(source),
-            Err(e) => MaybeApplyPatch::PatchParseError(e),
-        },
+        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => {
+            match parse_patch_with_options(body, options) {
+                Ok(source) => MaybeApplyPatch::Body(source),
+                Err(e) => MaybeApplyPatch::PatchParseError(e),
+            }
+        }
         // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
         _ => match parse_shell_script(argv) {
             Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
-                Ok((body, workdir)) => match parse_patch(&body) {
+                Ok((body, workdir)) => match parse_patch_with_options(&body, options) {
                     Ok(mut source) => {
                         source.workdir = workdir;
                         MaybeApplyPatch::Body(source)
@@ -138,20 +150,37 @@ pub async fn maybe_parse_apply_patch_verified(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
 ) -> MaybeApplyPatchVerified {
+    maybe_parse_apply_patch_verified_with_options(
+        argv,
+        ApplyPatchOptions::default(),
+        cwd,
+        fs,
+        sandbox,
+    )
+    .await
+}
+
+pub async fn maybe_parse_apply_patch_verified_with_options(
+    argv: &[String],
+    options: ApplyPatchOptions,
+    cwd: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
     if let [body] = argv
-        && parse_patch(body).is_ok()
+        && parse_patch_with_options(body, options).is_ok()
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
     if let Some((_, script)) = parse_shell_script(argv)
-        && parse_patch(script).is_ok()
+        && parse_patch_with_options(script, options).is_ok()
     {
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
-    match maybe_parse_apply_patch(argv) {
+    match maybe_parse_apply_patch_with_options(argv, options) {
         MaybeApplyPatch::Body(args) => verify_apply_patch_args(args, cwd, fs, sandbox).await,
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
