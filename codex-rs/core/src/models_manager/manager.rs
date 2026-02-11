@@ -336,8 +336,8 @@ impl ModelsManager {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager with a specific provider for testing.
+    #[doc(hidden)]
     pub fn with_provider(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
@@ -355,8 +355,8 @@ impl ModelsManager {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Get model identifier without consulting remote state or cache.
+    #[doc(hidden)]
     pub fn get_model_offline(model: Option<&str>) -> String {
         if let Some(model) = model {
             return model.to_string();
@@ -370,8 +370,8 @@ impl ModelsManager {
             .unwrap_or_default()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
+    #[doc(hidden)]
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
         model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
     }
