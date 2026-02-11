@@ -876,7 +876,7 @@ remote_models = true
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
-                managed_preferences_base64: None,
+                managed_preferences_base64: Some(String::new()),
                 macos_managed_config_requirements_base64: None,
             },
             CloudRequirementsLoader::default(),
@@ -941,7 +941,7 @@ remote_models = true
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
-                managed_preferences_base64: None,
+                managed_preferences_base64: Some(String::new()),
                 macos_managed_config_requirements_base64: None,
             },
             CloudRequirementsLoader::default(),
@@ -1046,7 +1046,7 @@ remote_models = true
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
-                managed_preferences_base64: None,
+                managed_preferences_base64: Some(String::new()),
                 macos_managed_config_requirements_base64: None,
             },
             CloudRequirementsLoader::default(),
@@ -1095,7 +1095,7 @@ remote_models = true
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
-                managed_preferences_base64: None,
+                managed_preferences_base64: Some(String::new()),
                 macos_managed_config_requirements_base64: None,
             },
             CloudRequirementsLoader::default(),
@@ -1143,7 +1143,7 @@ remote_models = true
             LoaderOverrides {
                 managed_config_path: Some(managed_path.clone()),
                 #[cfg(target_os = "macos")]
-                managed_preferences_base64: None,
+                managed_preferences_base64: Some(String::new()),
                 macos_managed_config_requirements_base64: None,
             },
             CloudRequirementsLoader::default(),
