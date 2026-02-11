@@ -11,10 +11,10 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
-use crate::config_loader::config_requirements::RequirementSource;
-use crate::config_loader::fingerprint::version_for_toml;
+use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
+use crate::config_loader::version_for_toml;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -1246,19 +1246,19 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 }
 
 mod requirements_exec_policy_tests {
-    use super::super::config_requirements::ConfigRequirementsWithSources;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyDecisionToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyParseError;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
-    use super::super::requirements_exec_policy::RequirementsExecPolicyToml;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use crate::config_loader::ConfigRequirementsWithSources;
     use crate::config_loader::RequirementSource;
     use crate::exec_policy::load_exec_policy;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::RequirementsExecPolicyDecisionToml;
+    use codex_config::RequirementsExecPolicyParseError;
+    use codex_config::RequirementsExecPolicyPatternTokenToml;
+    use codex_config::RequirementsExecPolicyPrefixRuleToml;
+    use codex_config::RequirementsExecPolicyToml;
     use codex_execpolicy::Decision;
     use codex_execpolicy::Evaluation;
     use codex_execpolicy::RuleMatch;

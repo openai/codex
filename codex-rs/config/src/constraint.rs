@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::config_loader::RequirementSource;
+use crate::config_requirements::RequirementSource;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]

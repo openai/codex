@@ -1,5 +1,5 @@
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
+use crate::config_requirements::ConfigRequirements;
+use crate::config_requirements::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;

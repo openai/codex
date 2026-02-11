@@ -15,6 +15,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "config",
     "shell-command",
     "core",
     "hooks",
@@ -83,20 +84,19 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
-codex-cloud-requirements = { path = "cloud-requirements" }
 codex-chatgpt = { path = "chatgpt" }
-codex-cli = { path = "cli"}
+codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
-codex-shell-command = { path = "shell-command" }
+codex-cloud-requirements = { path = "cloud-requirements" }
+codex-config = { path = "config" }
 codex-core = { path = "core" }
-codex-hooks = { path = "hooks" }
-codex-secrets = { path = "secrets" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
+codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -109,25 +109,27 @@ codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-secrets = { path = "secrets" }
+codex-shell-command = { path = "shell-command" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
+codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
+codex-utils-cli = { path = "utils/cli" }
+codex-utils-elapsed = { path = "utils/elapsed" }
+codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
+codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
-codex-utils-home-dir = { path = "utils/home-dir" }
+codex-utils-oss = { path = "utils/oss" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
-codex-utils-string = { path = "utils/string" }
-codex-utils-cli = { path = "utils/cli" }
-codex-utils-elapsed = { path = "utils/elapsed" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
-codex-utils-approval-presets = { path = "utils/approval-presets" }
-codex-utils-oss = { path = "utils/oss" }
-codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
+codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }
@@ -139,12 +141,12 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
+askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
-askama = "0.15.4"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bm25 = "2.3.2"
@@ -154,8 +156,8 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
-crossterm = "0.28.1"
 crossbeam-channel = "0.5.15"
+crossterm = "0.28.1"
 ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
@@ -173,10 +175,10 @@ icu_decimal = "2.1"
 icu_locale_core = "2.1"
 icu_provider = { version = "2.1", features = ["sync"] }
 ignore = "0.4.23"
-indoc = "2.0"
 image = { version = "^0.25.9", default-features = false }
 include_dir = "0.7.4"
 indexmap = "2.12.0"
+indoc = "2.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
@@ -198,7 +200,6 @@ opentelemetry-appender-tracing = "0.31.0"
 opentelemetry-otlp = "0.31.0"
 opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry_sdk = "0.31.0"
-tracing-opentelemetry = "0.32.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
 path-absolutize = "3.1.1"
@@ -214,10 +215,14 @@ regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.14.0", default-features = false }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
+semver = "1.0"
 sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
@@ -227,11 +232,19 @@ serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
 sha2 = "0.10"
-semver = "1.0"
 shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
-sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "json", "macros", "migrate", "runtime-tokio-rustls", "sqlite", "time", "uuid"] }
+sqlx = { version = "0.8.6", default-features = false, features = [
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+    "runtime-tokio-rustls",
+    "sqlite",
+    "time",
+    "uuid",
+] }
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
@@ -246,20 +259,23 @@ tiny_http = "0.12"
 tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
-tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
-tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
+tokio-tungstenite = { version = "0.28.0", features = [
+    "proxy",
+    "rustls-tls-native-roots",
+] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
+tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
-zstd = "0.13"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
+tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
@@ -272,6 +288,7 @@ webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
 zip = "2.4.2"
+zstd = "0.13"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
@@ -317,7 +334,12 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["icu_provider", "openssl-sys", "codex-utils-readiness", "codex-secrets"]
+ignored = [
+    "icu_provider",
+    "openssl-sys",
+    "codex-utils-readiness",
+    "codex-secrets",
+]
 
 [profile.release]
 lto = "fat"
