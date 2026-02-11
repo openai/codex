@@ -33,6 +33,7 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
+codex-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
@@ -106,8 +107,6 @@ tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-tree-sitter = { workspace = true }
-tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }

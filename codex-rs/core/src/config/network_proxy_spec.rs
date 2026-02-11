@@ -68,6 +68,10 @@ impl NetworkProxySpec {
         host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
     }
 
+    pub fn socks_enabled(&self) -> bool {
+        self.config.network.enable_socks5
+    }
+
     pub(crate) fn from_constraints(
         _config_layer_stack: &config::ConfigLayerStack,
         requirements: NetworkConstraints,

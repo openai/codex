@@ -19,7 +19,7 @@ Consolidation goals:
 4. Deduplicate aggressively and remove generic advice.
 
 Expected outputs for this directory (create/update as needed):
-- `MEMORY.md`: merged durable memory registry for this CWD.
+- `MEMORY.md`: merged durable memory registry for this shared memory root.
 - `skills/<skill-name>/...`: optional skill folders when there is clear reusable procedure value.
 
 Do not rewrite phase-1 artifacts except when adding explicit cross-references:
