@@ -203,11 +203,6 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let sse = responses::sse(vec![
-        responses::ev_assistant_message("m1", "MANUAL_COMPACT_SUMMARY"),
-        responses::ev_completed_with_tokens("r1", 200),
-    ]);
-    responses::mount_sse_sequence(&server, vec![sse]).await;
 
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml(
