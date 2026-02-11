@@ -6825,11 +6825,11 @@ mod tests {
         )
         .await;
 
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
         assert_eq!(
             sess.previous_model().await,
             Some(tc.model_info.slug.clone())
         );
-        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 
     #[derive(Clone, Copy)]
