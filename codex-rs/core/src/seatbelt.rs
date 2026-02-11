@@ -167,6 +167,9 @@ fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
+/// Returns zero or more complete Seatbelt policy lines for unix socket rules.
+/// When non-empty, the returned string is newline-terminated so callers can
+/// append it directly to larger policy blocks.
 fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
     if proxy.dangerously_allow_all_unix_sockets {
         return "(allow network* (subpath \"/\"))\n".to_string();
@@ -356,6 +359,7 @@ mod tests {
     use super::macos_dir_params;
     use super::normalize_path_for_sandbox;
     use super::unix_socket_dir_params;
+    use super::unix_socket_policy;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -512,6 +516,27 @@ mod tests {
         assert!(
             policy.contains("(allow network* (subpath (param \"UNIX_SOCKET_PATH_0\")))"),
             "policy should allow explicitly configured unix sockets:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn unix_socket_policy_non_empty_output_is_newline_terminated() {
+        let allowlist_policy = unix_socket_policy(&ProxyPolicyInputs {
+            allow_unix_sockets: vec![absolute_path("/tmp/example.sock")],
+            ..ProxyPolicyInputs::default()
+        });
+        assert!(
+            allowlist_policy.ends_with('\n'),
+            "allowlist unix socket policy should end with a newline:\n{allowlist_policy}"
+        );
+
+        let allow_all_policy = unix_socket_policy(&ProxyPolicyInputs {
+            dangerously_allow_all_unix_sockets: true,
+            ..ProxyPolicyInputs::default()
+        });
+        assert!(
+            allow_all_policy.ends_with('\n'),
+            "allow-all unix socket policy should end with a newline:\n{allow_all_policy}"
         );
     }
 
