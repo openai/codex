@@ -134,17 +134,19 @@ impl ModelsManager {
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
-    /// Look up model metadata, applying remote overrides and config adjustments.
+    /// Look up model metadata, applying remote overrides and config adjustments, as well as client overrides.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
             .find_remote_model_by_longest_prefix(model, config)
             .await;
-        let model = if let Some(remote) = remote {
+        let model_info = if let Some(remote) = remote {
             remote
         } else {
             model_info::model_info_from_slug(model)
         };
-        model_info::with_config_overrides(model, config)
+
+        let model_info = model_info::with_model_info_patches(model_info, model, config);
+        model_info::with_config_overrides(model_info, config)
     }
 
     async fn find_remote_model_by_longest_prefix(
@@ -369,11 +371,13 @@ impl ModelsManager {
     }
 
     /// Build `ModelInfo` without consulting remote state or cache.
-    pub(crate) fn construct_model_info_offline_for_tests(
-        model: &str,
-        config: &Config,
-    ) -> ModelInfo {
-        model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
+    ///
+    /// This follows the same override precedence as `get_model_info`:
+    /// per-model `model_info_overrides` are applied first, then top-level config overrides.
+    pub(crate) fn construct_model_info_offline_for_tests(model: &str, config: &Config) -> ModelInfo {
+        let model_info = model_info::model_info_from_slug(model);
+        let model_info = model_info::with_model_info_patches(model_info, model, config);
+        model_info::with_config_overrides(model_info, config)
     }
 }
 

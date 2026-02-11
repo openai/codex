@@ -254,6 +254,37 @@ pub struct ModelInfo {
     pub prefer_websockets: bool,
 }
 
+/// User-provided patch for overriding model metadata in local config.
+///
+/// Every field is optional so users can override only the parts they need.
+/// The target model slug is provided by the surrounding map key.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, TS, JsonSchema)]
+#[serde(default)]
+pub struct ModelInfoPatch {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub default_reasoning_level: Option<ReasoningEffort>,
+    pub supported_reasoning_levels: Option<Vec<ReasoningEffortPreset>>,
+    pub shell_type: Option<ConfigShellToolType>,
+    pub visibility: Option<ModelVisibility>,
+    pub supported_in_api: Option<bool>,
+    pub priority: Option<i32>,
+    pub upgrade: Option<ModelInfoUpgrade>,
+    pub base_instructions: Option<String>,
+    pub model_messages: Option<ModelMessages>,
+    pub supports_reasoning_summaries: Option<bool>,
+    pub support_verbosity: Option<bool>,
+    pub default_verbosity: Option<Verbosity>,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    pub truncation_policy: Option<TruncationPolicyConfig>,
+    pub supports_parallel_tool_calls: Option<bool>,
+    pub context_window: Option<i64>,
+    pub auto_compact_token_limit: Option<i64>,
+    pub effective_context_window_percent: Option<i64>,
+    pub experimental_supported_tools: Option<Vec<String>>,
+    pub input_modalities: Option<Vec<InputModality>>,
+}
+
 impl ModelInfo {
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
         self.auto_compact_token_limit.or_else(|| {

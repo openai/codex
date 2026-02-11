@@ -13,6 +13,7 @@ use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ModelInfoPatch;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
@@ -233,8 +234,10 @@ async fn responses_stream_includes_subagent_header_on_other() {
     );
 }
 
+// Request-construction integration test:
+// enabling summaries via config should result in reasoning.summary being sent in /responses.
 #[tokio::test]
-async fn responses_respects_model_info_overrides_from_config() {
+async fn responses_includes_reasoning_summary_when_enabled_in_config() {
     core_test_support::skip_if_no_network!();
 
     let server = responses::start_mock_server().await;
@@ -342,6 +345,127 @@ async fn responses_respects_model_info_overrides_from_config() {
         reasoning.is_some(),
         "reasoning should be present when config enables summaries"
     );
+
+    assert_eq!(
+        reasoning
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .and_then(|value| value.as_str()),
+        Some("detailed")
+    );
+}
+
+// Request-construction integration test for model_info_overrides:
+// patching supports_reasoning_summaries on the selected model should enable reasoning.summary
+// in the actual outbound /responses body.
+#[tokio::test]
+async fn responses_respects_model_info_overrides_from_config() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once(&server, response_body).await;
+
+    let provider = ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    let codex_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model = Some("gpt-3.5-turbo".to_string());
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    config.model_reasoning_summary = ReasoningSummary::Detailed;
+    config.model_info_overrides.insert(
+        "gpt-3.5-turbo".to_string(),
+        ModelInfoPatch {
+            supports_reasoning_summaries: Some(true),
+            ..Default::default()
+        },
+    );
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = config.model.clone().expect("model configured");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_mode = auth_manager.auth_mode().map(TelemetryAuthMode::from);
+    let models_manager = ModelsManager::new(config.codex_home.clone(), auth_manager);
+    let config = Arc::new(config);
+    let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+
+    let conversation_id = ThreadId::new();
+    let session_source =
+        SessionSource::SubAgent(SubAgentSource::Other("override-check".to_string()));
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        auth_mode,
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let client = ModelClient::new(
+        None,
+        conversation_id,
+        provider,
+        session_source,
+        config.model_verbosity,
+        false,
+        false,
+        false,
+        false,
+        None,
+    );
+    let mut client_session = client.new_session();
+
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "hello".into(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let mut stream = client_session
+        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .await
+        .expect("stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    let request = request_recorder.single_request();
+    let body = request.body_json();
+    let reasoning = body
+        .get("reasoning")
+        .and_then(|value| value.as_object())
+        .cloned();
 
     assert_eq!(
         reasoning

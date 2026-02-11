@@ -82,6 +82,13 @@
       ],
       "type": "string"
     },
+    "ApplyPatchToolType": {
+      "enum": [
+        "freeform",
+        "function"
+      ],
+      "type": "string"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -335,6 +342,17 @@
       },
       "type": "object"
     },
+    "ConfigShellToolType": {
+      "description": "Shell execution capability for a model.",
+      "enum": [
+        "default",
+        "local",
+        "unified_exec",
+        "disabled",
+        "shell_command"
+      ],
+      "type": "string"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -414,6 +432,25 @@
         }
       ]
     },
+    "InputModality": {
+      "description": "Canonical user-input modality tags advertised by a model.",
+      "oneOf": [
+        {
+          "description": "Plain text turns and tool payloads.",
+          "enum": [
+            "text"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Image attachments included in user turns.",
+          "enum": [
+            "image"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -421,6 +458,186 @@
         "default"
       ],
       "type": "string"
+    },
+    "ModelInfoPatch": {
+      "description": "User-provided patch for overriding model metadata in local config.\n\nEvery field is optional so users can override only the parts they need. The target model slug is provided by the surrounding map key.",
+      "properties": {
+        "apply_patch_tool_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApplyPatchToolType"
+            }
+          ],
+          "default": null
+        },
+        "auto_compact_token_limit": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "base_instructions": {
+          "default": null,
+          "type": "string"
+        },
+        "context_window": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "default_reasoning_level": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "default": null
+        },
+        "default_verbosity": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Verbosity"
+            }
+          ],
+          "default": null
+        },
+        "description": {
+          "default": null,
+          "type": "string"
+        },
+        "display_name": {
+          "default": null,
+          "type": "string"
+        },
+        "effective_context_window_percent": {
+          "default": null,
+          "format": "int64",
+          "type": "integer"
+        },
+        "experimental_supported_tools": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_modalities": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/InputModality"
+          },
+          "type": "array"
+        },
+        "model_messages": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelMessages"
+            }
+          ],
+          "default": null
+        },
+        "priority": {
+          "default": null,
+          "format": "int32",
+          "type": "integer"
+        },
+        "shell_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ConfigShellToolType"
+            }
+          ],
+          "default": null
+        },
+        "support_verbosity": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supported_in_api": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supported_reasoning_levels": {
+          "default": null,
+          "items": {
+            "$ref": "#/definitions/ReasoningEffortPreset"
+          },
+          "type": "array"
+        },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
+        },
+        "supports_reasoning_summaries": {
+          "default": null,
+          "type": "boolean"
+        },
+        "truncation_policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TruncationPolicyConfig"
+            }
+          ],
+          "default": null
+        },
+        "upgrade": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelInfoUpgrade"
+            }
+          ],
+          "default": null
+        },
+        "visibility": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelVisibility"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "ModelInfoUpgrade": {
+      "properties": {
+        "migration_markdown": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "migration_markdown",
+        "model"
+      ],
+      "type": "object"
+    },
+    "ModelInstructionsVariables": {
+      "properties": {
+        "personality_default": {
+          "type": "string"
+        },
+        "personality_friendly": {
+          "type": "string"
+        },
+        "personality_pragmatic": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ModelMessages": {
+      "description": "A strongly-typed template for assembling model instructions and developer messages. If instructions_* is populated and valid, it will override base_instructions.",
+      "properties": {
+        "instructions_template": {
+          "type": "string"
+        },
+        "instructions_variables": {
+          "$ref": "#/definitions/ModelInstructionsVariables"
+        }
+      },
+      "type": "object"
     },
     "ModelProviderInfo": {
       "additionalProperties": false,
@@ -509,6 +726,15 @@
         "name"
       ],
       "type": "object"
+    },
+    "ModelVisibility": {
+      "description": "Visibility of a model in the picker or APIs.",
+      "enum": [
+        "list",
+        "hide",
+        "none"
+      ],
+      "type": "string"
     },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -881,6 +1107,28 @@
       ],
       "type": "string"
     },
+    "ReasoningEffortPreset": {
+      "description": "A reasoning effort option that can be surfaced for a model.",
+      "properties": {
+        "description": {
+          "description": "Short human description shown next to the effort in UIs.",
+          "type": "string"
+        },
+        "effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Effort level that the model supports."
+        }
+      },
+      "required": [
+        "description",
+        "effort"
+      ],
+      "type": "object"
+    },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
       "oneOf": [
@@ -1036,6 +1284,30 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "TruncationMode": {
+      "description": "Server-provided truncation policy metadata for a model.",
+      "enum": [
+        "bytes",
+        "tokens"
+      ],
+      "type": "string"
+    },
+    "TruncationPolicyConfig": {
+      "properties": {
+        "limit": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/definitions/TruncationMode"
+        }
+      },
+      "required": [
+        "limit",
+        "mode"
+      ],
       "type": "object"
     },
     "TrustLevel": {
@@ -1441,6 +1713,14 @@
       "description": "Size of the context window for the model, in tokens.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_info_overrides": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelInfoPatch"
+      },
+      "default": {},
+      "description": "Per-model metadata overrides keyed by model slug.",
+      "type": "object"
     },
     "model_instructions_file": {
       "allOf": [

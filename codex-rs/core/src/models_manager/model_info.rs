@@ -19,6 +19,102 @@ const LOCAL_FRIENDLY_TEMPLATE: &str =
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
+pub(crate) fn with_model_info_patch(
+    mut model: ModelInfo,
+    model_key: &str,
+    config: &Config,
+) -> ModelInfo {
+    let Some(model_info_patch) = config.model_info_overrides.get(model_key) else {
+        return model;
+    };
+
+    model.slug = model_key.to_string();
+
+    if let Some(display_name) = &model_info_patch.display_name {
+        model.display_name = display_name.clone();
+    }
+    if let Some(description) = &model_info_patch.description {
+        model.description = Some(description.clone());
+    }
+    if let Some(default_reasoning_level) = model_info_patch.default_reasoning_level {
+        model.default_reasoning_level = Some(default_reasoning_level);
+    }
+    if let Some(supported_reasoning_levels) = &model_info_patch.supported_reasoning_levels {
+        model.supported_reasoning_levels = supported_reasoning_levels.clone();
+    }
+    if let Some(shell_type) = model_info_patch.shell_type {
+        model.shell_type = shell_type;
+    }
+    if let Some(visibility) = model_info_patch.visibility {
+        model.visibility = visibility;
+    }
+    if let Some(supported_in_api) = model_info_patch.supported_in_api {
+        model.supported_in_api = supported_in_api;
+    }
+    if let Some(priority) = model_info_patch.priority {
+        model.priority = priority;
+    }
+    if let Some(upgrade) = &model_info_patch.upgrade {
+        model.upgrade = Some(upgrade.clone());
+    }
+    if let Some(base_instructions) = &model_info_patch.base_instructions {
+        model.base_instructions = base_instructions.clone();
+    }
+    if let Some(model_messages) = &model_info_patch.model_messages {
+        model.model_messages = Some(model_messages.clone());
+    }
+    if let Some(supports_reasoning_summaries) = model_info_patch.supports_reasoning_summaries {
+        model.supports_reasoning_summaries = supports_reasoning_summaries;
+    }
+    if let Some(support_verbosity) = model_info_patch.support_verbosity {
+        model.support_verbosity = support_verbosity;
+    }
+    if let Some(default_verbosity) = model_info_patch.default_verbosity {
+        model.default_verbosity = Some(default_verbosity);
+    }
+    if let Some(apply_patch_tool_type) = &model_info_patch.apply_patch_tool_type {
+        model.apply_patch_tool_type = Some(apply_patch_tool_type.clone());
+    }
+    if let Some(truncation_policy) = model_info_patch.truncation_policy {
+        model.truncation_policy = truncation_policy;
+    }
+    if let Some(supports_parallel_tool_calls) = model_info_patch.supports_parallel_tool_calls {
+        model.supports_parallel_tool_calls = supports_parallel_tool_calls;
+    }
+    if let Some(context_window) = model_info_patch.context_window {
+        model.context_window = Some(context_window);
+    }
+    if let Some(auto_compact_token_limit) = model_info_patch.auto_compact_token_limit {
+        model.auto_compact_token_limit = Some(auto_compact_token_limit);
+    }
+    if let Some(effective_context_window_percent) =
+        model_info_patch.effective_context_window_percent
+    {
+        model.effective_context_window_percent = effective_context_window_percent;
+    }
+    if let Some(experimental_supported_tools) = &model_info_patch.experimental_supported_tools {
+        model.experimental_supported_tools = experimental_supported_tools.clone();
+    }
+    if let Some(input_modalities) = &model_info_patch.input_modalities {
+        model.input_modalities = input_modalities.clone();
+    }
+
+    model
+}
+
+pub(crate) fn with_model_info_patches(
+    mut model_info: ModelInfo,
+    requested_model: &str,
+    config: &Config,
+) -> ModelInfo {
+    let resolved_slug = model_info.slug.clone();
+    model_info = with_model_info_patch(model_info, &resolved_slug, config);
+    if requested_model != resolved_slug {
+        model_info = with_model_info_patch(model_info, requested_model, config);
+    }
+    model_info
+}
+
 pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
     if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries {
         model.supports_reasoning_summaries = supports_reasoning_summaries;
