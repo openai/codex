@@ -1678,8 +1678,10 @@ impl CodexMessageProcessor {
                         .insert("windows.sandbox".to_string(), serde_json::json!("elevated"));
                 }
                 WindowsSandboxLevel::RestrictedToken => {
-                    request_overrides
-                        .insert("windows.sandbox".to_string(), serde_json::json!("unelevated"));
+                    request_overrides.insert(
+                        "windows.sandbox".to_string(),
+                        serde_json::json!("unelevated"),
+                    );
                 }
                 WindowsSandboxLevel::Disabled => {}
             }
@@ -2786,8 +2788,10 @@ impl CodexMessageProcessor {
                         .insert("windows.sandbox".to_string(), serde_json::json!("elevated"));
                 }
                 WindowsSandboxLevel::RestrictedToken => {
-                    cli_overrides
-                        .insert("windows.sandbox".to_string(), serde_json::json!("unelevated"));
+                    cli_overrides.insert(
+                        "windows.sandbox".to_string(),
+                        serde_json::json!("unelevated"),
+                    );
                 }
                 WindowsSandboxLevel::Disabled => {}
             }
