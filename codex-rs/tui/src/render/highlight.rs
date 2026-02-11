@@ -1,3 +1,26 @@
+//! Syntax highlighting engine for the TUI.
+//!
+//! Wraps [syntect] with the [two_face] grammar and theme bundles to provide
+//! ~250-language syntax highlighting and 32 bundled color themes.  The module
+//! owns four process-global singletons:
+//!
+//! | Singleton | Type | Purpose |
+//! |---|---|---|
+//! | `SYNTAX_SET` | `OnceLock<SyntaxSet>` | Grammar database, immutable after init |
+//! | `THEME` | `OnceLock<RwLock<Theme>>` | Active color theme, swappable at runtime |
+//! | `THEME_OVERRIDE` | `OnceLock<Option<String>>` | Persisted user preference (write-once) |
+//! | `CODEX_HOME` | `OnceLock<Option<PathBuf>>` | Root for custom `.tmTheme` discovery |
+//!
+//! **Lifecycle:** call [`set_theme_override`] once at startup (after the final
+//! config is resolved) to persist the user preference and seed the `THEME`
+//! lock.  After that, [`set_syntax_theme`] and [`current_syntax_theme`] can
+//! swap/snapshot the theme for live preview.  All highlighting functions read
+//! the theme via `theme_lock()`.
+//!
+//! **Guardrails:** inputs exceeding 512 KB or 10 000 lines are rejected early
+//! (returns `None`) to prevent pathological CPU/memory usage.  Callers must
+//! fall back to plain unstyled text.
+
 use ratatui::style::Color as RtColor;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -235,9 +258,13 @@ pub(crate) fn resolve_theme_by_name(name: &str, codex_home: Option<&Path>) -> Op
     None
 }
 
-/// A theme available in the picker.
+/// A theme available in the picker, either bundled or loaded from a custom
+/// `.tmTheme` file under `{CODEX_HOME}/themes/`.
 pub(crate) struct ThemeEntry {
+    /// Kebab-case identifier used for config persistence and theme resolution.
     pub name: String,
+    /// `true` when this entry was discovered from a `.tmTheme` file on disk
+    /// rather than the embedded two-face bundle.
     pub is_custom: bool,
 }
 
@@ -450,8 +477,14 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
 
 // -- Public API ---------------------------------------------------------------
 
-/// Highlight code in any supported language, returning styled ratatui Lines.
-/// Falls back to plain unstyled text when the language is not recognized.
+/// Highlight code in any supported language, returning styled ratatui `Line`s.
+///
+/// Falls back to plain unstyled text when the language is not recognized or the
+/// input exceeds safety guardrails.  Callers can always render the result
+/// directly -- the fallback path produces equivalent plain-text lines.
+///
+/// Used by `markdown_render` for fenced code blocks and by `exec_cell` for bash
+/// command highlighting.
 pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
     if let Some(line_spans) = highlight_to_line_spans(code, lang) {
         line_spans.into_iter().map(Line::from).collect()
@@ -474,7 +507,14 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 }
 
 /// Highlight code and return per-line styled spans for diff integration.
-/// Returns None if the language is unsupported.
+///
+/// Returns `None` when the language is unrecognized or the input exceeds
+/// guardrails.  The caller (`diff_render`) uses this signal to fall back to
+/// plain diff coloring.
+///
+/// Each inner `Vec<Span>` corresponds to one source line.  Styles are derived
+/// from the active theme but backgrounds are intentionally omitted so the
+/// terminal's own background shows through.
 pub(crate) fn highlight_code_to_styled_spans(
     code: &str,
     lang: &str,

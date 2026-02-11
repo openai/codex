@@ -1,3 +1,23 @@
+//! Renders unified diffs with line numbers, gutter signs, and optional syntax
+//! highlighting.
+//!
+//! Each `FileChange` variant (Add / Delete / Update) is rendered as a block of
+//! diff lines, each prefixed by a right-aligned line number, a gutter sign
+//! (`+` / `-` / ` `), and the content text.  When a recognized file extension
+//! is present, the content text is syntax-highlighted using
+//! [`crate::render::highlight`].
+//!
+//! **Highlighting strategy for `Update` diffs:** the renderer highlights each
+//! hunk as a single concatenated block rather than line-by-line.  This
+//! preserves syntect's parser state across consecutive lines within a hunk
+//! (important for multi-line strings, block comments, etc.).  Cross-hunk state
+//! is intentionally *not* preserved because hunks are visually separated and
+//! re-synchronize at context boundaries anyway.
+//!
+//! **Wrapping:** long lines are hard-wrapped at the available column width.
+//! Syntax-highlighted spans are split at character boundaries with styles
+//! preserved across the split so that no color information is lost.
+
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,7 +48,11 @@ use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
 
-// Diff line type used for gutter sign + style selection.
+/// Classifies a diff line for gutter sign rendering and style selection.
+///
+/// `Insert` renders with a `+` sign and green text, `Delete` with `-` and red
+/// text (plus dim overlay when syntax-highlighted), and `Context` with a space
+/// and default styling.
 #[derive(Clone, Copy)]
 pub(crate) enum DiffLineType {
     Insert,
@@ -465,6 +489,9 @@ pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     }
 }
 
+/// Render a single diff line (no syntax highlighting) as one or more wrapped
+/// ratatui `Line`s.  The first output line carries the gutter sign; continuation
+/// lines are indented under the line number column.
 pub(crate) fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
@@ -475,6 +502,9 @@ pub(crate) fn push_wrapped_diff_line(
     push_wrapped_diff_line_inner(line_number, kind, text, width, line_number_width, None)
 }
 
+/// Render a single diff line with pre-computed syntax spans.  The sign character
+/// uses the diff color; content gets syntax colors with a dim overlay for delete
+/// lines.
 pub(crate) fn push_wrapped_diff_line_with_syntax(
     line_number: usize,
     kind: DiffLineType,
@@ -598,8 +628,16 @@ fn push_wrapped_diff_line_inner(
 }
 
 /// Split styled spans into chunks that fit within `max_cols` display columns.
+///
 /// Returns one `Vec<RtSpan>` per output line.  Styles are preserved across
 /// split boundaries so that wrapping never loses syntax coloring.
+///
+/// The algorithm walks characters using their Unicode display width (with tabs
+/// expanded to [`TAB_WIDTH`] columns).  When a character would overflow the
+/// current line, the accumulated text is flushed and a new line begins.  A
+/// single character wider than the remaining space forces a line break *before*
+/// the character so that progress is always made (avoiding infinite loops on
+/// CJK characters or tabs at the end of a line).
 fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSpan<'static>>> {
     let mut result: Vec<Vec<RtSpan<'static>>> = Vec::new();
     let mut current_line: Vec<RtSpan<'static>> = Vec::new();

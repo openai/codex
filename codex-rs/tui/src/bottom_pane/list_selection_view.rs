@@ -42,12 +42,16 @@ const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 /// panel when side-by-side layout is active.
 const SIDE_CONTENT_GAP: u16 = 2;
 
-/// Width mode for side content when side-by-side layout is active.
+/// Controls how the side content panel is sized relative to the popup width.
+///
+/// When the computed side width falls below `side_content_min_width` or the
+/// remaining list area would be narrower than [`MIN_LIST_WIDTH_FOR_SIDE`], the
+/// side-by-side layout is abandoned and the stacked fallback is used instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SideContentWidth {
-    /// Fixed number of columns.
+    /// Fixed number of columns.  `Fixed(0)` disables side content entirely.
     Fixed(u16),
-    /// Exact 50/50 split (minus inter-column gap).
+    /// Exact 50/50 split of the content area (minus the inter-column gap).
     Half,
 }
 
@@ -60,10 +64,13 @@ impl Default for SideContentWidth {
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
-/// Callback type for when the selection changes (navigation, filter, number-key).
+/// Callback invoked whenever the highlighted item changes (arrow keys, search
+/// filter, number-key jump).  Receives the *actual* index into the unfiltered
+/// `items` list and the event sender.  Used by the theme picker for live preview.
 pub type OnSelectionChangedCallback = Option<Box<dyn Fn(usize, &AppEventSender) + Send + Sync>>;
 
-/// Callback type for when the selection popup is dismissed without accepting (e.g. via Esc or Ctrl+C).
+/// Callback invoked when the picker is dismissed without accepting (Esc or
+/// Ctrl+C).  Used by the theme picker to restore the pre-open theme.
 pub type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + Sync>>;
 
 /// One row in a [`ListSelectionView`] selection list.
