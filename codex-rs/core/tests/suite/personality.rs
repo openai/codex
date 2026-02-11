@@ -47,7 +47,7 @@ async fn personality_does_not_mutate_base_instructions_without_template() {
     config.features.enable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 
-    let model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
+    let model_info = codex_core::test_support::construct_model_info_offline("gpt-5.1", &config);
     assert_eq!(
         model_info.get_model_instructions(config.personality),
         model_info.base_instructions
@@ -62,7 +62,8 @@ async fn base_instructions_override_disables_personality_template() {
     config.personality = Some(Personality::Friendly);
     config.base_instructions = Some("override instructions".to_string());
 
-    let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline("gpt-5.2-codex", &config);
 
     assert_eq!(model_info.base_instructions, "override instructions");
     assert_eq!(
@@ -470,7 +471,8 @@ async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
     config.features.disable(Feature::Personality);
     config.personality = Some(Personality::Friendly);
 
-    let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline("gpt-5.2-codex", &config);
     assert_eq!(
         model_info.get_model_instructions(config.personality),
         model_info.base_instructions
@@ -613,6 +615,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(
@@ -729,6 +732,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(
@@ -840,6 +844,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     };
 
     let _models_mock = mount_models_once(

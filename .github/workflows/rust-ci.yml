@@ -379,21 +379,7 @@ jobs:
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
       - name: cargo clippy
-        id: clippy
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
-
-      # Running `cargo build` from the workspace root builds the workspace using
-      # the union of all features from third-party crates. This can mask errors
-      # where individual crates have underspecified features. To avoid this, we
-      # run `cargo check` for each crate individually, though because this is
-      # slower, we only do this for the x86_64-unknown-linux-gnu target.
-      - name: cargo check individual crates
-        id: cargo_check_all_crates
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
-        continue-on-error: true
-        run: |
-          find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
-            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
       # Save caches explicitly; make non-fatal so cache packaging
       # never fails the overall job. Only save when key wasn't hit.
@@ -446,15 +432,6 @@ jobs:
           path: |
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
-
-      # Fail the job if any of the previous steps failed.
-      - name: verify all steps passed
-        if: |
-          steps.clippy.outcome == 'failure' ||
-          steps.cargo_check_all_crates.outcome == 'failure'
-        run: |
-          echo "One or more checks failed (clippy or cargo_check_all_crates). See logs for details."
-          exit 1
 
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}

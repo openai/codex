@@ -6,7 +6,10 @@ use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
 use crate::skills::SkillMetadata;
+use crate::skills::injection::ToolMentionKind;
+use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::extract_tool_mentions;
+use crate::skills::injection::tool_kind_for_path;
 
 pub(crate) struct CollectedToolMentions {
     pub(crate) plain_names: HashSet<String>,
@@ -24,13 +27,24 @@ pub(crate) fn collect_tool_mentions_from_messages(messages: &[String]) -> Collec
     CollectedToolMentions { plain_names, paths }
 }
 
-pub(crate) fn collect_explicit_app_paths(input: &[UserInput]) -> Vec<String> {
+pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
+    let messages = input
+        .iter()
+        .filter_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+
     input
         .iter()
         .filter_map(|item| match item {
             UserInput::Mention { path, .. } => Some(path.clone()),
             _ => None,
         })
+        .chain(collect_tool_mentions_from_messages(&messages).paths)
+        .filter(|path| tool_kind_for_path(path.as_str()) == ToolMentionKind::App)
+        .filter_map(|path| app_id_from_path(path.as_str()).map(str::to_string))
         .collect()
 }
 
@@ -61,4 +75,70 @@ pub(crate) fn build_connector_slug_counts(
         *counts.entry(slug).or_insert(0) += 1;
     }
     counts
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use codex_protocol::user_input::UserInput;
+    use pretty_assertions::assert_eq;
+
+    use super::collect_explicit_app_ids;
+
+    fn text_input(text: &str) -> UserInput {
+        UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_from_linked_text_mentions() {
+        let input = vec![text_input("use [$calendar](app://calendar)")];
+
+        let app_ids = collect_explicit_app_ids(&input);
+
+        assert_eq!(app_ids, HashSet::from(["calendar".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_dedupes_structured_and_linked_mentions() {
+        let input = vec![
+            text_input("use [$calendar](app://calendar)"),
+            UserInput::Mention {
+                name: "calendar".to_string(),
+                path: "app://calendar".to_string(),
+            },
+        ];
+
+        let app_ids = collect_explicit_app_ids(&input);
+
+        assert_eq!(app_ids, HashSet::from(["calendar".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_ignores_non_app_paths() {
+        let input = vec![
+            text_input(
+                "use [$docs](mcp://docs) and [$skill](skill://team/skill) and [$file](/tmp/file.txt)",
+            ),
+            UserInput::Mention {
+                name: "docs".to_string(),
+                path: "mcp://docs".to_string(),
+            },
+            UserInput::Mention {
+                name: "skill".to_string(),
+                path: "skill://team/skill".to_string(),
+            },
+            UserInput::Mention {
+                name: "file".to_string(),
+                path: "/tmp/file.txt".to_string(),
+            },
+        ];
+
+        let app_ids = collect_explicit_app_ids(&input);
+
+        assert_eq!(app_ids, HashSet::<String>::new());
+    }
 }

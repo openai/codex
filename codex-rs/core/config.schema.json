@@ -611,6 +611,14 @@
           "description": "Log user prompt in traces",
           "type": "boolean"
         },
+        "metrics_exporter": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/OtelExporterKind"
+            }
+          ],
+          "description": "Optional metrics exporter"
+        },
         "trace_exporter": {
           "allOf": [
             {

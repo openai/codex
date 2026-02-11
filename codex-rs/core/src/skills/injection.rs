@@ -6,6 +6,7 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
+use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
@@ -93,13 +94,14 @@ pub(crate) fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
-    skill_name_counts: &HashMap<String, usize>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
+    let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
+
     let selection_context = SkillSelectionContext {
         skills,
         disabled_paths,
-        skill_name_counts,
+        skill_name_counts: &skill_name_counts,
         connector_slug_counts,
     };
     let mut selected: Vec<SkillMetadata> = Vec::new();
@@ -489,34 +491,13 @@ mod tests {
         assert_eq!(mentions.paths, set(expected_paths));
     }
 
-    fn build_skill_name_counts(
-        skills: &[SkillMetadata],
-        disabled_paths: &HashSet<PathBuf>,
-    ) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        for skill in skills {
-            if disabled_paths.contains(&skill.path) {
-                continue;
-            }
-            *counts.entry(skill.name.clone()).or_insert(0) += 1;
-        }
-        counts
-    }
-
     fn collect_mentions(
         inputs: &[UserInput],
         skills: &[SkillMetadata],
         disabled_paths: &HashSet<PathBuf>,
         connector_slug_counts: &HashMap<String, usize>,
     ) -> Vec<SkillMetadata> {
-        let skill_name_counts = build_skill_name_counts(skills, disabled_paths);
-        collect_explicit_skill_mentions(
-            inputs,
-            skills,
-            disabled_paths,
-            &skill_name_counts,
-            connector_slug_counts,
-        )
+        collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
     }
 
     #[test]

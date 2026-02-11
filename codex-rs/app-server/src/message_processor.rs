@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
@@ -114,10 +117,11 @@ pub(crate) struct MessageProcessor {
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
     experimental_api_enabled: bool,
+    pub(crate) opted_out_notification_methods: HashSet<String>,
 }
 
 pub(crate) struct MessageProcessorArgs {
@@ -191,6 +195,7 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         session: &mut ConnectionSessionState,
+        outbound_initialized: &AtomicBool,
     ) {
         let request_id = ConnectionRequestId {
             connection_id,
@@ -245,10 +250,19 @@ impl MessageProcessor {
                     // shared thread when another connected client did not opt into
                     // experimental API). Proposed direction is instance-global first-write-wins
                     // with initialize-time mismatch rejection.
-                    session.experimental_api_enabled = params
-                        .capabilities
-                        .as_ref()
-                        .is_some_and(|cap| cap.experimental_api);
+                    let (experimental_api_enabled, opt_out_notification_methods) =
+                        match params.capabilities {
+                            Some(capabilities) => (
+                                capabilities.experimental_api,
+                                capabilities
+                                    .opt_out_notification_methods
+                                    .unwrap_or_default(),
+                            ),
+                            None => (false, Vec::new()),
+                        };
+                    session.experimental_api_enabled = experimental_api_enabled;
+                    session.opted_out_notification_methods =
+                        opt_out_notification_methods.into_iter().collect();
                     let ClientInfo {
                         name,
                         title: _title,
@@ -286,14 +300,7 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;
-                    for notification in self.config_warnings.iter().cloned() {
-                        self.outgoing
-                            .send_server_notification(ServerNotification::ConfigWarning(
-                                notification,
-                            ))
-                            .await;
-                    }
-
+                    outbound_initialized.store(true, Ordering::Release);
                     return;
                 }
             }
@@ -379,6 +386,14 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn send_initialize_notifications(&self) {
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification(ServerNotification::ConfigWarning(notification))
+                .await;
+        }
     }
 
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {

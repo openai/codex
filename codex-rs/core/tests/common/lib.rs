@@ -1,6 +1,7 @@
 #![expect(clippy::expect_used)]
 
 use codex_utils_cargo_bin::CargoBinError;
+use ctor::ctor;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -16,6 +17,12 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+
+#[ctor]
+fn enable_deterministic_unified_exec_process_ids_for_tests() {
+    codex_core::test_support::set_thread_manager_test_mode(true);
+    codex_core::test_support::set_deterministic_process_ids(true);
+}
 
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {

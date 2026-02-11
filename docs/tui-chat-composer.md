@@ -144,6 +144,10 @@ Local history entries capture:
 Persistent history entries only restore text. They intentionally do **not** rehydrate attachments
 or pending paste payloads.
 
+For non-empty drafts, Up/Down navigation is only treated as history recall when the current text
+matches the last recalled history entry and the cursor is at a boundary (start or end of the
+line). This keeps multiline cursor movement intact while preserving shell-like history traversal.
+
 ### Draft recovery (Ctrl+C)
 
 Ctrl+C clears the composer but stashes the full draft state (text elements, image paths, and
@@ -157,6 +161,7 @@ ranges and local image paths. Pending paste payloads are cleared during submissi
 placeholders are expanded into their full text before being recorded. This means:
 
 - Up/Down recall of a submitted message restores image placeholders and their local paths.
+- Recalled entries place the cursor at end-of-line to match typical shell history editing.
 - Large-paste placeholders are not expected in recalled submitted history; the text is the
   expanded paste content.
 

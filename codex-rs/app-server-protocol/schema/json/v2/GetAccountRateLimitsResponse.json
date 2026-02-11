@@ -48,6 +48,18 @@
             }
           ]
         },
+        "limitId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -110,7 +122,22 @@
   },
   "properties": {
     "rateLimits": {
-      "$ref": "#/definitions/RateLimitSnapshot"
+      "allOf": [
+        {
+          "$ref": "#/definitions/RateLimitSnapshot"
+        }
+      ],
+      "description": "Backward-compatible single-bucket view; mirrors the historical payload."
+    },
+    "rateLimitsByLimitId": {
+      "additionalProperties": {
+        "$ref": "#/definitions/RateLimitSnapshot"
+      },
+      "description": "Multi-bucket view keyed by metered `limit_id` (for example, `codex`).",
+      "type": [
+        "object",
+        "null"
+      ]
     }
   },
   "required": [
