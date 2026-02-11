@@ -51,8 +51,14 @@ fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(two_face::syntax::extra_newlines)
 }
 
-/// Set the user-configured theme override before any highlighting occurs.
-/// Must be called at most once, before the first call to `theme()`.
+/// Set the user-configured syntax theme override and codex home path.
+///
+/// Call this with the **final resolved config** (after onboarding, resume, and
+/// fork reloads complete). The first call persists `name` and `codex_home` in
+/// `OnceLock`s used by startup/default theme resolution.
+///
+/// Subsequent calls cannot change the persisted `OnceLock` values, but they
+/// still update the runtime theme immediately for live preview flows.
 ///
 /// Returns a warning message when the configured theme name cannot be
 /// resolved to a bundled theme or a custom `.tmTheme` file on disk.
@@ -162,6 +168,25 @@ fn load_custom_theme(name: &str, codex_home: &Path) -> Option<Theme> {
     ThemeSet::get_theme(custom_theme_path(name, codex_home)).ok()
 }
 
+fn adaptive_default_theme_selection() -> (EmbeddedThemeName, &'static str) {
+    match crate::terminal_palette::default_bg() {
+        Some(bg) if crate::color::is_light(bg) => {
+            (EmbeddedThemeName::CatppuccinLatte, "catppuccin-latte")
+        }
+        _ => (EmbeddedThemeName::CatppuccinMocha, "catppuccin-mocha"),
+    }
+}
+
+fn adaptive_default_embedded_theme_name() -> EmbeddedThemeName {
+    adaptive_default_theme_selection().0
+}
+
+/// Return the kebab-case name of the adaptive default syntax theme selected
+/// from terminal background lightness.
+pub(crate) fn adaptive_default_theme_name() -> &'static str {
+    adaptive_default_theme_selection().1
+}
+
 /// Build the theme from current override/auto-detection settings.
 /// Extracted from the old `theme()` init closure so it can be reused.
 fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) -> Theme {
@@ -182,12 +207,7 @@ fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) ->
         tracing::warn!("unknown syntax theme \"{name}\", falling back to auto-detection");
     }
 
-    // Adaptive default: light or dark based on terminal background.
-    let name = match crate::terminal_palette::default_bg() {
-        Some(bg) if crate::color::is_light(bg) => EmbeddedThemeName::CatppuccinLatte,
-        _ => EmbeddedThemeName::CatppuccinMocha,
-    };
-    ts.get(name).clone()
+    ts.get(adaptive_default_embedded_theme_name()).clone()
 }
 
 /// Build the theme from current override/auto-detection settings.
@@ -234,11 +254,7 @@ pub(crate) fn current_theme_name() -> String {
             return name.clone();
         }
     }
-    // Adaptive default: light or dark based on terminal background.
-    match crate::terminal_palette::default_bg() {
-        Some(bg) if crate::color::is_light(bg) => "catppuccin-latte".to_string(),
-        _ => "catppuccin-mocha".to_string(),
-    }
+    adaptive_default_theme_name().to_string()
 }
 
 /// Resolve a theme name to a `Theme` (bundled or custom). Returns `None`
