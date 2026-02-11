@@ -157,7 +157,7 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version, package, is_release=release_version is not None)
+        stage_sources(staging_dir, version, package)
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
@@ -233,7 +233,7 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str, package: str, *, is_release: bool) -> None:
+def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
@@ -317,12 +317,11 @@ def stage_sources(staging_dir: Path, version: str, package: str, *, is_release: 
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
 
-        if is_release:
-            dependencies = package_json.get("dependencies")
-            if not isinstance(dependencies, dict):
-                dependencies = {}
-            dependencies[CODEX_NPM_NAME] = version
-            package_json["dependencies"] = dependencies
+        dependencies = package_json.get("dependencies")
+        if not isinstance(dependencies, dict):
+            dependencies = {}
+        dependencies[CODEX_NPM_NAME] = version
+        package_json["dependencies"] = dependencies
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)

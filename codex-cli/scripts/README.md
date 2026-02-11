@@ -11,8 +11,7 @@ example, to stage the CLI, responses proxy, and SDK packages for version `0.6.0`
   --package codex-sdk
 ```
 
-This downloads the native artifacts once, hydrates `vendor/` for packages that ship native
-binaries, and writes
+This downloads the native artifacts once, hydrates `vendor/` for each package, and writes
 tarballs to `dist/npm/`.
 
 When `--package codex` is provided, the staging helper builds the lightweight
