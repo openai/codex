@@ -1720,14 +1720,36 @@ async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window
         .await
         .unwrap();
 
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ContextCompacted(_))
-    })
-    .await;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let mut saw_context_compacted = false;
+    let mut started_turn_ids = Vec::new();
+    let completed_turn_id = loop {
+        let event = test.codex.next_event().await.unwrap();
+        match event.msg {
+            EventMsg::ContextCompacted(_) => {
+                saw_context_compacted = true;
+            }
+            EventMsg::TurnStarted(_) if !event.id.starts_with("auto-compact-") => {
+                started_turn_ids.push(event.id.clone());
+            }
+            EventMsg::TurnComplete(_) if !event.id.starts_with("auto-compact-") => {
+                break event.id;
+            }
+            _ => {}
+        }
+    };
+    assert!(
+        saw_context_compacted,
+        "expected context compaction before the follow-up turn completed"
+    );
+    assert_eq!(
+        started_turn_ids.len(),
+        1,
+        "expected exactly one TurnStarted for the follow-up turn"
+    );
+    assert_eq!(
+        started_turn_ids[0], completed_turn_id,
+        "expected TurnStarted and TurnComplete to use the same follow-up turn id"
+    );
 
     let mut compact_requests = compact_mock_1.requests();
     compact_requests.extend(compact_mock_2.requests());
@@ -1903,14 +1925,36 @@ async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_c
         .await
         .unwrap();
 
-    wait_for_event(&resumed.codex, |event| {
-        matches!(event, EventMsg::ContextCompacted(_))
-    })
-    .await;
-    wait_for_event(&resumed.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let mut saw_context_compacted = false;
+    let mut started_turn_ids = Vec::new();
+    let completed_turn_id = loop {
+        let event = resumed.codex.next_event().await.unwrap();
+        match event.msg {
+            EventMsg::ContextCompacted(_) => {
+                saw_context_compacted = true;
+            }
+            EventMsg::TurnStarted(_) if !event.id.starts_with("auto-compact-") => {
+                started_turn_ids.push(event.id.clone());
+            }
+            EventMsg::TurnComplete(_) if !event.id.starts_with("auto-compact-") => {
+                break event.id;
+            }
+            _ => {}
+        }
+    };
+    assert!(
+        saw_context_compacted,
+        "expected context compaction before the resumed follow-up turn completed"
+    );
+    assert_eq!(
+        started_turn_ids.len(),
+        1,
+        "expected exactly one TurnStarted for the resumed follow-up turn"
+    );
+    assert_eq!(
+        started_turn_ids[0], completed_turn_id,
+        "expected TurnStarted and TurnComplete to use the same resumed follow-up turn id"
+    );
 
     let mut compact_requests = compact_mock_1.requests();
     compact_requests.extend(compact_mock_2.requests());
