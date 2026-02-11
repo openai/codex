@@ -74,8 +74,14 @@ async fn run_linux_sandbox_direct(
     env: HashMap<String, String>,
     timeout_ms: u64,
 ) -> Output {
-    let cwd = std::env::current_dir().expect("cwd should exist");
-    let policy_json = serde_json::to_string(sandbox_policy).expect("policy should serialize");
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => panic!("cwd should exist: {err}"),
+    };
+    let policy_json = match serde_json::to_string(sandbox_policy) {
+        Ok(policy_json) => policy_json,
+        Err(err) => panic!("policy should serialize: {err}"),
+    };
 
     let mut args = vec![
         "--sandbox-policy-cwd".to_string(),
@@ -98,10 +104,14 @@ async fn run_linux_sandbox_direct(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output())
-        .await
-        .expect("sandbox command should not time out")
-        .expect("sandbox command should execute")
+    let output = match tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output()).await {
+        Ok(output) => output,
+        Err(err) => panic!("sandbox command should not time out: {err}"),
+    };
+    match output {
+        Ok(output) => output,
+        Err(err) => panic!("sandbox command should execute: {err}"),
+    }
 }
 
 #[tokio::test]
