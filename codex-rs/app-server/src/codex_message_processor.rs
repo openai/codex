@@ -5374,7 +5374,12 @@ impl CodexMessageProcessor {
         let subscription_id = Uuid::new_v4();
         let thread_state = self
             .thread_state_manager
-            .set_listener(subscription_id, conversation_id, connection_id)
+            .set_listener(
+                subscription_id,
+                conversation_id,
+                connection_id,
+                raw_events_enabled,
+            )
             .await;
         self.start_conversation_listener(
             conversation_id,
@@ -5406,7 +5411,7 @@ impl CodexMessageProcessor {
         };
         let thread_state = self
             .thread_state_manager
-            .ensure_connection_subscribed(conversation_id, connection_id)
+            .ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
             .await;
         self.start_conversation_listener(
             conversation_id,
@@ -5424,7 +5429,7 @@ impl CodexMessageProcessor {
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
-        raw_events_enabled: bool,
+        _raw_events_enabled: bool,
         api_version: ApiVersion,
     ) {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
@@ -5453,10 +5458,6 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
-                            continue;
-                        }
-
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should
                         // be migrated to be variants of `ServerNotification`
@@ -5481,21 +5482,28 @@ impl CodexMessageProcessor {
                             "conversationId".to_string(),
                             conversation_id.to_string().into(),
                         );
-                        let subscribed_connection_ids =
-                            thread_state.lock().await.subscribed_connection_ids();
-                        if subscribed_connection_ids.is_empty() {
+                        let (subscribed_connection_ids, raw_events_enabled) = {
+                            let thread_state = thread_state.lock().await;
+                            (
+                                thread_state.subscribed_connection_ids(),
+                                thread_state.experimental_raw_events,
+                            )
+                        };
+                        if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
                             continue;
                         }
 
-                        outgoing_for_task
-                            .send_notification_to_connections(
-                                &subscribed_connection_ids,
-                                OutgoingNotification {
-                                    method: format!("codex/event/{event_formatted}"),
-                                    params: Some(params.into()),
-                                },
-                            )
-                            .await;
+                        if !subscribed_connection_ids.is_empty() {
+                            outgoing_for_task
+                                .send_notification_to_connections(
+                                    &subscribed_connection_ids,
+                                    OutgoingNotification {
+                                        method: format!("codex/event/{event_formatted}"),
+                                        params: Some(params.into()),
+                                    },
+                                )
+                                .await;
+                        }
 
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
                             outgoing_for_task.clone(),
@@ -6404,10 +6412,10 @@ mod tests {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
         manager
-            .set_listener(listener_a, thread_id, connection_a)
+            .set_listener(listener_a, thread_id, connection_a, false)
             .await;
         manager
-            .set_listener(listener_b, thread_id, connection_b)
+            .set_listener(listener_b, thread_id, connection_b, false)
             .await;
         {
             let state = manager.thread_state(thread_id);
@@ -6422,6 +6430,53 @@ mod tests {
         );
         assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
         assert_eq!(cancel_rx.await, Ok(()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removing_listener_unsubscribes_its_connection() -> Result<()> {
+        let mut manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let listener_a = Uuid::new_v4();
+        let listener_b = Uuid::new_v4();
+        let connection_a = ConnectionId(1);
+        let connection_b = ConnectionId(2);
+
+        manager
+            .set_listener(listener_a, thread_id, connection_a, false)
+            .await;
+        manager
+            .set_listener(listener_b, thread_id, connection_b, false)
+            .await;
+
+        assert_eq!(manager.remove_listener(listener_a).await, Some(thread_id));
+        let state = manager.thread_state(thread_id);
+        let subscribed_connection_ids = state.lock().await.subscribed_connection_ids();
+        assert_eq!(subscribed_connection_ids, vec![connection_b]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_listener_uses_last_write_for_raw_events() -> Result<()> {
+        let mut manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let listener_a = Uuid::new_v4();
+        let listener_b = Uuid::new_v4();
+        let connection_a = ConnectionId(1);
+        let connection_b = ConnectionId(2);
+
+        manager
+            .set_listener(listener_a, thread_id, connection_a, true)
+            .await;
+        {
+            let state = manager.thread_state(thread_id);
+            assert!(state.lock().await.experimental_raw_events);
+        }
+        manager
+            .set_listener(listener_b, thread_id, connection_b, false)
+            .await;
+        let state = manager.thread_state(thread_id);
+        assert!(!state.lock().await.experimental_raw_events);
         Ok(())
     }
 }

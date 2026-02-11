@@ -29,6 +29,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
+    pub(crate) experimental_raw_events: bool,
     listener_thread: Option<Weak<CodexThread>>,
     subscribed_connections: HashSet<ConnectionId>,
 }
@@ -70,12 +71,22 @@ impl ThreadState {
     pub(crate) fn subscribed_connection_ids(&self) -> Vec<ConnectionId> {
         self.subscribed_connections.iter().copied().collect()
     }
+
+    pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
+        self.experimental_raw_events = enabled;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SubscriptionState {
+    thread_id: ThreadId,
+    connection_id: ConnectionId,
 }
 
 #[derive(Default)]
 pub(crate) struct ThreadStateManager {
     thread_states: HashMap<ThreadId, Arc<Mutex<ThreadState>>>,
-    thread_id_by_subscription: HashMap<Uuid, ThreadId>,
+    subscription_state_by_id: HashMap<Uuid, SubscriptionState>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
 
@@ -92,14 +103,43 @@ impl ThreadStateManager {
     }
 
     pub(crate) async fn remove_listener(&mut self, subscription_id: Uuid) -> Option<ThreadId> {
-        let thread_id = self.thread_id_by_subscription.remove(&subscription_id)?;
+        let subscription_state = self.subscription_state_by_id.remove(&subscription_id)?;
+        let thread_id = subscription_state.thread_id;
+
+        let connection_still_subscribed_to_thread =
+            self.subscription_state_by_id.values().any(|state| {
+                state.thread_id == thread_id
+                    && state.connection_id == subscription_state.connection_id
+            });
+        if !connection_still_subscribed_to_thread {
+            let mut remove_connection_entry = false;
+            if let Some(thread_ids) = self
+                .thread_ids_by_connection
+                .get_mut(&subscription_state.connection_id)
+            {
+                thread_ids.remove(&thread_id);
+                remove_connection_entry = thread_ids.is_empty();
+            }
+            if remove_connection_entry {
+                self.thread_ids_by_connection
+                    .remove(&subscription_state.connection_id);
+            }
+            if let Some(thread_state) = self.thread_states.get(&thread_id) {
+                thread_state
+                    .lock()
+                    .await
+                    .remove_connection(subscription_state.connection_id);
+            }
+        }
+
+        let has_remaining_subscriptions = self
+            .subscription_state_by_id
+            .values()
+            .any(|state| state.thread_id == thread_id);
         if let Some(thread_state) = self.thread_states.get(&thread_id) {
-            let has_remaining_subscriptions = self
-                .thread_id_by_subscription
-                .values()
-                .any(|existing_thread_id| *existing_thread_id == thread_id);
+            let mut thread_state = thread_state.lock().await;
             if !has_remaining_subscriptions {
-                thread_state.lock().await.clear_listener();
+                thread_state.clear_listener();
             }
         }
         Some(thread_id)
@@ -109,8 +149,8 @@ impl ThreadStateManager {
         if let Some(thread_state) = self.thread_states.remove(&thread_id) {
             thread_state.lock().await.clear_listener();
         }
-        self.thread_id_by_subscription
-            .retain(|_, existing_thread_id| *existing_thread_id != thread_id);
+        self.subscription_state_by_id
+            .retain(|_, state| state.thread_id != thread_id);
         self.thread_ids_by_connection.retain(|_, thread_ids| {
             thread_ids.remove(&thread_id);
             !thread_ids.is_empty()
@@ -122,15 +162,25 @@ impl ThreadStateManager {
         subscription_id: Uuid,
         thread_id: ThreadId,
         connection_id: ConnectionId,
+        experimental_raw_events: bool,
     ) -> Arc<Mutex<ThreadState>> {
-        self.thread_id_by_subscription
-            .insert(subscription_id, thread_id);
+        self.subscription_state_by_id.insert(
+            subscription_id,
+            SubscriptionState {
+                thread_id,
+                connection_id,
+            },
+        );
         self.thread_ids_by_connection
             .entry(connection_id)
             .or_default()
             .insert(thread_id);
         let thread_state = self.thread_state(thread_id);
-        thread_state.lock().await.add_connection(connection_id);
+        {
+            let mut thread_state_guard = thread_state.lock().await;
+            thread_state_guard.add_connection(connection_id);
+            thread_state_guard.set_experimental_raw_events(experimental_raw_events);
+        }
         thread_state
     }
 
@@ -138,13 +188,20 @@ impl ThreadStateManager {
         &mut self,
         thread_id: ThreadId,
         connection_id: ConnectionId,
+        experimental_raw_events: bool,
     ) -> Arc<Mutex<ThreadState>> {
         self.thread_ids_by_connection
             .entry(connection_id)
             .or_default()
             .insert(thread_id);
         let thread_state = self.thread_state(thread_id);
-        thread_state.lock().await.add_connection(connection_id);
+        {
+            let mut thread_state_guard = thread_state.lock().await;
+            thread_state_guard.add_connection(connection_id);
+            if experimental_raw_events {
+                thread_state_guard.set_experimental_raw_events(true);
+            }
+        }
         thread_state
     }
 
