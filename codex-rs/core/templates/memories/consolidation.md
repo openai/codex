@@ -6,7 +6,7 @@ Integrate Phase 1 artifacts into a stable, retrieval-friendly memory hierarchy w
 
 Primary inputs in this directory:
 - `rollout_summaries/` (per-thread summaries from Phase 1)
-- `raw_memories.md` (merged Stage 1 raw memories; latest first)
+- `raw_memories.yaml` (array of Stage 1 raw memories with `file_path` and `raw_memory`)
 - Existing outputs if present:
   - `MEMORY.md`
   - `memory_summary.md`
@@ -40,7 +40,7 @@ Expected outputs (create/update only these):
 
 Workflow (order matters):
 1. Determine mode (`INIT` vs `INCREMENTAL`) from artifact availability/content.
-2. Read `rollout_summaries/` first for routing, then validate details in `raw_memories.md`.
+2. Read `rollout_summaries/` first for routing, then validate details in `raw_memories.yaml`.
 3. Read existing `MEMORY.md`, `memory_summary.md`, and `skills/` for continuity.
 4. Update `skills/` only for reliable, repeatable procedures with clear verification.
 5. Update `MEMORY.md` as the durable registry; add clear related-skill pointers in note bodies when useful.

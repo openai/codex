@@ -17,6 +17,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
+use serde::Deserialize;
 use tempfile::tempdir;
 
 #[test]
@@ -195,6 +196,19 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     let raw_memories = tokio::fs::read_to_string(raw_memories_file(&root))
         .await
         .expect("read raw memories");
-    assert!(raw_memories.contains("raw memory"));
-    assert!(raw_memories.contains(&keep_id));
+    let parsed: Vec<RawMemoryYamlEntry> =
+        serde_yaml::from_str(&raw_memories).expect("parse raw memories yaml");
+    assert_eq!(
+        parsed,
+        vec![RawMemoryYamlEntry {
+            file_path: keep_path.display().to_string(),
+            raw_memory: "raw memory".to_string(),
+        }]
+    );
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+struct RawMemoryYamlEntry {
+    file_path: String,
+    raw_memory: String,
 }

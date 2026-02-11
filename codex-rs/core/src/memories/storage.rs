@@ -1,4 +1,5 @@
 use codex_state::Stage1Output;
+use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -10,7 +11,7 @@ use super::raw_memories_file;
 use super::rollout_summaries_dir;
 use super::text::compact_whitespace;
 
-/// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
+/// Rebuild `raw_memories.yaml` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
@@ -62,33 +63,28 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 }
 
 async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
-    let retained = memories
+    let entries = memories
         .iter()
         .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
-        .collect::<Vec<_>>();
-    let mut body = String::from("# Raw Memories\n\n");
-
-    if retained.is_empty() {
-        body.push_str("No raw memories yet.\n");
-        return tokio::fs::write(raw_memories_file(root), body).await;
-    }
-
-    body.push_str("Merged stage-1 raw memories (latest first):\n\n");
-    for memory in retained {
-        writeln!(body, "## Thread `{}`", memory.thread_id)
-            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
-        writeln!(
-            body,
-            "updated_at: {}",
-            memory.source_updated_at.to_rfc3339()
-        )
-        .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
-        writeln!(body)
-            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
-        body.push_str(memory.raw_memory.trim());
-        body.push_str("\n\n");
-    }
-
+        .map(|memory| -> std::io::Result<RawMemoryYamlEntry> {
+            let file_path = rollout_summaries_dir(root).join(format!("{}.md", memory.thread_id));
+            let file_path = if file_path.is_absolute() {
+                file_path
+            } else {
+                std::env::current_dir()
+                    .map_err(|err| {
+                        std::io::Error::other(format!("resolve raw memory path: {err}"))
+                    })?
+                    .join(file_path)
+            };
+            Ok(RawMemoryYamlEntry {
+                file_path: file_path.display().to_string(),
+                raw_memory: memory.raw_memory.clone(),
+            })
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let body = serde_yaml::to_string(&entries)
+        .map_err(|err| std::io::Error::other(format!("serialize raw memories yaml: {err}")))?;
     tokio::fs::write(raw_memories_file(root), body).await
 }
 
@@ -148,4 +144,10 @@ async fn write_rollout_summary_for_thread(
 fn extract_thread_id_from_rollout_summary_filename(file_name: &str) -> Option<&str> {
     let stem = file_name.strip_suffix(".md")?;
     if stem.is_empty() { None } else { Some(stem) }
+}
+
+#[derive(Serialize)]
+struct RawMemoryYamlEntry {
+    file_path: String,
+    raw_memory: String,
 }
