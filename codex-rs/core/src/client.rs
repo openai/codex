@@ -155,8 +155,8 @@ pub struct ModelClient {
 /// The session establishes a Responses WebSocket connection lazily and reuses it across multiple
 /// requests within the turn. It also caches per-turn state:
 ///
-/// - The last request's input items, so subsequent calls can use `response.append` when the input
-///   is an incremental extension of the previous request.
+/// - The last full request, so subsequent calls can use `response.append` only when the current
+///   request is an incremental extension of the previous one.
 /// - The `x-codex-turn-state` sticky-routing token, which must be replayed for all requests within
 ///   the same turn.
 ///
@@ -166,7 +166,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
+    websocket_last_request: Option<ResponsesApiRequest>,
     websocket_last_response_id: Option<String>,
     websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
     /// Turn state for sticky routing.
@@ -230,7 +230,7 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             connection: None,
-            websocket_last_items: Vec::new(),
+            websocket_last_request: None,
             websocket_last_response_id: None,
             websocket_last_response_id_rx: None,
             turn_state: Arc::new(OnceLock::new()),
@@ -530,16 +530,25 @@ impl ModelClientSession {
         }
     }
 
-    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build
-        // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
-        if can_append {
-            Some(input_items[previous_len..].to_vec())
+    fn get_incremental_items(&self, request: &ResponsesApiRequest) -> Option<Vec<ResponseItem>> {
+        // Checks whether the current request is an incremental append to the previous request.
+        // We only append when non-input request fields are unchanged and `input` is a strict
+        // extension of the previous input.
+        let previous_request = self.websocket_last_request.as_ref()?;
+        let mut previous_without_input = previous_request.clone();
+        previous_without_input.input.clear();
+        let mut request_without_input = request.clone();
+        request_without_input.input.clear();
+        if previous_without_input != request_without_input {
+            return None;
+        }
+
+        let previous_len = previous_request.input.len();
+        if previous_len > 0
+            && request.input.starts_with(&previous_request.input)
+            && previous_len < request.input.len()
+        {
+            Some(request.input[previous_len..].to_vec())
         } else {
             None
         }
@@ -571,10 +580,10 @@ impl ModelClientSession {
     fn prepare_websocket_request(
         &mut self,
         payload: ResponseCreateWsRequest,
-    ) -> (ResponsesWsRequest, Vec<ResponseItem>) {
-        let full_input = payload.input.clone();
+        request: &ResponsesApiRequest,
+    ) -> ResponsesWsRequest {
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
-        let incremental_items = self.get_incremental_items(&full_input);
+        let incremental_items = self.get_incremental_items(request);
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled
                 && let Some(previous_response_id) = self.websocket_previous_response_id()
@@ -584,20 +593,17 @@ impl ModelClientSession {
                     input: append_items,
                     ..payload
                 };
-                return (ResponsesWsRequest::ResponseCreate(payload), full_input);
+                return ResponsesWsRequest::ResponseCreate(payload);
             }
 
             if !responses_websockets_v2_enabled {
-                return (
-                    ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                        input: append_items,
-                    }),
-                    full_input,
-                );
+                return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+                    input: append_items,
+                });
             }
         }
 
-        (ResponsesWsRequest::ResponseCreate(payload), full_input)
+        ResponsesWsRequest::ResponseCreate(payload)
     }
 
     /// Opportunistically warms a websocket for this turn-scoped client session.
@@ -650,7 +656,7 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.websocket_last_items.clear();
+            self.websocket_last_request = None;
             self.websocket_last_response_id = None;
             self.websocket_last_response_id_rx = None;
             let turn_state = options
@@ -806,7 +812,7 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let (request, request_input) = self.prepare_websocket_request(ws_payload);
+            let ws_request = self.prepare_websocket_request(ws_payload, &request);
 
             let stream_result = self
                 .connection
@@ -816,10 +822,10 @@ impl ModelClientSession {
                         "websocket connection is unavailable".to_string(),
                     ))
                 })?
-                .stream_request(request)
+                .stream_request(ws_request)
                 .await
                 .map_err(map_api_error)?;
-            self.websocket_last_items = request_input;
+            self.websocket_last_request = Some(request);
             let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
             self.websocket_last_response_id_rx = Some(last_response_id_receiver);
             let mut last_response_id_sender = Some(last_response_id_sender);
@@ -928,7 +934,7 @@ impl ModelClientSession {
             );
 
             self.connection = None;
-            self.websocket_last_items.clear();
+            self.websocket_last_request = None;
         }
         activated
     }
@@ -1108,5 +1114,105 @@ impl WebsocketTelemetry for ApiTelemetry {
         duration: Duration,
     ) {
         self.otel_manager.record_websocket_event(result, duration);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelClient;
+    use codex_otel::OtelManager;
+    use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ModelInfo;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn test_model_client(session_source: SessionSource) -> ModelClient {
+        let provider = crate::model_provider_info::create_oss_provider_with_base_url(
+            "https://example.com/v1",
+            crate::model_provider_info::WireApi::Responses,
+        );
+        ModelClient::new(
+            None,
+            ThreadId::new(),
+            provider,
+            session_source,
+            None,
+            false,
+            false,
+            false,
+            false,
+            None,
+        )
+    }
+
+    fn test_model_info() -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": "gpt-test",
+            "display_name": "gpt-test",
+            "description": "desc",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "medium", "description": "medium"}
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "base_instructions": "base instructions",
+            "model_messages": null,
+            "supports_reasoning_summaries": false,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10000},
+            "supports_parallel_tool_calls": false,
+            "context_window": 272000,
+            "auto_compact_token_limit": null,
+            "experimental_supported_tools": []
+        }))
+        .expect("deserialize test model info")
+    }
+
+    fn test_otel_manager() -> OtelManager {
+        OtelManager::new(
+            ThreadId::new(),
+            "gpt-test",
+            "gpt-test",
+            None,
+            None,
+            None,
+            "test-originator".to_string(),
+            false,
+            "test-terminal".to_string(),
+            SessionSource::Cli,
+        )
+    }
+
+    #[test]
+    fn build_subagent_headers_sets_other_subagent_label() {
+        let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
+            "memory_consolidation".to_string(),
+        )));
+        let headers = client.build_subagent_headers();
+        let value = headers
+            .get("x-openai-subagent")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(value, Some("memory_consolidation"));
+    }
+
+    #[tokio::test]
+    async fn summarize_memories_returns_empty_for_empty_input() {
+        let client = test_model_client(SessionSource::Cli);
+        let model_info = test_model_info();
+        let otel_manager = test_otel_manager();
+
+        let output = client
+            .summarize_memories(Vec::new(), &model_info, None, &otel_manager)
+            .await
+            .expect("empty summarize request should succeed");
+        assert_eq!(output.len(), 0);
     }
 }

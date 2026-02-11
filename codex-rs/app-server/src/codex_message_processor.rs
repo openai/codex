@@ -201,7 +201,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::open_if_present;
+use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -2026,11 +2026,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = open_if_present(
-            &self.config.codex_home,
-            self.config.model_provider_id.as_str(),
-        )
-        .await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -3073,17 +3069,13 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = open_if_present(
-            &self.config.codex_home,
-            self.config.model_provider_id.as_str(),
-        )
-        .await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
                 RolloutRecorder::list_archived_threads(
-                    &self.config.codex_home,
+                    &self.config,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -3099,7 +3091,7 @@ impl CodexMessageProcessor {
                 })?
             } else {
                 RolloutRecorder::list_threads(
-                    &self.config.codex_home,
+                    &self.config,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -4156,11 +4148,7 @@ impl CodexMessageProcessor {
         }
 
         if state_db_ctx.is_none() {
-            state_db_ctx = open_if_present(
-                &self.config.codex_home,
-                self.config.model_provider_id.as_str(),
-            )
-            .await;
+            state_db_ctx = get_state_db(&self.config, None).await;
         }
 
         // Move the rollout file to archived.
@@ -5585,8 +5573,7 @@ async fn read_history_cwd_from_state_db(
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) =
-        open_if_present(&config.codex_home, config.model_provider_id.as_str()).await
+    if let Some(state_db_ctx) = get_state_db(config, None).await
         && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -5607,7 +5594,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = open_if_present(&config.codex_home, config.model_provider_id.as_str()).await;
+    let state_db_ctx = get_state_db(config, None).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 

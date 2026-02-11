@@ -2,6 +2,9 @@ use askama::Template;
 use std::path::Path;
 use tracing::warn;
 
+use super::text::prefix_at_char_boundary;
+use super::text::suffix_at_char_boundary;
+
 const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 1_000_000;
 
 #[derive(Template)]
@@ -20,7 +23,7 @@ struct StageOneInputTemplate<'a> {
 /// Builds the consolidation subagent prompt for a specific memory root.
 ///
 /// Falls back to a simple string replacement if Askama rendering fails.
-pub(crate) fn build_consolidation_prompt(memory_root: &Path) -> String {
+pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     let template = ConsolidationPromptTemplate {
         memory_root: &memory_root,
@@ -39,7 +42,7 @@ pub(crate) fn build_consolidation_prompt(memory_root: &Path) -> String {
 ///
 /// Large rollout payloads are truncated to a bounded byte budget while keeping
 /// both head and tail context.
-pub(crate) fn build_stage_one_input_message(rollout_path: &Path, rollout_contents: &str) -> String {
+pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_contents: &str) -> String {
     let (rollout_contents, truncated) = truncate_rollout_for_prompt(rollout_contents);
     if truncated {
         warn!(
@@ -80,35 +83,6 @@ fn truncate_rollout_for_prompt(input: &str) -> (String, bool) {
     let truncated = format!("{head}{marker}{tail}");
 
     (truncated, true)
-}
-
-fn prefix_at_char_boundary(input: &str, max_bytes: usize) -> &str {
-    if max_bytes >= input.len() {
-        return input;
-    }
-    let mut end = 0;
-    for (idx, _) in input.char_indices() {
-        if idx > max_bytes {
-            break;
-        }
-        end = idx;
-    }
-    &input[..end]
-}
-
-fn suffix_at_char_boundary(input: &str, max_bytes: usize) -> &str {
-    if max_bytes >= input.len() {
-        return input;
-    }
-    let start_limit = input.len().saturating_sub(max_bytes);
-    let mut start = input.len();
-    for (idx, _) in input.char_indices().rev() {
-        if idx < start_limit {
-            break;
-        }
-        start = idx;
-    }
-    &input[start..]
 }
 
 #[cfg(test)]

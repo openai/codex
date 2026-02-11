@@ -72,6 +72,8 @@ jobs:
     needs: metadata
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(needs.metadata.outputs.version, '-alpha') && 'thin' || 'fat' }}
     defaults:
       run:
         working-directory: codex-rs

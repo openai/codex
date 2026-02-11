@@ -315,64 +315,6 @@ pub async fn persist_dynamic_tools(
     }
 }
 
-/// Get memory summaries for a thread id using SQLite.
-pub async fn get_thread_memory(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    stage: &str,
-) -> Option<codex_state::ThreadMemory> {
-    let ctx = context?;
-    match ctx.get_thread_memory(thread_id).await {
-        Ok(memory) => memory,
-        Err(err) => {
-            warn!("state db get_thread_memory failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Upsert memory summaries for a thread id using SQLite.
-pub async fn upsert_thread_memory(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    raw_memory: &str,
-    memory_summary: &str,
-    stage: &str,
-) -> Option<codex_state::ThreadMemory> {
-    let ctx = context?;
-    match ctx
-        .upsert_thread_memory(thread_id, raw_memory, memory_summary)
-        .await
-    {
-        Ok(memory) => Some(memory),
-        Err(err) => {
-            warn!("state db upsert_thread_memory failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
-/// Get the last N memories corresponding to a cwd using an exact path match.
-pub async fn get_last_n_thread_memories_for_cwd(
-    context: Option<&codex_state::StateRuntime>,
-    cwd: &Path,
-    n: usize,
-    stage: &str,
-) -> Option<Vec<codex_state::ThreadMemory>> {
-    let ctx = context?;
-    let normalized_cwd = normalize_cwd_for_state_db(cwd);
-    match ctx
-        .get_last_n_thread_memories_for_cwd(&normalized_cwd, n)
-        .await
-    {
-        Ok(memories) => Some(memories),
-        Err(err) => {
-            warn!("state db get_last_n_thread_memories_for_cwd failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
 /// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
 pub async fn reconcile_rollout(
     context: Option<&codex_state::StateRuntime>,

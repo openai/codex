@@ -1,109 +1,79 @@
-mod phase_one;
+//! Memory subsystem for startup extraction and consolidation.
+//!
+//! The startup memory pipeline is split into two phases:
+//! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
+//! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
+
 mod prompts;
 mod rollout;
-mod selection;
+mod stage_one;
+mod startup;
 mod storage;
-mod types;
+mod text;
 
 #[cfg(test)]
 mod tests;
 
-use crate::path_utils::normalize_for_path_comparison;
-use sha2::Digest;
-use sha2::Sha256;
+use serde::Deserialize;
 use std::path::Path;
 use std::path::PathBuf;
 
 /// Subagent source label used to identify consolidation tasks.
-pub(crate) const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
-/// Maximum number of rollout candidates processed per startup pass.
-pub(crate) const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
-/// Concurrency cap for startup memory extraction and consolidation scheduling.
-pub(crate) const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
-/// Maximum number of recent raw memories retained per scope.
-pub(crate) const MAX_RAW_MEMORIES_PER_SCOPE: usize = 64;
-/// Maximum rollout age considered for phase-1 extraction.
-pub(crate) const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
-/// Lease duration (seconds) for phase-1 job ownership.
-pub(crate) const PHASE_ONE_JOB_LEASE_SECONDS: i64 = 3_600;
-/// Lease duration (seconds) for phase-2 consolidation job ownership.
-pub(crate) const PHASE_TWO_JOB_LEASE_SECONDS: i64 = 3_600;
-/// Heartbeat interval (seconds) for phase-2 running jobs.
-pub(crate) const PHASE_TWO_JOB_HEARTBEAT_SECONDS: u64 = 30;
-pub(crate) const MEMORY_SCOPE_KIND_CWD: &str = "cwd";
-pub(crate) const MEMORY_SCOPE_KIND_USER: &str = "user";
-pub(crate) const MEMORY_SCOPE_KEY_USER: &str = "user";
-
-const MEMORY_SUBDIR: &str = "memory";
-const RAW_MEMORIES_SUBDIR: &str = "raw_memories";
-const MEMORY_SUMMARY_FILENAME: &str = "memory_summary.md";
+const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
+const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
+const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
-const LEGACY_CONSOLIDATED_FILENAME: &str = "consolidated.md";
 const SKILLS_SUBDIR: &str = "skills";
-const CWD_MEMORY_BUCKET_HEX_LEN: usize = 16;
+/// Maximum number of rollout candidates processed per startup pass.
+const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
+/// Concurrency cap for startup memory extraction and consolidation scheduling.
+const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
+/// Maximum number of recent raw memories retained for global consolidation.
+const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 64;
+/// Maximum rollout age considered for phase-1 extraction.
+const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+/// Minimum rollout idle time required before phase-1 extraction.
+const PHASE_ONE_MIN_ROLLOUT_IDLE_HOURS: i64 = 12;
+/// Lease duration (seconds) for phase-1 job ownership.
+const PHASE_ONE_JOB_LEASE_SECONDS: i64 = 3_600;
+/// Backoff delay (seconds) before retrying a failed stage-1 extraction job.
+const PHASE_ONE_JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
+/// Lease duration (seconds) for phase-2 consolidation job ownership.
+const PHASE_TWO_JOB_LEASE_SECONDS: i64 = 3_600;
+/// Backoff delay (seconds) before retrying a failed phase-2 consolidation job.
+const PHASE_TWO_JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
+/// Heartbeat interval (seconds) for phase-2 running jobs.
+const PHASE_TWO_JOB_HEARTBEAT_SECONDS: u64 = 30;
 
-pub(crate) use phase_one::RAW_MEMORY_PROMPT;
-pub(crate) use phase_one::parse_stage_one_output;
-pub(crate) use phase_one::stage_one_output_schema;
-pub(crate) use prompts::build_consolidation_prompt;
-pub(crate) use prompts::build_stage_one_input_message;
-#[cfg(test)]
-pub(crate) use rollout::StageOneResponseItemKinds;
-pub(crate) use rollout::StageOneRolloutFilter;
-pub(crate) use rollout::serialize_filtered_rollout_response_items;
-pub(crate) use selection::select_rollout_candidates_from_db;
-pub(crate) use storage::prune_to_recent_memories_and_rebuild_summary;
-pub(crate) use storage::rebuild_memory_summary_from_memories;
-pub(crate) use storage::sync_raw_memories_from_memories;
-pub(crate) use storage::wipe_consolidation_outputs;
-pub(crate) use types::RolloutCandidate;
+/// Parsed stage-1 model output payload.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StageOneOutput {
+    /// Detailed markdown raw memory for a single rollout.
+    #[serde(rename = "raw_memory")]
+    raw_memory: String,
+    /// Compact summary line used for routing and indexing.
+    #[serde(rename = "rollout_summary")]
+    rollout_summary: String,
+}
 
-/// Returns the on-disk memory root directory for a given working directory.
+fn memory_root(codex_home: &Path) -> PathBuf {
+    codex_home.join("memories")
+}
+
+fn rollout_summaries_dir(root: &Path) -> PathBuf {
+    root.join(ROLLOUT_SUMMARIES_SUBDIR)
+}
+
+fn raw_memories_file(root: &Path) -> PathBuf {
+    root.join(RAW_MEMORIES_FILENAME)
+}
+
+async fn ensure_layout(root: &Path) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(rollout_summaries_dir(root)).await
+}
+
+/// Starts the memory startup pipeline for eligible root sessions.
 ///
-/// The cwd is normalized and hashed into a deterministic bucket under
-/// `<codex_home>/memories/<hash>/memory`.
-pub(crate) fn memory_root_for_cwd(codex_home: &Path, cwd: &Path) -> PathBuf {
-    let bucket = memory_bucket_for_cwd(cwd);
-    codex_home.join("memories").join(bucket).join(MEMORY_SUBDIR)
-}
-
-/// Returns the DB scope key for a cwd-scoped memory entry.
-///
-/// This uses the same normalization/fallback behavior as cwd bucket derivation.
-pub(crate) fn memory_scope_key_for_cwd(cwd: &Path) -> String {
-    normalize_cwd_for_memory(cwd).display().to_string()
-}
-
-/// Returns the on-disk user-shared memory root directory.
-pub(crate) fn memory_root_for_user(codex_home: &Path) -> PathBuf {
-    codex_home
-        .join("memories")
-        .join(MEMORY_SCOPE_KEY_USER)
-        .join(MEMORY_SUBDIR)
-}
-
-fn raw_memories_dir(root: &Path) -> PathBuf {
-    root.join(RAW_MEMORIES_SUBDIR)
-}
-
-fn memory_summary_file(root: &Path) -> PathBuf {
-    root.join(MEMORY_SUMMARY_FILENAME)
-}
-
-/// Ensures the phase-1 memory directory layout exists for the given root.
-pub(crate) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(raw_memories_dir(root)).await
-}
-
-fn memory_bucket_for_cwd(cwd: &Path) -> String {
-    let normalized = normalize_cwd_for_memory(cwd);
-    let normalized = normalized.to_string_lossy();
-    let mut hasher = Sha256::new();
-    hasher.update(normalized.as_bytes());
-    let full_hash = format!("{:x}", hasher.finalize());
-    full_hash[..CWD_MEMORY_BUCKET_HEX_LEN].to_string()
-}
-
-fn normalize_cwd_for_memory(cwd: &Path) -> PathBuf {
-    normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
-}
+/// This is the single entrypoint that `codex` uses to trigger memory startup.
+pub(crate) use startup::start_memories_startup_task;

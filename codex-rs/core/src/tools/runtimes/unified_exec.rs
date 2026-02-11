@@ -4,6 +4,7 @@ Runtime: unified exec
 Handles approval + sandbox orchestration for unified exec requests, delegating to
 the process manager to spawn PTYs once an ExecRequest is prepared.
 */
+use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
@@ -78,7 +79,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 
     fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
         vec![UnifiedExecApprovalKey {
-            command: req.command.clone(),
+            command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,

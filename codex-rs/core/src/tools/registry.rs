@@ -3,15 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
-use crate::exec::SandboxType;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::SandboxPolicy;
-use crate::safety::get_platform_sandbox;
+use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
@@ -250,23 +248,6 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
     }
-}
-
-fn sandbox_tag(policy: &SandboxPolicy, windows_sandbox_level: WindowsSandboxLevel) -> &'static str {
-    if matches!(policy, SandboxPolicy::DangerFullAccess) {
-        return "none";
-    }
-    if matches!(policy, SandboxPolicy::ExternalSandbox { .. }) {
-        return "external";
-    }
-    if cfg!(target_os = "windows") && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
-    {
-        return "windows_elevated";
-    }
-
-    get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
-        .map(SandboxType::as_metric_tag)
-        .unwrap_or("none")
 }
 
 fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
