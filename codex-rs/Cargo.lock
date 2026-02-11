@@ -8948,7 +8948,7 @@ dependencies = [
  "once_cell",
  "onig",
  "plist",
- "regex-syntax 0.8.8",
+ "regex-syntax 0.8.9",
  "serde",
  "serde_derive",
  "serde_json",
