@@ -2638,7 +2638,9 @@ impl CodexMessageProcessor {
 
     /// Best-effort: attach a listener for thread_id if missing.
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
-        if self.thread_state_manager.has_listener_for_thread(thread_id) {}
+        if self.thread_state_manager.has_listener_for_thread(thread_id) {
+            return;
+        }
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
@@ -2656,108 +2658,6 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         } = params;
-
-        if history.is_none()
-            && path.is_none()
-            && model.is_none()
-            && model_provider.is_none()
-            && cwd.is_none()
-            && approval_policy.is_none()
-            && sandbox.is_none()
-            && request_overrides.is_none()
-            && base_instructions.is_none()
-            && developer_instructions.is_none()
-            && personality.is_none()
-        {
-            let existing_thread_id = match ThreadId::from_string(&thread_id) {
-                Ok(id) => id,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
-            if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
-                let path = match find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &existing_thread_id.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("no rollout found for thread id {existing_thread_id}"),
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {existing_thread_id}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                };
-                if let Err(err) = self
-                    .ensure_conversation_listener(
-                        existing_thread_id,
-                        request_id.connection_id,
-                        false,
-                        ApiVersion::V2,
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "failed to attach listener for thread {}: {}",
-                        existing_thread_id,
-                        err.message
-                    );
-                }
-
-                let config_snapshot = existing_thread.config_snapshot().await;
-                let mut thread = build_thread_from_snapshot(
-                    existing_thread_id,
-                    &config_snapshot,
-                    Some(path.clone()),
-                );
-                match read_rollout_items_from_rollout(path.as_path()).await {
-                    Ok(items) => {
-                        thread.turns = build_turns_from_rollout_items(&items);
-                    }
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
-                                path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-
-                let response = ThreadResumeResponse {
-                    thread,
-                    model: config_snapshot.model,
-                    model_provider: config_snapshot.model_provider_id,
-                    cwd: config_snapshot.cwd,
-                    approval_policy: config_snapshot.approval_policy.into(),
-                    sandbox: config_snapshot.sandbox_policy.into(),
-                    reasoning_effort: config_snapshot.reasoning_effort,
-                };
-                self.outgoing.send_response(request_id, response).await;
-                return;
-            }
-        }
 
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
@@ -5570,6 +5470,9 @@ impl CodexMessageProcessor {
                         );
                         let subscribed_connection_ids =
                             thread_state.lock().await.subscribed_connection_ids();
+                        if subscribed_connection_ids.is_empty() {
+                            continue;
+                        }
 
                         outgoing_for_task
                             .send_notification_to_connections(
@@ -6474,15 +6377,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_one_listener_does_not_cancel_other_subscriptions_for_same_thread()
-    -> Result<()> {
+    async fn removing_any_listener_clears_active_listener_for_thread() -> Result<()> {
         let mut manager = ThreadStateManager::new();
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
         let connection_a = ConnectionId(1);
         let connection_b = ConnectionId(2);
-        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
 
         manager
             .set_listener(listener_a, thread_id, connection_a)
@@ -6496,14 +6398,8 @@ mod tests {
         }
 
         assert_eq!(manager.remove_listener(listener_a).await, Some(thread_id));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
-                .await
-                .is_err()
-        );
-
-        assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
         assert_eq!(cancel_rx.await, Ok(()));
+        assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
         Ok(())
     }
 }
