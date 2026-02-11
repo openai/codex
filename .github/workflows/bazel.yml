@@ -65,26 +65,6 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
-      - name: Ensure rust-objcopy is available (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          if command -v rust-objcopy >/dev/null; then
-            exit 0
-          fi
-
-          rustup component add llvm-tools-preview
-          host="$(rustc -vV | sed -n 's/^host: //p')"
-          toolchain="$(rustup show active-toolchain | awk '{print $1}')"
-          rust_objcopy="$HOME/.rustup/toolchains/$toolchain/lib/rustlib/$host/bin/rust-objcopy"
-
-          if [[ ! -x "$rust_objcopy" ]]; then
-            echo "rust-objcopy not found at $rust_objcopy"
-            exit 1
-          fi
-
-          cp "$rust_objcopy" /usr/local/bin/rust-objcopy
-
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
       # uploading at the end of the build, which takes over a minute!
