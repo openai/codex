@@ -18,10 +18,8 @@ common:linux --config=remote
 common:linux --strategy=remote
 common:linux --platforms=//:rbe
 
-# On mac, remote execution runs build scripts on Linux executors, which breaks
-# macOS-specific bindgen users (e.g., coreaudio-sys). Keep remote config but
-# run build actions locally.
-common:macos --config=remote
+# On mac, some crates (e.g., coreaudio-sys) require macOS-native build scripts,
+# so keep both build and test actions local.
 common:macos --strategy=local
 common:macos --strategy=TestRunner=darwin-sandbox,local
 
