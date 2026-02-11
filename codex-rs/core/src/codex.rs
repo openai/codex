@@ -17,6 +17,8 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::compact;
+use crate::compact::AutoCompactCallsite;
+use crate::compact::TurnContextReinjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -123,6 +125,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::estimate_item_token_count;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -2166,11 +2169,11 @@ impl Session {
                         history.replace(replacement.clone());
                     } else {
                         let user_messages = collect_user_messages(history.raw_items());
-                        let rebuilt = compact::build_compacted_history(
-                            self.build_initial_context(turn_context).await,
+                        let mut rebuilt = self.build_initial_context(turn_context).await;
+                        rebuilt.extend(compact::build_compacted_history(
                             &user_messages,
                             &compacted.message,
-                        );
+                        ));
                         history.replace(rebuilt);
                     }
                 }
@@ -2187,9 +2190,14 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         compacted_history: Vec<ResponseItem>,
+        turn_context_reinjection: TurnContextReinjection,
     ) -> Vec<ResponseItem> {
         let initial_context = self.build_initial_context(turn_context).await;
-        compact::process_compacted_history(compacted_history, &initial_context)
+        compact::process_compacted_history(
+            compacted_history,
+            &initial_context,
+            turn_context_reinjection,
+        )
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -2237,6 +2245,11 @@ impl Session {
         self.record_conversation_items(turn_context, &initial_context)
             .await;
         self.flush_rollout().await;
+    }
+
+    pub(crate) async fn mark_initial_context_unseeded_for_next_turn(&self) {
+        let mut state = self.state.lock().await;
+        state.initial_context_seeded = false;
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -2294,14 +2307,6 @@ impl Session {
             items.push(
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
-        }
-        // Add developer instructions for memories.
-        if let Some(memory_prompt) =
-            memories::build_memory_tool_developer_instructions(&turn_context.config.codex_home)
-                .await
-            && turn_context.features.enabled(Feature::MemoryTool)
-        {
-            items.push(DeveloperInstructions::new(memory_prompt).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -3122,19 +3127,29 @@ mod handlers {
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
             let resumed_model = sess.take_pending_resume_previous_model().await;
-            let update_items = sess.build_settings_update_items(
+            let pre_turn_context_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
                 resumed_model.as_deref(),
                 &current_context,
             );
-            if !update_items.is_empty() {
-                sess.record_conversation_items(&current_context, &update_items)
+            let has_user_input = !items.is_empty();
+            if !has_user_input && !pre_turn_context_items.is_empty() {
+                // Empty-input UserTurn still needs these model-visible updates persisted now.
+                // Otherwise `previous_context` advances and the next non-empty turn computes no diff.
+                sess.record_conversation_items(&current_context, &pre_turn_context_items)
                     .await;
             }
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
-            let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
+            let regular_task = if has_user_input {
+                sess.take_startup_regular_task()
+                    .await
+                    .unwrap_or_default()
+                    .with_pre_turn_context_items(pre_turn_context_items)
+            } else {
+                sess.take_startup_regular_task().await.unwrap_or_default()
+            };
             sess.spawn_task(Arc::clone(&current_context), items, regular_task)
                 .await;
             *previous_context = Some(current_context);
@@ -3861,6 +3876,7 @@ pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    pre_turn_context_items: Vec<ResponseItem>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
@@ -3870,7 +3886,9 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
+    let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+    let mut incoming_turn_items = pre_turn_context_items.clone();
+    incoming_turn_items.push(response_item.clone());
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
@@ -3878,11 +3896,34 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit
-        && run_auto_compact(&sess, &turn_context).await.is_err()
+    let pre_turn_compaction_outcome = match run_pre_turn_auto_compaction_if_needed(
+        &sess,
+        &turn_context,
+        auto_compact_limit,
+        &incoming_turn_items,
+    )
+    .await
     {
-        return None;
-    }
+        Ok(outcome) => outcome,
+        Err(CodexErr::ContextWindowExceeded) => {
+            let incoming_items_tokens_estimate = incoming_turn_items
+                .iter()
+                .map(estimate_item_token_count)
+                .fold(0_i64, i64::saturating_add);
+            let message = format!(
+                "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
+            );
+            let event =
+                EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)));
+            sess.send_event(&turn_context, event).await;
+            return None;
+        }
+        Err(err) => {
+            let event = EventMsg::Error(err.to_error_event(None));
+            sess.send_event(&turn_context, event).await;
+            return None;
+        }
+    };
 
     let skills_outcome = Some(
         sess.services
@@ -3954,10 +3995,15 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
+    persist_pre_turn_items_for_compaction_outcome(
+        &sess,
+        &turn_context,
+        pre_turn_compaction_outcome,
+        &pre_turn_context_items,
+        &input,
+        response_item,
+    )
+    .await;
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -4059,7 +4105,19 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                    if let Err(err) = run_auto_compact(
+                        &sess,
+                        &turn_context,
+                        AutoCompactCallsite::MidTurnContinuation,
+                        TurnContextReinjection::ReinjectAboveLastRealUser,
+                        None,
+                    )
+                    .await
+                    {
+                        let event = EventMsg::Error(
+                            err.to_error_event(Some("Error running auto compact task".to_string())),
+                        );
+                        sess.send_event(&turn_context, event).await;
                         return None;
                     }
                     continue;
@@ -4119,13 +4177,158 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
-    } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreTurnCompactionOutcome {
+    /// Pre-turn input fits without compaction.
+    NotNeeded,
+    /// Pre-turn compaction succeeded with incoming turn context + user message included.
+    CompactedWithIncomingItems,
+    /// Pre-turn compaction succeeded without incoming turn items
+    /// (incoming user message should be appended after the compaction summary).
+    /// This compaction strategy is currently out of distribution for our compaction model,
+    /// but is planned to be trained on in the future.
+    #[cfg(test)]
+    CompactedWithoutIncomingItems,
+}
+
+async fn persist_pre_turn_items_for_compaction_outcome(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    outcome: PreTurnCompactionOutcome,
+    pre_turn_context_items: &[ResponseItem],
+    input: &[UserInput],
+    response_item: ResponseItem,
+) {
+    match outcome {
+        PreTurnCompactionOutcome::CompactedWithIncomingItems => {
+            // Incoming turn items were already part of pre-turn compaction input, and the
+            // user prompt is already persisted in history after compaction. Emit lifecycle events
+            // only so UI/consumers still observe a normal user turn item transition.
+            let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+            sess.emit_turn_item_started(turn_context.as_ref(), &turn_item)
+                .await;
+            sess.emit_turn_item_completed(turn_context.as_ref(), turn_item)
+                .await;
+            sess.ensure_rollout_materialized().await;
+        }
+        PreTurnCompactionOutcome::NotNeeded => {
+            if !pre_turn_context_items.is_empty() {
+                sess.record_conversation_items(turn_context, pre_turn_context_items)
+                    .await;
+            }
+            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
+                .await;
+        }
+        #[cfg(test)]
+        PreTurnCompactionOutcome::CompactedWithoutIncomingItems => {
+            // Reserved path for future models that compact pre-turn history without incoming turn
+            // items; reseed canonical initial context above the incoming user message.
+            let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+            if !initial_context.is_empty() {
+                sess.record_conversation_items(turn_context, &initial_context)
+                    .await;
+            }
+            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
+                .await;
+        }
     }
-    Ok(())
+}
+
+/// Runs pre-turn auto-compaction with incoming turn context + user message included.
+async fn run_pre_turn_auto_compaction_if_needed(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    auto_compact_limit: i64,
+    incoming_turn_items: &[ResponseItem],
+) -> CodexResult<PreTurnCompactionOutcome> {
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    let incoming_items_tokens_estimate = incoming_turn_items
+        .iter()
+        .map(estimate_item_token_count)
+        .fold(0_i64, i64::saturating_add);
+    if !is_projected_submission_over_auto_compact_limit(
+        total_usage_tokens,
+        incoming_items_tokens_estimate,
+        auto_compact_limit,
+    ) {
+        return Ok(PreTurnCompactionOutcome::NotNeeded);
+    }
+
+    let compact_result = run_auto_compact(
+        sess,
+        turn_context,
+        AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
+        TurnContextReinjection::ReinjectAboveLastRealUser,
+        Some(incoming_turn_items.to_vec()),
+    )
+    .await;
+
+    if let Err(err) = compact_result {
+        if matches!(err, CodexErr::ContextWindowExceeded) {
+            error!(
+                turn_id = %turn_context.sub_id,
+                auto_compact_callsite = ?AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
+                incoming_items_tokens_estimate,
+                auto_compact_limit,
+                reason = "pre-turn compaction exceeded context window",
+                "incoming user/context is too large for pre-turn auto-compaction flow"
+            );
+        }
+        return Err(err);
+    }
+
+    Ok(PreTurnCompactionOutcome::CompactedWithIncomingItems)
+}
+
+fn is_projected_submission_over_auto_compact_limit(
+    total_usage_tokens: i64,
+    incoming_user_tokens_estimate: i64,
+    auto_compact_limit: i64,
+) -> bool {
+    if auto_compact_limit == i64::MAX {
+        return false;
+    }
+
+    total_usage_tokens.saturating_add(incoming_user_tokens_estimate) >= auto_compact_limit
+}
+
+async fn run_auto_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    auto_compact_callsite: AutoCompactCallsite,
+    turn_context_reinjection: TurnContextReinjection,
+    incoming_items: Option<Vec<ResponseItem>>,
+) -> CodexResult<()> {
+    let result = if should_use_remote_compact_task(&turn_context.provider) {
+        run_inline_remote_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            auto_compact_callsite,
+            turn_context_reinjection,
+            incoming_items,
+        )
+        .await
+    } else {
+        run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            auto_compact_callsite,
+            turn_context_reinjection,
+            incoming_items,
+        )
+        .await
+    };
+
+    if let Err(err) = &result {
+        error!(
+            turn_id = %turn_context.sub_id,
+            auto_compact_callsite = ?auto_compact_callsite,
+            compact_error = %err,
+            "auto compaction failed"
+        );
+    }
+
+    result
 }
 
 fn filter_connectors_for_input(
@@ -4996,7 +5199,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
-                can_append: _,
+                ..
             } => {
                 if let Some(state) = plan_mode_state.as_mut() {
                     flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
@@ -5206,6 +5409,151 @@ mod tests {
             end_turn: None,
             phase: None,
         }
+    }
+
+    #[test]
+    fn pre_turn_projection_uses_incoming_user_tokens_for_compaction() {
+        assert!(is_projected_submission_over_auto_compact_limit(90, 15, 100));
+        assert!(!is_projected_submission_over_auto_compact_limit(90, 9, 100));
+    }
+
+    #[test]
+    fn pre_turn_projection_does_not_compact_with_unbounded_limit() {
+        assert!(!is_projected_submission_over_auto_compact_limit(
+            i64::MAX - 1,
+            100,
+            i64::MAX,
+        ));
+    }
+
+    #[test]
+    fn post_compaction_projection_triggers_error_when_still_over_limit() {
+        assert!(is_projected_submission_over_auto_compact_limit(95, 10, 100));
+        assert!(is_projected_submission_over_auto_compact_limit(
+            100, 10, 100
+        ));
+        assert!(!is_projected_submission_over_auto_compact_limit(
+            80, 10, 100
+        ));
+    }
+
+    #[tokio::test]
+    async fn reserved_compacted_without_incoming_items_records_initial_context_and_prompt() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+        let stale_pre_turn_context_items = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "stale context diff".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        persist_pre_turn_items_for_compaction_outcome(
+            &session,
+            &turn_context,
+            PreTurnCompactionOutcome::CompactedWithoutIncomingItems,
+            &stale_pre_turn_context_items,
+            &input,
+            response_item.clone(),
+        )
+        .await;
+
+        let mut expected = session.build_initial_context(turn_context.as_ref()).await;
+        expected.push(response_item);
+        let actual = session.clone_history().await.raw_items().to_vec();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn compacted_with_incoming_items_emits_lifecycle_without_history_writes() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+        let stale_pre_turn_context_items = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "stale context diff".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        persist_pre_turn_items_for_compaction_outcome(
+            &session,
+            &turn_context,
+            PreTurnCompactionOutcome::CompactedWithIncomingItems,
+            &stale_pre_turn_context_items,
+            &input,
+            response_item,
+        )
+        .await;
+
+        let actual = session.clone_history().await.raw_items().to_vec();
+        assert_eq!(actual, Vec::<ResponseItem>::new());
+    }
+
+    #[test]
+    fn estimate_user_input_token_count_is_positive_for_text_input() {
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_input_item = ResponseInputItem::from(input);
+        let response_item: ResponseItem = response_input_item.into();
+        let estimated_tokens = estimate_item_token_count(&response_item);
+        assert!(estimated_tokens > 0);
+    }
+
+    #[test]
+    fn estimate_user_input_token_count_ignores_skill_and_mention_payload_lengths() {
+        let short = vec![
+            UserInput::Skill {
+                name: "s".to_string(),
+                path: PathBuf::from("/s"),
+            },
+            UserInput::Mention {
+                name: "m".to_string(),
+                path: "app://m".to_string(),
+            },
+        ];
+        let long = vec![
+            UserInput::Skill {
+                name: "very-long-skill-name-that-should-not-affect-prompt-serialization"
+                    .to_string(),
+                path: PathBuf::from(
+                    "/very/long/skill/path/that/should/not/affect/prompt/serialization/SKILL.md",
+                ),
+            },
+            UserInput::Mention {
+                name: "very-long-mention-name-that-should-not-affect-prompt-serialization"
+                    .to_string(),
+                path: "app://very-long-connector-path-that-should-not-affect-prompt-serialization"
+                    .to_string(),
+            },
+        ];
+
+        let short_response_input_item = ResponseInputItem::from(short);
+        let long_response_input_item = ResponseInputItem::from(long);
+        let short_response_item: ResponseItem = short_response_input_item.into();
+        let long_response_item: ResponseItem = long_response_input_item.into();
+        let short_tokens = estimate_item_token_count(&short_response_item);
+        let long_tokens = estimate_item_token_count(&long_response_item);
+        assert_eq!(short_tokens, long_tokens);
     }
 
     fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -6969,8 +7317,8 @@ mod tests {
             .clone()
             .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages1 = collect_user_messages(&snapshot1);
-        let rebuilt1 =
-            compact::build_compacted_history(initial_context.clone(), &user_messages1, summary1);
+        let mut rebuilt1 = initial_context.clone();
+        rebuilt1.extend(compact::build_compacted_history(&user_messages1, summary1));
         live_history.replace(rebuilt1);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary1.to_string(),
@@ -7012,8 +7360,8 @@ mod tests {
             .clone()
             .for_prompt(&reconstruction_turn.model_info.input_modalities);
         let user_messages2 = collect_user_messages(&snapshot2);
-        let rebuilt2 =
-            compact::build_compacted_history(initial_context.clone(), &user_messages2, summary2);
+        let mut rebuilt2 = initial_context.clone();
+        rebuilt2.extend(compact::build_compacted_history(&user_messages2, summary2));
         live_history.replace(rebuilt2);
         rollout_items.push(RolloutItem::Compacted(CompactedItem {
             message: summary2.to_string(),
