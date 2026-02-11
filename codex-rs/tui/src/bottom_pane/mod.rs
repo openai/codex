@@ -761,6 +761,16 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    /// Returns whether Enter is currently allowed to submit from the composer.
+    ///
+    /// We require:
+    /// - no modal view on the bottom-pane stack,
+    /// - no active composer popup,
+    /// - composer input enabled.
+    pub(crate) fn composer_can_submit_enter(&self) -> bool {
+        self.no_modal_or_popup_active() && self.composer.input_enabled()
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }
