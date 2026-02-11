@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_config::Constrained;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -18,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
-use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;

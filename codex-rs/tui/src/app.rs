@@ -1158,7 +1158,7 @@ impl App {
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -2016,10 +2016,8 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
-                #[cfg(target_os = "windows")]
-                let policy_for_chat = policy.clone();
 
                 if let Err(err) = self.config.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
@@ -2028,7 +2026,16 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
-                if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
+                if !matches!(
+                    self.config.sandbox_policy.get(),
+                    codex_core::protocol::SandboxPolicy::ReadOnly { .. }
+                ) || WindowsSandboxLevel::from_config(&self.config)
+                    != WindowsSandboxLevel::Disabled
+                {
+                    self.config.forced_auto_mode_downgraded_on_windows = false;
+                }
+                let sandbox_policy_for_chat = self.config.sandbox_policy.get().clone();
+                if let Err(err) = self.chat_widget.set_sandbox_policy(sandbox_policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
@@ -3081,7 +3088,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3136,7 +3143,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3185,7 +3192,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3264,7 +3271,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3388,7 +3395,7 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
