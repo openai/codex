@@ -594,6 +594,7 @@ impl ModelClientSession {
         };
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
         if !responses_websockets_v2_enabled && !last_response.can_append {
+            trace!("incremental request failed, can't append");
             return ResponsesWsRequest::ResponseCreate(payload);
         }
         let incremental_items = self.get_incremental_items(request, Some(&last_response));
