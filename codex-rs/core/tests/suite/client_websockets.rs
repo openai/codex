@@ -1,5 +1,4 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
@@ -11,7 +10,6 @@ use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -979,10 +977,11 @@ async fn websocket_harness_with_options(
         config.features.enable(Feature::ResponsesWebsocketsV2);
     }
     let config = Arc::new(config);
-    let mut model_info = ModelsManager::construct_model_info_offline(MODEL, &config);
+    let mut model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     model_info.prefer_websockets = prefer_websockets;
     let conversation_id = ThreadId::new();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let exporter = InMemoryMetricExporter::default();
     let metrics = MetricsClient::new(
         MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)

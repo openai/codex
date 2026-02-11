@@ -16,7 +16,6 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_common::approval_presets::builtin_approval_presets;
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -965,13 +964,16 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
-    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
-    let thread_manager = Arc::new(ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("test"),
-        cfg.model_provider.clone(),
-    ));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -993,7 +995,7 @@ async fn helpers_are_available_and_do_not_panic() {
 }
 
 fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
-    let model_info = ModelsManager::construct_model_info_offline(model, config);
+    let model_info = codex_core::test_support::construct_model_info_offline(model, config);
     OtelManager::new(
         ThreadId::new(),
         model,
@@ -1022,7 +1024,7 @@ async fn make_chatwidget_manual(
     let mut cfg = test_config().await;
     let resolved_model = model_override
         .map(str::to_owned)
-        .unwrap_or_else(|| ModelsManager::get_model_offline(cfg.model.as_deref()));
+        .unwrap_or_else(|| codex_core::test_support::get_model_offline(cfg.model.as_deref()));
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -1039,7 +1041,8 @@ async fn make_chatwidget_manual(
     });
     bottom.set_steer_enabled(true);
     bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let models_manager = Arc::new(ModelsManager::new(codex_home, auth_manager.clone()));
     let reasoning_effort = None;
@@ -1144,8 +1147,9 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
     chat.models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
@@ -1448,8 +1452,9 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
@@ -1463,7 +1468,7 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 async fn rate_limit_switch_prompt_skips_non_codex_limit() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: Some("codex_other".to_string()),
@@ -1488,7 +1493,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 async fn rate_limit_switch_prompt_shows_once_per_session() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
     assert!(
@@ -1512,7 +1517,7 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
@@ -1527,7 +1532,7 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
 async fn rate_limit_switch_prompt_defers_until_task_complete() {
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = AuthManager::from_auth_for_testing(auth);
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
 
     chat.bottom_pane.set_task_running(true);
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -1547,8 +1552,9 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();
@@ -1881,8 +1887,9 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 #[tokio::test]
 async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    );
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
@@ -3143,13 +3150,16 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         .build()
         .await
         .expect("config");
-    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
-    let thread_manager = Arc::new(ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("test"),
-        cfg.model_provider.clone(),
-    ));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -3189,13 +3199,16 @@ async fn experimental_mode_plan_applies_on_startup() {
         .build()
         .await
         .expect("config");
-    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
-    let thread_manager = Arc::new(ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("test"),
-        cfg.model_provider.clone(),
-    ));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),

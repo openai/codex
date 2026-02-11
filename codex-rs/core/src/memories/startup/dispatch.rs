@@ -208,7 +208,7 @@ mod tests {
             .await
             .expect("initialize state db");
 
-            let manager = ThreadManager::with_models_provider_and_home(
+            let manager = ThreadManager::with_models_provider_and_home_for_tests(
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
                 config.codex_home.clone(),

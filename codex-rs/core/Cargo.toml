@@ -113,10 +113,6 @@ which = { workspace = true }
 wildmatch = { workspace = true }
 zip = { workspace = true }
 
-[features]
-test-support = []
-
-
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 landlock = { workspace = true }

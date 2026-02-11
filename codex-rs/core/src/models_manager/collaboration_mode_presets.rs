@@ -9,13 +9,8 @@ const COLLABORATION_MODE_DEFAULT: &str =
 const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 
-pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
+pub(crate) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     vec![plan_preset(), default_preset()]
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    builtin_collaboration_mode_presets()
 }
 
 fn plan_preset() -> CollaborationModeMask {
