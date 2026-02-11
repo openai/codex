@@ -1004,6 +1004,7 @@ mod tests {
             .clone()
             .unwrap_or_else(|| "gpt-5.1".to_string());
         TurnContextItem {
+            turn_id: None,
             cwd,
             approval_policy: config.approval_policy.value(),
             sandbox_policy: config.sandbox_policy.get().clone(),

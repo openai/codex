@@ -5,9 +5,9 @@ use regex::Regex;
 use serde_json::Value;
 use serde_json::json;
 
+use super::StageOneOutput;
 use super::text::compact_whitespace;
 use super::text::truncate_text_for_storage;
-use super::types::StageOneOutput;
 
 /// System prompt for stage-1 raw memory extraction.
 pub(super) const RAW_MEMORY_PROMPT: &str =
@@ -28,10 +28,10 @@ pub(super) fn stage_one_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "rawMemory": { "type": "string" },
-            "summary": { "type": "string" }
+            "rollout_summary": { "type": "string" },
+            "raw_memory": { "type": "string" }
         },
-        "required": ["rawMemory", "summary"],
+        "required": ["rollout_summary", "raw_memory"],
         "additionalProperties": false
     })
 }
@@ -95,21 +95,21 @@ fn parse_json_object_loose(raw: &str) -> Result<Value> {
 
 fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutput> {
     output.raw_memory = output.raw_memory.trim().to_string();
-    output.summary = output.summary.trim().to_string();
+    output.rollout_summary = output.rollout_summary.trim().to_string();
 
     if output.raw_memory.is_empty() {
         return Err(CodexErr::InvalidRequest(
-            "stage-1 memory output missing rawMemory".to_string(),
+            "stage-1 memory output missing raw_memory".to_string(),
         ));
     }
-    if output.summary.is_empty() {
+    if output.rollout_summary.is_empty() {
         return Err(CodexErr::InvalidRequest(
-            "stage-1 memory output missing summary".to_string(),
+            "stage-1 memory output missing rollout_summary".to_string(),
         ));
     }
 
     output.raw_memory = normalize_raw_memory_structure(&redact_secrets(&output.raw_memory));
-    output.summary = redact_secrets(&compact_whitespace(&output.summary));
+    output.rollout_summary = redact_secrets(&compact_whitespace(&output.rollout_summary));
 
     if output.raw_memory.len() > MAX_STAGE_ONE_RAW_MEMORY_CHARS {
         output.raw_memory = truncate_text_for_storage(
@@ -119,9 +119,9 @@ fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutp
         );
     }
 
-    if output.summary.len() > MAX_STAGE_ONE_SUMMARY_CHARS {
-        output.summary = truncate_text_for_storage(
-            &output.summary,
+    if output.rollout_summary.len() > MAX_STAGE_ONE_SUMMARY_CHARS {
+        output.rollout_summary = truncate_text_for_storage(
+            &output.rollout_summary,
             MAX_STAGE_ONE_SUMMARY_CHARS,
             " [...summary truncated...]",
         );
@@ -188,14 +188,17 @@ mod tests {
     fn normalize_stage_one_output_redacts_and_compacts_summary() {
         let output = StageOneOutput {
             raw_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
-            summary: "password = mysecret123456\n\nsmall".to_string(),
+            rollout_summary: "password = mysecret123456\n\nsmall".to_string(),
         };
 
         let normalized = normalize_stage_one_output(output).expect("normalized");
 
         assert!(normalized.raw_memory.contains("[REDACTED_SECRET]"));
-        assert!(!normalized.summary.contains("mysecret123456"));
-        assert_eq!(normalized.summary, "password = [REDACTED_SECRET] small");
+        assert!(!normalized.rollout_summary.contains("mysecret123456"));
+        assert_eq!(
+            normalized.rollout_summary,
+            "password = [REDACTED_SECRET] small"
+        );
     }
 
     #[test]

@@ -5,8 +5,8 @@ use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-use crate::shell::ShellType;
-use crate::shell::detect_shell_type;
+use crate::shell_detect::ShellType;
+use crate::shell_detect::detect_shell_type;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
@@ -429,6 +429,21 @@ mod tests {
     #[test]
     fn rejects_trailing_operator_parse_error() {
         assert!(parse_seq("ls &&").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_command_position_with_leading_operator() {
+        assert!(parse_seq("&& ls").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_command_position_with_double_separator() {
+        assert!(parse_seq("ls ;; pwd").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_command_position_with_empty_pipeline_segment() {
+        assert!(parse_seq("ls | | wc").is_none());
     }
 
     #[test]
