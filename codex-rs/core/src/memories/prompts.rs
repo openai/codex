@@ -1,10 +1,10 @@
+use super::text::prefix_at_char_boundary;
+use super::text::suffix_at_char_boundary;
+use crate::memories::memory_root;
 use askama::Template;
 use std::path::Path;
 use tokio::fs;
 use tracing::warn;
-
-use super::text::prefix_at_char_boundary;
-use super::text::suffix_at_char_boundary;
 
 // TODO(jif) use proper truncation
 const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 100_000;
@@ -30,7 +30,6 @@ struct MemoryToolDeveloperInstructionsTemplate<'a> {
     memory_summary: &'a str,
 }
 
-const MEMORY_SUMMARY_UNAVAILABLE: &str = "No memory summary available.";
 
 /// Builds the consolidation subagent prompt for a specific memory root.
 ///
@@ -78,31 +77,23 @@ pub(super) fn build_stage_one_input_message(
     })
 }
 
-pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> String {
-    let base_path = codex_home.join("memories");
+pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
+    let base_path = memory_root(codex_home);
     let memory_summary_path = base_path.join("memory_summary.md");
-    let memory_summary = match fs::read_to_string(&memory_summary_path).await {
-        Ok(contents) => {
-            let trimmed = contents.trim();
-            if trimmed.is_empty() {
-                MEMORY_SUMMARY_UNAVAILABLE.to_string()
-            } else {
-                trimmed.to_string()
-            }
-        }
-        Err(_) => MEMORY_SUMMARY_UNAVAILABLE.to_string(),
-    };
+    let memory_summary = fs::read_to_string(&memory_summary_path)
+        .await
+        .ok()?
+        .trim()
+        .to_string();
+    if memory_summary.is_empty() {
+        return None;
+    }
     let base_path = base_path.display().to_string();
     let template = MemoryToolDeveloperInstructionsTemplate {
         base_path: &base_path,
         memory_summary: &memory_summary,
     };
-    template.render().unwrap_or_else(|err| {
-        warn!("failed to render memory tool developer instructions template: {err}");
-        format!(
-            "## Memory\n\nMemory root: {base_path}\n\n========= MEMORY_SUMMARY BEGINS =========\n{memory_summary}\n========= MEMORY_SUMMARY ENDS =========\n\nBegin with the memory protocol."
-        )
-    })
+    template.render().ok()
 }
 
 fn truncate_rollout_for_prompt(input: &str) -> (String, bool) {

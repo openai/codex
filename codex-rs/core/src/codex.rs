@@ -2295,20 +2295,13 @@ impl Session {
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
         }
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && tokio::fs::try_exists(memory_root(turn_context.config.codex_home.as_path()))
+        // Add developer instructions for memories.
+        if let Some(memory_prompt) =
+            memories::build_memory_tool_developer_instructions(&turn_context.config.codex_home)
                 .await
-                .unwrap_or_default()
+            && turn_context.features.enabled(Feature::MemoryTool)
         {
-            items.push(
-                DeveloperInstructions::new(
-                    memories::build_memory_tool_developer_instructions(
-                        &turn_context.config.codex_home,
-                    )
-                    .await,
-                )
-                .into(),
-            );
+            items.push(DeveloperInstructions::new(memory_prompt).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -5132,7 +5125,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
-use crate::memories::memory_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]
