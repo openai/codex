@@ -5439,15 +5439,16 @@ impl ChatWidget {
         }
         matches!(
             (&preset.sandbox, current_sandbox),
-            (SandboxPolicy::ReadOnly, SandboxPolicy::ReadOnly)
-                | (
-                    SandboxPolicy::DangerFullAccess,
-                    SandboxPolicy::DangerFullAccess
-                )
-                | (
-                    SandboxPolicy::WorkspaceWrite { .. },
-                    SandboxPolicy::WorkspaceWrite { .. }
-                )
+            (
+                SandboxPolicy::ReadOnly { .. },
+                SandboxPolicy::ReadOnly { .. }
+            ) | (
+                SandboxPolicy::DangerFullAccess,
+                SandboxPolicy::DangerFullAccess
+            ) | (
+                SandboxPolicy::WorkspaceWrite { .. },
+                SandboxPolicy::WorkspaceWrite { .. }
+            )
         )
     }
 
@@ -5568,7 +5569,7 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly => "Read-Only mode",
+            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
             _ => "Agent mode",
         };
         let mode_label = preset

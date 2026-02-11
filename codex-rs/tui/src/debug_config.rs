@@ -474,13 +474,14 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
+
         let requirements = ConfigRequirements {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(AskForApproval::OnRequest),
                 Some(RequirementSource::CloudRequirements),
             ),
             sandbox_policy: ConstrainedWithSource::new(
-                Constrained::allow_any(SandboxPolicy::ReadOnly),
+                Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 Some(RequirementSource::SystemRequirementsToml {
                     file: requirements_file.clone(),
                 }),
@@ -572,7 +573,6 @@ mod tests {
         ));
         assert!(!rendered.contains("  - rules:"));
     }
-
     #[test]
     fn debug_config_output_lists_session_flag_key_value_pairs() {
         let session_flags = toml::from_str::<TomlValue>(
