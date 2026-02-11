@@ -6474,4 +6474,39 @@ mod tests {
         assert!(state.lock().await.subscribed_connection_ids().is_empty());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn removing_auto_attached_connection_preserves_listener_for_other_connections()
+    -> Result<()> {
+        let mut manager = ThreadStateManager::new();
+        let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
+        let connection_a = ConnectionId(1);
+        let connection_b = ConnectionId(2);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+
+        manager
+            .ensure_connection_subscribed(thread_id, connection_a, false)
+            .await;
+        manager
+            .ensure_connection_subscribed(thread_id, connection_b, false)
+            .await;
+        {
+            let state = manager.thread_state(thread_id);
+            state.lock().await.cancel_tx = Some(cancel_tx);
+        }
+
+        manager.remove_connection(connection_a).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
+                .await
+                .is_err()
+        );
+
+        let state = manager.thread_state(thread_id);
+        assert_eq!(
+            state.lock().await.subscribed_connection_ids(),
+            vec![connection_b]
+        );
+        Ok(())
+    }
 }

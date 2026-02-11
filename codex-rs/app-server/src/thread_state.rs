@@ -132,13 +132,9 @@ impl ThreadStateManager {
             }
         }
 
-        let has_remaining_subscriptions = self
-            .subscription_state_by_id
-            .values()
-            .any(|state| state.thread_id == thread_id);
         if let Some(thread_state) = self.thread_states.get(&thread_id) {
             let mut thread_state = thread_state.lock().await;
-            if !has_remaining_subscriptions {
+            if thread_state.subscribed_connection_ids().is_empty() {
                 thread_state.clear_listener();
             }
         }
@@ -214,13 +210,9 @@ impl ThreadStateManager {
 
         for thread_id in thread_ids {
             if let Some(thread_state) = self.thread_states.get(&thread_id) {
-                let has_remaining_subscriptions = self
-                    .subscription_state_by_id
-                    .values()
-                    .any(|state| state.thread_id == thread_id);
                 let mut thread_state = thread_state.lock().await;
                 thread_state.remove_connection(connection_id);
-                if !has_remaining_subscriptions {
+                if thread_state.subscribed_connection_ids().is_empty() {
                     thread_state.clear_listener();
                 }
             }
