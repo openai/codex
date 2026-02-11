@@ -85,6 +85,15 @@ pub fn blocked_message(reason: &str) -> &'static str {
     }
 }
 
+pub fn blocked_text_response(reason: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "text/plain")
+        .header("x-proxy-error", blocked_header_value(reason))
+        .body(Body::from(blocked_message(reason)))
+        .unwrap_or_else(|_| Response::new(Body::from("blocked")))
+}
+
 pub fn policy_decision_prefix(details: &PolicyDecisionDetails<'_>) -> String {
     let payload = PolicyDecisionPayload {
         decision: details.decision.as_str(),

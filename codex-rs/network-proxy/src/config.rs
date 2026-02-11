@@ -90,7 +90,7 @@ impl NetworkMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MitmConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -388,6 +388,7 @@ mod tests {
                 denied_domains: Vec::new(),
                 allow_unix_sockets: Vec::new(),
                 allow_local_binding: true,
+                mitm: MitmConfig::default(),
             }
         );
     }
