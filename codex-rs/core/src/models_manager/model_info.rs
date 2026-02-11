@@ -98,6 +98,9 @@ pub(crate) fn with_model_info_patch(
     if let Some(input_modalities) = &model_info_patch.input_modalities {
         model.input_modalities = input_modalities.clone();
     }
+    if let Some(prefer_websockets) = model_info_patch.prefer_websockets {
+        model.prefer_websockets = prefer_websockets;
+    }
 
     model
 }

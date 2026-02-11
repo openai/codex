@@ -535,6 +535,10 @@
           ],
           "default": null
         },
+        "prefer_websockets": {
+          "default": null,
+          "type": "boolean"
+        },
         "priority": {
           "default": null,
           "format": "int32",

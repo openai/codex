@@ -85,7 +85,7 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models(config).await;
-        self.build_available_models(remote_models)
+        self.build_available_models(remote_models, config)
     }
 
     /// List collaboration mode presets.
@@ -100,7 +100,7 @@ impl ModelsManager {
     /// Returns an error if the internal lock cannot be acquired.
     pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models(config)?;
-        Ok(self.build_available_models(remote_models))
+        Ok(self.build_available_models(remote_models, config))
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -124,7 +124,7 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models(config).await;
-        let available = self.build_available_models(remote_models);
+        let available = self.build_available_models(remote_models, config);
         available
             .iter()
             .find(|model| model.is_default)
@@ -298,8 +298,19 @@ impl ModelsManager {
     }
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
-    fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
+    fn build_available_models(
+        &self,
+        mut remote_models: Vec<ModelInfo>,
+        config: &Config,
+    ) -> Vec<ModelPreset> {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
+        remote_models = remote_models
+            .into_iter()
+            .map(|remote_model| {
+                let remote_slug = remote_model.slug.clone();
+                model_info::with_model_info_patch(remote_model, &remote_slug, config)
+            })
+            .collect();
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let existing_presets = self.local_models.clone();
@@ -390,6 +401,8 @@ mod tests {
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
+    use codex_protocol::openai_models::ModelInfoPatch;
+    use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
@@ -827,8 +840,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_available_models_picks_default_after_hiding_hidden_models() {
+    #[tokio::test]
+    async fn build_available_models_picks_default_after_hiding_hidden_models() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -847,9 +860,50 @@ mod tests {
         let mut expected_visible = ModelPreset::from(visible_model.clone());
         expected_visible.is_default = true;
 
-        let available = manager.build_available_models(vec![hidden_model, visible_model]);
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let available = manager.build_available_models(vec![hidden_model, visible_model], &config);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
+    }
+
+    #[tokio::test]
+    async fn build_available_models_applies_model_info_overrides() {
+        let codex_home = tempdir().expect("temp dir");
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let provider = provider_for("http://example.test".to_string());
+        let mut manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        manager.local_models = Vec::new();
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.model_info_overrides.insert(
+            "visible".to_string(),
+            ModelInfoPatch {
+                display_name: Some("Visible Local Override".to_string()),
+                visibility: Some(ModelVisibility::Hide),
+                ..Default::default()
+            },
+        );
+
+        let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
+        let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
+        let available = manager.build_available_models(vec![hidden_model, visible_model], &config);
+
+        let visible = available
+            .iter()
+            .find(|preset| preset.model == "visible")
+            .expect("visible model should exist");
+        assert_eq!(visible.display_name, "Visible Local Override");
+        assert!(!visible.show_in_picker);
     }
 
     #[test]
