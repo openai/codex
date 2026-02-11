@@ -457,6 +457,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let writable_root = AbsolutePathBuf::try_from(writable.path())?;
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![writable_root],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
