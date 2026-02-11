@@ -4,12 +4,8 @@ use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
-use anyhow::Context;
-use anyhow::bail;
-use codex_utils_home_dir::find_codex_home;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 
 pub use crate::runtime::BlockedRequest;
@@ -55,13 +51,12 @@ pub struct PartialNetworkConfig {
 }
 
 pub fn build_config_state(
-    mut config: NetworkProxyConfig,
+    config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm.enabled {
-        resolve_relative_mitm_paths(&mut config)?;
         Some(Arc::new(MitmState::new(
             &config.network.mitm,
             config.network.allow_upstream_proxy,
@@ -77,35 +72,6 @@ pub fn build_config_state(
         constraints,
         blocked: std::collections::VecDeque::new(),
     })
-}
-
-fn resolve_relative_mitm_paths(config: &mut NetworkProxyConfig) -> anyhow::Result<()> {
-    if config.network.mitm.ca_cert_path.is_absolute() {
-        bail!(
-            "network.mitm.ca_cert_path must be relative to CODEX_HOME: {}",
-            config.network.mitm.ca_cert_path.display()
-        );
-    }
-    if config.network.mitm.ca_key_path.is_absolute() {
-        bail!(
-            "network.mitm.ca_key_path must be relative to CODEX_HOME: {}",
-            config.network.mitm.ca_key_path.display()
-        );
-    }
-
-    let codex_home =
-        find_codex_home().context("failed to resolve CODEX_HOME for network.mitm paths")?;
-    resolve_relative_mitm_paths_for_base(config, &codex_home);
-    Ok(())
-}
-
-fn resolve_relative_mitm_paths_for_base(config: &mut NetworkProxyConfig, base: &Path) {
-    if config.network.mitm.ca_cert_path.is_relative() {
-        config.network.mitm.ca_cert_path = base.join(&config.network.mitm.ca_cert_path);
-    }
-    if config.network.mitm.ca_key_path.is_relative() {
-        config.network.mitm.ca_key_path = base.join(&config.network.mitm.ca_key_path);
-    }
 }
 
 pub fn validate_policy_against_constraints(
@@ -334,70 +300,5 @@ fn network_mode_rank(mode: NetworkMode) -> u8 {
     match mode {
         NetworkMode::Limited => 0,
         NetworkMode::Full => 1,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::MitmConfig;
-    use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-
-    #[test]
-    fn resolve_relative_mitm_paths_for_base_converts_relative_paths() {
-        let codex_home = tempfile::tempdir().expect("create temp codex home");
-        let base = codex_home.path().to_path_buf();
-        let mut config = NetworkProxyConfig::default();
-        config.network.mitm = MitmConfig {
-            ca_cert_path: PathBuf::from("proxy/ca.pem"),
-            ca_key_path: PathBuf::from("proxy/ca.key"),
-            ..MitmConfig::default()
-        };
-
-        resolve_relative_mitm_paths_for_base(&mut config, &base);
-
-        assert_eq!(config.network.mitm.ca_cert_path, base.join("proxy/ca.pem"));
-        assert_eq!(config.network.mitm.ca_key_path, base.join("proxy/ca.key"));
-    }
-
-    #[test]
-    fn build_config_state_rejects_absolute_cert_path() {
-        let mut config = NetworkProxyConfig::default();
-        config.network.mitm = MitmConfig {
-            enabled: true,
-            ca_cert_path: std::env::temp_dir().join("mitm-cert.pem"),
-            ca_key_path: PathBuf::from("proxy/ca.key"),
-            ..MitmConfig::default()
-        };
-
-        let result = build_config_state(config, NetworkProxyConstraints::default());
-        assert!(result.is_err(), "absolute cert path should fail");
-        let err = result.err().expect("absolute cert path should fail");
-        assert!(
-            err.to_string()
-                .contains("network.mitm.ca_cert_path must be relative to CODEX_HOME"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn build_config_state_rejects_absolute_key_path() {
-        let mut config = NetworkProxyConfig::default();
-        config.network.mitm = MitmConfig {
-            enabled: true,
-            ca_cert_path: PathBuf::from("proxy/ca.pem"),
-            ca_key_path: std::env::temp_dir().join("mitm-key.pem"),
-            ..MitmConfig::default()
-        };
-
-        let result = build_config_state(config, NetworkProxyConstraints::default());
-        assert!(result.is_err(), "absolute key path should fail");
-        let err = result.err().expect("absolute key path should fail");
-        assert!(
-            err.to_string()
-                .contains("network.mitm.ca_key_path must be relative to CODEX_HOME"),
-            "unexpected error: {err}"
-        );
     }
 }

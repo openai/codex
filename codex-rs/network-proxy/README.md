@@ -37,10 +37,8 @@ mode = "full" # default when unset; use "limited" for read-only mode
 
 [network.mitm]
 # When enabled, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
-# CA cert/key paths are relative to CODEX_HOME by default.
 enabled = false
-ca_cert_path = "proxy/ca.pem"
-ca_key_path = "proxy/ca.key"
+# CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 # Maximum size of request/response bodies MITM will buffer for inspection.
 max_body_bytes = 1048576
 

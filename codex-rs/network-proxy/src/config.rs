@@ -5,7 +5,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use tracing::warn;
 use url::Url;
 
@@ -98,10 +97,6 @@ pub struct MitmConfig {
     pub inspect: bool,
     #[serde(default = "default_mitm_max_body_bytes")]
     pub max_body_bytes: usize,
-    #[serde(default = "default_ca_cert_path")]
-    pub ca_cert_path: PathBuf,
-    #[serde(default = "default_ca_key_path")]
-    pub ca_key_path: PathBuf,
 }
 
 impl Default for MitmConfig {
@@ -110,8 +105,6 @@ impl Default for MitmConfig {
             enabled: false,
             inspect: false,
             max_body_bytes: default_mitm_max_body_bytes(),
-            ca_cert_path: default_ca_cert_path(),
-            ca_key_path: default_ca_key_path(),
         }
     }
 }
@@ -126,14 +119,6 @@ fn default_admin_url() -> String {
 
 fn default_socks_url() -> String {
     "http://127.0.0.1:8081".to_string()
-}
-
-fn default_ca_cert_path() -> PathBuf {
-    PathBuf::from("proxy/ca.pem")
-}
-
-fn default_ca_key_path() -> PathBuf {
-    PathBuf::from("proxy/ca.key")
 }
 
 fn default_mitm_max_body_bytes() -> usize {

@@ -11,6 +11,7 @@ use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_utils_home_dir::find_codex_home;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::bytes::Bytes;
@@ -45,6 +46,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
@@ -88,7 +90,7 @@ impl MitmState {
         // MITM exists to make limited-mode HTTPS enforceable: once CONNECT is established, plain
         // proxying would lose visibility into the inner HTTP request. We generate/load a local CA
         // and issue per-host leaf certs so we can terminate TLS and apply policy.
-        let (ca_cert_pem, ca_key_pem) = load_or_create_ca(cfg)?;
+        let (ca_cert_pem, ca_key_pem) = load_or_create_ca()?;
         let ca_key = KeyPair::from_pem(&ca_key_pem).context("failed to parse CA key")?;
         let issuer: Issuer<'static, KeyPair> =
             Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
@@ -458,17 +460,34 @@ fn issue_host_certificate_pem(
     Ok((cert.pem(), key_pair.serialize_pem()))
 }
 
-fn load_or_create_ca(cfg: &MitmConfig) -> Result<(String, String)> {
-    let cert_path = &cfg.ca_cert_path;
-    let key_path = &cfg.ca_key_path;
+const MANAGED_MITM_CA_DIR: &str = "proxy";
+const MANAGED_MITM_CA_CERT: &str = "ca.pem";
+const MANAGED_MITM_CA_KEY: &str = "ca.key";
+
+fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
+    let codex_home =
+        find_codex_home().context("failed to resolve CODEX_HOME for managed MITM CA")?;
+    let proxy_dir = codex_home.join(MANAGED_MITM_CA_DIR);
+    Ok((
+        proxy_dir.join(MANAGED_MITM_CA_CERT),
+        proxy_dir.join(MANAGED_MITM_CA_KEY),
+    ))
+}
+
+fn load_or_create_ca() -> Result<(String, String)> {
+    let (cert_path, key_path) = managed_ca_paths()?;
 
     if cert_path.exists() || key_path.exists() {
         if !cert_path.exists() || !key_path.exists() {
-            return Err(anyhow!("both ca_cert_path and ca_key_path must exist"));
+            return Err(anyhow!(
+                "both managed MITM CA files must exist (cert={}, key={})",
+                cert_path.display(),
+                key_path.display()
+            ));
         }
-        let cert_pem = fs::read_to_string(cert_path)
+        let cert_pem = fs::read_to_string(&cert_path)
             .with_context(|| format!("failed to read CA cert {}", cert_path.display()))?;
-        let key_pem = fs::read_to_string(key_path)
+        let key_pem = fs::read_to_string(&key_path)
             .with_context(|| format!("failed to read CA key {}", key_path.display()))?;
         return Ok((cert_pem, key_pem));
     }
@@ -488,13 +507,13 @@ fn load_or_create_ca(cfg: &MitmConfig) -> Result<(String, String)> {
     //
     // We intentionally use create-new semantics: if a key already exists, we should not overwrite
     // it silently (that would invalidate previously-trusted cert chains).
-    write_atomic_create_new(key_path, key_pem.as_bytes(), 0o600)
+    write_atomic_create_new(&key_path, key_pem.as_bytes(), 0o600)
         .with_context(|| format!("failed to persist CA key {}", key_path.display()))?;
-    if let Err(err) = write_atomic_create_new(cert_path, cert_pem.as_bytes(), 0o644)
+    if let Err(err) = write_atomic_create_new(&cert_path, cert_pem.as_bytes(), 0o644)
         .with_context(|| format!("failed to persist CA cert {}", cert_path.display()))
     {
         // Avoid leaving a partially-created CA around (cert missing) if the second write fails.
-        let _ = fs::remove_file(key_path);
+        let _ = fs::remove_file(&key_path);
         return Err(err);
     }
     let cert_path = cert_path.display();
