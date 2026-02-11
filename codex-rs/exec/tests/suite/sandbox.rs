@@ -69,7 +69,7 @@ async fn spawn_command_under_sandbox(
 async fn linux_sandbox_test_env() -> Option<HashMap<String, String>> {
     let command_cwd = std::env::current_dir().ok()?;
     let sandbox_cwd = command_cwd.clone();
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
 
     if can_apply_linux_sandbox_policy(&policy, &command_cwd, sandbox_cwd.as_path(), HashMap::new())
         .await
@@ -134,6 +134,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
 
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -194,7 +195,7 @@ async fn python_getpwuid_works_under_sandbox() {
         return;
     }
 
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
     let command_cwd = std::env::current_dir().expect("should be able to get current dir");
     let sandbox_cwd = command_cwd.clone();
 
@@ -247,6 +248,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     // is under a writable root.
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -387,7 +389,7 @@ fn unix_sock_body() {
 async fn allow_unix_socketpair_recvfrom() {
     run_code_under_sandbox(
         "allow_unix_socketpair_recvfrom",
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         || async { unix_sock_body() },
     )
     .await
