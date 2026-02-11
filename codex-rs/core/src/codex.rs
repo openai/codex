@@ -1334,8 +1334,8 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
-                    state.previous_model = None;
                 }
+                self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
@@ -1346,8 +1346,8 @@ impl Session {
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
-                    state.previous_model = previous_model;
                 }
+                self.set_previous_model(previous_model).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
@@ -1390,10 +1390,7 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 let previous_model = Self::last_rollout_model_name(&rollout_items)
                     .map(std::string::ToString::to_string);
-                {
-                    let mut state = self.state.lock().await;
-                    state.previous_model = previous_model;
-                }
+                self.set_previous_model(previous_model).await;
 
                 // Always add response items to conversation history
                 let reconstructed_history = self
