@@ -30,7 +30,6 @@ struct MemoryToolDeveloperInstructionsTemplate<'a> {
     memory_summary: &'a str,
 }
 
-
 /// Builds the consolidation subagent prompt for a specific memory root.
 ///
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
