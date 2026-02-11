@@ -563,7 +563,7 @@ fn assert_layers_user_then_optional_system(
     let mut first_index = 0;
     if matches!(
         layers.first().map(|layer| &layer.name),
-        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm { .. })
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
     ) {
         first_index = 1;
     }
@@ -587,7 +587,7 @@ fn assert_layers_managed_user_then_optional_system(
     let mut first_index = 0;
     if matches!(
         layers.first().map(|layer| &layer.name),
-        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm { .. })
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
     ) {
         first_index = 1;
     }
