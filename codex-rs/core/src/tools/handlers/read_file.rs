@@ -1,5 +1,4 @@
 use codex_protocol::models::FunctionCallOutputBody;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -8,12 +7,9 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::skills::injection::MentionRewriteContext;
-use crate::skills::injection::rewrite_text_mentions;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::handlers::mention_rewrite::mention_rewrite_context_for_read_paths;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -103,12 +99,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation {
-            payload,
-            session,
-            turn,
-            ..
-        } = invocation;
+        let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -147,54 +138,18 @@ impl ToolHandler for ReadFileHandler {
                 "file_path must be an absolute path".to_string(),
             ));
         }
-        let mention_rewrite_context = mention_rewrite_context_for_read_paths(
-            session.as_ref(),
-            turn.as_ref(),
-            vec![path.clone()],
-        )
-        .await;
 
-        let mut collected = match mode {
+        let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,
             ReadMode::Indentation => {
                 let indentation = indentation.unwrap_or_default();
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
-        if let Some(context) = mention_rewrite_context.as_ref() {
-            collected = rewrite_collected_lines_for_mentions(collected, context);
-        }
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),
         })
-    }
-}
-
-fn rewrite_collected_lines_for_mentions(
-    collected: Vec<String>,
-    context: &MentionRewriteContext,
-) -> Vec<String> {
-    let mut explicit_app_paths = HashSet::new();
-    collected
-        .into_iter()
-        .map(|line| rewrite_prefixed_line_for_mentions(line, context, &mut explicit_app_paths))
-        .collect()
-}
-
-fn rewrite_prefixed_line_for_mentions(
-    line: String,
-    context: &MentionRewriteContext,
-    explicit_app_paths: &mut HashSet<String>,
-) -> String {
-    let Some((prefix, line_text)) = line.split_once(": ") else {
-        return line;
-    };
-    let rewritten = rewrite_text_mentions(line_text, context, explicit_app_paths);
-    if rewritten == line_text {
-        line
-    } else {
-        format!("{prefix}: {rewritten}")
     }
 }
 
@@ -533,44 +488,8 @@ mod tests {
     use super::indentation::read_block;
     use super::slice::read;
     use super::*;
-    use crate::mentions::build_connector_slug_counts;
-    use crate::mentions::build_skill_name_counts;
-    use crate::skills::SkillMetadata;
-    use crate::skills::injection::build_mention_rewrite_context;
-    use crate::tools::handlers::mention_rewrite::should_rewrite_mentions_for_path;
-    use codex_app_server_protocol::AppInfo;
-    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
-    use std::collections::HashSet;
-    use std::path::Path;
-    use std::path::PathBuf;
     use tempfile::NamedTempFile;
-
-    fn make_skill(name: &str, path: &str) -> SkillMetadata {
-        SkillMetadata {
-            name: name.to_string(),
-            description: format!("{name} skill"),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path: PathBuf::from(path),
-            scope: SkillScope::User,
-        }
-    }
-
-    fn make_connector(id: &str, name: &str) -> AppInfo {
-        AppInfo {
-            id: id.to_string(),
-            name: name.to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: None,
-            is_accessible: true,
-        }
-    }
 
     #[tokio::test]
     async fn reads_requested_range() -> anyhow::Result<()> {
@@ -1068,61 +987,5 @@ private:
             ]
         );
         Ok(())
-    }
-
-    #[test]
-    fn should_rewrite_mentions_for_skill_paths() {
-        let skills = vec![make_skill("alpha-skill", "/tmp/skills/alpha/SKILL.md")];
-
-        assert_eq!(
-            true,
-            should_rewrite_mentions_for_path(Path::new("/tmp/skills/alpha/SKILL.md"), &skills)
-        );
-        assert_eq!(
-            true,
-            should_rewrite_mentions_for_path(
-                Path::new("/tmp/skills/alpha/references/secondary_context.md"),
-                &skills,
-            )
-        );
-        assert_eq!(
-            true,
-            should_rewrite_mentions_for_path(Path::new("/tmp/random/SKILL.md"), &skills)
-        );
-        assert_eq!(
-            false,
-            should_rewrite_mentions_for_path(Path::new("/tmp/random/README.md"), &skills)
-        );
-    }
-
-    #[test]
-    fn rewrite_collected_lines_for_mentions_rewrites_skills_and_connectors() {
-        let skills = vec![make_skill("beta-skill", "/tmp/skills/beta/SKILL.md")];
-        let disabled_paths = HashSet::new();
-        let (skill_name_counts, skill_name_counts_lower) =
-            build_skill_name_counts(&skills, &disabled_paths);
-        let connectors = vec![make_connector("github-id", "GitHub")];
-        let connector_slug_counts = build_connector_slug_counts(&connectors);
-        let context = build_mention_rewrite_context(
-            &skills,
-            &disabled_paths,
-            &skill_name_counts,
-            &skill_name_counts_lower,
-            &connector_slug_counts,
-            &connectors,
-        );
-
-        let rewritten = rewrite_collected_lines_for_mentions(
-            vec!["L7: use $beta-skill and $GitHub".to_string()],
-            &context,
-        );
-
-        assert_eq!(
-            rewritten,
-            vec![
-                "L7: use [$beta-skill](skill:///tmp/skills/beta/SKILL.md) and [$GitHub](app://github-id)"
-                    .to_string()
-            ]
-        );
     }
 }

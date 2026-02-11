@@ -15,6 +15,8 @@ use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::mention_rewrite::mention_rewrite_context_for_tool_call;
+use crate::tools::mention_rewrite::rewrite_tool_response_mentions;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -78,16 +80,29 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
+                        let mention_rewrite_context = mention_rewrite_context_for_tool_call(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call.tool_name,
+                            &call.payload,
+                        )
+                        .await;
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {
                             Either::Right(lock.write().await)
                         };
 
-                        router
+                        let mut response = router
                             .dispatch_tool_call(session, turn, tracker, call.clone())
                             .instrument(dispatch_span.clone())
-                            .await
+                            .await?;
+
+                        if let Some(context) = mention_rewrite_context.as_ref() {
+                            rewrite_tool_response_mentions(&mut response, &call.tool_name, context);
+                        }
+
+                        Ok(response)
                     } => res,
                 }
             }));

@@ -9,8 +9,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
-use crate::tools::handlers::mention_rewrite::mention_rewrite_context_for_command_reads;
-use crate::tools::handlers::mention_rewrite::rewrite_text_with_mentions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -127,7 +125,7 @@ impl ToolHandler for UnifiedExecHandler {
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
-        let (mut response, mention_rewrite_context) = match tool_name.as_str() {
+        let response = match tool_name.as_str() {
             "exec_command" => {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
@@ -169,13 +167,6 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
-                let mention_rewrite_context = mention_rewrite_context_for_command_reads(
-                    context.session.as_ref(),
-                    context.turn.as_ref(),
-                    &command,
-                    &cwd,
-                )
-                .await;
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -193,7 +184,7 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
-                let response = manager
+                manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
@@ -212,8 +203,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
-                    })?;
-                (response, mention_rewrite_context)
+                    })?
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
@@ -238,7 +228,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
                     .await;
 
-                (response, None)
+                response
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -246,9 +236,6 @@ impl ToolHandler for UnifiedExecHandler {
                 )));
             }
         };
-        if let Some(context) = mention_rewrite_context.as_ref() {
-            response.output = rewrite_text_with_mentions(&response.output, context);
-        }
 
         let content = format_response(&response);
 

@@ -13,15 +13,12 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
-use crate::skills::injection::MentionRewriteContext;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
-use crate::tools::handlers::mention_rewrite::mention_rewrite_context_for_command_reads;
-use crate::tools::handlers::mention_rewrite::rewrite_text_with_mentions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
@@ -299,14 +296,6 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let mention_rewrite_context = mention_rewrite_context_for_command_reads(
-            session.as_ref(),
-            turn.as_ref(),
-            &exec_params.command,
-            &exec_params.cwd,
-        )
-        .await;
-
         let exec_approval_requirement = session
             .services
             .exec_policy
@@ -342,11 +331,6 @@ impl ShellHandler {
             .await;
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
-        let content = if let Some(context) = mention_rewrite_context.as_ref() {
-            rewrite_shell_output_mentions(content, context, freeform)
-        } else {
-            content
-        };
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
@@ -354,127 +338,25 @@ impl ShellHandler {
     }
 }
 
-fn rewrite_shell_output_mentions(
-    content: String,
-    context: &MentionRewriteContext,
-    freeform: bool,
-) -> String {
-    if freeform {
-        rewrite_shell_freeform_output_mentions(content, context)
-    } else {
-        rewrite_shell_structured_output_mentions(content, context)
-    }
-}
-
-fn rewrite_shell_freeform_output_mentions(
-    content: String,
-    context: &MentionRewriteContext,
-) -> String {
-    let Some((prefix, output)) = content.split_once("\nOutput:\n") else {
-        return rewrite_text_with_mentions(&content, context);
-    };
-
-    let rewritten = rewrite_text_with_mentions(output, context);
-    if rewritten == output {
-        content
-    } else {
-        format!("{prefix}\nOutput:\n{rewritten}")
-    }
-}
-
-fn rewrite_shell_structured_output_mentions(
-    content: String,
-    context: &MentionRewriteContext,
-) -> String {
-    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return content;
-    };
-
-    let Some(output) = payload.get("output").and_then(serde_json::Value::as_str) else {
-        return content;
-    };
-    let rewritten = rewrite_text_with_mentions(output, context);
-    if rewritten == output {
-        return content;
-    }
-
-    let Some(output_field) = payload.get_mut("output") else {
-        return content;
-    };
-    *output_field = serde_json::Value::String(rewritten);
-    serde_json::to_string(&payload).unwrap_or(content)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::rewrite_shell_output_mentions;
-    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use codex_app_server_protocol::AppInfo;
     use codex_protocol::models::ShellCommandToolCallParams;
-    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
 
     use crate::codex::make_session_and_context;
     use crate::exec_env::create_env;
     use crate::is_safe_command::is_known_safe_command;
-    use crate::mentions::build_connector_slug_counts;
-    use crate::mentions::build_skill_name_counts;
     use crate::powershell::try_find_powershell_executable_blocking;
     use crate::powershell::try_find_pwsh_executable_blocking;
     use crate::sandboxing::SandboxPermissions;
     use crate::shell::Shell;
     use crate::shell::ShellType;
     use crate::shell_snapshot::ShellSnapshot;
-    use crate::skills::SkillMetadata;
-    use crate::skills::injection::build_mention_rewrite_context;
     use crate::tools::handlers::ShellCommandHandler;
     use tokio::sync::watch;
-
-    fn make_skill(name: &str, path: &str) -> SkillMetadata {
-        SkillMetadata {
-            name: name.to_string(),
-            description: format!("{name} skill"),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            path: PathBuf::from(path),
-            scope: SkillScope::User,
-        }
-    }
-
-    fn make_connector(id: &str, name: &str) -> AppInfo {
-        AppInfo {
-            id: id.to_string(),
-            name: name.to_string(),
-            description: None,
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: None,
-            is_accessible: true,
-        }
-    }
-
-    fn make_mention_rewrite_context() -> crate::skills::injection::MentionRewriteContext {
-        let skills = vec![make_skill("beta-skill", "/tmp/skills/beta/SKILL.md")];
-        let disabled_paths = HashSet::new();
-        let (skill_name_counts, skill_name_counts_lower) =
-            build_skill_name_counts(&skills, &disabled_paths);
-        let connectors = vec![make_connector("github-id", "GitHub")];
-        let connector_slug_counts = build_connector_slug_counts(&connectors);
-        build_mention_rewrite_context(
-            &skills,
-            &disabled_paths,
-            &skill_name_counts,
-            &skill_name_counts_lower,
-            &connector_slug_counts,
-            &connectors,
-        )
-    }
 
     /// The logic for is_known_safe_command() has heuristics for known shells,
     /// so we must ensure the commands generated by [ShellCommandHandler] can be
@@ -593,45 +475,6 @@ mod tests {
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)
-        );
-    }
-
-    #[test]
-    fn rewrite_shell_output_mentions_rewrites_freeform_output_section() {
-        let context = make_mention_rewrite_context();
-        let content = "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nuse $beta-skill and $GitHub"
-            .to_string();
-
-        let rewritten = rewrite_shell_output_mentions(content, &context, true);
-
-        assert_eq!(
-            rewritten,
-            "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nuse [$beta-skill](skill:///tmp/skills/beta/SKILL.md) and [$GitHub](app://github-id)"
-        );
-    }
-
-    #[test]
-    fn rewrite_shell_output_mentions_rewrites_structured_output_payload() {
-        let context = make_mention_rewrite_context();
-        let content = serde_json::json!({
-            "output": "use $beta-skill and $GitHub",
-            "metadata": {
-                "exit_code": 0,
-                "duration_seconds": 0.1
-            }
-        })
-        .to_string();
-
-        let rewritten = rewrite_shell_output_mentions(content, &context, false);
-        let payload: serde_json::Value =
-            serde_json::from_str(&rewritten).expect("valid structured shell output");
-
-        assert_eq!(
-            payload.get("output"),
-            Some(&serde_json::Value::String(
-                "use [$beta-skill](skill:///tmp/skills/beta/SKILL.md) and [$GitHub](app://github-id)"
-                    .to_string(),
-            ))
         );
     }
 }
