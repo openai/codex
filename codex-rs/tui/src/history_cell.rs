@@ -3460,6 +3460,7 @@ mod tests {
 
         assert!(rendered.contains("[Image #1]"));
         assert!(rendered.contains("describe these"));
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
@@ -3493,6 +3494,7 @@ mod tests {
 
         assert!(rendered.contains("[Image #1]"));
         assert!(rendered.contains("[Image #2]"));
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]

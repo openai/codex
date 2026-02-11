@@ -5402,6 +5402,31 @@ mod tests {
     }
 
     #[test]
+    fn remote_image_rows_snapshots() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        snapshot_composer_state("remote_image_rows", false, |composer| {
+            composer.set_remote_image_urls(vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ]);
+            composer.set_text_content("describe these".to_string(), Vec::new(), Vec::new());
+        });
+
+        snapshot_composer_state("remote_image_rows_selected", false, |composer| {
+            composer.set_remote_image_urls(vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ]);
+            composer.set_text_content("describe these".to_string(), Vec::new(), Vec::new());
+            composer.textarea.set_cursor(0);
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        });
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
