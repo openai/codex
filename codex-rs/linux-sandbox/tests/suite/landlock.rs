@@ -82,18 +82,27 @@ async fn run_cmd_result_with_writable_roots(
         arg0: None,
     };
 
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots
-            .iter()
-            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
-            .collect(),
-        network_access: false,
+    let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let SandboxPolicy::WorkspaceWrite {
+        writable_roots: sandbox_writable_roots,
+        network_access,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
+        exclude_tmpdir_env_var,
+        exclude_slash_tmp,
+        ..
+    } = &mut sandbox_policy
+    else {
+        panic!("workspace-write policy expected");
     };
+    *sandbox_writable_roots = writable_roots
+        .iter()
+        .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
+        .collect();
+    *network_access = false;
+    *exclude_tmpdir_env_var = true;
+    *exclude_slash_tmp = true;
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
 

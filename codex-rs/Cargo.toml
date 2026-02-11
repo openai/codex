@@ -16,6 +16,7 @@ members = [
     "cloud-tasks-client",
     "cli",
     "common",
+    "config",
     "shell-command",
     "core",
     "hooks",
@@ -83,6 +84,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
+codex-config = { path = "config" }
 codex-shell-command = { path = "shell-command" }
 codex-core = { path = "core" }
 codex-hooks = { path = "hooks" }
