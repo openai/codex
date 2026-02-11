@@ -85,6 +85,20 @@ jobs:
 
           cp "$rust_objcopy" /usr/local/bin/rust-objcopy
 
+      - name: Configure LIBCLANG_PATH (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          xcode_dev_dir="$(xcode-select -p)"
+          libclang_dir="$xcode_dev_dir/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+
+          if [[ ! -f "$libclang_dir/libclang.dylib" ]]; then
+            echo "libclang.dylib not found at $libclang_dir"
+            exit 1
+          fi
+
+          echo "LIBCLANG_PATH=$libclang_dir" >> "$GITHUB_ENV"
+
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
       # uploading at the end of the build, which takes over a minute!
@@ -131,6 +145,10 @@ jobs:
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
           )
+
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            bazel_args+=(--action_env=LIBCLANG_PATH --host_action_env=LIBCLANG_PATH)
+          fi
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             echo "BuildBuddy API key is available; using remote Bazel configuration."
