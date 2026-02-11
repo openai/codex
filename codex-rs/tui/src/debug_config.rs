@@ -403,7 +403,7 @@ mod tests {
             Some(RequirementSource::CloudRequirements),
         );
         requirements.sandbox_policy = ConstrainedWithSource::new(
-            Constrained::allow_any(SandboxPolicy::ReadOnly),
+            Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             Some(RequirementSource::SystemRequirementsToml {
                 file: requirements_file.clone(),
             }),
