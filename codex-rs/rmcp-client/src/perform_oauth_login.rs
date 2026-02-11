@@ -13,6 +13,7 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tracing::debug;
 use urlencoding::decode;
 
 use crate::OAuthCredentialsStoreMode;
@@ -22,6 +23,7 @@ use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::oauth_auth_url_candidates;
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -219,7 +221,7 @@ struct OauthLoginFlow {
     rx: oneshot::Receiver<(String, String)>,
     guard: CallbackServerGuard,
     server_name: String,
-    server_url: String,
+    oauth_server_url: String,
     store_mode: OAuthCredentialsStoreMode,
     launch_browser: bool,
     timeout: Duration,
@@ -288,12 +290,61 @@ impl OauthLoginFlow {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
 
-        let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
-        let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        oauth_state
-            .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
-            .await?;
-        let auth_url = oauth_state.get_authorization_url().await?;
+        let mut last_error: Option<anyhow::Error> = None;
+        let mut auth_url = None;
+        let mut oauth_state = None;
+        let mut oauth_server_url = None;
+
+        for candidate_url in oauth_auth_url_candidates(server_url) {
+            let mut state = match OAuthState::new(&candidate_url, Some(http_client.clone())).await {
+                Ok(state) => state,
+                Err(err) => {
+                    last_error = Some(err.into());
+                    continue;
+                }
+            };
+            let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+            if let Err(err) = state
+                .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
+                .await
+            {
+                last_error = Some(err.into());
+                continue;
+            }
+
+            auth_url = match state.get_authorization_url().await {
+                Ok(candidate_auth_url) => {
+                    oauth_state = Some(state);
+                    oauth_server_url = Some(candidate_url);
+                    Some(candidate_auth_url)
+                }
+                Err(err) => {
+                    let err_msg = format!("{err:?}");
+                    last_error = Some(anyhow!(err_msg.clone()));
+                    debug!("OAuth state did not provide authorization URL: {err_msg}");
+                    continue;
+                }
+            };
+            break;
+        }
+
+        let oauth_state = match oauth_state {
+            Some(state) => state,
+            None => {
+                return Err(last_error.unwrap_or_else(|| {
+                    anyhow!("No usable OAuth auth endpoint found for MCP server")
+                }));
+            }
+        };
+        let auth_url = match auth_url {
+            Some(url) => url,
+            None => {
+                return Err(anyhow!(
+                    "Internal OAuth login error: authorization URL not initialized after state setup"
+                ));
+            }
+        };
+        let oauth_server_url = oauth_server_url.unwrap_or_else(|| server_url.to_string());
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);
         let timeout = Duration::from_secs(timeout_secs as u64);
 
@@ -303,7 +354,7 @@ impl OauthLoginFlow {
             rx,
             guard,
             server_name: server_name.to_string(),
-            server_url: server_url.to_string(),
+            oauth_server_url,
             store_mode,
             launch_browser,
             timeout,
@@ -349,7 +400,7 @@ impl OauthLoginFlow {
             let expires_at = compute_expires_at_millis(&credentials);
             let stored = StoredOAuthTokens {
                 server_name: self.server_name.clone(),
-                url: self.server_url.clone(),
+                url: self.oauth_server_url.clone(),
                 client_id,
                 token_response: WrappedOAuthTokenResponse(credentials),
                 expires_at,

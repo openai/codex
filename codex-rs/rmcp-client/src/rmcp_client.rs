@@ -59,6 +59,7 @@ use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
+use crate::utils::oauth_auth_url_candidates;
 use crate::utils::run_with_timeout;
 
 enum PendingTransport {
@@ -244,21 +245,36 @@ impl RmcpClient {
     ) -> Result<Self> {
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
 
-        let initial_oauth_tokens = match bearer_token {
-            Some(_) => None,
-            None => match load_oauth_tokens(server_name, url, store_mode) {
-                Ok(tokens) => tokens,
-                Err(err) => {
-                    warn!("failed to read tokens for server `{server_name}`: {err}");
-                    None
+        let (initial_oauth_tokens, oauth_server_url) = match bearer_token {
+            Some(_) => (None, None),
+            None => {
+                let mut token_match = None;
+                for candidate_url in oauth_auth_url_candidates(url) {
+                    match load_oauth_tokens(server_name, &candidate_url, store_mode) {
+                        Ok(Some(tokens)) => {
+                            token_match = Some((candidate_url, tokens));
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            warn!(
+                                "failed to read tokens for server `{server_name}` at `{candidate_url}`: {err}"
+                            );
+                        }
+                    }
                 }
-            },
+                token_match.map_or((None, None), |(candidate_url, tokens)| {
+                    (Some(tokens), Some(candidate_url))
+                })
+            }
         };
 
         let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
+            let oauth_url = oauth_server_url.as_deref().unwrap_or(url);
             match create_oauth_transport_and_runtime(
                 server_name,
                 url,
+                oauth_url,
                 initial_tokens.clone(),
                 store_mode,
                 default_headers.clone(),
@@ -583,6 +599,7 @@ impl RmcpClient {
 async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
+    oauth_url: &str,
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
     default_headers: HeaderMap,
@@ -592,7 +609,7 @@ async fn create_oauth_transport_and_runtime(
 )> {
     let http_client =
         apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
-    let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
+    let mut oauth_state = OAuthState::new(oauth_url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state
         .set_credentials(
@@ -619,7 +636,7 @@ async fn create_oauth_transport_and_runtime(
 
     let runtime = OAuthPersistor::new(
         server_name.to_string(),
-        url.to_string(),
+        oauth_url.to_string(),
         auth_manager,
         credentials_store,
         Some(initial_tokens),

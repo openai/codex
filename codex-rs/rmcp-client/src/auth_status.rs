@@ -15,6 +15,7 @@ use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::oauth_auth_url_candidates;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
@@ -57,50 +58,69 @@ pub async fn supports_oauth_login(url: &str) -> Result<bool> {
 }
 
 async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
-    let base_url = Url::parse(url)?;
+    let mut supports = false;
 
-    // Use no_proxy to avoid a bug in the system-configuration crate that
-    // can result in a panic. See #8912.
-    let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
-    let client = apply_default_headers(builder, default_headers).build()?;
-
-    let mut last_error: Option<Error> = None;
-    for candidate_path in discovery_paths(base_url.path()) {
-        let mut discovery_url = base_url.clone();
-        discovery_url.set_path(&candidate_path);
-
-        let response = match client
-            .get(discovery_url.clone())
-            .header(OAUTH_DISCOVERY_HEADER, OAUTH_DISCOVERY_VERSION)
-            .send()
-            .await
-        {
-            Ok(response) => response,
+    for candidate_url in oauth_auth_url_candidates(url) {
+        let base_url = match Url::parse(&candidate_url) {
+            Ok(base_url) => base_url,
             Err(err) => {
-                last_error = Some(err.into());
+                debug!("Skipping OAuth discovery candidate `{candidate_url}`: {err:?}");
                 continue;
             }
         };
 
-        if response.status() != StatusCode::OK {
-            continue;
+        // Use no_proxy to avoid a bug in the system-configuration crate that
+        // can result in a panic. See #8912.
+        let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
+        let client = apply_default_headers(builder, default_headers).build()?;
+
+        let mut last_error: Option<Error> = None;
+        for candidate_path in discovery_paths(base_url.path()) {
+            let mut discovery_url = base_url.clone();
+            discovery_url.set_path(&candidate_path);
+
+            let response = match client
+                .get(discovery_url.clone())
+                .header(OAUTH_DISCOVERY_HEADER, OAUTH_DISCOVERY_VERSION)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    last_error = Some(err.into());
+                    continue;
+                }
+            };
+
+            if response.status() != StatusCode::OK {
+                continue;
+            }
+
+            let metadata = match response.json::<OAuthDiscoveryMetadata>().await {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    last_error = Some(err.into());
+                    continue;
+                }
+            };
+
+            if metadata.authorization_endpoint.is_some() && metadata.token_endpoint.is_some() {
+                supports = true;
+                break;
+            }
         }
 
-        let metadata = match response.json::<OAuthDiscoveryMetadata>().await {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                last_error = Some(err.into());
-                continue;
-            }
-        };
+        if let Some(err) = last_error {
+            debug!("OAuth discovery requests failed for {candidate_url}: {err:?}");
+        }
 
-        if metadata.authorization_endpoint.is_some() && metadata.token_endpoint.is_some() {
-            return Ok(true);
+        if supports {
+            break;
         }
     }
 
-    if let Some(err) = last_error {
-        debug!("OAuth discovery requests failed for {url}: {err:?}");
+    if supports {
+        return Ok(true);
     }
 
     Ok(false)

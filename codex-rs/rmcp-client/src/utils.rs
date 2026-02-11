@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use reqwest::ClientBuilder;
+use reqwest::Url;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
@@ -112,6 +113,33 @@ pub(crate) fn apply_default_headers(
     }
 }
 
+pub(crate) fn oauth_auth_url_candidates(server_url: &str) -> Vec<String> {
+    let mut candidates = vec![server_url.to_string()];
+
+    let Ok(mut base_url) = Url::parse(server_url) else {
+        return candidates;
+    };
+
+    let mut trimmed_path = base_url.path().trim_end_matches('/').to_string();
+    if let Some(truncated) = trimmed_path.strip_suffix("/mcp") {
+        trimmed_path = truncated.to_string();
+        if trimmed_path.is_empty() {
+            base_url.set_path("/");
+        } else {
+            base_url.set_path(&trimmed_path);
+        }
+        base_url.set_query(None);
+        base_url.set_fragment(None);
+
+        let fallback = base_url.to_string().trim_end_matches('/').to_string();
+        if !candidates.contains(&fallback) {
+            candidates.push(fallback);
+        }
+    }
+
+    candidates
+}
+
 #[cfg(unix)]
 pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
     "HOME",
@@ -214,5 +242,23 @@ mod tests {
         let _guard = EnvVarGuard::set(custom_var, value);
         let env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
         assert_eq!(env.get(custom_var), Some(&value.to_string()));
+    }
+
+    #[test]
+    fn oauth_auth_url_candidates_returns_input_when_not_mcp_path() {
+        let candidates = oauth_auth_url_candidates("https://example.com/api");
+        assert_eq!(candidates, vec!["https://example.com/api".to_string()]);
+    }
+
+    #[test]
+    fn oauth_auth_url_candidates_strips_trailing_mcp_segment() {
+        let candidates = oauth_auth_url_candidates("https://example.com/mcp");
+        assert_eq!(
+            candidates,
+            vec![
+                "https://example.com/mcp".to_string(),
+                "https://example.com".to_string()
+            ]
+        );
     }
 }
