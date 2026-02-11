@@ -1,3 +1,24 @@
+//! Builds the `/theme` picker dialog for the TUI.
+//!
+//! The picker lists all bundled themes plus any custom `.tmTheme` files found
+//! under `{CODEX_HOME}/themes/`.  It provides:
+//!
+//! - **Live preview:** the `on_selection_changed` callback swaps the runtime
+//!   syntax theme as the user navigates, giving instant visual feedback in both
+//!   the preview panel and any visible code blocks.
+//! - **Cancel-restore:** on dismiss (Esc / Ctrl+C) the `on_cancel` callback
+//!   restores the theme snapshot taken when the picker opened.
+//! - **Persist on confirm:** the `AppEvent::SyntaxThemeSelected` action persists
+//!   `[tui] theme = "..."` to `config.toml` via `ConfigEditsBuilder`.
+//!
+//! Two preview renderables adapt to terminal width:
+//!
+//! - `ThemePreviewWideRenderable` -- vertically centered, inset by 2 columns,
+//!   shown in the side panel when the terminal is wide enough for side-by-side
+//!   layout (>= 44-column side panel and >= 40-column list).
+//! - `ThemePreviewNarrowRenderable` -- compact 4-line snippet stacked below the
+//!   list when side-by-side does not fit.
+
 use std::path::Path;
 
 use crate::app_event::AppEvent;
@@ -122,9 +143,12 @@ const SIDE_CONTENT_GAP: u16 = 2;
 /// Minimum list width required for side-by-side mode in the selection popup.
 const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 
-/// Renders a syntax-highlighted code snippet below the theme list so users can
-/// preview what each theme looks like on real code.
+/// Side-by-side preview: syntax-highlighted Rust diff snippet, vertically
+/// centered with a 2-column left inset.  Fills the entire side panel height.
 struct ThemePreviewWideRenderable;
+
+/// Stacked preview: compact 4-line Rust diff snippet shown below the list
+/// when the terminal is too narrow for side-by-side layout.
 struct ThemePreviewNarrowRenderable;
 
 fn preview_diff_line_type(kind: PreviewDiffKind) -> DiffLineType {
@@ -272,6 +296,12 @@ fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>)
 ///
 /// Lists all bundled themes plus custom `.tmTheme` files, with live preview
 /// on cursor movement and cancel-restore.
+///
+/// `current_name` should be the value of `Config::tui_theme` (the persisted
+/// preference).  When it names a theme that is currently available the picker
+/// pre-selects it; otherwise the picker falls back to the active runtime theme
+/// (from adaptive auto-detection) so opening the picker without a persisted
+/// preference still highlights the correct entry.
 pub(crate) fn build_theme_picker_params(
     current_name: Option<&str>,
     codex_home: Option<&Path>,
