@@ -93,6 +93,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -1597,16 +1598,43 @@ impl Session {
     }
 
     pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
-        let mut state = self.state.lock().await;
-        state.take_startup_regular_task()
+        let startup_regular_task = {
+            let mut state = self.state.lock().await;
+            state.take_startup_regular_task()
+        };
+        let startup_regular_task = startup_regular_task?;
+        match startup_regular_task.await {
+            Ok(Ok(regular_task)) => Some(regular_task),
+            Ok(Err(err)) => {
+                warn!("startup websocket prewarm setup failed: {err:#}");
+                None
+            }
+            Err(err) => {
+                warn!("startup websocket prewarm setup join failed: {err}");
+                None
+            }
+        }
     }
 
-    async fn schedule_startup_prewarm(&self, base_instructions: String) {
+    async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
+        let sess = Arc::clone(self);
+        let startup_regular_task: JoinHandle<CodexResult<RegularTask>> =
+            tokio::spawn(
+                async move { sess.schedule_startup_prewarm_inner(base_instructions).await },
+            );
+        let mut state = self.state.lock().await;
+        state.set_startup_regular_task(startup_regular_task);
+    }
+
+    async fn schedule_startup_prewarm_inner(
+        self: &Arc<Self>,
+        base_instructions: String,
+    ) -> CodexResult<RegularTask> {
         let startup_turn_context = self
             .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
             .await;
         let startup_cancellation_token = CancellationToken::new();
-        let startup_router = match built_tools(
+        let startup_router = built_tools(
             self,
             startup_turn_context.as_ref(),
             &[],
@@ -1614,18 +1642,7 @@ impl Session {
             None,
             &startup_cancellation_token,
         )
-        .await
-        {
-            Ok(router) => router,
-            Err(err) => {
-                warn!("failed to build startup prewarm tools: {err:#}");
-                Arc::new(ToolRouter::from_config(
-                    &startup_turn_context.tools_config,
-                    Some(HashMap::new()),
-                    startup_turn_context.dynamic_tools.as_slice(),
-                ))
-            }
-        };
+        .await?;
         let startup_prompt = build_prompt(
             Vec::new(),
             startup_router.as_ref(),
@@ -1634,18 +1651,15 @@ impl Session {
                 text: base_instructions,
             },
         );
-        let startup_turn_metadata_header = {
-            let startup_turn_context = Arc::clone(&startup_turn_context);
-            async move { startup_turn_context.resolve_turn_metadata_header().await }.boxed()
-        };
-        let startup_regular_task = RegularTask::with_startup_prewarm(
+        let startup_turn_metadata_header =
+            startup_turn_context.resolve_turn_metadata_header().await;
+        Ok(RegularTask::with_startup_prewarm(
             self.services.model_client.clone(),
             startup_prompt,
             startup_turn_context,
             startup_turn_metadata_header,
-        );
-        let mut state = self.state.lock().await;
-        state.set_startup_regular_task(startup_regular_task);
+        )
+        .await)
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
