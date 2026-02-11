@@ -1963,7 +1963,7 @@ impl CodexMessageProcessor {
                 // Auto-attach a thread listener when starting a thread.
                 // Use the same behavior as the v1 API, with opt-in support for raw item events.
                 if let Err(err) = self
-                    .attach_conversation_listener(
+                    .ensure_conversation_listener(
                         thread_id,
                         request_id.connection_id,
                         experimental_raw_events,
@@ -3035,7 +3035,7 @@ impl CodexMessageProcessor {
         };
         // Auto-attach a conversation listener when forking a thread.
         if let Err(err) = self
-            .attach_conversation_listener(
+            .ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
                 false,
@@ -5157,7 +5157,7 @@ impl CodexMessageProcessor {
             })?;
 
         if let Err(err) = self
-            .attach_conversation_listener(
+            .ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
                 false,
@@ -5307,23 +5307,38 @@ impl CodexMessageProcessor {
             conversation_id,
             experimental_raw_events,
         } = params;
-        match self
-            .attach_conversation_listener(
+        let conversation = match self.thread_manager.get_thread(conversation_id).await {
+            Ok(conv) => conv,
+            Err(_) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("thread not found: {conversation_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let subscription_id = Uuid::new_v4();
+        let thread_state = self
+            .thread_state_manager
+            .set_listener(
+                subscription_id,
                 conversation_id,
                 request_id.connection_id,
                 experimental_raw_events,
-                ApiVersion::V1,
             )
-            .await
-        {
-            Ok(subscription_id) => {
-                let response = AddConversationSubscriptionResponse { subscription_id };
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-            }
-        }
+            .await;
+        self.ensure_listener_task_running(
+            conversation_id,
+            conversation,
+            thread_state,
+            ApiVersion::V1,
+        )
+        .await;
+
+        let response = AddConversationSubscriptionResponse { subscription_id };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn remove_thread_listener(
@@ -5353,45 +5368,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn attach_conversation_listener(
-        &mut self,
-        conversation_id: ThreadId,
-        connection_id: ConnectionId,
-        raw_events_enabled: bool,
-        api_version: ApiVersion,
-    ) -> Result<Uuid, JSONRPCErrorError> {
-        let conversation = match self.thread_manager.get_thread(conversation_id).await {
-            Ok(conv) => conv,
-            Err(_) => {
-                return Err(JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("thread not found: {conversation_id}"),
-                    data: None,
-                });
-            }
-        };
-
-        let subscription_id = Uuid::new_v4();
-        let thread_state = self
-            .thread_state_manager
-            .set_listener(
-                subscription_id,
-                conversation_id,
-                connection_id,
-                raw_events_enabled,
-            )
-            .await;
-        self.start_conversation_listener(
-            conversation_id,
-            conversation,
-            thread_state,
-            raw_events_enabled,
-            api_version,
-        )
-        .await;
-        Ok(subscription_id)
-    }
-
     async fn ensure_conversation_listener(
         &mut self,
         conversation_id: ThreadId,
@@ -5413,23 +5389,16 @@ impl CodexMessageProcessor {
             .thread_state_manager
             .ensure_connection_subscribed(conversation_id, connection_id, raw_events_enabled)
             .await;
-        self.start_conversation_listener(
-            conversation_id,
-            conversation,
-            thread_state,
-            raw_events_enabled,
-            api_version,
-        )
-        .await;
+        self.ensure_listener_task_running(conversation_id, conversation, thread_state, api_version)
+            .await;
         Ok(())
     }
 
-    async fn start_conversation_listener(
+    async fn ensure_listener_task_running(
         &self,
         conversation_id: ThreadId,
         conversation: Arc<CodexThread>,
         thread_state: Arc<Mutex<ThreadState>>,
-        _raw_events_enabled: bool,
         api_version: ApiVersion,
     ) {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
