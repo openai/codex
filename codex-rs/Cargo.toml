@@ -15,6 +15,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "companion",
     "common",
     "core",
     "hooks",
@@ -80,6 +81,7 @@ codex-backend-client = { path = "backend-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
+codex-companion = { path = "companion" }
 codex-client = { path = "codex-client" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }

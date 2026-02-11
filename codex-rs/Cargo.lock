@@ -805,6 +805,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -823,8 +824,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1513,6 +1516,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-tasks",
  "codex-common",
+ "codex-companion",
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
@@ -1636,6 +1640,27 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
+name = "codex-companion"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "futures",
+ "include_dir",
+ "mime_guess",
+ "pretty_assertions",
+ "rand 0.9.2",
+ "reqwest",
+ "serde",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]

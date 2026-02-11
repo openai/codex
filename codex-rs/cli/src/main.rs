@@ -17,6 +17,7 @@ use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
+use codex_companion::CompanionOptions;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -73,6 +74,22 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     interactive: TuiCli,
+
+    /// [experimental] Launch a local browser UI backed by `codex app-server`.
+    #[arg(long = "companion", default_value_t = false)]
+    companion: bool,
+
+    /// Port to bind the companion server to (0 picks a free port).
+    #[arg(long = "companion-port", value_name = "PORT", default_value_t = 0)]
+    companion_port: u16,
+
+    /// Do not auto-open the browser.
+    #[arg(long = "companion-no-open", default_value_t = false)]
+    companion_no_open: bool,
+
+    /// Use an external UI URL (for example Vite dev server) instead of embedded assets.
+    #[arg(long = "companion-ui-dev-url", value_name = "URL")]
+    companion_ui_dev_url: Option<String>,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -545,6 +562,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         config_overrides: mut root_config_overrides,
         feature_toggles,
         mut interactive,
+        companion,
+        companion_port,
+        companion_no_open,
+        companion_ui_dev_url,
         subcommand,
     } = MultitoolCli::parse();
 
@@ -552,14 +573,29 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
 
+    if companion && subcommand.is_some() {
+        anyhow::bail!("--companion cannot be used with subcommands; run `codex --companion`");
+    }
+
     match subcommand {
         None => {
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
-            handle_app_exit(exit_info)?;
+            if companion {
+                let options = CompanionOptions::new(
+                    companion_port,
+                    !companion_no_open,
+                    companion_ui_dev_url,
+                    root_config_overrides.raw_overrides.clone(),
+                    interactive.prompt.clone(),
+                );
+                codex_companion::run(options).await?;
+            } else {
+                let exit_info = run_interactive_tui(interactive, codex_linux_sandbox_exe).await?;
+                handle_app_exit(exit_info)?;
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -1034,6 +1070,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1063,6 +1100,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
@@ -1102,6 +1140,33 @@ mod tests {
             unreachable!()
         };
         app_server
+    }
+
+    #[test]
+    fn companion_flag_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--companion"].as_ref()).expect("parse");
+        assert!(cli.companion);
+        assert_eq!(cli.companion_port, 0);
+        assert!(!cli.companion_no_open);
+        assert_eq!(cli.companion_ui_dev_url, None);
+    }
+
+    #[test]
+    fn companion_dev_url_parses() {
+        let cli = MultitoolCli::try_parse_from(
+            [
+                "codex",
+                "--companion",
+                "--companion-ui-dev-url",
+                "http://127.0.0.1:5173",
+            ]
+            .as_ref(),
+        )
+        .expect("parse");
+        assert_eq!(
+            cli.companion_ui_dev_url,
+            Some("http://127.0.0.1:5173".to_string())
+        );
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

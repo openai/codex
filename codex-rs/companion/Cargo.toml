@@ -1,0 +1,31 @@
+[package]
+name = "codex-companion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_companion"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, default-features = false, features = ["http1", "query", "tokio", "ws"] }
+base64 = { workspace = true }
+futures = { workspace = true }
+include_dir = { workspace = true }
+mime_guess = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal"] }
+tracing = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
