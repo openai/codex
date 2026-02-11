@@ -460,8 +460,8 @@ impl App {
                     &mut self.transcript_cells,
                     rollback.num_turns,
                 ) {
-                    // Keep inline-mode scrollback synced when rollback came from replay
-                    // or another client rather than this UI's pending backtrack flow.
+                    // This rollback was not initiated by the current backtrack flow.
+                    // Refresh visible chat history so removed messages disappear.
                     self.backtrack_render_pending = true;
                 }
             }
