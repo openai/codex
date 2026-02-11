@@ -416,9 +416,7 @@ pub struct UsageLimitReachedError {
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Pro users might hit a non-standard codex metered bucket.
-        if matches!(self.plan_type, Some(PlanType::Known(KnownPlan::Pro)))
-            && let Some(limit_name) = self.limit_name.as_deref()
+        if let Some(limit_name) = self.limit_name.as_deref()
             && !limit_name.eq_ignore_ascii_case("codex")
         {
             return write!(
@@ -1002,13 +1000,13 @@ mod tests {
     }
 
     #[test]
-    fn usage_limit_reached_error_hides_upsell_for_pro_non_codex_limit() {
+    fn usage_limit_reached_error_hides_upsell_for_non_codex_limit_name() {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
         let resets_at = base + ChronoDuration::hours(1);
         with_now_override(base, move || {
             let expected_time = format_retry_timestamp(&resets_at);
             let err = UsageLimitReachedError {
-                plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                plan_type: Some(PlanType::Known(KnownPlan::Plus)),
                 resets_at: Some(resets_at),
                 rate_limits: Some(Box::new(rate_limit_snapshot())),
                 promo_message: Some(

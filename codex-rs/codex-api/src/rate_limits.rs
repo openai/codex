@@ -18,15 +18,15 @@ impl Display for RateLimitError {
     }
 }
 
-/// Parses the bespoke Codex rate-limit headers into a `RateLimitSnapshot`.
-pub fn parse_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
+/// Parses the default Codex rate-limit header family into a `RateLimitSnapshot`.
+pub fn parse_default_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
     parse_rate_limit_for_limit(headers, None)
 }
 
 /// Parses all known rate-limit header families into update records keyed by limit id.
-pub fn parse_rate_limit_updates(headers: &HeaderMap) -> Vec<RateLimitSnapshot> {
+pub fn parse_all_rate_limits(headers: &HeaderMap) -> Vec<RateLimitSnapshot> {
     let mut snapshots = Vec::new();
-    if let Some(snapshot) = parse_rate_limit(headers) {
+    if let Some(snapshot) = parse_default_rate_limit(headers) {
         snapshots.push(snapshot);
     }
 
@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_rate_limit_updates_reads_all_limit_families() {
+    fn parse_all_rate_limits_reads_all_limit_families() {
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-codex-primary-used-percent",
@@ -343,7 +343,7 @@ mod tests {
             HeaderValue::from_static("80"),
         );
 
-        let updates = parse_rate_limit_updates(&headers);
+        let updates = parse_all_rate_limits(&headers);
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].limit_id.as_deref(), Some("codex"));
         assert_eq!(updates[1].limit_id.as_deref(), Some("codex_secondary"));
@@ -352,10 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_rate_limit_updates_includes_default_codex_snapshot() {
+    fn parse_all_rate_limits_includes_default_codex_snapshot() {
         let headers = HeaderMap::new();
 
-        let updates = parse_rate_limit_updates(&headers);
+        let updates = parse_all_rate_limits(&headers);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].limit_id.as_deref(), Some("codex"));
         assert_eq!(updates[0].limit_name, None);

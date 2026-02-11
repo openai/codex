@@ -1,7 +1,7 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
-use crate::rate_limits::parse_rate_limit_updates;
+use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
@@ -54,7 +54,7 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
-    let rate_limit_snapshots = parse_rate_limit_updates(&stream_response.headers);
+    let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
         .headers
         .get("X-Models-Etag")
