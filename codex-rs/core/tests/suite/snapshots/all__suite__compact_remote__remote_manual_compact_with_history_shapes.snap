@@ -1,12 +1,13 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1879
-expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "sectioned_request_shapes(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
+Scenario: Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.
+
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_MANUAL_FIRST_REPLY
 
@@ -14,6 +15,6 @@ expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact
 00:message/user:USER_ONE
 01:message/developer:<PERMISSIONS_INSTRUCTIONS>
 02:message/user:<AGENTS_MD>
-03:message/user:<ENVIRONMENT_CONTEXT>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:<SUMMARY:REMOTE_MANUAL_WITH_HISTORY_SUMMARY>
 05:message/user:USER_TWO

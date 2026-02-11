@@ -1,12 +1,13 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1727
-expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "sectioned_request_shapes(\"Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
+Scenario: Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
+
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:function_call/<TOOL_CALL>
 05:function_call_output:<TOOL_ERROR_OUTPUT>
@@ -15,5 +16,5 @@ expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact
 00:message/user:USER_ONE
 01:message/developer:<PERMISSIONS_INSTRUCTIONS>
 02:message/user:<AGENTS_MD>
-03:message/user:<ENVIRONMENT_CONTEXT>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:<SUMMARY:REMOTE_MID_TURN_SUMMARY>

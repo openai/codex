@@ -28,6 +28,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
@@ -66,6 +67,8 @@ const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
+const PRETURN_CONTEXT_DIFF_CWD_MARKER: &str = "PRETURN_CONTEXT_DIFF_CWD";
+const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
 
@@ -207,14 +210,33 @@ fn normalize_shape_text(text: &str) -> String {
     if text.starts_with("# AGENTS.md instructions for ") {
         return "<AGENTS_MD>".to_string();
     }
-    if text.starts_with("<environment_context>") {
-        return "<ENVIRONMENT_CONTEXT>".to_string();
+    if let Some(env_context) = normalize_environment_context_for_shape(text) {
+        return env_context;
     }
     if text.contains("<permissions instructions>") {
         return "<PERMISSIONS_INSTRUCTIONS>".to_string();
     }
 
     text.replace('\n', "\\n")
+}
+
+fn normalize_environment_context_for_shape(text: &str) -> Option<String> {
+    if !text.starts_with("<environment_context>") {
+        return None;
+    }
+    let cwd = text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let cwd = trimmed.strip_prefix("<cwd>")?.strip_suffix("</cwd>")?;
+        Some(if cwd.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER) {
+            PRETURN_CONTEXT_DIFF_CWD_MARKER.to_string()
+        } else {
+            "<CWD>".to_string()
+        })
+    });
+    Some(match cwd {
+        Some(cwd) => format!("<ENVIRONMENT_CONTEXT:cwd={cwd}>"),
+        None => "<ENVIRONMENT_CONTEXT:cwd=<NONE>>".to_string(),
+    })
 }
 
 fn message_text_for_shape(item: &Value) -> String {
@@ -319,12 +341,13 @@ fn request_input_shape(request: &ResponsesRequest) -> String {
         .join("\n")
 }
 
-fn sectioned_request_shapes(sections: &[(&str, &ResponsesRequest)]) -> String {
-    sections
+fn sectioned_request_shapes(scenario: &str, sections: &[(&str, &ResponsesRequest)]) -> String {
+    let sections = sections
         .iter()
         .map(|(title, request)| format!("## {title}\n{}", request_input_shape(request)))
         .collect::<Vec<String>>()
-        .join("\n\n")
+        .join("\n\n");
+    format!("Scenario: {scenario}\n\n{sections}")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3130,6 +3153,20 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             .expect("submit user input");
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     }
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("override turn context");
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
     codex
@@ -3156,14 +3193,21 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     let follow_up_shape = request_input_shape(&requests[3]);
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
-        sectioned_request_shapes(&[
-            ("Local Compaction Request", &requests[2]),
-            ("Local Post-Compaction History Layout", &requests[3]),
-        ])
+        sectioned_request_shapes(
+            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded on main.",
+            &[
+                ("Local Compaction Request", &requests[2]),
+                ("Local Post-Compaction History Layout", &requests[3]),
+            ]
+        )
     );
     assert!(
         compact_shape.contains("<SUMMARIZATION_PROMPT>"),
         "expected compact request to include summarization prompt"
+    );
+    assert!(
+        compact_shape.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER),
+        "expected compact request to include pre-turn context diff"
     );
     assert!(
         !compact_shape.contains("USER_THREE"),
@@ -3271,10 +3315,13 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     let include_attempt_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
-        sectioned_request_shapes(&[(
-            "Local Compaction Request (Incoming User Excluded on main)",
-            &requests[1]
-        ),])
+        sectioned_request_shapes(
+            "Pre-turn auto-compaction context-window failure on main: compaction request excludes the incoming user message and the turn errors.",
+            &[(
+                "Local Compaction Request (Incoming User Excluded on main)",
+                &requests[1]
+            ),]
+        )
     );
 
     assert!(
@@ -3342,10 +3389,13 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
     let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",
-        sectioned_request_shapes(&[
-            ("Local Compaction Request", &requests[1]),
-            ("Local Post-Compaction History Layout", &requests[2]),
-        ])
+        sectioned_request_shapes(
+            "Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
+            &[
+                ("Local Compaction Request", &requests[1]),
+                ("Local Post-Compaction History Layout", &requests[2]),
+            ]
+        )
     );
     assert!(
         compact_shape.contains("function_call_output"),
@@ -3405,7 +3455,10 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     let follow_up_shape = request_input_shape(&requests[0]);
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
-        sectioned_request_shapes(&[("Local Post-Compaction History Layout", &requests[0]),])
+        sectioned_request_shapes(
+            "Manual /compact with no prior user turn behaves as a no-op and follow-up turn carries only canonical initial context plus the new user message.",
+            &[("Local Post-Compaction History Layout", &requests[0]),]
+        )
     );
     assert!(
         !follow_up_shape.contains("<SUMMARY:MANUAL_EMPTY_SUMMARY>"),
@@ -3479,10 +3532,13 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
     let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "manual_compact_with_history_shapes",
-        sectioned_request_shapes(&[
-            ("Local Compaction Request", &requests[1]),
-            ("Local Post-Compaction History Layout", &requests[2]),
-        ])
+        sectioned_request_shapes(
+            "Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.",
+            &[
+                ("Local Compaction Request", &requests[1]),
+                ("Local Post-Compaction History Layout", &requests[2]),
+            ]
+        )
     );
     assert!(
         compact_shape.contains("USER_ONE"),

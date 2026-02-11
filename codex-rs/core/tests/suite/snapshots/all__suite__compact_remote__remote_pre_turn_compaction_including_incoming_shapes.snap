@@ -1,16 +1,18 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1546
-expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[2]),])"
+expression: "sectioned_request_shapes(\"Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message on main.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[2]),])"
 ---
+Scenario: Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message on main.
+
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_FIRST_REPLY
 05:message/user:USER_TWO
 06:message/assistant:REMOTE_SECOND_REPLY
+07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
 
 ## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
@@ -18,6 +20,6 @@ expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact
 02:message/user:USER_THREE
 03:message/developer:<PERMISSIONS_INSTRUCTIONS>
 04:message/user:<AGENTS_MD>
-05:message/user:<ENVIRONMENT_CONTEXT>
+05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
 06:message/user:<SUMMARY:REMOTE_PRE_TURN_SUMMARY>
 07:message/user:USER_THREE
