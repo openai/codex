@@ -874,27 +874,10 @@ impl ChatComposer {
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
-        let local_image_count = local_image_paths.len();
-        let image_placeholders_in_order = image_placeholders_in_element_order(
-            &text,
-            &text_elements,
-            self.remote_image_urls.len(),
-            local_image_count,
-        );
-        if image_placeholders_in_order.is_empty() {
-            for (idx, path) in local_image_paths.into_iter().enumerate() {
-                let placeholder = local_image_label_text(self.remote_image_urls.len() + idx + 1);
-                self.attached_images
-                    .push(AttachedImage { placeholder, path });
-            }
-        } else {
-            for (path, placeholder) in local_image_paths
-                .into_iter()
-                .zip(image_placeholders_in_order.into_iter())
-            {
-                self.attached_images
-                    .push(AttachedImage { placeholder, path });
-            }
+        for (idx, path) in local_image_paths.into_iter().enumerate() {
+            let placeholder = local_image_label_text(self.remote_image_urls.len() + idx + 1);
+            self.attached_images
+                .push(AttachedImage { placeholder, path });
         }
 
         self.bind_mentions_from_snapshot(mention_bindings);
@@ -3748,33 +3731,6 @@ impl ChatComposer {
     }
 }
 
-fn image_placeholders_in_element_order(
-    text: &str,
-    text_elements: &[TextElement],
-    remote_image_count: usize,
-    local_image_count: usize,
-) -> Vec<String> {
-    if local_image_count == 0 {
-        return Vec::new();
-    }
-    let known_placeholders: HashSet<String> = (1..=(remote_image_count + local_image_count))
-        .map(local_image_label_text)
-        .collect();
-    let mut ordered = text_elements.to_vec();
-    ordered.sort_by_key(|elem| elem.byte_range.start);
-    let mut seen = HashSet::new();
-    let mut placeholders = Vec::new();
-    for elem in ordered {
-        if let Some(placeholder) = elem.placeholder(text).map(str::to_string)
-            && known_placeholders.contains(&placeholder)
-            && seen.insert(placeholder.clone())
-        {
-            placeholders.push(placeholder);
-        }
-    }
-    placeholders
-}
-
 fn prompt_selection_action(
     prompt: &CustomPrompt,
     first_line: &str,
@@ -4464,10 +4420,10 @@ mod tests {
         );
         let remote_image_url = "https://example.com/one.png".to_string();
         composer.set_remote_image_urls(vec![remote_image_url.clone()]);
-        let text = "[Image #1] draft".to_string();
+        let text = "[Image #2] draft".to_string();
         let text_elements = vec![TextElement::new(
-            (0.."[Image #1]".len()).into(),
-            Some("[Image #1]".to_string()),
+            (0.."[Image #2]".len()).into(),
+            Some("[Image #2]".to_string()),
         )];
         let local_image_path = PathBuf::from("/tmp/local-draft.png");
         composer.set_text_content(text, text_elements, vec![local_image_path.clone()]);
@@ -4494,7 +4450,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_history_entry_relabels_legacy_local_placeholders_after_remote_prefix() {
+    fn apply_history_entry_preserves_local_placeholders_after_remote_prefix() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -4508,10 +4464,10 @@ mod tests {
         let remote_image_url = "https://example.com/one.png".to_string();
         let local_image_path = PathBuf::from("/tmp/local-draft.png");
         composer.apply_history_entry(HistoryEntry::with_pending_and_remote(
-            "[Image #1] draft".to_string(),
+            "[Image #2] draft".to_string(),
             vec![TextElement::new(
-                (0.."[Image #1]".len()).into(),
-                Some("[Image #1]".to_string()),
+                (0.."[Image #2]".len()).into(),
+                Some("[Image #2]".to_string()),
             )],
             vec![local_image_path.clone()],
             Vec::new(),

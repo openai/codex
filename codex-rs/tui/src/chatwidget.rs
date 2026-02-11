@@ -694,25 +694,14 @@ pub(crate) fn create_initial_user_message(
     if text.is_empty() && local_image_paths.is_empty() {
         None
     } else {
-        let local_image_count = local_image_paths.len();
-        let placeholders =
-            image_placeholders_in_element_order(&text, &text_elements, local_image_count);
-        let local_images = if placeholders.is_empty() {
-            local_image_paths
-                .into_iter()
-                .enumerate()
-                .map(|(idx, path)| LocalImageAttachment {
-                    placeholder: local_image_label_text(idx + 1),
-                    path,
-                })
-                .collect()
-        } else {
-            local_image_paths
-                .into_iter()
-                .zip(placeholders)
-                .map(|(path, placeholder)| LocalImageAttachment { placeholder, path })
-                .collect()
-        };
+        let local_images = local_image_paths
+            .into_iter()
+            .enumerate()
+            .map(|(idx, path)| LocalImageAttachment {
+                placeholder: local_image_label_text(idx + 1),
+                path,
+            })
+            .collect();
         Some(UserMessage {
             text,
             local_images,
@@ -721,32 +710,6 @@ pub(crate) fn create_initial_user_message(
             mention_bindings: Vec::new(),
         })
     }
-}
-
-fn image_placeholders_in_element_order(
-    text: &str,
-    text_elements: &[TextElement],
-    local_image_count: usize,
-) -> Vec<String> {
-    if local_image_count == 0 {
-        return Vec::new();
-    }
-    let known_placeholders: HashSet<String> = (1..=local_image_count)
-        .map(local_image_label_text)
-        .collect();
-    let mut ordered = text_elements.to_vec();
-    ordered.sort_by_key(|elem| elem.byte_range.start);
-    let mut seen = HashSet::new();
-    let mut placeholders = Vec::new();
-    for elem in ordered {
-        if let Some(placeholder) = elem.placeholder(text).map(str::to_string)
-            && known_placeholders.contains(&placeholder)
-            && seen.insert(placeholder.clone())
-        {
-            placeholders.push(placeholder);
-        }
-    }
-    placeholders
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
