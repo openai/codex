@@ -1,5 +1,4 @@
 use std::env;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -47,6 +46,10 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let src_dir = resolve_bwrap_source_dir(&manifest_dir)?;
 
+    let libcap = pkg_config::Config::new()
+        .probe("libcap")
+        .map_err(|err| format!("libcap not available via pkg-config: {err}"))?;
+
     let config_h = out_dir.join("config.h");
     std::fs::write(
         &config_h,
@@ -67,82 +70,14 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
         .define("_GNU_SOURCE", None)
         // Rename `main` so we can call it via FFI.
         .define("main", Some("bwrap_main"));
-    configure_libcap_support(&mut build, &out_dir)?;
+
+    for include_path in libcap.include_paths {
+        build.include(include_path);
+    }
 
     build.compile("build_time_bwrap");
     println!("cargo:rustc-cfg=vendored_bwrap_available");
     Ok(())
-}
-
-fn configure_libcap_support(build: &mut cc::Build, out_dir: &Path) -> Result<(), String> {
-    match pkg_config::Config::new().probe("libcap") {
-        Ok(libcap) => {
-            for include_path in libcap.include_paths {
-                build.include(include_path);
-            }
-            Ok(())
-        }
-        Err(err) => {
-            // Cross builds often don't have a target libcap pkg-config entry.
-            // We only need `cap_from_name` for user-provided --cap-add/--cap-drop
-            // options, which codex does not use. Provide a tiny compatibility
-            // implementation so vendored bwrap can still compile.
-            let shim_include_dir = out_dir.join("sys");
-            fs::create_dir_all(&shim_include_dir).map_err(|create_err| {
-                format!(
-                    "failed to create libcap shim include dir {}: {create_err}",
-                    shim_include_dir.display()
-                )
-            })?;
-
-            let shim_header = shim_include_dir.join("capability.h");
-            fs::write(
-                &shim_header,
-                r#"#pragma once
-#include <linux/capability.h>
-
-typedef int cap_value_t;
-int cap_from_name(const char *name, cap_value_t *cap);
-"#,
-            )
-            .map_err(|write_err| {
-                format!(
-                    "failed to write libcap shim header {}: {write_err}",
-                    shim_header.display()
-                )
-            })?;
-
-            let shim_source = out_dir.join("libcap_compat.c");
-            fs::write(
-                &shim_source,
-                r#"#include <errno.h>
-#include <stddef.h>
-#include <sys/capability.h>
-
-int cap_from_name(const char *name, cap_value_t *cap) {
-  (void)name;
-  if (cap != NULL) {
-    *cap = -1;
-  }
-  errno = EINVAL;
-  return -1;
-}
-"#,
-            )
-            .map_err(|write_err| {
-                format!(
-                    "failed to write libcap shim source {}: {write_err}",
-                    shim_source.display()
-                )
-            })?;
-
-            build.file(&shim_source);
-            println!(
-                "cargo:warning=libcap not available via pkg-config ({err}); using compatibility shim for cap_from_name"
-            );
-            Ok(())
-        }
-    }
 }
 
 /// Resolve the bubblewrap source directory used for build-time compilation.
