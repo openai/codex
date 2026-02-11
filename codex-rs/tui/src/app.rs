@@ -1604,15 +1604,16 @@ impl App {
                 is_installed,
                 is_enabled,
             } => {
-                self.chat_widget.open_app_link_view(
-                    app_id,
-                    title,
-                    description,
-                    instructions,
-                    url,
-                    is_installed,
-                    is_enabled,
-                );
+                self.chat_widget
+                    .open_app_link_view(crate::bottom_pane::AppLinkViewParams {
+                        app_id,
+                        title,
+                        description,
+                        instructions,
+                        url,
+                        is_installed,
+                        is_enabled,
+                    });
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);

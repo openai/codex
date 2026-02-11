@@ -32,6 +32,16 @@ enum AppLinkScreen {
     InstallConfirmation,
 }
 
+pub(crate) struct AppLinkViewParams {
+    pub(crate) app_id: String,
+    pub(crate) title: String,
+    pub(crate) description: Option<String>,
+    pub(crate) instructions: String,
+    pub(crate) url: String,
+    pub(crate) is_installed: bool,
+    pub(crate) is_enabled: bool,
+}
+
 pub(crate) struct AppLinkView {
     app_id: String,
     title: String,
@@ -47,16 +57,16 @@ pub(crate) struct AppLinkView {
 }
 
 impl AppLinkView {
-    pub(crate) fn new(
-        app_id: String,
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-        is_enabled: bool,
-        app_event_tx: AppEventSender,
-    ) -> Self {
+    pub(crate) fn new(params: AppLinkViewParams, app_event_tx: AppEventSender) -> Self {
+        let AppLinkViewParams {
+            app_id,
+            title,
+            description,
+            instructions,
+            url,
+            is_installed,
+            is_enabled,
+        } = params;
         Self {
             app_id,
             title,
@@ -432,13 +442,15 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let view = AppLinkView::new(
-            "connector_1".to_string(),
-            "Notion".to_string(),
-            None,
-            "Manage app".to_string(),
-            "https://example.test/notion".to_string(),
-            true,
-            true,
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
             tx,
         );
 
@@ -453,13 +465,15 @@ mod tests {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut view = AppLinkView::new(
-            "connector_1".to_string(),
-            "Notion".to_string(),
-            None,
-            "Manage app".to_string(),
-            "https://example.test/notion".to_string(),
-            true,
-            true,
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
             tx,
         );
 

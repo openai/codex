@@ -1147,26 +1147,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_app_link_view(
-        &mut self,
-        app_id: String,
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-        is_enabled: bool,
-    ) {
-        let view = crate::bottom_pane::AppLinkView::new(
-            app_id,
-            title,
-            description,
-            instructions,
-            url,
-            is_installed,
-            is_enabled,
-            self.app_event_tx.clone(),
-        );
+    pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {
+        let view = crate::bottom_pane::AppLinkView::new(params, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
