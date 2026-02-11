@@ -7,6 +7,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -17,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -95,6 +97,7 @@ async fn start_review_conversation(
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    sub_agent_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
 
     let model = config
         .review_model

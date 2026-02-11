@@ -48,7 +48,7 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -76,13 +76,60 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: windows-latest
+          - runner: windows-x64
             target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
             target: aarch64-pc-windows-msvc
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
+      - name: Print runner specs (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(uname -a)"
+          echo "CPU model: $(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/,\"\",$2); print $2; exit}')"
+          echo "Logical CPUs: $(nproc)"
+          echo "Total RAM: $(awk '/MemTotal/ {printf \"%.1f GiB\\n\", $2 / 1024 / 1024}' /proc/meminfo)"
+          echo "Disk usage:"
+          df -h .
+      - name: Print runner specs (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: $(sysctl -n hw.memsize | awk '{printf \"%.1f GiB\\n\", $1 / 1024 / 1024 / 1024}')"
+          echo "Disk usage:"
+          df -h .
+      - name: Print runner specs (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        shell: powershell
+        run: |
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $ramGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "Logical CPUs: $($computer.NumberOfLogicalProcessors)"
+          Write-Host "Physical CPUs: $($computer.NumberOfProcessors)"
+          Write-Host "Total RAM: $ramGiB GiB"
+          Write-Host "Disk usage:"
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
       - name: Install Linux bwrap build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -317,7 +364,7 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - if: ${{ matrix.runner == 'windows-11-arm' }}
+      - if: ${{ matrix.runner == 'windows-arm64' }}
         name: Install zstd
         shell: powershell
         run: choco install -y zstandard

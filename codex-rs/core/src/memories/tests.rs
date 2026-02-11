@@ -1,5 +1,3 @@
-use super::rollout::StageOneRolloutFilter;
-use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
@@ -10,10 +8,6 @@ use crate::memories::rollout_summaries_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
-use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -79,106 +73,6 @@ fn stage_one_output_schema_requires_all_declared_properties() {
     required_keys.sort_unstable();
 
     assert_eq!(required_keys, property_keys);
-}
-
-#[test]
-fn serialize_filtered_rollout_response_items_keeps_response_and_compacted() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::Compacted(CompactedItem {
-            message: "compacted summary".to_string(),
-            replacement_history: None,
-        }),
-    ];
-
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter::response_and_compacted_items(),
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
-
-    assert_eq!(parsed.len(), 2);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
-    assert!(matches!(parsed[1], ResponseItem::Message { .. }));
-}
-
-#[test]
-fn serialize_filtered_rollout_response_items_supports_response_only_filter() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::Compacted(CompactedItem {
-            message: "compacted summary".to_string(),
-            replacement_history: None,
-        }),
-    ];
-
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter {
-            keep_response_items: true,
-            keep_compacted_items: false,
-            response_item_filter: crate::rollout::policy::should_persist_response_item,
-            max_items: None,
-        },
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
-
-    assert_eq!(parsed.len(), 1);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
-}
-
-#[test]
-fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            arguments: "{\"cmd\":\"pwd\"}".to_string(),
-            call_id: "call-1".to_string(),
-        }),
-    ];
-
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter {
-            keep_response_items: true,
-            keep_compacted_items: false,
-            response_item_filter: |item| matches!(item, ResponseItem::Message { .. }),
-            max_items: None,
-        },
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
-
-    assert_eq!(parsed.len(), 1);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
 }
 
 #[tokio::test]

@@ -14,11 +14,11 @@ use tracing::warn;
 use super::StageOneRequestContext;
 use crate::memories::StageOneOutput;
 use crate::memories::prompts::build_stage_one_input_message;
-use crate::memories::rollout::StageOneRolloutFilter;
-use crate::memories::rollout::serialize_filtered_rollout_response_items;
 use crate::memories::stage_one::RAW_MEMORY_PROMPT;
 use crate::memories::stage_one::parse_stage_one_output;
 use crate::memories::stage_one::stage_one_output_schema;
+use crate::rollout::policy::should_persist_response_item;
+use codex_protocol::protocol::RolloutItem;
 use std::path::Path;
 
 pub(super) async fn extract_stage_one_output(
@@ -45,10 +45,7 @@ pub(super) async fn extract_stage_one_output(
         );
     }
 
-    let rollout_contents = match serialize_filtered_rollout_response_items(
-        &rollout_items,
-        StageOneRolloutFilter::default(),
-    ) {
+    let rollout_contents = match serialize_filtered_rollout_response_items(&rollout_items) {
         Ok(contents) => contents,
         Err(err) => {
             warn!(
@@ -147,5 +144,50 @@ async fn collect_response_text_until_completed(stream: &mut ResponseStream) -> C
             ResponseEvent::Completed { .. } => return Ok(output_text),
             _ => {}
         }
+    }
+}
+
+/// Serializes filtered stage-1 memory items for prompt inclusion.
+fn serialize_filtered_rollout_response_items(
+    items: &[RolloutItem],
+) -> crate::error::Result<String> {
+    let filtered = items
+        .iter()
+        .filter_map(|item| {
+            if let RolloutItem::ResponseItem(item) = item
+                && should_persist_response_item(item)
+            {
+                Some(item.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&filtered).map_err(|err| {
+        CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_filtered_rollout_response_items_keeps_response_items_only() {
+        let input = vec![RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "user input".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        })];
+
+        let serialized = serialize_filtered_rollout_response_items(&input).expect("serialize");
+        let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
+
+        pretty_assertions::assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], ResponseItem::Message { .. }));
     }
 }

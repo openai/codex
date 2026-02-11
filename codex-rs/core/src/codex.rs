@@ -220,6 +220,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::js_repl::JsReplHandle;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -510,6 +511,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -549,6 +551,7 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     turn_metadata_header: OnceCell<Option<String>>,
 }
@@ -809,6 +812,7 @@ impl Session {
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
+        js_repl: Arc<JsReplHandle>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration.model_reasoning_summary;
@@ -857,6 +861,7 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_header: OnceCell::new(),
         }
@@ -1123,6 +1128,10 @@ impl Session {
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let prewarm_model_info = models_manager
             .get_model_info(session_configuration.collaboration_mode.model(), &config)
@@ -1150,6 +1159,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1598,6 +1608,7 @@ impl Session {
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
             sub_id,
+            Arc::clone(&self.js_repl),
         );
 
         if let Some(final_schema) = final_output_json_schema {
@@ -3766,6 +3777,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
@@ -4253,11 +4265,13 @@ async fn run_sampling_request(
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
+    let tools =
+        crate::tools::spec::filter_tools_for_model(router.specs(), &turn_context.tools_config);
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = Prompt {
         input,
-        tools: router.specs(),
+        tools,
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
         personality: turn_context.personality,
@@ -5280,9 +5294,9 @@ mod tests {
         ];
 
         let (session, _turn_context) = make_session_and_context().await;
+        let config = test_config();
 
         for test_case in test_cases {
-            let config = test_config();
             let model_info = model_info_for_slug(test_case.slug, &config);
             if test_case.expects_apply_patch_instructions {
                 assert_eq!(
@@ -6298,6 +6312,10 @@ mod tests {
                 Session::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -6308,6 +6326,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&js_repl),
         );
 
         let session = Session {
@@ -6319,6 +6338,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -6435,6 +6455,10 @@ mod tests {
                 Session::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -6445,6 +6469,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&js_repl),
         ));
 
         let session = Arc::new(Session {
@@ -6456,6 +6481,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 

@@ -62,6 +62,7 @@ mod fuzzy_file_search;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod thread_state;
 mod transport;
 
 pub use crate::transport::AppServerTransport;
