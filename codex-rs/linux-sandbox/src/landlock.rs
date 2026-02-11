@@ -162,38 +162,37 @@ fn install_filesystem_landlock_rules_on_current_thread(
 fn install_network_seccomp_filter_on_current_thread(
     mode: NetworkSeccompMode,
 ) -> std::result::Result<(), SandboxErr> {
+    fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: i64) {
+        rules.insert(nr, vec![]); // empty rule vec = unconditional match
+    }
+
     // Build rule map.
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
 
-    // Helper – insert unconditional deny rule for syscall number.
-    let mut deny_syscall = |nr: i64| {
-        rules.insert(nr, vec![]); // empty rule vec = unconditional match
-    };
-
-    deny_syscall(libc::SYS_ptrace);
-    deny_syscall(libc::SYS_io_uring_setup);
-    deny_syscall(libc::SYS_io_uring_enter);
-    deny_syscall(libc::SYS_io_uring_register);
+    deny_syscall(&mut rules, libc::SYS_ptrace);
+    deny_syscall(&mut rules, libc::SYS_io_uring_setup);
+    deny_syscall(&mut rules, libc::SYS_io_uring_enter);
+    deny_syscall(&mut rules, libc::SYS_io_uring_register);
 
     match mode {
         NetworkSeccompMode::Restricted => {
-            deny_syscall(libc::SYS_connect);
-            deny_syscall(libc::SYS_accept);
-            deny_syscall(libc::SYS_accept4);
-            deny_syscall(libc::SYS_bind);
-            deny_syscall(libc::SYS_listen);
-            deny_syscall(libc::SYS_getpeername);
-            deny_syscall(libc::SYS_getsockname);
-            deny_syscall(libc::SYS_shutdown);
-            deny_syscall(libc::SYS_sendto);
-            deny_syscall(libc::SYS_sendmmsg);
+            deny_syscall(&mut rules, libc::SYS_connect);
+            deny_syscall(&mut rules, libc::SYS_accept);
+            deny_syscall(&mut rules, libc::SYS_accept4);
+            deny_syscall(&mut rules, libc::SYS_bind);
+            deny_syscall(&mut rules, libc::SYS_listen);
+            deny_syscall(&mut rules, libc::SYS_getpeername);
+            deny_syscall(&mut rules, libc::SYS_getsockname);
+            deny_syscall(&mut rules, libc::SYS_shutdown);
+            deny_syscall(&mut rules, libc::SYS_sendto);
+            deny_syscall(&mut rules, libc::SYS_sendmmsg);
             // NOTE: allowing recvfrom allows some tools like: `cargo clippy`
             // to run with their socketpair + child processes for sub-proc
             // management.
-            // deny_syscall(libc::SYS_recvfrom);
-            deny_syscall(libc::SYS_recvmmsg);
-            deny_syscall(libc::SYS_getsockopt);
-            deny_syscall(libc::SYS_setsockopt);
+            // deny_syscall(&mut rules, libc::SYS_recvfrom);
+            deny_syscall(&mut rules, libc::SYS_recvmmsg);
+            deny_syscall(&mut rules, libc::SYS_getsockopt);
+            deny_syscall(&mut rules, libc::SYS_setsockopt);
 
             // For `socket` we allow AF_UNIX (arg0 == AF_UNIX) and deny
             // everything else.
@@ -226,7 +225,7 @@ fn install_network_seccomp_filter_on_current_thread(
                 )?,
             ])?;
             rules.insert(libc::SYS_socket, vec![deny_non_inet_sockets]);
-            deny_syscall(libc::SYS_socketpair);
+            deny_syscall(&mut rules, libc::SYS_socketpair);
         }
     }
 
