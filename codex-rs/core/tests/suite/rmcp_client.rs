@@ -333,7 +333,9 @@ async fn stdio_server_reconnects_after_disconnect() -> anyhow::Result<()> {
     assert_eq!(first_env, expected_env_value);
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-    sleep(Duration::from_millis(100)).await;
+    // The test server exits on a background task after the first successful call.
+    // Give it enough headroom on slower CI runners before issuing the next turn.
+    sleep(Duration::from_millis(300)).await;
 
     fixture
         .codex

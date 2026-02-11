@@ -85,6 +85,7 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+const STARTUP_FAILURE_RECONNECT_COOLDOWN: Duration = Duration::from_secs(10);
 
 const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
@@ -266,6 +267,8 @@ impl ManagedClient {
 struct AsyncManagedClient {
     builder: ManagedClientBuilder,
     client: Arc<Mutex<ManagedClientFuture>>,
+    reconnect_lock: Arc<Mutex<()>>,
+    next_startup_reconnect_attempt: Arc<Mutex<Option<Instant>>>,
 }
 
 type ManagedClientFuture = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
@@ -363,6 +366,8 @@ impl AsyncManagedClient {
         Self {
             client: Arc::new(Mutex::new(builder.connect())),
             builder,
+            reconnect_lock: Arc::new(Mutex::new(())),
+            next_startup_reconnect_attempt: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -374,7 +379,29 @@ impl AsyncManagedClient {
         self.client_future().await.await
     }
 
-    async fn reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
+    async fn reconnect(
+        &self,
+        previous_client: Option<&Arc<RmcpClient>>,
+    ) -> Result<ManagedClient, StartupOutcomeError> {
+        let _reconnect_guard = self.reconnect_lock.lock().await;
+        let current_future = self.client_future().await;
+        match current_future.clone().now_or_never() {
+            None => return current_future.await,
+            Some(Ok(current_managed_client)) => {
+                if let Some(previous_client) = previous_client {
+                    if !Arc::ptr_eq(&current_managed_client.client, previous_client) {
+                        return Ok(current_managed_client);
+                    }
+                } else {
+                    return Ok(current_managed_client);
+                }
+            }
+            Some(Err(StartupOutcomeError::Cancelled)) => {
+                return Err(StartupOutcomeError::Cancelled);
+            }
+            Some(Err(StartupOutcomeError::Failed { .. })) => {}
+        }
+
         let future = self.builder.connect();
         {
             let mut guard = self.client.lock().await;
@@ -383,11 +410,33 @@ impl AsyncManagedClient {
         future.await
     }
 
+    async fn should_retry_startup_failure(&self, error: &str) -> bool {
+        if !is_connection_error_message(error) {
+            return false;
+        }
+
+        let mut next_attempt_guard = self.next_startup_reconnect_attempt.lock().await;
+        let now = Instant::now();
+        if let Some(next_attempt) = *next_attempt_guard
+            && now < next_attempt
+        {
+            return false;
+        }
+
+        *next_attempt_guard = Some(now + STARTUP_FAILURE_RECONNECT_COOLDOWN);
+        true
+    }
+
     async fn client_or_reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
         match self.client().await {
             Ok(client) => Ok(client),
             Err(StartupOutcomeError::Cancelled) => Err(StartupOutcomeError::Cancelled),
-            Err(StartupOutcomeError::Failed { .. }) => self.reconnect().await,
+            Err(StartupOutcomeError::Failed { error }) => {
+                if !self.should_retry_startup_failure(&error).await {
+                    return Err(StartupOutcomeError::Failed { error });
+                }
+                self.reconnect(None).await
+            }
         }
     }
 
@@ -536,10 +585,14 @@ impl McpConnectionManager {
             .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))
     }
 
-    async fn reconnect_client(&self, server_name: &str) -> Result<ManagedClient> {
+    async fn reconnect_client(
+        &self,
+        server_name: &str,
+        previous_client: Option<&Arc<RmcpClient>>,
+    ) -> Result<ManagedClient> {
         let async_client = self.async_client_by_name(server_name)?;
         let managed = async_client
-            .reconnect()
+            .reconnect(previous_client)
             .await
             .with_context(|| format!("failed to reconnect MCP server `{server_name}`"))?;
 
@@ -559,7 +612,12 @@ impl McpConnectionManager {
         match async_client.client().await {
             Ok(client) => Ok(client),
             Err(StartupOutcomeError::Cancelled) => Err(anyhow!("MCP startup cancelled")),
-            Err(StartupOutcomeError::Failed { .. }) => self.reconnect_client(name).await,
+            Err(StartupOutcomeError::Failed { error }) => {
+                if !is_connection_error_message(&error) {
+                    return Err(anyhow!("{error}"));
+                }
+                self.reconnect_client(name, None).await
+            }
         }
     }
 
@@ -828,7 +886,9 @@ impl McpConnectionManager {
                 warn!(
                     "MCP tool call for `{server}/{tool}` failed due to connection error; reconnecting and retrying: {error:#}",
                 );
-                let reconnected_client = self.reconnect_client(server).await?;
+                let reconnected_client = self
+                    .reconnect_client(server, Some(&managed_client.client))
+                    .await?;
                 call_tool_with_managed_client(&reconnected_client, server, &tool_name, arguments)
                     .await
             }
@@ -870,7 +930,8 @@ impl McpConnectionManager {
                 warn!(
                     "MCP resources/list for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
                 );
-                let reconnected_client = self.reconnect_client(server).await?;
+                let reconnected_client =
+                    self.reconnect_client(server, Some(&managed.client)).await?;
                 reconnected_client
                     .client
                     .list_resources(params, reconnected_client.tool_timeout)
@@ -901,7 +962,8 @@ impl McpConnectionManager {
                 warn!(
                     "MCP resources/templates/list for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
                 );
-                let reconnected_client = self.reconnect_client(server).await?;
+                let reconnected_client =
+                    self.reconnect_client(server, Some(&managed.client)).await?;
                 reconnected_client
                     .client
                     .list_resource_templates(params, reconnected_client.tool_timeout)
@@ -932,7 +994,8 @@ impl McpConnectionManager {
                 warn!(
                     "MCP resources/read for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
                 );
-                let reconnected_client = self.reconnect_client(server).await?;
+                let reconnected_client =
+                    self.reconnect_client(server, Some(&managed.client)).await?;
                 reconnected_client
                     .client
                     .read_resource(params, reconnected_client.tool_timeout)
@@ -1004,7 +1067,17 @@ async fn call_tool_with_managed_client(
 }
 
 fn is_connection_error(error: &anyhow::Error) -> bool {
-    const CONNECTION_ERROR_HINTS: [&str; 9] = [
+    error.chain().any(|cause| {
+        if cause.downcast_ref::<std::io::Error>().is_some() {
+            return true;
+        }
+
+        is_connection_error_message(&cause.to_string())
+    })
+}
+
+fn is_connection_error_message(message: &str) -> bool {
+    const CONNECTION_ERROR_HINTS: [&str; 10] = [
         "broken pipe",
         "connection reset",
         "connection closed",
@@ -1014,18 +1087,13 @@ fn is_connection_error(error: &anyhow::Error) -> bool {
         "channel closed",
         "client not initialized",
         "not connected",
+        "timed out handshaking with mcp server",
     ];
 
-    error.chain().any(|cause| {
-        if cause.downcast_ref::<std::io::Error>().is_some() {
-            return true;
-        }
-
-        let message = cause.to_string().to_ascii_lowercase();
-        CONNECTION_ERROR_HINTS
-            .iter()
-            .any(|hint| message.contains(hint))
-    })
+    let normalized = message.to_ascii_lowercase();
+    CONNECTION_ERROR_HINTS
+        .iter()
+        .any(|hint| normalized.contains(hint))
 }
 
 async fn emit_update(
@@ -1725,5 +1793,18 @@ mod tests {
         let error = anyhow::anyhow!("unknown tool: echo");
 
         assert!(!is_connection_error(&error));
+    }
+
+    #[test]
+    fn is_connection_error_message_detects_transport_hints() {
+        assert!(is_connection_error_message(
+            "timed out handshaking with MCP server after 10s"
+        ));
+        assert!(is_connection_error_message("connection reset by peer"));
+    }
+
+    #[test]
+    fn is_connection_error_message_ignores_auth_errors() {
+        assert!(!is_connection_error_message("Auth required for server"));
     }
 }
