@@ -5,7 +5,7 @@ expression: "sectioned_request_shapes(\"Manual /compact with no prior user turn 
 Scenario: Manual /compact with no prior user turn behaves as a no-op and follow-up turn carries only canonical initial context plus the new user message.
 
 ## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=<none>]
-01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=<none>]
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=<none>]
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:<SUMMARIZATION_PROMPT>

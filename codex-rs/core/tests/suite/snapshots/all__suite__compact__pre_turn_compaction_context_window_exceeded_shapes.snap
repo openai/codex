@@ -5,9 +5,9 @@ expression: "sectioned_request_shapes(\"Pre-turn auto-compaction context-window 
 Scenario: Pre-turn auto-compaction context-window failure on main: compaction request excludes the incoming user message and the turn errors.
 
 ## Local Compaction Request (Incoming User Excluded on main)
-00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
-01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:message/assistant:FIRST_REPLY
 05:message/user:<SUMMARIZATION_PROMPT>

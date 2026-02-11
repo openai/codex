@@ -5,16 +5,16 @@ expression: "sectioned_request_shapes(\"Remote manual /compact with prior user h
 Scenario: Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.
 
 ## Remote Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
-01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_MANUAL_FIRST_REPLY
 
 ## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
-01:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=USER_ONE;next_user=USER_TWO]
-02:message/user:<AGENTS_MD> [prev_user=USER_ONE;next_user=USER_TWO]
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=USER_ONE;next_user=USER_TWO]
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:<SUMMARY:REMOTE_MANUAL_WITH_HISTORY_SUMMARY>
 05:message/user:USER_TWO
