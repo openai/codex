@@ -1624,26 +1624,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-command"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "codex-protocol",
- "codex-utils-absolute-path",
- "once_cell",
- "pretty_assertions",
- "regex",
- "serde",
- "serde_json",
- "shlex",
- "tree-sitter",
- "tree-sitter-bash",
- "url",
- "which",
-]
-
-[[package]]
 name = "codex-common"
 version = "0.0.0"
 dependencies = [
@@ -1680,7 +1660,6 @@ dependencies = [
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
- "codex-command",
  "codex-core",
  "codex-execpolicy",
  "codex-file-search",
@@ -1691,6 +1670,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -2207,6 +2187,26 @@ dependencies = [
  "sha2",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "codex-shell-command"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "url",
+ "which",
 ]
 
 [[package]]
