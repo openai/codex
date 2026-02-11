@@ -665,6 +665,8 @@ fn wrap_styled_spans(spans: &[RtSpan<'static>], max_cols: usize) -> Vec<Vec<RtSp
                 };
                 let ch_len = ch.len_utf8();
                 current_line.push(RtSpan::styled(remaining[..ch_len].to_string(), style));
+                // Use fallback width 1 (not 0) so this branch always advances
+                // even if `ch` has unknown/zero display width.
                 col = ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 1 });
                 remaining = &remaining[ch_len..];
                 continue;
