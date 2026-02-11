@@ -123,6 +123,8 @@ impl Session {
         self.clear_mcp_tool_selection().await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
+        self.set_previous_model(Some(turn_context.model_info.slug.clone()))
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
