@@ -3165,34 +3165,7 @@ impl ChatWidget {
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
                     self.dispatch_command_with_args(cmd, args, text_elements);
                 }
-                InputResult::None => {
-                    if key_event.kind == KeyEventKind::Press
-                        && key_event.code == KeyCode::Enter
-                        && self.bottom_pane.composer_can_submit_enter()
-                        && !self.bottom_pane.remote_image_urls().is_empty()
-                        && self
-                            .bottom_pane
-                            .composer_text_with_pending()
-                            .trim()
-                            .is_empty()
-                    {
-                        let user_message = UserMessage {
-                            text: String::new(),
-                            local_images: Vec::new(),
-                            remote_image_urls: self.take_remote_image_urls(),
-                            text_elements: Vec::new(),
-                            mention_bindings: Vec::new(),
-                        };
-                        if self.is_session_configured() {
-                            self.reasoning_buffer.clear();
-                            self.full_reasoning_buffer.clear();
-                            self.set_status_header(String::from("Working"));
-                            self.submit_user_message(user_message);
-                        } else {
-                            self.queue_user_message(user_message);
-                        }
-                    }
-                }
+                InputResult::None => {}
             },
         }
     }
