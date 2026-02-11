@@ -601,7 +601,7 @@ impl ModelClientSession {
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled && !last_response.response_id.is_empty() {
                 let payload = ResponseCreateWsRequest {
-                    previous_response_id: Some(last_response.response_id.clone()),
+                    previous_response_id: Some(last_response.response_id),
                     input: append_items,
                     ..payload
                 };
