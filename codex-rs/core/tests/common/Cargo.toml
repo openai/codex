@@ -15,6 +15,7 @@ codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+ctor = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }
 regex-lite = { workspace = true }

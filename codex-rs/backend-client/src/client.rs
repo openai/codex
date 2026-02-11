@@ -1,9 +1,7 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigFileResponse;
-use crate::types::CreditStatusDetails;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
-use crate::types::RateLimitWindowSnapshot;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_core::auth::CodexAuth;
@@ -160,6 +158,15 @@ impl Client {
     }
 
     pub async fn get_rate_limits(&self) -> Result<RateLimitSnapshot> {
+        let snapshots = self.get_rate_limits_many().await?;
+        let preferred = snapshots
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned();
+        Ok(preferred.unwrap_or_else(|| snapshots[0].clone()))
+    }
+
+    pub async fn get_rate_limits_many(&self) -> Result<Vec<RateLimitSnapshot>> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
@@ -167,7 +174,7 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
-        Ok(Self::rate_limit_snapshot_from_payload(payload))
+        Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 
     pub async fn list_tasks(
@@ -295,35 +302,59 @@ impl Client {
     }
 
     // rate limit helpers
-    fn rate_limit_snapshot_from_payload(payload: RateLimitStatusPayload) -> RateLimitSnapshot {
-        let rate_limit_details = payload
-            .rate_limit
-            .and_then(|inner| inner.map(|boxed| *boxed));
+    fn rate_limit_snapshots_from_payload(
+        payload: RateLimitStatusPayload,
+    ) -> Vec<RateLimitSnapshot> {
+        let plan_type = Some(Self::map_plan_type(payload.plan_type));
+        let mut snapshots = vec![Self::make_rate_limit_snapshot(
+            Some("codex".to_string()),
+            None,
+            payload.rate_limit.flatten().map(|details| *details),
+            payload.credits.flatten().map(|details| *details),
+            plan_type,
+        )];
+        if let Some(additional) = payload.additional_rate_limits.flatten() {
+            snapshots.extend(additional.into_iter().map(|details| {
+                Self::make_rate_limit_snapshot(
+                    Some(details.metered_feature),
+                    Some(details.limit_name),
+                    details.rate_limit.flatten().map(|rate_limit| *rate_limit),
+                    None,
+                    plan_type,
+                )
+            }));
+        }
+        snapshots
+    }
 
-        let (primary, secondary) = if let Some(details) = rate_limit_details {
-            (
+    fn make_rate_limit_snapshot(
+        limit_id: Option<String>,
+        limit_name: Option<String>,
+        rate_limit: Option<crate::types::RateLimitStatusDetails>,
+        credits: Option<crate::types::CreditStatusDetails>,
+        plan_type: Option<AccountPlanType>,
+    ) -> RateLimitSnapshot {
+        let (primary, secondary) = match rate_limit {
+            Some(details) => (
                 Self::map_rate_limit_window(details.primary_window),
                 Self::map_rate_limit_window(details.secondary_window),
-            )
-        } else {
-            (None, None)
+            ),
+            None => (None, None),
         };
-
         RateLimitSnapshot {
+            limit_id,
+            limit_name,
             primary,
             secondary,
-            credits: Self::map_credits(payload.credits),
-            plan_type: Some(Self::map_plan_type(payload.plan_type)),
+            credits: Self::map_credits(credits),
+            plan_type,
         }
     }
 
     fn map_rate_limit_window(
-        window: Option<Option<Box<RateLimitWindowSnapshot>>>,
+        window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
     ) -> Option<RateLimitWindow> {
-        let snapshot = match window {
-            Some(Some(snapshot)) => *snapshot,
-            _ => return None,
-        };
+        let snapshot = window.flatten().map(|details| *details)?;
 
         let used_percent = f64::from(snapshot.used_percent);
         let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
@@ -335,16 +366,13 @@ impl Client {
         })
     }
 
-    fn map_credits(credits: Option<Option<Box<CreditStatusDetails>>>) -> Option<CreditsSnapshot> {
-        let details = match credits {
-            Some(Some(details)) => *details,
-            _ => return None,
-        };
+    fn map_credits(credits: Option<crate::types::CreditStatusDetails>) -> Option<CreditsSnapshot> {
+        let details = credits?;
 
         Some(CreditsSnapshot {
             has_credits: details.has_credits,
             unlimited: details.unlimited,
-            balance: details.balance.and_then(|inner| inner),
+            balance: details.balance.flatten(),
         })
     }
 
@@ -372,5 +400,144 @@ impl Client {
 
         let seconds_i64 = i64::from(seconds);
         Some((seconds_i64 + 59) / 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn usage_payload_maps_primary_and_additional_rate_limits() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Pro,
+            rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 42,
+                    limit_window_seconds: 300,
+                    reset_after_seconds: 0,
+                    reset_at: 123,
+                }))),
+                secondary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 84,
+                    limit_window_seconds: 3600,
+                    reset_after_seconds: 0,
+                    reset_at: 456,
+                }))),
+                ..Default::default()
+            }))),
+            additional_rate_limits: Some(Some(vec![crate::types::AdditionalRateLimitDetails {
+                limit_name: "codex_other".to_string(),
+                metered_feature: "codex_other".to_string(),
+                rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                    primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                        used_percent: 70,
+                        limit_window_seconds: 900,
+                        reset_after_seconds: 0,
+                        reset_at: 789,
+                    }))),
+                    secondary_window: None,
+                    ..Default::default()
+                }))),
+            }])),
+            credits: Some(Some(Box::new(crate::types::CreditStatusDetails {
+                has_credits: true,
+                unlimited: false,
+                balance: Some(Some("9.99".to_string())),
+                ..Default::default()
+            }))),
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots.len(), 2);
+
+        assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshots[0].limit_name, None);
+        assert_eq!(
+            snapshots[0].primary.as_ref().map(|w| w.used_percent),
+            Some(42.0)
+        );
+        assert_eq!(
+            snapshots[0].secondary.as_ref().map(|w| w.used_percent),
+            Some(84.0)
+        );
+        assert_eq!(
+            snapshots[0].credits,
+            Some(CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("9.99".to_string()),
+            })
+        );
+        assert_eq!(snapshots[0].plan_type, Some(AccountPlanType::Pro));
+
+        assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
+        assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+        assert_eq!(
+            snapshots[1].primary.as_ref().map(|w| w.used_percent),
+            Some(70.0)
+        );
+        assert_eq!(snapshots[1].credits, None);
+        assert_eq!(snapshots[1].plan_type, Some(AccountPlanType::Pro));
+    }
+
+    #[test]
+    fn usage_payload_maps_zero_rate_limit_when_primary_absent() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Plus,
+            rate_limit: None,
+            additional_rate_limits: Some(Some(vec![crate::types::AdditionalRateLimitDetails {
+                limit_name: "codex_other".to_string(),
+                metered_feature: "codex_other".to_string(),
+                rate_limit: None,
+            }])),
+            credits: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].limit_id.as_deref(), Some("codex"));
+        assert_eq!(snapshots[0].limit_name, None);
+        assert_eq!(snapshots[0].primary, None);
+        assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
+        assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn preferred_snapshot_selection_matches_get_rate_limits_behavior() {
+        let snapshots = [
+            RateLimitSnapshot {
+                limit_id: Some("codex_other".to_string()),
+                limit_name: Some("codex_other".to_string()),
+                primary: Some(RateLimitWindow {
+                    used_percent: 90.0,
+                    window_minutes: Some(60),
+                    resets_at: Some(1),
+                }),
+                secondary: None,
+                credits: None,
+                plan_type: Some(AccountPlanType::Pro),
+            },
+            RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: Some("codex".to_string()),
+                primary: Some(RateLimitWindow {
+                    used_percent: 10.0,
+                    window_minutes: Some(60),
+                    resets_at: Some(2),
+                }),
+                secondary: None,
+                credits: None,
+                plan_type: Some(AccountPlanType::Pro),
+            },
+        ];
+
+        let preferred = snapshots
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned()
+            .unwrap_or_else(|| snapshots[0].clone());
+        assert_eq!(preferred.limit_id.as_deref(), Some("codex"));
     }
 }

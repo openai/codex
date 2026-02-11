@@ -170,11 +170,21 @@ impl SessionState {
     }
 }
 
-// Sometimes new snapshots don't include credits or plan information.
+// Merge partial rate-limit updates: new fields overwrite existing values;
+// missing fields retain prior values. If `limit_id` is absent everywhere,
+// default it to `"codex"`.
 fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
     mut snapshot: RateLimitSnapshot,
 ) -> RateLimitSnapshot {
+    if snapshot.limit_id.is_none() {
+        snapshot.limit_id = previous
+            .and_then(|prior| prior.limit_id.clone())
+            .or_else(|| Some("codex".to_string()));
+    }
+    if snapshot.limit_name.is_none() {
+        snapshot.limit_name = previous.and_then(|prior| prior.limit_name.clone());
+    }
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
     }
@@ -188,6 +198,7 @@ fn merge_rate_limit_fields(
 mod tests {
     use super::*;
     use crate::codex::make_session_configuration_for_tests;
+    use crate::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -257,5 +268,127 @@ mod tests {
         state.clear_mcp_tool_selection();
 
         assert_eq!(state.get_mcp_tool_selection(), None);
+    }
+
+    #[tokio::test]
+    async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 12.0,
+                window_minutes: Some(60),
+                resets_at: Some(100),
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: None,
+        });
+
+        assert_eq!(
+            state
+                .latest_rate_limits
+                .as_ref()
+                .and_then(|v| v.limit_id.clone()),
+            Some("codex".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_rate_limits_preserves_previous_limit_id_when_missing() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: Some("codex_other".to_string()),
+            limit_name: Some("codex_other".to_string()),
+            primary: Some(RateLimitWindow {
+                used_percent: 20.0,
+                window_minutes: Some(60),
+                resets_at: Some(200),
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: None,
+        });
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_minutes: Some(60),
+                resets_at: Some(300),
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: None,
+        });
+
+        assert_eq!(
+            state
+                .latest_rate_limits
+                .as_ref()
+                .and_then(|v| v.limit_id.clone()),
+            Some("codex_other".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_rate_limits_accepts_new_limit_id_bucket() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("codex".to_string()),
+            primary: Some(RateLimitWindow {
+                used_percent: 10.0,
+                window_minutes: Some(60),
+                resets_at: Some(100),
+            }),
+            secondary: None,
+            credits: Some(crate::protocol::CreditsSnapshot {
+                has_credits: true,
+                unlimited: false,
+                balance: Some("50".to_string()),
+            }),
+            plan_type: Some(codex_protocol::account::PlanType::Plus),
+        });
+
+        state.set_rate_limits(RateLimitSnapshot {
+            limit_id: Some("codex_other".to_string()),
+            limit_name: Some("codex_other".to_string()),
+            primary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_minutes: Some(120),
+                resets_at: Some(200),
+            }),
+            secondary: None,
+            credits: None,
+            plan_type: None,
+        });
+
+        assert_eq!(
+            state.latest_rate_limits,
+            Some(RateLimitSnapshot {
+                limit_id: Some("codex_other".to_string()),
+                limit_name: Some("codex_other".to_string()),
+                primary: Some(RateLimitWindow {
+                    used_percent: 30.0,
+                    window_minutes: Some(120),
+                    resets_at: Some(200),
+                }),
+                secondary: None,
+                credits: Some(crate::protocol::CreditsSnapshot {
+                    has_credits: true,
+                    unlimited: false,
+                    balance: Some("50".to_string()),
+                }),
+                plan_type: Some(codex_protocol::account::PlanType::Plus),
+            })
+        );
     }
 }

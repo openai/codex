@@ -40,6 +40,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     }
 }
 

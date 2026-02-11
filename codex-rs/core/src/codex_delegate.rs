@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -90,7 +89,6 @@ pub(crate) async fn run_codex_thread_interactive(
     });
 
     Ok(Codex {
-        next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
@@ -166,7 +164,6 @@ pub(crate) async fn run_codex_thread_one_shot(
     drop(rx_closed);
 
     Ok(Codex {
-        next_id: AtomicU64::new(0),
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
@@ -470,7 +467,6 @@ mod tests {
         let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
         let codex = Arc::new(Codex {
-            next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
             agent_status,
@@ -482,6 +478,7 @@ mod tests {
             .send(Event {
                 id: "full".to_string(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some("turn-1".to_string()),
                     reason: TurnAbortReason::Interrupted,
                 }),
             })
