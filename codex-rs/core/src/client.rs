@@ -356,7 +356,7 @@ impl ModelClient {
     /// Returns whether websocket transport has been permanently disabled for this session.
     ///
     /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
-    fn disable_websockets(&self) -> bool {
+    fn websockets_disabled(&self) -> bool {
         self.state.disable_websockets.load(Ordering::Relaxed)
     }
 
@@ -620,7 +620,7 @@ impl ModelClientSession {
         model_info: &ModelInfo,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) || self.client.disable_websockets()
+        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
         {
             return Ok(());
         }
@@ -879,7 +879,7 @@ impl ModelClientSession {
         match wire_api {
             WireApi::Responses => {
                 let websocket_enabled = self.client.responses_websocket_enabled(model_info)
-                    && !self.client.disable_websockets();
+                    && !self.client.websockets_disabled();
 
                 if websocket_enabled {
                     match self
