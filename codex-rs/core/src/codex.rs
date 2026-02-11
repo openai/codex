@@ -5647,6 +5647,7 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let previous_model = "previous-rollout-model";
         let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
             approval_policy: turn_context.approval_policy,
             sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -5842,6 +5843,7 @@ mod tests {
         let (session, turn_context) = make_session_and_context().await;
         let previous_model = "forked-rollout-model";
         let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
             approval_policy: turn_context.approval_policy,
             sandbox_policy: turn_context.sandbox_policy.clone(),
