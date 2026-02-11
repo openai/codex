@@ -478,7 +478,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Bubblewrap sandbox",
             menu_description: "Try the new linux sandbox based on bubblewrap.",
-            announcement: "NEW: Try Linux bubblewrap sandboxing in Codex. Enable in /experimental and restart Codex!",
+            announcement: "NEW: Linux bubblewrap sandbox is now available in /experimental. Enable it and restart Codex to try it.",
         },
         #[cfg(target_os = "linux")]
         default_enabled: false,
