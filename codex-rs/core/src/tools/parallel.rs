@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,6 +22,7 @@ use crate::tools::mention_rewrite::load_turn_mention_rewrite_data;
 use crate::tools::mention_rewrite::mention_rewrite_context_for_read_paths;
 use crate::tools::mention_rewrite::read_paths_for_tool_call;
 use crate::tools::mention_rewrite::rewrite_tool_response_mentions;
+use crate::tools::mention_rewrite::tool_output_contains_mention_prefix;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -36,6 +38,10 @@ pub(crate) struct ToolCallRuntime {
     parallel_execution: Arc<RwLock<()>>,
     // Lazily populated once per turn and reused across tool calls.
     mention_rewrite_data: Arc<OnceCell<Option<TurnMentionRewriteData>>>,
+}
+
+fn should_attempt_mention_rewrite(read_paths: &[PathBuf], response: &ResponseInputItem) -> bool {
+    !read_paths.is_empty() && tool_output_contains_mention_prefix(response)
 }
 
 impl ToolCallRuntime {
@@ -94,19 +100,6 @@ impl ToolCallRuntime {
                             &call.tool_name,
                             &call.payload,
                         );
-                        let rewrite_context = if read_paths.is_empty() {
-                            None
-                        } else {
-                            // Build turn-scoped mention rewrite data once, then reuse.
-                            let turn_data = mention_rewrite_data
-                                .get_or_init(|| async {
-                                    load_turn_mention_rewrite_data(session.as_ref(), turn.as_ref()).await
-                                })
-                                .await;
-                            turn_data
-                                .as_ref()
-                                .and_then(|data| mention_rewrite_context_for_read_paths(read_paths, data))
-                        };
                         let _guard = if supports_parallel {
                             Either::Left(lock.read().await)
                         } else {
@@ -114,16 +107,33 @@ impl ToolCallRuntime {
                         };
 
                         let mut response = router
-                            .dispatch_tool_call(session, turn, tracker, call.clone())
+                            .dispatch_tool_call(
+                                Arc::clone(&session),
+                                Arc::clone(&turn),
+                                Arc::clone(&tracker),
+                                call.clone(),
+                            )
                             .instrument(dispatch_span.clone())
                             .await?;
 
-                        if let Some(context) = rewrite_context.as_ref() {
-                            rewrite_tool_response_mentions(
-                                &mut response,
-                                &call.tool_name,
-                                context.as_ref(),
-                            );
+                        if should_attempt_mention_rewrite(&read_paths, &response) {
+                            // Build turn-scoped mention rewrite data once, then reuse.
+                            let rewrite_context = mention_rewrite_data
+                                .get_or_init(|| async {
+                                    load_turn_mention_rewrite_data(session.as_ref(), turn.as_ref()).await
+                                })
+                                .await
+                                .as_ref()
+                                .and_then(|data| {
+                                    mention_rewrite_context_for_read_paths(read_paths, data)
+                                });
+                            if let Some(context) = rewrite_context.as_ref() {
+                                rewrite_tool_response_mentions(
+                                    &mut response,
+                                    &call.tool_name,
+                                    context.as_ref(),
+                                );
+                            }
                         }
 
                         Ok(response)
@@ -142,6 +152,54 @@ impl ToolCallRuntime {
             }
         }
         .in_current_span()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use pretty_assertions::assert_eq;
+
+    use super::should_attempt_mention_rewrite;
+    use super::*;
+
+    #[test]
+    fn should_attempt_mention_rewrite_requires_non_empty_read_paths() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("use $alpha-skill".to_string()),
+        };
+        assert_eq!(false, should_attempt_mention_rewrite(&[], &response));
+    }
+
+    #[test]
+    fn should_attempt_mention_rewrite_requires_dollar_mentions_in_output() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("plain output".to_string()),
+        };
+        assert_eq!(
+            false,
+            should_attempt_mention_rewrite(
+                &[PathBuf::from("/tmp/skills/alpha/SKILL.md")],
+                &response
+            )
+        );
+    }
+
+    #[test]
+    fn should_attempt_mention_rewrite_allows_when_all_gates_pass() {
+        let response = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("use $alpha-skill".to_string()),
+        };
+        assert_eq!(
+            true,
+            should_attempt_mention_rewrite(
+                &[PathBuf::from("/tmp/skills/alpha/SKILL.md")],
+                &response
+            )
+        );
     }
 }
 

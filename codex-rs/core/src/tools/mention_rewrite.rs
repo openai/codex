@@ -56,6 +56,14 @@ pub(crate) struct TurnMentionRewriteData {
     skills: Arc<[SkillMetadata]>,
 }
 
+// Utility to check skills/connectors prior to loading rewrite data
+pub(crate) fn has_turn_mention_rewrite_candidates(
+    skills: &[SkillMetadata],
+    connectors: &[connectors::AppInfo],
+) -> bool {
+    !skills.is_empty() || !connectors.is_empty()
+}
+
 /// Loads turn-scoped rewrite data once (skills + connectors + canonical lookup maps).
 /// Callers still decide per tool call whether rewriting applies by checking read paths.
 pub(crate) async fn load_turn_mention_rewrite_data(
@@ -67,12 +75,6 @@ pub(crate) async fn load_turn_mention_rewrite_data(
         .skills_manager
         .skills_for_cwd(&turn.cwd, false)
         .await;
-    if skills_outcome.skills.is_empty() {
-        return None;
-    }
-
-    let (skill_name_counts, skill_name_counts_lower) =
-        build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths);
     let connectors = if turn.config.features.enabled(Feature::Apps) {
         let mcp_tools = session
             .services
@@ -85,6 +87,12 @@ pub(crate) async fn load_turn_mention_rewrite_data(
     } else {
         Vec::new()
     };
+    if !has_turn_mention_rewrite_candidates(&skills_outcome.skills, &connectors) {
+        return None;
+    }
+
+    let (skill_name_counts, skill_name_counts_lower) =
+        build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths);
     let connector_slug_counts = build_connector_slug_counts(&connectors);
 
     let context = build_mention_rewrite_context(
@@ -158,6 +166,20 @@ pub(crate) fn rewrite_tool_response_mentions(
     if rewritten != *content {
         *content = rewritten;
     }
+}
+
+/// Returns true when tool output text can contain mentions that start with `$`.
+pub(crate) fn tool_output_contains_mention_prefix(response: &ResponseInputItem) -> bool {
+    let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
+        return false;
+    };
+    if output.success == Some(false) {
+        return false;
+    }
+
+    output
+        .text_content()
+        .is_some_and(|content| content.contains('$'))
 }
 
 /// Parses command tokens and returns every file path referenced by read-like operations,
@@ -435,6 +457,7 @@ mod tests {
     use std::path::PathBuf;
 
     use codex_app_server_protocol::AppInfo;
+    use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::protocol::SkillScope;
@@ -446,9 +469,11 @@ mod tests {
     use crate::skills::injection::build_mention_rewrite_context;
 
     use super::command_read_paths;
+    use super::has_turn_mention_rewrite_candidates;
     use super::rewrite_tool_response_mentions;
     use super::should_rewrite_mentions_for_path;
     use super::should_rewrite_mentions_for_read_paths;
+    use super::tool_output_contains_mention_prefix;
 
     /// Builds a test skill descriptor with the fields required by rewrite-context helpers.
     fn make_skill(name: &str, path: &str) -> SkillMetadata {
@@ -537,6 +562,28 @@ mod tests {
                 &[PathBuf::from("/tmp/random/README.md")],
                 &skills
             )
+        );
+    }
+
+    #[test]
+    fn has_turn_mention_rewrite_candidates_requires_skills_or_connectors() {
+        let empty_skills = Vec::<SkillMetadata>::new();
+        let empty_connectors = Vec::<AppInfo>::new();
+        assert_eq!(
+            false,
+            has_turn_mention_rewrite_candidates(&empty_skills, &empty_connectors)
+        );
+
+        let skills = vec![make_skill("alpha-skill", "/tmp/skills/alpha/SKILL.md")];
+        assert_eq!(
+            true,
+            has_turn_mention_rewrite_candidates(&skills, &empty_connectors)
+        );
+
+        let connectors = vec![make_connector("github-id", "GitHub")];
+        assert_eq!(
+            true,
+            has_turn_mention_rewrite_candidates(&empty_skills, &connectors)
         );
     }
 
@@ -635,6 +682,37 @@ mod tests {
                     .to_string(),
             ))
         );
+    }
+
+    #[test]
+    fn tool_output_contains_mention_prefix_only_when_output_has_dollar_mentions() {
+        let response_without_mentions = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("plain output".to_string()),
+        };
+        assert_eq!(
+            false,
+            tool_output_contains_mention_prefix(&response_without_mentions)
+        );
+
+        let response_with_mentions = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-2".to_string(),
+            output: FunctionCallOutputPayload::from_text("use $beta-skill".to_string()),
+        };
+        assert_eq!(
+            true,
+            tool_output_contains_mention_prefix(&response_with_mentions)
+        );
+
+        let failed_output = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-3".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("use $beta-skill".to_string()),
+                success: Some(false),
+                ..Default::default()
+            },
+        };
+        assert_eq!(false, tool_output_contains_mention_prefix(&failed_output));
     }
 
     #[test]
