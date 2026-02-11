@@ -841,7 +841,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_available_models_picks_default_after_hiding_hidden_models() {
+    async fn build_available_models_respects_visibility_defaults_and_overrides() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -865,27 +865,15 @@ mod tests {
             .build()
             .await
             .expect("load default test config");
-        let available = manager.build_available_models(vec![hidden_model, visible_model], &config);
+        let available_default = manager
+            .build_available_models(vec![hidden_model.clone(), visible_model.clone()], &config);
+        assert_eq!(
+            available_default,
+            vec![expected_hidden.clone(), expected_visible]
+        );
 
-        assert_eq!(available, vec![expected_hidden, expected_visible]);
-    }
-
-    #[tokio::test]
-    async fn build_available_models_applies_model_info_overrides() {
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let provider = provider_for("http://example.test".to_string());
-        let mut manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
-        manager.local_models = Vec::new();
-
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.model_info_overrides.insert(
+        let mut override_config = config;
+        override_config.model_info_overrides.insert(
             "visible".to_string(),
             ModelInfoPatch {
                 display_name: Some("Visible Local Override".to_string()),
@@ -893,17 +881,21 @@ mod tests {
                 ..Default::default()
             },
         );
-
-        let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
-        let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
-        let available = manager.build_available_models(vec![hidden_model, visible_model], &config);
-
-        let visible = available
+        let available_overridden =
+            manager.build_available_models(vec![hidden_model, visible_model], &override_config);
+        let visible = available_overridden
             .iter()
             .find(|preset| preset.model == "visible")
             .expect("visible model should exist");
         assert_eq!(visible.display_name, "Visible Local Override");
         assert!(!visible.show_in_picker);
+        assert!(
+            available_overridden
+                .iter()
+                .find(|preset| preset.model == "hidden")
+                .is_some_and(|preset| preset.is_default),
+            "when no model is shown in picker, first model should be marked default"
+        );
     }
 
     #[test]

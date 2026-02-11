@@ -2,7 +2,6 @@ use codex_core::CodexAuth;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_protocol::openai_models::ModelInfoPatch;
-use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::load_default_config_for_test;
 use pretty_assertions::assert_eq;
@@ -45,48 +44,11 @@ async fn offline_model_info_with_tool_output_override() {
     );
 }
 
-// Existing remote model path:
-// fetch model metadata for a known slug, then apply per-slug patch values from config.
+// Unknown model path + prefix-resolution path:
+// verify model_info_overrides apply both when the slug falls back to synthetic metadata and when
+// the requested slug differs from the resolved remote slug (longest-prefix match path).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_info_patch_overrides_remote_model_fields() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
-    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
-    let manager = ModelsManager::new(config.codex_home.clone(), auth_manager);
-
-    let mut baseline_config = config.clone();
-    baseline_config.model_info_overrides.clear();
-    let baseline = manager.get_model_info("gpt-5.1", &baseline_config).await;
-
-    config.model_info_overrides.insert(
-        "gpt-5.1".to_string(),
-        ModelInfoPatch {
-            display_name: Some("gpt-5.1-dev".to_string()),
-            context_window: Some(123_456),
-            visibility: Some(ModelVisibility::Hide),
-            supported_in_api: Some(false),
-            ..Default::default()
-        },
-    );
-    let model_info = manager.get_model_info("gpt-5.1", &config).await;
-
-    let mut expected = baseline;
-    expected.display_name = "gpt-5.1-dev".to_string();
-    expected.context_window = Some(123_456);
-    expected.visibility = ModelVisibility::Hide;
-    expected.supported_in_api = false;
-
-    assert_eq!(model_info, expected);
-}
-
-// Unknown model path:
-// when slug is not known remotely, manager falls back to synthetic metadata and still
-// applies the patch for that requested slug.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_info_patch_can_define_new_model_from_fallback() {
+async fn model_info_patch_applies_for_fallback_and_prefix_resolution_paths() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
@@ -119,6 +81,32 @@ async fn model_info_patch_can_define_new_model_from_fallback() {
     expected.base_instructions = "Custom model instructions".to_string();
 
     assert_eq!(model_info, expected);
+
+    let requested_slug = "gpt-5.1-eval";
+    let mut baseline_config = config;
+    baseline_config.model_info_overrides.clear();
+    let baseline = manager
+        .get_model_info(requested_slug, &baseline_config)
+        .await;
+
+    baseline_config.model_info_overrides.insert(
+        requested_slug.to_string(),
+        ModelInfoPatch {
+            display_name: Some("gpt-5.1-eval-dev".to_string()),
+            context_window: Some(456_789),
+            ..Default::default()
+        },
+    );
+    let model_info = manager
+        .get_model_info(requested_slug, &baseline_config)
+        .await;
+
+    let mut expected = baseline;
+    expected.slug = requested_slug.to_string();
+    expected.display_name = "gpt-5.1-eval-dev".to_string();
+    expected.context_window = Some(456_789);
+
+    assert_eq!(model_info, expected);
 }
 
 // Offline helper parity path:
@@ -143,42 +131,4 @@ async fn offline_helper_applies_model_info_patch() {
         codex_core::test_support::construct_model_info_offline("gpt-fake-offline", &config);
     assert_eq!(model_info.display_name, "gpt-fake-offline-dev".to_string());
     assert_eq!(model_info.context_window, Some(111_111));
-}
-
-// Prefix-resolution path (requested slug differs from resolved slug):
-// request a custom slug that resolves to known remote base model via longest-prefix match,
-// then ensure the requested-slug patch is still applied.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_info_patch_applies_when_requested_slug_differs_from_resolved_slug() {
-    let codex_home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
-    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
-    let manager = ModelsManager::new(config.codex_home.clone(), auth_manager);
-
-    let requested_slug = "gpt-5.1-eval";
-    let mut baseline_config = config.clone();
-    baseline_config.model_info_overrides.clear();
-    let baseline = manager
-        .get_model_info(requested_slug, &baseline_config)
-        .await;
-
-    config.model_info_overrides.insert(
-        requested_slug.to_string(),
-        ModelInfoPatch {
-            display_name: Some("gpt-5.1-eval-dev".to_string()),
-            context_window: Some(456_789),
-            ..Default::default()
-        },
-    );
-    let model_info = manager.get_model_info(requested_slug, &config).await;
-
-    let mut expected = baseline;
-    expected.slug = requested_slug.to_string();
-    expected.display_name = "gpt-5.1-eval-dev".to_string();
-    expected.context_window = Some(456_789);
-
-    assert_eq!(model_info, expected);
 }
