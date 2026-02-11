@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
@@ -193,6 +195,7 @@ impl MessageProcessor {
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         session: &mut ConnectionSessionState,
+        outbound_initialized: &AtomicBool,
     ) {
         let request_id = ConnectionRequestId {
             connection_id,
@@ -297,14 +300,7 @@ impl MessageProcessor {
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;
-                    for notification in self.config_warnings.iter().cloned() {
-                        self.outgoing
-                            .send_server_notification(ServerNotification::ConfigWarning(
-                                notification,
-                            ))
-                            .await;
-                    }
-
+                    outbound_initialized.store(true, Ordering::Release);
                     return;
                 }
             }
@@ -390,6 +386,14 @@ impl MessageProcessor {
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
         self.codex_message_processor.thread_created_receiver()
+    }
+
+    pub(crate) async fn send_initialize_notifications(&self) {
+        for notification in self.config_warnings.iter().cloned() {
+            self.outgoing
+                .send_server_notification(ServerNotification::ConfigWarning(notification))
+                .await;
+        }
     }
 
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
