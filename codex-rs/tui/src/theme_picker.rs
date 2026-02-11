@@ -194,12 +194,16 @@ pub(crate) fn build_theme_picker_params(
     let entries = highlight::list_available_themes(codex_home);
     let codex_home_owned = codex_home.map(|p| p.to_path_buf());
 
-    // Resolve the effective theme name: honor explicit config, fall back to
-    // the auto-detected default so the picker pre-selects even when no theme
-    // is configured.
-    let effective_name = current_name
-        .map(str::to_string)
-        .unwrap_or_else(highlight::current_theme_name);
+    // Resolve the effective theme name: honor explicit config only when it is
+    // currently available; otherwise fall back to the active runtime theme so
+    // opening `/theme` does not auto-preview an unrelated first entry.
+    let effective_name = if let Some(name) = current_name
+        && entries.iter().any(|entry| entry.name == name)
+    {
+        name.to_string()
+    } else {
+        highlight::current_theme_name()
+    };
 
     // Track the index of the current theme so we can pre-select it.
     let mut initial_idx = None;
@@ -406,5 +410,20 @@ mod tests {
         let subtitle = theme_picker_subtitle(Some(&codex_home), Some(94));
 
         assert_eq!(subtitle, PREVIEW_FALLBACK_SUBTITLE);
+    }
+
+    #[test]
+    fn unavailable_configured_theme_falls_back_to_active_theme_selection() {
+        let active_theme = highlight::current_theme_name();
+        let params = build_theme_picker_params(Some("not-a-real-theme"), None, Some(120));
+        let selected_idx = params
+            .initial_selected_idx
+            .expect("expected selected index for active fallback theme");
+        let selected_name = params.items[selected_idx]
+            .search_value
+            .as_deref()
+            .expect("expected search value to contain canonical theme name");
+
+        assert_eq!(selected_name, active_theme);
     }
 }
