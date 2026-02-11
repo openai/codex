@@ -114,6 +114,11 @@ pub fn main() -> Result<()> {
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
+    if !policy.has_full_disk_read_access() {
+        anyhow::bail!(
+            "Restricted read-only access is not yet supported by the Windows sandbox backend"
+        );
+    }
     let mut cap_psids: Vec<*mut c_void> = Vec::new();
     for sid in &req.cap_sids {
         let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
@@ -129,7 +134,9 @@ pub fn main() -> Result<()> {
     let base = unsafe { get_current_token_for_restriction()? };
     let token_res: Result<HANDLE> = unsafe {
         match &policy {
-            SandboxPolicy::ReadOnly => create_readonly_token_with_caps_from(base, &cap_psids),
+            SandboxPolicy::ReadOnly { .. } => {
+                create_readonly_token_with_caps_from(base, &cap_psids)
+            }
             SandboxPolicy::WorkspaceWrite { .. } => {
                 create_workspace_write_token_with_caps_from(base, &cap_psids)
             }
