@@ -209,9 +209,20 @@ impl ThreadStateManager {
         let Some(thread_ids) = self.thread_ids_by_connection.remove(&connection_id) else {
             return;
         };
+        self.subscription_state_by_id
+            .retain(|_, state| state.connection_id != connection_id);
+
         for thread_id in thread_ids {
             if let Some(thread_state) = self.thread_states.get(&thread_id) {
-                thread_state.lock().await.remove_connection(connection_id);
+                let has_remaining_subscriptions = self
+                    .subscription_state_by_id
+                    .values()
+                    .any(|state| state.thread_id == thread_id);
+                let mut thread_state = thread_state.lock().await;
+                thread_state.remove_connection(connection_id);
+                if !has_remaining_subscriptions {
+                    thread_state.clear_listener();
+                }
             }
         }
     }
