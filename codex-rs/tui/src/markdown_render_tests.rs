@@ -665,7 +665,11 @@ fn code_block_known_lang_has_syntax_colors() {
         })
         .collect();
     // Content should be preserved; ignore trailing empty line from highlighting.
-    let content: Vec<&str> = content.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
     assert_eq!(content, vec!["fn main() {}"]);
 
     // At least one span should have non-default style (syntax highlighting).
@@ -690,7 +694,11 @@ fn code_block_unknown_lang_plain() {
                 .collect::<String>()
         })
         .collect();
-    let content: Vec<&str> = content.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
     assert_eq!(content, vec!["hello world"]);
 
     // No syntax coloring for unknown language — all spans have default style.
@@ -715,7 +723,11 @@ fn code_block_no_lang_plain() {
                 .collect::<String>()
         })
         .collect();
-    let content: Vec<&str> = content.iter().map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+    let content: Vec<&str> = content
+        .iter()
+        .map(std::string::String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
     assert_eq!(content, vec!["no lang specified"]);
 }
 
@@ -785,7 +797,7 @@ Here is a code block that shows another fenced block:
     // Filter empty trailing lines for stability; the code block may or may
     // not emit a trailing blank depending on the highlighting path.
     let trimmed: Vec<&str> = {
-        let mut v: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let mut v: Vec<&str> = lines.iter().map(std::string::String::as_str).collect();
         while v.last() == Some(&"") {
             v.pop();
         }
