@@ -486,6 +486,8 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         json!({
             "info": null,
             "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
                 "primary": {
                     "used_percent": 100.0,
                     "window_minutes": 15,

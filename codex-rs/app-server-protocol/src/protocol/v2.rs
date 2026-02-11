@@ -1014,7 +1014,10 @@ pub struct ChatgptAuthTokensRefreshResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountRateLimitsResponse {
+    /// Backward-compatible single-bucket view; mirrors the historical payload.
     pub rate_limits: RateLimitSnapshot,
+    /// Multi-bucket view keyed by metered `limit_id` (for example, `codex`).
+    pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3108,6 +3111,8 @@ pub struct AccountRateLimitsUpdatedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
@@ -3117,6 +3122,8 @@ pub struct RateLimitSnapshot {
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
     fn from(value: CoreRateLimitSnapshot) -> Self {
         Self {
+            limit_id: value.limit_id,
+            limit_name: value.limit_name,
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),

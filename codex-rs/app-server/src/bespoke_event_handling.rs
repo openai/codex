@@ -2206,6 +2206,8 @@ mod tests {
             model_context_window: Some(4096),
         };
         let rate_limits = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 42.5,
                 window_minutes: Some(15),
@@ -2258,6 +2260,8 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::AccountRateLimitsUpdated(payload),
             ) => {
+                assert_eq!(payload.rate_limits.limit_id.as_deref(), Some("codex"));
+                assert_eq!(payload.rate_limits.limit_name, None);
                 assert!(payload.rate_limits.primary.is_some());
                 assert!(payload.rate_limits.credits.is_some());
             }

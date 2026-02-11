@@ -1509,6 +1509,8 @@ async fn token_count_includes_rate_limits_snapshot() {
         json!({
             "info": null,
             "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
@@ -1558,6 +1560,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "model_context_window": 258400
             },
             "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
@@ -1630,6 +1634,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let codex = codex_fixture.codex.clone();
 
     let expected_limits = json!({
+        "limit_id": "codex",
+        "limit_name": null,
         "primary": {
             "used_percent": 100.0,
             "window_minutes": 15,
