@@ -5,6 +5,7 @@ use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -140,8 +141,30 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     normalized_path.or(Some(absolute_path))
 }
 
-fn escape_seatbelt_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<(String, AbsolutePathBuf)> {
+    if proxy.dangerously_allow_all_unix_sockets {
+        return vec![];
+    }
+
+    let mut deduped_paths: BTreeMap<String, AbsolutePathBuf> = BTreeMap::new();
+    for path in &proxy.allow_unix_sockets {
+        deduped_paths
+            .entry(path.to_string_lossy().to_string())
+            .or_insert_with(|| path.clone());
+    }
+
+    deduped_paths
+        .into_values()
+        .enumerate()
+        .map(|(index, path)| (format!("UNIX_SOCKET_PATH_{index}"), path))
+        .collect()
+}
+
+fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
+    unix_socket_path_params(proxy)
+        .into_iter()
+        .map(|(key, path)| (key, path.into_path_buf()))
+        .collect()
 }
 
 fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
@@ -149,18 +172,9 @@ fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
         return "(allow network* (subpath \"/\"))\n".to_string();
     }
 
-    let paths: BTreeSet<String> = proxy
-        .allow_unix_sockets
+    unix_socket_path_params(proxy)
         .iter()
-        .map(|path| path.as_path().to_string_lossy().to_string())
-        .collect();
-
-    paths
-        .into_iter()
-        .map(|path| {
-            let escaped_path = escape_seatbelt_string(path.as_str());
-            format!("(allow network* (subpath \"{escaped_path}\"))\n")
-        })
+        .map(|(key, _)| format!("(allow network* (subpath (param \"{key}\")))\n"))
         .collect()
 }
 
@@ -290,7 +304,12 @@ pub(crate) fn create_seatbelt_command_args(
         "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
     );
 
-    let dir_params = [file_write_dir_params, macos_dir_params()].concat();
+    let dir_params = [
+        file_write_dir_params,
+        macos_dir_params(),
+        unix_socket_dir_params(&proxy),
+    ]
+    .concat();
 
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
     let definition_args = dir_params
@@ -336,6 +355,7 @@ mod tests {
     use super::dynamic_network_policy;
     use super::macos_dir_params;
     use super::normalize_path_for_sandbox;
+    use super::unix_socket_dir_params;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -490,8 +510,34 @@ mod tests {
         );
 
         assert!(
-            policy.contains("(allow network* (subpath \"/tmp/example.sock\"))"),
+            policy.contains("(allow network* (subpath (param \"UNIX_SOCKET_PATH_0\")))"),
             "policy should allow explicitly configured unix sockets:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn unix_socket_dir_params_use_stable_param_names() {
+        let params = unix_socket_dir_params(&ProxyPolicyInputs {
+            allow_unix_sockets: vec![
+                absolute_path("/tmp/b.sock"),
+                absolute_path("/tmp/a.sock"),
+                absolute_path("/tmp/a.sock"),
+            ],
+            ..ProxyPolicyInputs::default()
+        });
+
+        assert_eq!(
+            params,
+            vec![
+                (
+                    "UNIX_SOCKET_PATH_0".to_string(),
+                    PathBuf::from("/tmp/a.sock")
+                ),
+                (
+                    "UNIX_SOCKET_PATH_1".to_string(),
+                    PathBuf::from("/tmp/b.sock")
+                ),
+            ]
         );
     }
 
