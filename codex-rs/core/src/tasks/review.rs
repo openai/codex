@@ -17,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
-use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
@@ -91,15 +90,7 @@ async fn start_review_conversation(
         .web_search_mode
         .set(WebSearchMode::Disabled)
     {
-        tracing::warn!(
-            "failed to force review web_search_mode=disabled; falling back to a normalizer: {err}"
-        );
-        sub_agent_config.web_search_mode =
-            Constrained::normalized(WebSearchMode::Disabled, |_| WebSearchMode::Disabled)
-                .unwrap_or_else(|err| {
-                    tracing::warn!("failed to build normalizer for review web_search_mode: {err}");
-                    Constrained::allow_any(WebSearchMode::Disabled)
-                });
+        panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
     }
 
     // Set explicit review rubric for the sub-agent
