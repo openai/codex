@@ -191,11 +191,10 @@ pub(crate) async fn backfill_sessions(
                     &[("stage", "backfill_state_read_claimed")],
                 );
             }
-            let mut fallback = BackfillState {
+            BackfillState {
                 status: BackfillStatus::Running,
                 ..Default::default()
-            };
-            fallback
+            }
         }
     };
     if backfill_state.status != BackfillStatus::Running {
