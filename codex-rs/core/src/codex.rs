@@ -1653,13 +1653,13 @@ impl Session {
         );
         let startup_turn_metadata_header =
             startup_turn_context.resolve_turn_metadata_header().await;
-        Ok(RegularTask::with_startup_prewarm(
+        RegularTask::with_startup_prewarm(
             self.services.model_client.clone(),
             startup_prompt,
             startup_turn_context,
             startup_turn_metadata_header,
         )
-        .await)
+        .await
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {

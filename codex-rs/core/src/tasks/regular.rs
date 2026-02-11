@@ -6,13 +6,13 @@ use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::codex::TurnContext;
 use crate::codex::run_turn;
+use crate::error::Result as CodexResult;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::trace_span;
-use tracing::warn;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -35,9 +35,9 @@ impl RegularTask {
         prompt: Prompt,
         turn_context: Arc<TurnContext>,
         turn_metadata_header: Option<String>,
-    ) -> Self {
+    ) -> CodexResult<Self> {
         let mut client_session = model_client.new_session();
-        let prewarmed_session = match client_session
+        client_session
             .prewarm_websocket(
                 &prompt,
                 &turn_context.model_info,
@@ -46,18 +46,11 @@ impl RegularTask {
                 turn_context.reasoning_summary,
                 turn_metadata_header.as_deref(),
             )
-            .await
-        {
-            Ok(()) => Some(client_session),
-            Err(err) => {
-                warn!("startup websocket prewarm task failed: {err}");
-                None
-            }
-        };
+            .await?;
 
-        Self {
-            prewarmed_session: Mutex::new(prewarmed_session),
-        }
+        Ok(Self {
+            prewarmed_session: Mutex::new(Some(client_session)),
+        })
     }
 
     async fn take_prewarmed_session(&self) -> Option<ModelClientSession> {
