@@ -135,9 +135,19 @@ impl ToolOrchestrator {
                         output,
                     })));
                 }
-                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
-                // sandbox denial that preserves the original output.
-                if !tool.wants_no_sandbox_approval(approval_policy) {
+                let retry_details = build_denial_reason_from_output(
+                    output.as_ref(),
+                    should_prompt_for_network_approval(turn_ctx),
+                );
+
+                // Most tools disallow no-sandbox retry under OnRequest. However, for managed
+                // network denials with extracted network approval context, we still allow
+                // prompting so the user can explicitly approve the specific host/protocol access.
+                if !can_retry_without_sandbox(
+                    tool.wants_no_sandbox_approval(approval_policy),
+                    approval_policy,
+                    retry_details.network_approval_context.is_some(),
+                ) {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
                     })));
@@ -145,10 +155,6 @@ impl ToolOrchestrator {
 
                 // Ask for approval before retrying with the escalated sandbox.
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
-                    let retry_details = build_denial_reason_from_output(
-                        output.as_ref(),
-                        should_prompt_for_network_approval(turn_ctx),
-                    );
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         turn: turn_ctx,
@@ -231,6 +237,15 @@ fn should_prompt_for_network_approval(turn_ctx: &crate::codex::TurnContext) -> b
             .and_then(|network| network.enabled),
         Some(true)
     )
+}
+
+fn can_retry_without_sandbox(
+    tool_wants_no_sandbox_approval: bool,
+    approval_policy: AskForApproval,
+    has_network_approval_context: bool,
+) -> bool {
+    tool_wants_no_sandbox_approval
+        || (matches!(approval_policy, AskForApproval::OnRequest) && has_network_approval_context)
 }
 
 fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<NetworkApprovalContext> {
@@ -337,5 +352,41 @@ mod tests {
         let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"baseline_policy\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
 
         assert_eq!(extract_network_approval_context_from_text(text), None);
+    }
+
+    #[test]
+    fn can_retry_without_sandbox_respects_default_on_request_gate() {
+        assert!(!can_retry_without_sandbox(
+            false,
+            AskForApproval::OnRequest,
+            false
+        ));
+    }
+
+    #[test]
+    fn can_retry_without_sandbox_allows_on_request_for_network_context() {
+        assert!(can_retry_without_sandbox(
+            false,
+            AskForApproval::OnRequest,
+            true
+        ));
+    }
+
+    #[test]
+    fn can_retry_without_sandbox_still_blocks_never_without_tool_override() {
+        assert!(!can_retry_without_sandbox(
+            false,
+            AskForApproval::Never,
+            true
+        ));
+    }
+
+    #[test]
+    fn can_retry_without_sandbox_honors_tool_override() {
+        assert!(can_retry_without_sandbox(
+            true,
+            AskForApproval::OnRequest,
+            false
+        ));
     }
 }
