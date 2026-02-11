@@ -4244,7 +4244,7 @@ fn filter_connectors_for_input(
     connectors
         .into_iter()
         .filter(|connector| {
-            connector_inserted_in_messages(
+            mention_inserted_in_messages(
                 connector,
                 &mention_names_lower,
                 &allowed_connector_ids,
@@ -4255,7 +4255,7 @@ fn filter_connectors_for_input(
         .collect()
 }
 
-fn connector_inserted_in_messages(
+fn mention_inserted_in_messages(
     connector: &connectors::AppInfo,
     mention_names_lower: &HashSet<String>,
     allowed_connector_ids: &HashSet<String>,
