@@ -49,7 +49,7 @@ pub(crate) fn builder_from_session_meta(
     builder.model_provider = session_meta.meta.model_provider.clone();
     builder.cwd = session_meta.meta.cwd.clone();
     builder.cli_version = Some(session_meta.meta.cli_version.clone());
-    builder.sandbox_policy = SandboxPolicy::ReadOnly;
+    builder.sandbox_policy = SandboxPolicy::new_read_only_policy();
     builder.approval_mode = AskForApproval::OnRequest;
     if let Some(git) = session_meta.git.as_ref() {
         builder.git_sha = git.commit_hash.clone();

@@ -88,7 +88,7 @@ where
     S: Service<RoleClient> + ClientHandler,
 {
     let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),
         use_linux_sandbox_bwrap: false,
@@ -110,6 +110,7 @@ where
             // Note that sandbox_cwd will already be included as a writable root
             // when the sandbox policy is expanded.
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: false,
             // Disable writes to temp dir because this is a test, so
             // writable_folder is likely also under /tmp and we want to be

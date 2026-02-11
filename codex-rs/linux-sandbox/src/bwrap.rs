@@ -141,6 +141,13 @@ fn create_bwrap_flags(
 /// 4. `--dev-bind /dev/null /dev/null` preserves the common sink even under a
 ///    read-only root.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
+    if !sandbox_policy.has_full_disk_read_access() {
+        return Err(CodexErr::UnsupportedOperation(
+            "Restricted read-only access is not yet supported by the Linux bubblewrap backend."
+                .to_string(),
+        ));
+    }
+
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
