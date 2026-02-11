@@ -29,6 +29,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
 
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -43,6 +44,7 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
@@ -193,6 +195,136 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
         Some(turn_started_id),
         "compaction item completion should use the turn event id"
     );
+}
+
+fn normalize_shape_text(text: &str) -> String {
+    if text == SUMMARIZATION_PROMPT {
+        return "<SUMMARIZATION_PROMPT>".to_string();
+    }
+    if let Some(summary) = text.strip_prefix(format!("{SUMMARY_PREFIX}\n").as_str()) {
+        return format!("<SUMMARY:{summary}>");
+    }
+    if text.starts_with("# AGENTS.md instructions for ") {
+        return "<AGENTS_MD>".to_string();
+    }
+    if text.starts_with("<environment_context>") {
+        return "<ENVIRONMENT_CONTEXT>".to_string();
+    }
+    if text.contains("<permissions instructions>") {
+        return "<PERMISSIONS_INSTRUCTIONS>".to_string();
+    }
+
+    text.replace('\n', "\\n")
+}
+
+fn message_text_for_shape(item: &Value) -> String {
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                .map(normalize_shape_text)
+                .collect::<Vec<String>>()
+                .join(" | ")
+        })
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "<NO_TEXT>".to_string())
+}
+
+fn request_input_shape(request: &ResponsesRequest) -> String {
+    request
+        .input()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+                return format!("{idx:02}:<MISSING_TYPE>");
+            };
+            match item_type {
+                "message" => {
+                    let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
+                    let text = message_text_for_shape(&item);
+                    format!("{idx:02}:message/{role}:{text}")
+                }
+                "function_call" => {
+                    let name = item.get("name").and_then(Value::as_str).unwrap_or("unknown");
+                    let normalized_name = if name == DUMMY_FUNCTION_NAME {
+                        "<TOOL_CALL>"
+                    } else {
+                        name
+                    };
+                    format!("{idx:02}:function_call/{normalized_name}")
+                }
+                "function_call_output" => {
+                    let output = item
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .map(|output| {
+                            if output.starts_with("unsupported call: ")
+                                || output.starts_with("unsupported custom tool call: ")
+                            {
+                                "<TOOL_ERROR_OUTPUT>".to_string()
+                            } else {
+                                normalize_shape_text(output)
+                            }
+                        })
+                        .unwrap_or_else(|| "<NON_STRING_OUTPUT>".to_string());
+                    format!("{idx:02}:function_call_output:{output}")
+                }
+                "local_shell_call" => {
+                    let command = item
+                        .get("action")
+                        .and_then(|action| action.get("command"))
+                        .and_then(Value::as_array)
+                        .map(|parts| {
+                            parts
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<&str>>()
+                                .join(" ")
+                        })
+                        .filter(|cmd| !cmd.is_empty())
+                        .unwrap_or_else(|| "<NO_COMMAND>".to_string());
+                    format!("{idx:02}:local_shell_call:{command}")
+                }
+                "reasoning" => {
+                    let summary_text = item
+                        .get("summary")
+                        .and_then(Value::as_array)
+                        .and_then(|summary| summary.first())
+                        .and_then(|entry| entry.get("text"))
+                        .and_then(Value::as_str)
+                        .map(normalize_shape_text)
+                        .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
+                    let has_encrypted_content = item
+                        .get("encrypted_content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty());
+                    format!(
+                        "{idx:02}:reasoning:summary={summary_text}:encrypted={has_encrypted_content}"
+                    )
+                }
+                "compaction" => {
+                    let has_encrypted_content = item
+                        .get("encrypted_content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.is_empty());
+                    format!("{idx:02}:compaction:encrypted={has_encrypted_content}")
+                }
+                other => format!("{idx:02}:{other}"),
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+fn sectioned_request_shapes(sections: &[(&str, &ResponsesRequest)]) -> String {
+    sections
+        .iter()
+        .map(|(title, request)| format!("## {title}\n{}", request_input_shape(request)))
+        .collect::<Vec<String>>()
+        .join("\n\n")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -408,8 +540,15 @@ async fn manual_compact_uses_custom_prompt() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse_stream = sse(vec![ev_completed("r1")]);
-    let response_mock = mount_sse_once(&server, sse_stream).await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", 80),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", SUMMARY_TEXT),
+        ev_completed_with_tokens("r1", 100),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![first_turn, compact_turn]).await;
 
     let custom_prompt = "Use this compact prompt instead";
 
@@ -424,6 +563,18 @@ async fn manual_compact_uses_custom_prompt() {
         .expect("create conversation")
         .codex;
 
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
     let EventMsg::Warning(WarningEvent { message }) = warning_event else {
@@ -432,7 +583,13 @@ async fn manual_compact_uses_custom_prompt() {
     assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let body = response_mock.single_request().body_json();
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected first turn and compact requests"
+    );
+    let body = requests[1].body_json();
 
     let input = body
         .get("input")
@@ -475,6 +632,10 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let server = start_mock_server().await;
 
+    let sse_first_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", 80),
+    ]);
     // Compact run where the API reports zero tokens in usage. Our local
     // estimator should still compute a non-zero context size for the compacted
     // history.
@@ -482,7 +643,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
         ev_assistant_message("m1", SUMMARY_TEXT),
         ev_completed_with_tokens("r1", 0),
     ]);
-    mount_sse_once(&server, sse_compact).await;
+    mount_sse_sequence(&server, vec![sse_first_turn, sse_compact]).await;
 
     let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex().with_config(move |config| {
@@ -491,39 +652,41 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     });
     let codex = builder.build(&server).await.unwrap().codex;
 
-    // Trigger manual compact and collect TokenCount events for the compact turn.
-    codex.submit(Op::Compact).await.unwrap();
-
-    // First TokenCount: from the compact API call (usage.total_tokens = 0).
-    let first = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TokenCount(tc) => tc
-            .info
-            .as_ref()
-            .map(|info| info.last_token_usage.total_tokens),
-        _ => None,
-    })
-    .await;
-
-    // Second TokenCount: from the local post-compaction estimate.
-    let last = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TokenCount(tc) => tc
-            .info
-            .as_ref()
-            .map(|info| info.last_token_usage.total_tokens),
-        _ => None,
-    })
-    .await;
-
-    // Ensure the compact task itself completes.
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert_eq!(
-        first, 0,
-        "expected first TokenCount from compact API usage to be zero"
+    // Trigger manual compact and collect TokenCount events for the compact turn.
+    codex.submit(Op::Compact).await.unwrap();
+    let mut token_totals = Vec::new();
+    loop {
+        let event = wait_for_event(&codex, |_| true).await;
+        match event {
+            EventMsg::TokenCount(tc) => {
+                if let Some(info) = tc.info {
+                    token_totals.push(info.last_token_usage.total_tokens);
+                }
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert!(
+        token_totals.contains(&0),
+        "expected compact turn to emit TokenCount usage.total_tokens = 0"
     );
     assert!(
-        last > 0,
-        "second TokenCount should reflect a non-zero estimated context size after compaction"
+        token_totals.iter().any(|total| *total > 0),
+        "expected compact turn to emit non-zero estimated local context size after compaction"
     );
 }
 
@@ -2134,6 +2297,79 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let user_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let compact_failed_1 = sse_failed(
+        "resp-fail-1",
+        "server_error",
+        "temporary compact failure one",
+    );
+    let compact_failed_2 = sse_failed(
+        "resp-fail-2",
+        "server_error",
+        "temporary compact failure two",
+    );
+
+    mount_sse_sequence(&server, vec![user_turn, compact_failed_1, compact_failed_2]).await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(1);
+
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200_000);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("trigger compact");
+
+    let reconnect_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::StreamError(stream_error) => Some(stream_error.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(
+        reconnect_message.contains("Reconnecting... 1/1"),
+        "expected reconnect stream error message, got {reconnect_message}"
+    );
+
+    let task_error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(
+        task_error_message.contains("Error running local compact task"),
+        "expected local compact task error prefix, got {task_error_message}"
+    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compact_twice_preserves_latest_user_messages() {
     skip_if_no_network!();
 
@@ -2296,14 +2532,26 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .input()
         .into_iter()
+        .filter(|item| {
+            let role = item
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let text = item
+                .get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|v| v.first())
+                .and_then(|v| v.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if role == "developer" {
+                return false;
+            }
+            !(text.starts_with("# AGENTS.md instructions for ")
+                || text.starts_with("<environment_context>")
+                || text.starts_with("<turn_aborted>"))
+        })
         .collect::<VecDeque<_>>();
-
-    // Permissions developer message
-    final_output.pop_front();
-    // User instructions (project docs/skills)
-    final_output.pop_front();
-    // Environment context
-    final_output.pop_front();
 
     let _ = final_output
         .iter_mut()
@@ -2826,5 +3074,430 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         compact_requests.len(),
         1,
         "remote compaction should run once after the reasoning header clears"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 60),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 500),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", "PRE_TURN_SUMMARY"),
+        ev_completed_with_tokens("r3", 100),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 80),
+    ]);
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    for user in ["USER_ONE", "USER_TWO"] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .expect("submit user input");
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+        .to_string();
+    codex
+        .submit(Op::UserInput {
+            items: vec![
+                UserInput::Image {
+                    image_url: image_url.clone(),
+                },
+                UserInput::Text {
+                    text: "USER_THREE".to_string(),
+                    text_elements: Vec::new(),
+                },
+            ],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4, "expected user, user, compact, follow-up");
+
+    let compact_shape = request_input_shape(&requests[2]);
+    let follow_up_shape = request_input_shape(&requests[3]);
+    insta::assert_snapshot!(
+        "pre_turn_compaction_including_incoming_shapes",
+        sectioned_request_shapes(&[
+            ("Local Compaction Request", &requests[2]),
+            ("Local Post-Compaction History Request", &requests[3]),
+        ])
+    );
+    assert!(
+        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        "expected compact request to include summarization prompt"
+    );
+    assert!(
+        compact_shape.contains("USER_THREE"),
+        "expected compact request to include incoming user message"
+    );
+    let follow_up_has_incoming_image = requests[3].inputs_of_type("message").iter().any(|item| {
+        if item.get("role").and_then(Value::as_str) != Some("user") {
+            return false;
+        }
+        let Some(content) = item.get("content").and_then(Value::as_array) else {
+            return false;
+        };
+        let has_user_text = content.iter().any(|span| {
+            span.get("type").and_then(Value::as_str) == Some("input_text")
+                && span.get("text").and_then(Value::as_str) == Some("USER_THREE")
+        });
+        let has_image = content.iter().any(|span| {
+            span.get("type").and_then(Value::as_str) == Some("input_image")
+                && span.get("image_url").and_then(Value::as_str) == Some(image_url.as_str())
+        });
+        has_user_text && has_image
+    });
+    assert!(
+        follow_up_has_incoming_image,
+        "expected post-compaction follow-up request to keep incoming user image content"
+    );
+    assert!(
+        follow_up_shape.contains("<SUMMARY:PRE_TURN_SUMMARY>"),
+        "expected post-compaction request to include prefixed summary"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 500),
+    ]);
+    let mut responses = vec![first_turn];
+    responses.extend(
+        (0..7).map(|_| {
+            sse_failed(
+                "compact-failed",
+                "context_length_exceeded",
+                "Your input exceeds the context window of this model. Please adjust your input and try again.",
+            )
+        }),
+    );
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit first user");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit second user");
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(
+        requests.len() >= 2,
+        "expected first turn and at least one compaction request"
+    );
+
+    let include_attempt_shape = request_input_shape(&requests[1]);
+    insta::assert_snapshot!(
+        "pre_turn_compaction_context_window_exceeded_shapes",
+        sectioned_request_shapes(&[(
+            "Local Compaction Request (Including Incoming User Message)",
+            &requests[1]
+        ),])
+    );
+
+    assert!(
+        include_attempt_shape.contains("USER_TWO"),
+        "first pre-turn attempt should include incoming user message"
+    );
+    assert!(
+        error_message.contains(
+            "Incoming user message and/or turn context is too large to fit in context window"
+        ),
+        "expected context window exceeded message, got {error_message}"
+    );
+    assert!(
+        error_message.contains("incoming_items_tokens_estimate="),
+        "expected token estimate in error message, got {error_message}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_mid_turn_continuation_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", 500),
+    ]);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", "MID_TURN_SUMMARY"),
+        ev_completed_with_tokens("r2", 100),
+    ]);
+    let post_compact_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 80),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![first_turn, auto_compact_turn, post_compact_turn],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
+
+    let compact_shape = request_input_shape(&requests[1]);
+    let follow_up_shape = request_input_shape(&requests[2]);
+    insta::assert_snapshot!(
+        "mid_turn_compaction_shapes",
+        sectioned_request_shapes(&[
+            ("Local Compaction Request", &requests[1]),
+            ("Local Post-Compaction History Request", &requests[2]),
+        ])
+    );
+    assert!(
+        compact_shape.contains("function_call_output"),
+        "mid-turn compaction request should include function call output"
+    );
+    assert!(
+        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        "mid-turn compaction request should include summarization prompt"
+    );
+    assert!(
+        follow_up_shape.contains("<SUMMARY:MID_TURN_SUMMARY>"),
+        "post-mid-turn compaction request should include summary"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m1", FINAL_REPLY),
+        ev_completed_with_tokens("r1", 80),
+    ]);
+    let request_log = mount_sse_once(&server, follow_up_turn).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex.submit(Op::Compact).await.expect("run /compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "AFTER_MANUAL_EMPTY_COMPACT".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit follow-up user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 1, "expected only follow-up turn request");
+
+    let follow_up_shape = request_input_shape(&requests[0]);
+    insta::assert_snapshot!(
+        "manual_compact_without_prev_user_shapes",
+        sectioned_request_shapes(&[("Local Post-Compaction History", &requests[0]),])
+    );
+    assert!(
+        !follow_up_shape.contains("<SUMMARY:MANUAL_EMPTY_SUMMARY>"),
+        "follow-up request should not include compact summary after no-op /compact"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 80),
+    ]);
+    let compact_turn = sse(vec![
+        ev_assistant_message("m2", "MANUAL_SUMMARY"),
+        ev_completed_with_tokens("r2", 90),
+    ]);
+    let follow_up_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 80),
+    ]);
+    let request_log =
+        mount_sse_sequence(&server, vec![first_turn, compact_turn, follow_up_turn]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit first user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.expect("run /compact");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit second user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
+
+    let compact_shape = request_input_shape(&requests[1]);
+    let follow_up_shape = request_input_shape(&requests[2]);
+    insta::assert_snapshot!(
+        "manual_compact_with_history_shapes",
+        sectioned_request_shapes(&[
+            ("Local Compaction Request", &requests[1]),
+            ("Local Post-Compaction History Request", &requests[2]),
+        ])
+    );
+    assert!(
+        compact_shape.contains("USER_ONE"),
+        "manual compact request should include existing user history"
+    );
+    assert!(
+        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        "manual compact request should include summarization prompt"
+    );
+    assert!(
+        follow_up_shape.contains("<SUMMARY:MANUAL_SUMMARY>"),
+        "post-compact request should include compact summary"
+    );
+    assert!(
+        follow_up_shape.contains("USER_TWO"),
+        "post-compact request should include the latest user message"
     );
 }
