@@ -452,7 +452,12 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
+        let permissions_span = if self.permissions == "Full Access" {
+            Span::from(self.permissions.clone()).fg(Color::Rgb(255, 165, 0))
+        } else {
+            Span::from(self.permissions.clone())
+        };
+        lines.push(formatter.line("Permissions", vec![permissions_span]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {
