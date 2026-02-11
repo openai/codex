@@ -497,7 +497,7 @@ impl HistoryCell for StatusHistoryCell {
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         let permissions_span = if self.permissions == "Full Access" {
-            Span::from(self.permissions.clone()).fg(Color::Rgb(255, 165, 0))
+            Span::from(self.permissions.clone()).yellow()
         } else {
             Span::from(self.permissions.clone())
         };
