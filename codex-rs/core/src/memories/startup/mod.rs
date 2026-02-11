@@ -1,4 +1,3 @@
-mod dispatch;
 mod extract;
 mod phase2;
 
@@ -88,7 +87,7 @@ pub(super) async fn run_memories_startup_pipeline(
         .map(ToString::to_string)
         .collect::<Vec<_>>();
 
-    let claimed_candidates = match state_db
+    let claimed_candidates = state_db
         .claim_stage1_jobs_for_startup(
             session.conversation_id,
             codex_state::Stage1StartupClaimParams {
@@ -100,14 +99,10 @@ pub(super) async fn run_memories_startup_pipeline(
                 lease_seconds: super::PHASE_ONE_JOB_LEASE_SECONDS,
             },
         )
-        .await
-    {
-        Ok(claims) => claims,
-        Err(err) => {
-            warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
-            Vec::new()
-        }
-    };
+        .await.unwrap_or_else(|err| {
+        warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
+        Vec::new()
+    });
 
     let claimed_count = claimed_candidates.len();
     let mut succeeded_count = 0;
@@ -187,7 +182,7 @@ pub(super) async fn run_memories_startup_pipeline(
     );
 
     let consolidation_job_count =
-        usize::from(dispatch::run_global_memory_consolidation(session, config).await);
+        usize::from(phase2::run_global_memory_consolidation(session, config).await);
     info!(
         "memory consolidation dispatch complete: {} job(s) scheduled",
         consolidation_job_count
