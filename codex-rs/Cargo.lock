@@ -1718,7 +1718,6 @@ dependencies = [
  "landlock",
  "libc",
  "maplit",
- "multimap",
  "notify",
  "once_cell",
  "openssl-sys",
