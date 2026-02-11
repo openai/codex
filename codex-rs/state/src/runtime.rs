@@ -1272,7 +1272,6 @@ WHERE id = 1
     }
 
     #[tokio::test]
-    #[ignore = "TODO(jif): flaky"]
     async fn stage1_concurrent_claims_respect_running_cap() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
