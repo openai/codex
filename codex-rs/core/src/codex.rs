@@ -105,6 +105,7 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
@@ -220,6 +221,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::js_repl::JsReplHandle;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -250,7 +252,6 @@ use codex_utils_readiness::ReadinessFlag;
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
-    pub(crate) next_id: AtomicU64,
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
@@ -431,7 +432,6 @@ impl Codex {
             submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
         );
         let codex = Codex {
-            next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
@@ -448,10 +448,7 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        let id = self
-            .next_id
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            .to_string();
+        let id = Uuid::now_v7().to_string();
         let sub = Submission { id: id.clone(), op };
         self.submit_with_id(sub).await?;
         Ok(id)
@@ -516,6 +513,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -555,6 +553,7 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     turn_metadata_header: OnceCell<Option<String>>,
 }
@@ -815,6 +814,7 @@ impl Session {
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
+        js_repl: Arc<JsReplHandle>,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration.model_reasoning_summary;
@@ -863,6 +863,7 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_header: OnceCell::new(),
         }
@@ -1149,7 +1150,14 @@ impl Session {
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
+        let prewarm_model_info = models_manager
+            .get_model_info(session_configuration.collaboration_mode.model(), &config)
+            .await;
         let prewarm_cwd = session_configuration.cwd.clone();
         let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
             async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
@@ -1159,6 +1167,7 @@ impl Session {
         let startup_regular_task = RegularTask::with_startup_prewarm(
             services.model_client.clone(),
             services.otel_manager.clone(),
+            prewarm_model_info,
             turn_metadata_header,
         );
         state.set_startup_regular_task(startup_regular_task);
@@ -1172,6 +1181,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1620,6 +1630,7 @@ impl Session {
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
             sub_id,
+            Arc::clone(&self.js_repl),
         );
 
         if let Some(final_schema) = final_output_json_schema {
@@ -2316,6 +2327,14 @@ impl Session {
             items.push(
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
+        }
+        // Add developer instructions for memories.
+        if let Some(memory_prompt) =
+            memories::build_memory_tool_developer_instructions(&turn_context.config.codex_home)
+                .await
+            && turn_context.features.enabled(Feature::MemoryTool)
+        {
+            items.push(DeveloperInstructions::new(memory_prompt).into());
         }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
@@ -3780,6 +3799,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
@@ -3887,6 +3907,7 @@ pub(crate) async fn run_turn(
     let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -4266,11 +4287,13 @@ async fn run_sampling_request(
 
     let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
 
+    let tools =
+        crate::tools::spec::filter_tools_for_model(router.specs(), &turn_context.tools_config);
     let base_instructions = sess.get_base_instructions().await;
 
     let prompt = Prompt {
         input,
-        tools: router.specs(),
+        tools,
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
         personality: turn_context.personality,
@@ -4301,7 +4324,7 @@ async fn run_sampling_request(
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
+                    sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -4315,7 +4338,8 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries
-            && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
+            && client_session
+                .try_switch_fallback_transport(&turn_context.otel_manager, &turn_context.model_info)
         {
             sess.send_event(
                 &turn_context,
@@ -4839,6 +4863,7 @@ async fn try_run_sampling_request(
 ) -> CodexResult<SamplingRequestResult> {
     let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        turn_id: Some(turn_context.sub_id.clone()),
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -5007,6 +5032,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                can_append: _,
             } => {
                 if let Some(state) = plan_mode_state.as_mut() {
                     flush_proposed_plan_segments_all(&sess, &turn_context, state).await;
@@ -5290,9 +5316,9 @@ mod tests {
         ];
 
         let (session, _turn_context) = make_session_and_context().await;
+        let config = test_config();
 
         for test_case in test_cases {
-            let config = test_config();
             let model_info = model_info_for_slug(test_case.slug, &config);
             if test_case.expects_apply_patch_instructions {
                 assert_eq!(
@@ -5806,8 +5832,9 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
@@ -5842,6 +5869,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
                 window_minutes: Some(15),
@@ -5858,6 +5887,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: Some("codex_other".to_string()),
+            limit_name: Some("codex_other".to_string()),
             primary: Some(RateLimitWindow {
                 used_percent: 40.0,
                 window_minutes: Some(30),
@@ -5876,6 +5907,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex_other".to_string()),
+                limit_name: Some("codex_other".to_string()),
                 primary: update.primary.clone(),
                 secondary: update.secondary,
                 credits: initial.credits,
@@ -5889,8 +5922,9 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
@@ -5925,6 +5959,8 @@ mod tests {
 
         let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
                 window_minutes: Some(20),
@@ -5945,6 +5981,8 @@ mod tests {
         state.set_rate_limits(initial.clone());
 
         let update = RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 35.0,
                 window_minutes: Some(25),
@@ -5959,6 +5997,8 @@ mod tests {
         assert_eq!(
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: None,
                 primary: update.primary,
                 secondary: update.secondary,
                 credits: initial.credits,
@@ -6136,7 +6176,7 @@ mod tests {
     ) -> OtelManager {
         OtelManager::new(
             conversation_id,
-            ModelsManager::get_model_offline(config.model.as_deref()).as_str(),
+            ModelsManager::get_model_offline_for_tests(config.model.as_deref()).as_str(),
             model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
@@ -6152,8 +6192,9 @@ mod tests {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
@@ -6204,8 +6245,9 @@ mod tests {
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
@@ -6238,7 +6280,7 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_info = ModelsManager::construct_model_info_offline(
+        let model_info = ModelsManager::construct_model_info_offline_for_tests(
             session_configuration.collaboration_mode.model(),
             &per_turn_config,
         );
@@ -6283,7 +6325,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
@@ -6291,6 +6334,10 @@ mod tests {
                 Session::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -6301,6 +6348,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&js_repl),
         );
 
         let session = Session {
@@ -6312,6 +6360,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -6339,8 +6388,9 @@ mod tests {
         let agent_control = AgentControl::default();
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
@@ -6373,7 +6423,7 @@ mod tests {
             dynamic_tools: Vec::new(),
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
-        let model_info = ModelsManager::construct_model_info_offline(
+        let model_info = ModelsManager::construct_model_info_offline_for_tests(
             session_configuration.collaboration_mode.model(),
             &per_turn_config,
         );
@@ -6418,7 +6468,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
@@ -6426,6 +6477,10 @@ mod tests {
                 Session::build_model_client_beta_features_header(config.as_ref()),
             ),
         };
+        let js_repl = Arc::new(JsReplHandle::with_node_path(
+            config.js_repl_node_path.clone(),
+            config.codex_home.clone(),
+        ));
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -6436,6 +6491,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&js_repl),
         ));
 
         let session = Arc::new(Session {
@@ -6447,6 +6503,7 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
 

@@ -14,8 +14,6 @@ pub use cli::Cli;
 pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::oss::ensure_oss_provider_ready;
-use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
@@ -43,6 +41,8 @@ use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_oss::ensure_oss_provider_ready;
+use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
@@ -205,7 +205,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements =
+        cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url, codex_home.clone());
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -248,6 +249,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
         codex_linux_sandbox_exe,
+        js_repl_node_path: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,

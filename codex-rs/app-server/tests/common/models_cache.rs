@@ -1,6 +1,6 @@
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::models_manager::model_presets::all_model_presets;
+use codex_core::test_support::all_model_presets;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -40,6 +40,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
+        prefer_websockets: false,
     }
 }
 

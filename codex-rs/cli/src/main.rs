@@ -16,7 +16,6 @@ use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
-use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -26,6 +25,7 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
+use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -305,6 +305,15 @@ struct AppServerCommand {
     /// Omit to run the app server; specify a subcommand for tooling.
     #[command(subcommand)]
     subcommand: Option<AppServerSubcommand>,
+
+    /// Transport endpoint URL. Supported values: `stdio://` (default),
+    /// `ws://IP:PORT`.
+    #[arg(
+        long = "listen",
+        value_name = "URL",
+        default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
+    )]
+    listen: codex_app_server::AppServerTransport,
 
     /// Controls whether analytics are enabled by default.
     ///
@@ -587,11 +596,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
-                codex_app_server::run_main(
+                let transport = app_server_cli.listen;
+                codex_app_server::run_main_with_transport(
                     codex_linux_sandbox_exe,
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
+                    transport,
                 )
                 .await?;
             }
@@ -1248,11 +1259,11 @@ mod tests {
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
         assert_matches!(
             interactive.sandbox_mode,
-            Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
+            Some(codex_utils_cli::SandboxModeCliArg::WorkspaceWrite)
         );
         assert_matches!(
             interactive.approval_policy,
-            Some(codex_common::ApprovalModeCliArg::OnRequest)
+            Some(codex_utils_cli::ApprovalModeCliArg::OnRequest)
         );
         assert!(interactive.full_auto);
         assert_eq!(
@@ -1328,6 +1339,10 @@ mod tests {
     fn app_server_analytics_default_disabled_without_flag() {
         let app_server = app_server_from_args(["codex", "app-server"].as_ref());
         assert!(!app_server.analytics_default_enabled);
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::Stdio
+        );
     }
 
     #[test]
@@ -1335,6 +1350,36 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn app_server_listen_websocket_url_parses() {
+        let app_server = app_server_from_args(
+            ["codex", "app-server", "--listen", "ws://127.0.0.1:4500"].as_ref(),
+        );
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:4500".parse().expect("valid socket address"),
+            }
+        );
+    }
+
+    #[test]
+    fn app_server_listen_stdio_url_parses() {
+        let app_server =
+            app_server_from_args(["codex", "app-server", "--listen", "stdio://"].as_ref());
+        assert_eq!(
+            app_server.listen,
+            codex_app_server::AppServerTransport::Stdio
+        );
+    }
+
+    #[test]
+    fn app_server_listen_invalid_url_fails_to_parse() {
+        let parse_result =
+            MultitoolCli::try_parse_from(["codex", "app-server", "--listen", "http://foo"]);
+        assert!(parse_result.is_err());
     }
 
     #[test]

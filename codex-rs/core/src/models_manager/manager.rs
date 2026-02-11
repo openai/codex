@@ -336,9 +336,8 @@ impl ModelsManager {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Construct a manager with a specific provider for testing.
-    pub fn with_provider(
+    pub(crate) fn with_provider_for_tests(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
@@ -355,9 +354,8 @@ impl ModelsManager {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Get model identifier without consulting remote state or cache.
-    pub fn get_model_offline(model: Option<&str>) -> String {
+    pub(crate) fn get_model_offline_for_tests(model: Option<&str>) -> String {
         if let Some(model) = model {
             return model.to_string();
         }
@@ -370,9 +368,11 @@ impl ModelsManager {
             .unwrap_or_default()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
-    pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
+    pub(crate) fn construct_model_info_offline_for_tests(
+        model: &str,
+        config: &Config,
+    ) -> ModelInfo {
         model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
     }
 }
@@ -482,8 +482,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
 
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -536,8 +539,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
 
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -580,8 +586,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
 
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -646,8 +655,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
 
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -712,8 +724,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
-        let mut manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let mut manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
         manager.cache_manager.set_ttl(Duration::ZERO);
 
         manager
@@ -784,8 +799,11 @@ mod tests {
             AuthCredentialsStoreMode::File,
         ));
         let provider = provider_for(server.uri());
-        let manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
 
         manager
             .refresh_available_models(&config, RefreshStrategy::Online)
@@ -811,8 +829,11 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let provider = provider_for("http://example.test".to_string());
-        let mut manager =
-            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+        let mut manager = ModelsManager::with_provider_for_tests(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            provider,
+        );
         manager.local_models = Vec::new();
 
         let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");

@@ -79,7 +79,6 @@ mod image_rollout;
 mod items;
 mod json_result;
 mod list_dir;
-mod list_models;
 mod live_cli;
 mod live_reload;
 mod model_info_overrides;
