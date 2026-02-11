@@ -59,6 +59,9 @@ pub(crate) fn with_model_info_patch(
     }
     if let Some(base_instructions) = &model_info_patch.base_instructions {
         model.base_instructions = base_instructions.clone();
+        // Keep parity with top-level config behavior: explicit base instructions
+        // should disable template-driven model messages unless the patch sets them again.
+        model.model_messages = None;
     }
     if let Some(model_messages) = &model_info_patch.model_messages {
         model.model_messages = Some(model_messages.clone());
