@@ -5424,6 +5424,18 @@ mod tests {
             composer.textarea.set_cursor(0);
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         });
+
+        snapshot_composer_state("remote_image_rows_after_delete_first", false, |composer| {
+            composer.set_remote_image_urls(vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ]);
+            composer.set_text_content("describe these".to_string(), Vec::new(), Vec::new());
+            composer.textarea.set_cursor(0);
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        });
     }
 
     #[test]
