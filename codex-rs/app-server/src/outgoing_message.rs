@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -46,6 +47,62 @@ pub(crate) struct OutgoingMessageSender {
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
     request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ThreadScopedOutgoingMessageSender {
+    outgoing: Arc<OutgoingMessageSender>,
+    connection_ids: Arc<Vec<ConnectionId>>,
+}
+
+impl ThreadScopedOutgoingMessageSender {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        connection_ids: Vec<ConnectionId>,
+    ) -> Self {
+        Self {
+            outgoing,
+            connection_ids: Arc::new(connection_ids),
+        }
+    }
+
+    pub(crate) async fn send_request(
+        &self,
+        payload: ServerRequestPayload,
+    ) -> oneshot::Receiver<Result> {
+        if self.connection_ids.is_empty() {
+            let (_tx, rx) = oneshot::channel();
+            return rx;
+        }
+        self.outgoing
+            .send_request_to_connections(self.connection_ids.as_slice(), payload)
+            .await
+    }
+
+    pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        if self.connection_ids.is_empty() {
+            return;
+        }
+        self.outgoing
+            .send_server_notification_to_connections(self.connection_ids.as_slice(), notification)
+            .await;
+    }
+
+    pub(crate) async fn send_response<T: Serialize>(
+        &self,
+        request_id: ConnectionRequestId,
+        response: T,
+    ) {
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    pub(crate) async fn send_error(
+        &self,
+        request_id: ConnectionRequestId,
+        error: JSONRPCErrorError,
+    ) {
+        self.outgoing.send_error(request_id, error).await;
+    }
 }
 
 impl OutgoingMessageSender {

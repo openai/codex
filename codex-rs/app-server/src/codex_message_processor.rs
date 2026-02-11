@@ -7,6 +7,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -5480,13 +5481,16 @@ impl CodexMessageProcessor {
                             )
                             .await;
 
+                        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+                            outgoing_for_task.clone(),
+                            subscribed_connection_ids,
+                        );
                         apply_bespoke_event_handling(
                             event.clone(),
                             conversation_id,
                             conversation.clone(),
-                            outgoing_for_task.clone(),
+                            thread_outgoing,
                             thread_state.clone(),
-                            subscribed_connection_ids,
                             api_version,
                             fallback_model_provider.clone(),
                         )
