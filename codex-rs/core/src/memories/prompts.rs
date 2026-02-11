@@ -97,7 +97,7 @@ mod tests {
         let (_, truncated_rollout) = message
             .split_once("rendered conversation:")
             .expect("stage-one prompt must include rendered conversation section");
-        let truncated_rollout = truncated_rollout.trim_start_matches(['\r', '\n']);
+        let truncated_rollout = truncated_rollout.trim_matches(['\r', '\n']);
 
         assert!(truncated_rollout.contains("tokens truncated"));
         assert!(truncated_rollout.starts_with('a'));
