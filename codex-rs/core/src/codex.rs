@@ -2295,7 +2295,11 @@ impl Session {
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
         }
-        if turn_context.features.enabled(Feature::MemoryTool) && tokio::fs::try_exists(memory_root(turn_context.config.codex_home.as_path())).await.unwrap_or_default() {
+        if turn_context.features.enabled(Feature::MemoryTool)
+            && tokio::fs::try_exists(memory_root(turn_context.config.codex_home.as_path()))
+                .await
+                .unwrap_or_default()
+        {
             items.push(
                 DeveloperInstructions::new(
                     memories::build_memory_tool_developer_instructions(
@@ -5128,13 +5132,13 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
     })
 }
 
+use crate::memories::memory_root;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context_with_rx;
 #[cfg(test)]
 pub(crate) use tests::make_session_configuration_for_tests;
-use crate::memories::memory_root;
 
 #[cfg(test)]
 mod tests {
