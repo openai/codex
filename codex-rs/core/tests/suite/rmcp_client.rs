@@ -191,6 +191,217 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
+async fn stdio_server_reconnects_after_disconnect() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let server_name = "rmcp_reconnect";
+    let tool_name = format!("mcp__{server_name}__echo");
+    let call_ids = ["call-reconnect-1", "call-reconnect-2"];
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-reconnect-1"),
+            responses::ev_function_call(call_ids[0], &tool_name, "{\"message\":\"ping-1\"}"),
+            responses::ev_completed("resp-reconnect-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-reconnect-1", "first rmcp call completed."),
+            responses::ev_completed("resp-reconnect-2"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-reconnect-3"),
+            responses::ev_function_call(call_ids[1], &tool_name, "{\"message\":\"ping-2\"}"),
+            responses::ev_completed("resp-reconnect-3"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-reconnect-2", "second rmcp call completed."),
+            responses::ev_completed("resp-reconnect-4"),
+        ]),
+    )
+    .await;
+
+    let expected_env_value = "propagated-env-reconnect";
+    let rmcp_test_server_bin = stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::from([
+                            ("MCP_TEST_VALUE".to_string(), expected_env_value.to_string()),
+                            ("MCP_EXIT_AFTER_CALLS".to_string(), "1".to_string()),
+                        ])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the reconnect test rmcp tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model.clone(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.invocation.server, server_name);
+    assert_eq!(begin.invocation.tool, "echo");
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let result = end
+        .result
+        .as_ref()
+        .expect("first rmcp echo tool call should succeed");
+    assert_eq!(result.is_error, Some(false));
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    let Value::Object(first_map) = structured else {
+        panic!("structured content should be an object: {structured:?}");
+    };
+    let first_echo = first_map
+        .get("echo")
+        .and_then(Value::as_str)
+        .expect("echo payload present");
+    assert_eq!(first_echo, "ECHOING: ping-1");
+    let first_env = first_map
+        .get("env")
+        .and_then(Value::as_str)
+        .expect("env snapshot inserted");
+    assert_eq!(first_env, expected_env_value);
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    sleep(Duration::from_millis(100)).await;
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the reconnect test rmcp tool again".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let begin_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let EventMsg::McpToolCallBegin(begin) = begin_event else {
+        unreachable!("event guard guarantees McpToolCallBegin");
+    };
+    assert_eq!(begin.invocation.server, server_name);
+    assert_eq!(begin.invocation.tool, "echo");
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let result = end
+        .result
+        .as_ref()
+        .expect("second rmcp echo tool call should succeed after reconnect");
+    assert_eq!(result.is_error, Some(false));
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    let Value::Object(second_map) = structured else {
+        panic!("structured content should be an object: {structured:?}");
+    };
+    let second_echo = second_map
+        .get("echo")
+        .and_then(Value::as_str)
+        .expect("echo payload present");
+    assert_eq!(second_echo, "ECHOING: ping-2");
+    let second_env = second_map
+        .get("env")
+        .and_then(Value::as_str)
+        .expect("env snapshot inserted");
+    assert_eq!(second_env, expected_env_value);
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
 async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

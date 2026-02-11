@@ -264,7 +264,83 @@ impl ManagedClient {
 
 #[derive(Clone)]
 struct AsyncManagedClient {
-    client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    builder: ManagedClientBuilder,
+    client: Arc<Mutex<ManagedClientFuture>>,
+}
+
+type ManagedClientFuture = Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>;
+
+#[derive(Clone)]
+struct ManagedClientBuilder {
+    server_name: String,
+    transport: McpServerTransportConfig,
+    store_mode: OAuthCredentialsStoreMode,
+    startup_timeout: Option<Duration>,
+    tool_timeout: Duration,
+    tool_filter: ToolFilter,
+    cancel_token: CancellationToken,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
+}
+
+impl ManagedClientBuilder {
+    fn from_config(
+        server_name: String,
+        config: McpServerConfig,
+        store_mode: OAuthCredentialsStoreMode,
+        cancel_token: CancellationToken,
+        tx_event: Sender<Event>,
+        elicitation_requests: ElicitationRequestManager,
+    ) -> Self {
+        let tool_filter = ToolFilter::from_config(&config);
+        Self {
+            server_name,
+            transport: config.transport,
+            store_mode,
+            startup_timeout: config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+            tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+            tool_filter,
+            cancel_token,
+            tx_event,
+            elicitation_requests,
+        }
+    }
+
+    fn connect(&self) -> ManagedClientFuture {
+        let server_name = self.server_name.clone();
+        let transport = self.transport.clone();
+        let store_mode = self.store_mode;
+        let startup_timeout = self.startup_timeout;
+        let tool_timeout = self.tool_timeout;
+        let tool_filter = self.tool_filter.clone();
+        let cancel_token = self.cancel_token.clone();
+        let tx_event = self.tx_event.clone();
+        let elicitation_requests = self.elicitation_requests.clone();
+        async move {
+            if let Err(error) = validate_mcp_server_name(&server_name) {
+                return Err(error.into());
+            }
+
+            let client = Arc::new(make_rmcp_client(&server_name, transport, store_mode).await?);
+            match start_server_task(
+                server_name,
+                client,
+                startup_timeout,
+                tool_timeout,
+                tool_filter,
+                tx_event,
+                elicitation_requests,
+            )
+            .or_cancel(&cancel_token)
+            .await
+            {
+                Ok(result) => result,
+                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            }
+        }
+        .boxed()
+        .shared()
+    }
 }
 
 impl AsyncManagedClient {
@@ -276,41 +352,47 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
     ) -> Self {
-        let tool_filter = ToolFilter::from_config(&config);
-        let fut = async move {
-            if let Err(error) = validate_mcp_server_name(&server_name) {
-                return Err(error.into());
-            }
-
-            let client =
-                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
-            match start_server_task(
-                server_name,
-                client,
-                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                tool_filter,
-                tx_event,
-                elicitation_requests,
-            )
-            .or_cancel(&cancel_token)
-            .await
-            {
-                Ok(result) => result,
-                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
-            }
-        };
+        let builder = ManagedClientBuilder::from_config(
+            server_name,
+            config,
+            store_mode,
+            cancel_token,
+            tx_event,
+            elicitation_requests,
+        );
         Self {
-            client: fut.boxed().shared(),
+            client: Arc::new(Mutex::new(builder.connect())),
+            builder,
         }
     }
 
+    async fn client_future(&self) -> ManagedClientFuture {
+        self.client.lock().await.clone()
+    }
+
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
-        self.client.clone().await
+        self.client_future().await.await
+    }
+
+    async fn reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        let future = self.builder.connect();
+        {
+            let mut guard = self.client.lock().await;
+            *guard = future.clone();
+        }
+        future.await
+    }
+
+    async fn client_or_reconnect(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        match self.client().await {
+            Ok(client) => Ok(client),
+            Err(StartupOutcomeError::Cancelled) => Err(StartupOutcomeError::Cancelled),
+            Err(StartupOutcomeError::Failed { .. }) => self.reconnect().await,
+        }
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let managed = self.client().await?;
+        let managed = self.client_or_reconnect().await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
@@ -336,6 +418,7 @@ pub struct SandboxState {
 pub(crate) struct McpConnectionManager {
     clients: HashMap<String, AsyncManagedClient>,
     elicitation_requests: ElicitationRequestManager,
+    sandbox_state: Arc<Mutex<Option<SandboxState>>>,
 }
 
 impl McpConnectionManager {
@@ -350,6 +433,10 @@ impl McpConnectionManager {
     ) {
         if cancel_token.is_cancelled() {
             return;
+        }
+        {
+            let mut sandbox_state_guard = self.sandbox_state.lock().await;
+            *sandbox_state_guard = Some(initial_sandbox_state.clone());
         }
         let mut clients = HashMap::new();
         let mut join_set = JoinSet::new();
@@ -443,13 +530,37 @@ impl McpConnectionManager {
         });
     }
 
-    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
+    fn async_client_by_name(&self, name: &str) -> Result<&AsyncManagedClient> {
         self.clients
             .get(name)
-            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
+            .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))
+    }
+
+    async fn reconnect_client(&self, server_name: &str) -> Result<ManagedClient> {
+        let async_client = self.async_client_by_name(server_name)?;
+        let managed = async_client
+            .reconnect()
             .await
-            .context("failed to get client")
+            .with_context(|| format!("failed to reconnect MCP server `{server_name}`"))?;
+
+        if let Some(sandbox_state) = self.sandbox_state.lock().await.clone()
+            && let Err(error) = managed.notify_sandbox_state_change(&sandbox_state).await
+        {
+            warn!(
+                "Failed to notify sandbox state to reconnected MCP server {server_name}: {error:#}",
+            );
+        }
+
+        Ok(managed)
+    }
+
+    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
+        let async_client = self.async_client_by_name(name)?;
+        match async_client.client().await {
+            Ok(client) => Ok(client),
+            Err(StartupOutcomeError::Cancelled) => Err(anyhow!("MCP startup cancelled")),
+            Err(StartupOutcomeError::Failed { .. }) => self.reconnect_client(name).await,
+        }
     }
 
     pub async fn resolve_elicitation(
@@ -505,7 +616,7 @@ impl McpConnectionManager {
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for (server_name, managed_client) in &self.clients {
-            let client = managed_client.client().await.ok();
+            let client = managed_client.client_or_reconnect().await.ok();
             if let Some(client) = client {
                 let rmcp_client = client.client;
                 let tool_timeout = client.tool_timeout;
@@ -567,7 +678,7 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client_or_reconnect().await else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -633,7 +744,7 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client_or_reconnect().await else {
                 continue;
             };
             let client = managed_client.client.clone();
@@ -701,18 +812,31 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
-        let client = self.client_by_name(server).await?;
-        if !client.tool_filter.allows(tool) {
-            return Err(anyhow!(
-                "tool '{tool}' is disabled for MCP server '{server}'"
-            ));
-        }
+        let managed_client = self.client_by_name(server).await?;
+        let tool_name = tool.to_string();
 
-        let result: rmcp::model::CallToolResult = client
-            .client
-            .call_tool(tool.to_string(), arguments, client.tool_timeout)
-            .await
-            .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
+        let call_result = match call_tool_with_managed_client(
+            &managed_client,
+            server,
+            &tool_name,
+            arguments.clone(),
+        )
+        .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) if is_connection_error(&error) => {
+                warn!(
+                    "MCP tool call for `{server}/{tool}` failed due to connection error; reconnecting and retrying: {error:#}",
+                );
+                let reconnected_client = self.reconnect_client(server).await?;
+                call_tool_with_managed_client(&reconnected_client, server, &tool_name, arguments)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+
+        let result: rmcp::model::CallToolResult =
+            call_result.with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 
         let content = result
             .content
@@ -740,11 +864,22 @@ impl McpConnectionManager {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
-        managed
-            .client
-            .list_resources(params, timeout)
-            .await
-            .with_context(|| format!("resources/list failed for `{server}`"))
+        let list_result = match managed.client.list_resources(params.clone(), timeout).await {
+            Ok(result) => Ok(result),
+            Err(error) if is_connection_error(&error) => {
+                warn!(
+                    "MCP resources/list for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
+                );
+                let reconnected_client = self.reconnect_client(server).await?;
+                reconnected_client
+                    .client
+                    .list_resources(params, reconnected_client.tool_timeout)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+
+        list_result.with_context(|| format!("resources/list failed for `{server}`"))
     }
 
     /// List resource templates from the specified server.
@@ -757,10 +892,25 @@ impl McpConnectionManager {
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
-        client
-            .list_resource_templates(params, timeout)
+        let list_result = match client
+            .list_resource_templates(params.clone(), timeout)
             .await
-            .with_context(|| format!("resources/templates/list failed for `{server}`"))
+        {
+            Ok(result) => Ok(result),
+            Err(error) if is_connection_error(&error) => {
+                warn!(
+                    "MCP resources/templates/list for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
+                );
+                let reconnected_client = self.reconnect_client(server).await?;
+                reconnected_client
+                    .client
+                    .list_resource_templates(params, reconnected_client.tool_timeout)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+
+        list_result.with_context(|| format!("resources/templates/list failed for `{server}`"))
     }
 
     /// Read a resource from the specified server.
@@ -770,14 +920,28 @@ impl McpConnectionManager {
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
-        let client = managed.client.clone();
-        let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
 
-        client
-            .read_resource(params, timeout)
+        let read_result = match managed
+            .client
+            .read_resource(params.clone(), managed.tool_timeout)
             .await
-            .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
+        {
+            Ok(result) => Ok(result),
+            Err(error) if is_connection_error(&error) => {
+                warn!(
+                    "MCP resources/read for `{server}` failed due to connection error; reconnecting and retrying: {error:#}",
+                );
+                let reconnected_client = self.reconnect_client(server).await?;
+                reconnected_client
+                    .client
+                    .read_resource(params, reconnected_client.tool_timeout)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+
+        read_result.with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
     pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
@@ -788,6 +952,11 @@ impl McpConnectionManager {
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
+        {
+            let mut sandbox_state_guard = self.sandbox_state.lock().await;
+            *sandbox_state_guard = Some(sandbox_state.clone());
+        }
+
         let mut join_set = JoinSet::new();
 
         for async_managed_client in self.clients.values() {
@@ -814,6 +983,49 @@ impl McpConnectionManager {
 
         Ok(())
     }
+}
+
+async fn call_tool_with_managed_client(
+    managed_client: &ManagedClient,
+    server: &str,
+    tool: &str,
+    arguments: Option<serde_json::Value>,
+) -> Result<rmcp::model::CallToolResult> {
+    if !managed_client.tool_filter.allows(tool) {
+        return Err(anyhow!(
+            "tool '{tool}' is disabled for MCP server '{server}'"
+        ));
+    }
+
+    managed_client
+        .client
+        .call_tool(tool.to_string(), arguments, managed_client.tool_timeout)
+        .await
+}
+
+fn is_connection_error(error: &anyhow::Error) -> bool {
+    const CONNECTION_ERROR_HINTS: [&str; 9] = [
+        "broken pipe",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "unexpected eof",
+        "transport closed",
+        "channel closed",
+        "client not initialized",
+        "not connected",
+    ];
+
+    error.chain().any(|cause| {
+        if cause.downcast_ref::<std::io::Error>().is_some() {
+            return true;
+        }
+
+        let message = cause.to_string().to_ascii_lowercase();
+        CONNECTION_ERROR_HINTS
+            .iter()
+            .any(|hint| message.contains(hint))
+    })
 }
 
 async fn emit_update(
@@ -1496,5 +1708,22 @@ mod tests {
             "MCP client for `slow` timed out after 10 seconds. Add or adjust `startup_timeout_sec` in your config.toml:\n[mcp_servers.slow]\nstartup_timeout_sec = XX",
             display
         );
+    }
+
+    #[test]
+    fn is_connection_error_detects_io_errors() {
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe closed",
+        ));
+
+        assert!(is_connection_error(&error));
+    }
+
+    #[test]
+    fn is_connection_error_ignores_application_errors() {
+        let error = anyhow::anyhow!("unknown tool: echo");
+
+        assert!(!is_connection_error(&error));
     }
 }

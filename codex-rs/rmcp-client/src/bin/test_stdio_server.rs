@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
@@ -31,6 +32,7 @@ struct TestToolServer {
     tools: Arc<Vec<Tool>>,
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
+    exit_after_calls: Option<Arc<tokio::sync::Mutex<usize>>>,
 }
 
 const MEMO_URI: &str = "memo://codex/example-note";
@@ -50,10 +52,23 @@ impl TestToolServer {
         ];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
+        let exit_after_calls = std::env::var("MCP_EXIT_AFTER_CALLS")
+            .ok()
+            .and_then(|value| {
+                value
+                    .parse::<usize>()
+                    .inspect_err(|error| {
+                        eprintln!("invalid MCP_EXIT_AFTER_CALLS value `{value}`: {error}");
+                    })
+                    .ok()
+            })
+            .filter(|value| *value > 0)
+            .map(|value| Arc::new(tokio::sync::Mutex::new(value)));
         Self {
             tools: Arc::new(tools),
             resources: Arc::new(resources),
             resource_templates: Arc::new(resource_templates),
+            exit_after_calls,
         }
     }
 
@@ -295,7 +310,7 @@ impl ServerHandler for TestToolServer {
         request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        match request.name.as_ref() {
+        let result = match request.name.as_ref() {
             "echo" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(
@@ -352,7 +367,13 @@ impl ServerHandler for TestToolServer {
                 format!("unknown tool: {other}"),
                 None,
             )),
+        };
+
+        if result.is_ok() {
+            self.schedule_exit_after_call_if_needed().await;
         }
+
+        result
     }
 }
 
@@ -429,6 +450,29 @@ impl TestToolServer {
         }
 
         Ok(CallToolResult::success(content))
+    }
+
+    async fn schedule_exit_after_call_if_needed(&self) {
+        let Some(remaining_calls) = &self.exit_after_calls else {
+            return;
+        };
+
+        let should_exit = {
+            let mut remaining = remaining_calls.lock().await;
+            if *remaining == 0 {
+                false
+            } else {
+                *remaining -= 1;
+                *remaining == 0
+            }
+        };
+
+        if should_exit {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                std::process::exit(0);
+            });
+        }
     }
 }
 
