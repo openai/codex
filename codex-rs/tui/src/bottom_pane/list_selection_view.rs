@@ -1003,7 +1003,10 @@ mod tests {
     }
 
     fn render_lines_with_width(view: &ListSelectionView, width: u16) -> String {
-        let height = view.desired_height(width);
+        render_lines_in_area(view, width, view.desired_height(width))
+    }
+
+    fn render_lines_in_area(view: &ListSelectionView, width: u16, height: u16) -> String {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
@@ -1087,6 +1090,20 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
+    }
+
+    #[test]
+    fn theme_picker_subtitle_uses_fallback_text_in_94x35_terminal() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let home = dirs::home_dir().expect("home directory should be available");
+        let codex_home = home.join(".codex");
+        let params =
+            crate::theme_picker::build_theme_picker_params(None, Some(&codex_home), Some(94));
+        let view = ListSelectionView::new(params, tx);
+
+        let rendered = render_lines_in_area(&view, 94, 35);
+        assert!(rendered.contains("Move up/down to live preview themes"));
     }
 
     #[test]
