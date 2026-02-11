@@ -101,6 +101,8 @@ pub(crate) struct MentionRewriteContext {
     connector_paths_by_slug: HashMap<String, String>,
 }
 
+/// Builds lookup maps used to rewrite mentions to canonical skill/app paths while skipping
+/// disabled or ambiguous skill/connector names.
 pub(crate) fn build_mention_rewrite_context(
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
@@ -125,6 +127,8 @@ pub(crate) fn build_mention_rewrite_context(
     }
 }
 
+/// Rewrites raw mention text using the provided lookup context and records any explicit app
+/// paths encountered while rewriting.
 pub(crate) fn rewrite_text_mentions(
     text: &str,
     context: &MentionRewriteContext,
@@ -141,6 +145,8 @@ pub(crate) fn rewrite_text_mentions(
     )
 }
 
+/// Recursively expands the currently mentioned skills by scanning skill file contents for
+/// additional mentions, rewriting those contents, and collecting explicit app paths.
 pub(crate) async fn expand_skill_mentions(
     mentioned_skills: &[SkillMetadata],
     skills: &[SkillMetadata],
@@ -245,6 +251,8 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
     );
 }
 
+/// Builds a name-to-path map for enabled skills whose names are unique and do not conflict
+/// with connector mention slugs.
 fn build_unambiguous_skill_path_map(
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
@@ -268,6 +276,7 @@ fn build_unambiguous_skill_path_map(
     paths_by_name
 }
 
+/// Builds a lookup from normalized skill file paths to canonical `skill://` paths.
 fn build_skill_path_lookup(
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
@@ -283,6 +292,8 @@ fn build_skill_path_lookup(
     paths_by_normalized_path
 }
 
+/// Builds a slug-to-path map for connectors that are unique and do not collide with
+/// case-insensitive skill names.
 fn build_unambiguous_connector_path_map(
     connectors: &[AppInfo],
     connector_slug_counts: &HashMap<String, usize>,
@@ -300,6 +311,8 @@ fn build_unambiguous_connector_path_map(
     paths_by_slug
 }
 
+/// Rewrites linked and plain mentions to canonical paths. If any linked skill path cannot
+/// be resolved, the original text is returned unchanged.
 fn rewrite_skill_mentions(
     text: &str,
     mentions: &ToolMentions<'_>,
@@ -399,6 +412,7 @@ fn rewrite_skill_mentions(
     out
 }
 
+/// Resolves a linked mention path to a canonical path based on mention kind.
 fn resolve_linked_mention_path(
     path: &str,
     skill_paths_by_normalized_path: &HashMap<String, String>,
@@ -416,6 +430,7 @@ fn resolve_linked_mention_path(
     }
 }
 
+/// Converts a filesystem path to the canonical `skill://` URI form.
 fn canonical_skill_path(path: &Path) -> String {
     format!("{SKILL_PATH_PREFIX}{}", path.to_string_lossy())
 }

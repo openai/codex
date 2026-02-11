@@ -49,6 +49,8 @@ pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
         .collect()
 }
 
+/// Extracts all mentioned resource paths from tool-output text so connector and skill
+/// references emitted by tools can affect follow-up tool selection.
 pub(crate) fn collect_tool_paths_from_tool_outputs(input: &[ResponseItem]) -> HashSet<String> {
     let mut paths = HashSet::new();
     for item in input {

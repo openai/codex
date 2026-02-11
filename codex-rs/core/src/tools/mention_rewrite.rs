@@ -48,6 +48,8 @@ struct UnifiedExecCommandArgs {
     login: bool,
 }
 
+/// Builds rewrite context for a specific tool call by first extracting all file paths that
+/// the call is expected to read.
 pub(crate) async fn mention_rewrite_context_for_tool_call(
     session: &Session,
     turn: &TurnContext,
@@ -58,6 +60,8 @@ pub(crate) async fn mention_rewrite_context_for_tool_call(
     mention_rewrite_context_for_read_paths(session, turn, read_paths).await
 }
 
+/// Builds mention rewrite context for a set of read paths when at least one path targets
+/// skill-related content and there are loaded skills in the current cwd.
 pub(crate) async fn mention_rewrite_context_for_read_paths(
     session: &Session,
     turn: &TurnContext,
@@ -113,6 +117,8 @@ pub(crate) async fn mention_rewrite_context_for_read_paths(
     ))
 }
 
+/// Rewrites successful function-call output text in place based on tool-specific output format
+/// so mentions are emitted in canonical linked form.
 pub(crate) fn rewrite_tool_response_mentions(
     response: &mut ResponseInputItem,
     tool_name: &str,
@@ -140,6 +146,8 @@ pub(crate) fn rewrite_tool_response_mentions(
     }
 }
 
+/// Parses command tokens and returns every file path referenced by read-like operations,
+/// resolving relative paths against `cwd`.
 pub(crate) fn command_read_paths(command: &[String], cwd: &Path) -> Vec<PathBuf> {
     parse_command(command)
         .into_iter()
@@ -156,6 +164,8 @@ pub(crate) fn command_read_paths(command: &[String], cwd: &Path) -> Vec<PathBuf>
         .collect()
 }
 
+/// Returns true when a path is likely to contain skill content that should have mentions
+/// rewritten (a SKILL.md file or a file under a known skill directory).
 pub(crate) fn should_rewrite_mentions_for_path(path: &Path, skills: &[SkillMetadata]) -> bool {
     if path
         .file_name()
@@ -173,11 +183,13 @@ pub(crate) fn should_rewrite_mentions_for_path(path: &Path, skills: &[SkillMetad
     })
 }
 
+/// Rewrites mentions in plain text and ignores the collected explicit app paths.
 pub(crate) fn rewrite_text_with_mentions(text: &str, context: &MentionRewriteContext) -> String {
     let mut explicit_app_paths = HashSet::new();
     rewrite_text_mentions(text, context, &mut explicit_app_paths)
 }
 
+/// Routes each supported tool payload shape to the corresponding read-path extraction logic.
 fn read_paths_for_tool_call(
     session: &Session,
     turn: &TurnContext,
@@ -204,6 +216,7 @@ fn read_paths_for_tool_call(
     }
 }
 
+/// Extracts the absolute read target from a `read_file` call payload.
 fn read_paths_for_read_file(arguments: &str) -> Vec<PathBuf> {
     let Some(args) = parse_tool_arguments::<ReadFileToolArgs>(arguments) else {
         return Vec::new();
@@ -217,6 +230,7 @@ fn read_paths_for_read_file(arguments: &str) -> Vec<PathBuf> {
     }
 }
 
+/// Extracts read paths from structured `shell`/`container.exec` tool arguments.
 fn command_read_paths_for_shell_tool(arguments: &str, turn: &TurnContext) -> Vec<PathBuf> {
     let Some(params) = parse_tool_arguments::<ShellToolCallParams>(arguments) else {
         return Vec::new();
@@ -226,6 +240,7 @@ fn command_read_paths_for_shell_tool(arguments: &str, turn: &TurnContext) -> Vec
     command_read_paths(&params.command, &cwd)
 }
 
+/// Extracts read paths from `shell_command` by expanding to concrete shell exec args.
 fn command_read_paths_for_shell_command(
     arguments: &str,
     session: &Session,
@@ -241,6 +256,7 @@ fn command_read_paths_for_shell_command(
     command_read_paths(&command, &cwd)
 }
 
+/// Extracts read paths from unified exec arguments after resolving workdir and shell behavior.
 fn command_read_paths_for_unified_exec(
     arguments: &str,
     session: &Session,
@@ -257,6 +273,7 @@ fn command_read_paths_for_unified_exec(
     command_read_paths(&command, &cwd)
 }
 
+/// Deserializes raw tool argument JSON into the requested typed argument struct.
 fn parse_tool_arguments<T>(arguments: &str) -> Option<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -264,10 +281,13 @@ where
     serde_json::from_str(arguments).ok()
 }
 
+/// Default `login` behavior for unified exec payloads when omitted by the caller.
 fn default_login() -> bool {
     true
 }
 
+/// Produces the concrete command vector for unified exec, honoring model-provided shell
+/// overrides when present and falling back to the session shell otherwise.
 fn unified_exec_command(args: &UnifiedExecCommandArgs, session_shell: &Shell) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
@@ -279,6 +299,7 @@ fn unified_exec_command(args: &UnifiedExecCommandArgs, session_shell: &Shell) ->
     shell.derive_exec_args(&args.cmd, args.login)
 }
 
+/// Maps tool names to the output format needed by mention rewriting.
 fn output_rewrite_kind_for_tool_name(tool_name: &str) -> Option<MentionRewriteOutputKind> {
     match tool_name {
         "read_file" => Some(MentionRewriteOutputKind::ReadFile),
@@ -291,6 +312,7 @@ fn output_rewrite_kind_for_tool_name(tool_name: &str) -> Option<MentionRewriteOu
     }
 }
 
+/// Rewrites output content using the strategy for the specified output kind.
 fn rewrite_tool_output(
     content: &str,
     kind: MentionRewriteOutputKind,
@@ -308,6 +330,7 @@ fn rewrite_tool_output(
     }
 }
 
+/// Rewrites mentions in line-prefixed `read_file` output while preserving unchanged content.
 fn rewrite_read_file_output_mentions(content: &str, context: &MentionRewriteContext) -> String {
     let mut explicit_app_paths = HashSet::new();
     let mut changed = false;
@@ -330,6 +353,7 @@ fn rewrite_read_file_output_mentions(content: &str, context: &MentionRewriteCont
     }
 }
 
+/// Rewrites mentions in a single `read_file` line while preserving the leading line prefix.
 fn rewrite_prefixed_line_for_mentions(
     line: &str,
     context: &MentionRewriteContext,
@@ -347,6 +371,7 @@ fn rewrite_prefixed_line_for_mentions(
     }
 }
 
+/// Rewrites only the `Output:` section of freeform shell output when present.
 fn rewrite_shell_freeform_output_mentions(
     content: &str,
     context: &MentionRewriteContext,
@@ -363,6 +388,8 @@ fn rewrite_shell_freeform_output_mentions(
     }
 }
 
+/// Rewrites the `output` field in structured shell JSON output and preserves the original
+/// payload when parsing fails or no rewrite is needed.
 fn rewrite_shell_structured_output_mentions(
     content: &str,
     context: &MentionRewriteContext,
@@ -408,6 +435,7 @@ mod tests {
     use super::rewrite_tool_response_mentions;
     use super::should_rewrite_mentions_for_path;
 
+    /// Builds a test skill descriptor with the fields required by rewrite-context helpers.
     fn make_skill(name: &str, path: &str) -> SkillMetadata {
         SkillMetadata {
             name: name.to_string(),
@@ -421,6 +449,7 @@ mod tests {
         }
     }
 
+    /// Builds a minimal connector descriptor used in mention rewrite tests.
     fn make_connector(id: &str, name: &str) -> AppInfo {
         AppInfo {
             id: id.to_string(),

@@ -4304,6 +4304,8 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+/// Returns whether the loaded MCP tool set already includes any tools from the codex-apps
+/// MCP server.
 fn has_codex_apps_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
 ) -> bool {
@@ -4312,6 +4314,8 @@ fn has_codex_apps_mcp_tools(
         .any(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
 }
 
+/// Determines whether the turn input requests at least one app connector through explicit app
+/// paths, user-message mentions, or tool-output mentions.
 fn input_requests_app_connector(input: &[ResponseItem], explicit_app_paths: &[String]) -> bool {
     if explicit_app_paths
         .iter()
@@ -4336,6 +4340,8 @@ fn input_requests_app_connector(input: &[ResponseItem], explicit_app_paths: &[St
         .any(|path| tool_kind_for_path(path) == ToolMentionKind::App)
 }
 
+/// Collects explicit app mention paths from structured user mentions and linked/plain
+/// mentions extracted from user text inputs.
 fn collect_explicit_app_paths(input: &[UserInput]) -> Vec<String> {
     let messages = input
         .iter()
@@ -4367,6 +4373,8 @@ struct TurnMentionResolution {
     rewritten_skill_contents: HashMap<PathBuf, String>,
 }
 
+/// Resolves all turn-level mentions by selecting explicit skills, expanding transitive skill
+/// mentions, collecting app paths, and returning rewritten skill file contents.
 async fn resolve_turn_mentions(
     input: &[UserInput],
     skills_outcome: Option<&SkillLoadOutcome>,

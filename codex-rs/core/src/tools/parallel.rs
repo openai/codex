@@ -80,7 +80,7 @@ impl ToolCallRuntime {
                         Ok(Self::aborted_response(&call, secs))
                     },
                     res = async {
-                        let mention_rewrite_context = mention_rewrite_context_for_tool_call(
+                        let rewrite_context = mention_rewrite_context_for_tool_call(
                             session.as_ref(),
                             turn.as_ref(),
                             &call.tool_name,
@@ -98,8 +98,12 @@ impl ToolCallRuntime {
                             .instrument(dispatch_span.clone())
                             .await?;
 
-                        if let Some(context) = mention_rewrite_context.as_ref() {
-                            rewrite_tool_response_mentions(&mut response, &call.tool_name, context);
+                        if let Some(context) = rewrite_context {
+                            rewrite_tool_response_mentions(
+                                &mut response,
+                                &call.tool_name,
+                                &context,
+                            );
                         }
 
                         Ok(response)
