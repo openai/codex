@@ -25,6 +25,7 @@
 //! the final answer. During streaming we hide the status row to avoid duplicate
 //! progress indicators; once commentary completes and stream queues drain, we
 //! re-show it so users still see turn-in-progress state between output bursts.
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -41,6 +42,7 @@ use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
+use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -229,8 +231,6 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
-use codex_common::approval_presets::ApprovalPreset;
-use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -241,6 +241,8 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_utils_approval_presets::ApprovalPreset;
+use codex_utils_approval_presets::builtin_approval_presets;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -511,7 +513,7 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
-    rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
+    rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
@@ -1498,10 +1500,18 @@ impl ChatWidget {
 
     pub(crate) fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(mut snapshot) = snapshot {
+            let limit_id = snapshot
+                .limit_id
+                .clone()
+                .unwrap_or_else(|| "codex".to_string());
+            let limit_label = snapshot
+                .limit_name
+                .clone()
+                .unwrap_or_else(|| limit_id.clone());
             if snapshot.credits.is_none() {
                 snapshot.credits = self
-                    .rate_limit_snapshot
-                    .as_ref()
+                    .rate_limit_snapshots_by_limit_id
+                    .get(&limit_id)
                     .and_then(|display| display.credits.as_ref())
                     .map(|credits| CreditsSnapshot {
                         has_credits: credits.has_credits,
@@ -1512,32 +1522,38 @@ impl ChatWidget {
 
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
-            let warnings = self.rate_limit_warnings.take_warnings(
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .map(|window| window.used_percent),
-                snapshot
-                    .secondary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-                snapshot.primary.as_ref().map(|window| window.used_percent),
-                snapshot
-                    .primary
-                    .as_ref()
-                    .and_then(|window| window.window_minutes),
-            );
+            let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            let warnings = if is_codex_limit {
+                self.rate_limit_warnings.take_warnings(
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .map(|window| window.used_percent),
+                    snapshot
+                        .secondary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                    snapshot.primary.as_ref().map(|window| window.used_percent),
+                    snapshot
+                        .primary
+                        .as_ref()
+                        .and_then(|window| window.window_minutes),
+                )
+            } else {
+                vec![]
+            };
 
-            let high_usage = snapshot
-                .secondary
-                .as_ref()
-                .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                .unwrap_or(false)
-                || snapshot
-                    .primary
+            let high_usage = is_codex_limit
+                && (snapshot
+                    .secondary
                     .as_ref()
                     .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || snapshot
+                        .primary
+                        .as_ref()
+                        .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
+                        .unwrap_or(false));
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
@@ -1550,8 +1566,10 @@ impl ChatWidget {
                 self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Pending;
             }
 
-            let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
-            self.rate_limit_snapshot = Some(display);
+            let display =
+                rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
+            self.rate_limit_snapshots_by_limit_id
+                .insert(limit_id, display);
 
             if !warnings.is_empty() {
                 for warning in warnings {
@@ -1560,7 +1578,7 @@ impl ChatWidget {
                 self.request_redraw();
             }
         } else {
-            self.rate_limit_snapshot = None;
+            self.rate_limit_snapshots_by_limit_id.clear();
         }
         self.refresh_status_line();
     }
@@ -2608,7 +2626,7 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
+            rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -2773,7 +2791,7 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
+            rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -2927,7 +2945,7 @@ impl ChatWidget {
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
-            rate_limit_snapshot: None,
+            rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             plan_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
@@ -3929,9 +3947,9 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message, from_replay)
-            }
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => self.on_task_complete(last_agent_message, from_replay),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -4041,7 +4059,13 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
-            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::ThreadRolledBack(rollback) => {
+                if from_replay {
+                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
+                        num_turns: rollback.num_turns,
+                    });
+                }
+            }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
@@ -4222,7 +4246,12 @@ impl ChatWidget {
             .unwrap_or(&default_usage);
         let collaboration_mode = self.collaboration_mode_label();
         let reasoning_effort_override = Some(self.effective_reasoning_effort());
-        self.add_to_history(crate::status::new_status_output(
+        let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
+            .rate_limit_snapshots_by_limit_id
+            .values()
+            .cloned()
+            .collect();
+        self.add_to_history(crate::status::new_status_output_with_rate_limits(
             &self.config,
             self.auth_manager.as_ref(),
             token_info,
@@ -4230,7 +4259,7 @@ impl ChatWidget {
             &self.thread_id,
             self.thread_name.clone(),
             self.forked_from,
-            self.rate_limit_snapshot.as_ref(),
+            rate_limit_snapshots.as_slice(),
             self.plan_type,
             Local::now(),
             self.model_display_name(),
@@ -4376,8 +4405,8 @@ impl ChatWidget {
                 .map(|used| format!("{used}% used")),
             StatusLineItem::FiveHourLimit => {
                 let window = self
-                    .rate_limit_snapshot
-                    .as_ref()
+                    .rate_limit_snapshots_by_limit_id
+                    .get("codex")
                     .and_then(|s| s.primary.as_ref());
                 let label = window
                     .and_then(|window| window.window_minutes)
@@ -4387,8 +4416,8 @@ impl ChatWidget {
             }
             StatusLineItem::WeeklyLimit => {
                 let window = self
-                    .rate_limit_snapshot
-                    .as_ref()
+                    .rate_limit_snapshots_by_limit_id
+                    .get("codex")
                     .and_then(|s| s.secondary.as_ref());
                 let label = window
                     .and_then(|window| window.window_minutes)
@@ -4572,9 +4601,10 @@ impl ChatWidget {
             loop {
                 if let Some(auth) = auth_manager.auth().await
                     && auth.is_chatgpt_auth()
-                    && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
                 {
-                    app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                    for snapshot in fetch_rate_limits(base_url.clone(), auth).await {
+                        app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
+                    }
                 }
                 interval.tick().await;
             }
@@ -7140,18 +7170,18 @@ fn extract_first_bold(s: &str) -> Option<String> {
     None
 }
 
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
+async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => match client.get_rate_limits().await {
-            Ok(snapshot) => Some(snapshot),
+        Ok(client) => match client.get_rate_limits_many().await {
+            Ok(snapshots) => snapshots,
             Err(err) => {
                 debug!(error = ?err, "failed to fetch rate limits from /usage");
-                None
+                Vec::new()
             }
         },
         Err(err) => {
             debug!(error = ?err, "failed to construct backend client for rate limits");
-            None
+            Vec::new()
         }
     }
 }

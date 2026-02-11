@@ -431,6 +431,16 @@ pub fn ev_done() -> Value {
     })
 }
 
+pub fn ev_done_with_id(id: &str) -> Value {
+    serde_json::json!({
+        "type": "response.done",
+        "response": {
+            "id": id,
+            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
+        }
+    })
+}
+
 /// Convenience: SSE event for a created response with a specific id.
 pub fn ev_response_created(id: &str) -> Value {
     serde_json::json!({

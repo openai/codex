@@ -1537,6 +1537,11 @@ impl App {
                     }
                 }
             }
+            AppEvent::ApplyThreadRollback { num_turns } => {
+                if self.apply_non_pending_thread_rollback(num_turns) {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::StartCommitAnimation => {
                 if self
                     .commit_anim_running
@@ -2324,7 +2329,6 @@ impl App {
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
-        self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event_replay(event);
     }
 
@@ -2620,18 +2624,17 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
-    use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
-    use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_core::protocol::SessionSource;
+    use codex_core::protocol::ThreadRolledBackEvent;
+    use codex_core::protocol::UserMessageEvent;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
@@ -2720,14 +2723,17 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
@@ -2773,14 +2779,17 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(ThreadManager::with_models_provider(
+        let server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                CodexAuth::from_api_key("Test API Key"),
+                config.model_provider.clone(),
+            ),
+        );
+        let auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
-            config.model_provider.clone(),
-        ));
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
-        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
@@ -2824,7 +2833,7 @@ mod tests {
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
-        let model_info = ModelsManager::construct_model_info_offline(model, config);
+        let model_info = codex_core::test_support::construct_model_info_offline(model, config);
         OtelManager::new(
             ThreadId::new(),
             model,
@@ -2840,7 +2849,7 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::models_manager::model_presets::all_model_presets().clone()
+        codex_core::test_support::all_model_presets().clone()
     }
 
     fn model_migration_copy_to_plain_text(
@@ -3135,6 +3144,211 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn replayed_initial_messages_apply_rollback_in_queue_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "third prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            user_messages,
+            vec!["first prompt".to_string(), "third prompt".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_rollback_during_replay_is_applied_in_app_event_order() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let session_id = ThreadId::new();
+        app.handle_codex_event_replay(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: Some(vec![
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "first prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                    EventMsg::UserMessage(UserMessageEvent {
+                        message: "second prompt".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    }),
+                ]),
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        // Simulate a live rollback arriving before queued replay inserts are drained.
+        app.handle_codex_event_now(Event {
+            id: "live-rollback".to_string(),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        });
+
+        let mut saw_rollback = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let cell: Arc<dyn HistoryCell> = cell.into();
+                    app.transcript_cells.push(cell);
+                }
+                AppEvent::ApplyThreadRollback { num_turns } => {
+                    saw_rollback = true;
+                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                        &mut app.transcript_cells,
+                        num_turns,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first prompt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after first")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from("after second")],
+                false,
+            )) as Arc<dyn HistoryCell>,
+        ];
+        app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
+        app.deferred_history_lines = vec![Line::from("stale buffered line")];
+        app.backtrack.overlay_preview_active = true;
+        app.backtrack.nth_user_message = 1;
+
+        let changed = app.apply_non_pending_thread_rollback(1);
+
+        assert!(changed);
+        assert!(app.backtrack_render_pending);
+        assert!(app.deferred_history_lines.is_empty());
+        assert_eq!(app.backtrack.nth_user_message, 0);
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first".to_string()]);
+        let overlay_cell_count = match app.overlay.as_ref() {
+            Some(Overlay::Transcript(t)) => t.committed_cell_count(),
+            _ => panic!("expected transcript overlay"),
+        };
+        assert_eq!(overlay_cell_count, app.transcript_cells.len());
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@ use crate::codex_message_processor::PendingInterrupts;
 use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
-use crate::codex_message_processor::read_event_msgs_from_rollout;
+use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
@@ -69,7 +69,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
-use codex_app_server_protocol::build_turns_from_event_msgs;
+use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -1101,9 +1101,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     Ok(summary) => {
                         let mut thread = summary_to_thread(summary);
-                        match read_event_msgs_from_rollout(rollout_path.as_path()).await {
-                            Ok(events) => {
-                                thread.turns = build_turns_from_event_msgs(&events);
+                        match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                            Ok(items) => {
+                                thread.turns = build_turns_from_rollout_items(&items);
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {
@@ -1115,7 +1115,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                     ),
                                     data: None,
                                 };
-                                outgoing.send_error(request_id, error).await;
+                                outgoing.send_error(request_id.clone(), error).await;
                                 return;
                             }
                         }
@@ -1129,7 +1129,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ),
                             data: None,
                         };
-                        outgoing.send_error(request_id, error).await;
+                        outgoing.send_error(request_id.clone(), error).await;
                         return;
                     }
                 };
@@ -1894,6 +1894,7 @@ async fn construct_mcp_tool_call_end_notification(
 mod tests {
     use super::*;
     use crate::CHANNEL_CAPACITY;
+    use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
     use anyhow::Result;
@@ -1921,6 +1922,21 @@ mod tests {
 
     fn new_turn_summary_store() -> TurnSummaryStore {
         Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    async fn recv_broadcast_message(
+        rx: &mut mpsc::Receiver<OutgoingEnvelope>,
+    ) -> Result<OutgoingMessage> {
+        let envelope = rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow!("should send one message"))?;
+        match envelope {
+            OutgoingEnvelope::Broadcast { message } => Ok(message),
+            OutgoingEnvelope::ToConnection { connection_id, .. } => {
+                bail!("unexpected targeted message for connection {connection_id:?}")
+            }
+        }
     }
 
     #[test]
@@ -2024,10 +2040,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2066,10 +2079,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2108,10 +2118,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, event_turn_id);
@@ -2160,10 +2167,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
@@ -2206,6 +2210,8 @@ mod tests {
             model_context_window: Some(4096),
         };
         let rate_limits = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 42.5,
                 window_minutes: Some(15),
@@ -2231,10 +2237,7 @@ mod tests {
         )
         .await;
 
-        let first = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected usage notification"))?;
+        let first = recv_broadcast_message(&mut rx).await?;
         match first {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ThreadTokenUsageUpdated(payload),
@@ -2250,14 +2253,13 @@ mod tests {
             other => bail!("unexpected notification: {other:?}"),
         }
 
-        let second = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("expected rate limit notification"))?;
+        let second = recv_broadcast_message(&mut rx).await?;
         match second {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::AccountRateLimitsUpdated(payload),
             ) => {
+                assert_eq!(payload.rate_limits.limit_id.as_deref(), Some("codex"));
+                assert_eq!(payload.rate_limits.limit_name, None);
                 assert!(payload.rate_limits.primary.is_some());
                 assert!(payload.rate_limits.credits.is_some());
             }
@@ -2390,10 +2392,7 @@ mod tests {
         .await;
 
         // Verify: A turn 1
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send first notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn1);
@@ -2411,10 +2410,7 @@ mod tests {
         }
 
         // Verify: B turn 1
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send second notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, b_turn1);
@@ -2432,10 +2428,7 @@ mod tests {
         }
 
         // Verify: A turn 2
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send third notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnCompleted(n)) => {
                 assert_eq!(n.turn.id, a_turn2);
@@ -2601,10 +2594,7 @@ mod tests {
         )
         .await;
 
-        let msg = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one notification"))?;
+        let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnDiffUpdated(
                 notification,

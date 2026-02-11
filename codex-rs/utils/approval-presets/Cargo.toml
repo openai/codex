@@ -1,0 +1,11 @@
+[package]
+name = "codex-utils-approval-presets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-core = { workspace = true }
