@@ -921,6 +921,15 @@ impl App {
         Ok(())
     }
 
+    fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
+        if !matches!(msg, EventMsg::ShutdownComplete) {
+            return None;
+        }
+        let active_thread_id = self.active_thread_id?;
+        let primary_thread_id = self.primary_thread_id?;
+        (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
+    }
+
     fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
@@ -1216,7 +1225,7 @@ impl App {
                     }
                 }, if app.active_thread_rx.is_some() => {
                     if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event)?;
+                        app.handle_active_thread_event(tui, event).await?;
                     } else {
                         app.clear_active_thread().await;
                     }
@@ -2332,7 +2341,28 @@ impl App {
         self.chat_widget.handle_codex_event_replay(event);
     }
 
-    fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        if let Some((closed_thread_id, primary_thread_id)) =
+            self.active_non_primary_shutdown_target(&event.msg)
+        {
+            self.thread_event_channels.remove(&closed_thread_id);
+            self.select_agent_thread(tui, primary_thread_id).await?;
+            if self.active_thread_id == Some(primary_thread_id) {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Agent thread {closed_thread_id} closed. Switched back to main thread."
+                    ),
+                    None,
+                );
+            } else {
+                self.clear_active_thread().await;
+                self.chat_widget.add_error_message(format!(
+                    "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
+                ));
+            }
+            return Ok(());
+        }
+
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -2717,6 +2747,51 @@ mod tests {
         app.open_agent_picker().await;
 
         assert_eq!(app.thread_event_channels.contains_key(&thread_id), false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        app.active_thread_id = Some(ThreadId::new());
+        app.primary_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_primary_thread_shutdown()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_ids_for_non_primary_shutdown() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
         Ok(())
     }
 
