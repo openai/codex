@@ -146,6 +146,7 @@ WHERE thread_id = ?
             r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
 FROM stage1_outputs AS so
+WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
             "#,
@@ -189,6 +190,25 @@ WHERE thread_id = ?
         if let Some(existing_output) = existing_output {
             let existing_source_updated_at: i64 = existing_output.try_get("source_updated_at")?;
             if existing_source_updated_at >= source_updated_at {
+                tx.commit().await?;
+                return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
+            }
+        }
+        let existing_job = sqlx::query(
+            r#"
+SELECT last_success_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(existing_job) = existing_job {
+            let last_success_watermark =
+                existing_job.try_get::<Option<i64>, _>("last_success_watermark")?;
+            if last_success_watermark.is_some_and(|watermark| watermark >= source_updated_at) {
                 tx.commit().await?;
                 return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
             }
@@ -422,28 +442,15 @@ WHERE kind = ? AND job_key = ? AND ownership_token = ?
 
         sqlx::query(
             r#"
-INSERT INTO stage1_outputs (
-    thread_id,
-    source_updated_at,
-    raw_memory,
-    rollout_summary,
-    generated_at
-) VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(thread_id) DO UPDATE SET
-    source_updated_at = excluded.source_updated_at,
-    raw_memory = excluded.raw_memory,
-    rollout_summary = excluded.rollout_summary,
-    generated_at = excluded.generated_at
-WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
+DELETE FROM stage1_outputs
+WHERE thread_id = ?
             "#,
         )
         .bind(thread_id.as_str())
-        .bind(source_updated_at)
-        .bind("")
-        .bind("")
-        .bind(now)
         .execute(&mut *tx)
         .await?;
+
+        enqueue_global_consolidation_with_executor(&mut *tx, source_updated_at).await?;
 
         tx.commit().await?;
         Ok(true)

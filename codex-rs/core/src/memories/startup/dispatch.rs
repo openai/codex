@@ -69,14 +69,6 @@ pub(super) async fn run_global_memory_consolidation(
             return false;
         }
     };
-    if latest_memories.is_empty() {
-        debug!("memory phase-2 has no stage-1 outputs; skipping global consolidation");
-        let _ = state_db
-            .mark_global_phase2_job_succeeded(&ownership_token, claimed_watermark)
-            .await;
-        return false;
-    };
-
     let root = memory_root(&config.codex_home);
     let materialized_watermark = latest_memories
         .iter()
@@ -103,6 +95,13 @@ pub(super) async fn run_global_memory_consolidation(
                 "failed rebuilding raw memories aggregate",
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
             )
+            .await;
+        return false;
+    }
+    if latest_memories.is_empty() {
+        debug!("memory phase-2 has no stage-1 outputs; finalized local memory artifacts only");
+        let _ = state_db
+            .mark_global_phase2_job_succeeded(&ownership_token, materialized_watermark)
             .await;
         return false;
     }
@@ -152,6 +151,7 @@ pub(super) async fn run_global_memory_consolidation(
 
 #[cfg(test)]
 mod tests {
+    use super::memory_root;
     use super::run_global_memory_consolidation;
     use crate::CodexAuth;
     use crate::ThreadManager;
@@ -160,6 +160,8 @@ mod tests {
     use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
+    use crate::memories::raw_memories_file;
+    use crate::memories::rollout_summaries_dir;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::Op;
@@ -361,6 +363,51 @@ mod tests {
             Phase2JobClaimOutcome::SkippedNotDirty,
             "empty dispatch should finalize global job as up-to-date"
         );
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_empty_stage1_outputs_rebuilds_local_artifacts() {
+        let harness = DispatchHarness::new().await;
+        let root = memory_root(&harness.config.codex_home);
+        let summaries_dir = rollout_summaries_dir(&root);
+        tokio::fs::create_dir_all(&summaries_dir)
+            .await
+            .expect("create rollout summaries dir");
+
+        let stale_summary_path = summaries_dir.join(format!("{}.md", ThreadId::new()));
+        tokio::fs::write(&stale_summary_path, "stale summary\n")
+            .await
+            .expect("write stale rollout summary");
+        let raw_memories_path = raw_memories_file(&root);
+        tokio::fs::write(&raw_memories_path, "stale raw memories\n")
+            .await
+            .expect("write stale raw memories");
+
+        harness
+            .state_db
+            .enqueue_global_consolidation(999)
+            .await
+            .expect("enqueue global consolidation");
+
+        let scheduled =
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+        assert!(
+            !scheduled,
+            "dispatch should skip subagent spawn when no stage-1 outputs are available"
+        );
+
+        assert!(
+            !tokio::fs::try_exists(&stale_summary_path)
+                .await
+                .expect("check stale summary existence"),
+            "empty consolidation should prune stale rollout summary files"
+        );
+        let raw_memories = tokio::fs::read_to_string(&raw_memories_path)
+            .await
+            .expect("read rebuilt raw memories");
+        assert_eq!(raw_memories, "# Raw Memories\n\nNo raw memories yet.\n");
 
         harness.shutdown_threads().await;
     }
