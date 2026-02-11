@@ -9,6 +9,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -403,7 +404,8 @@ async fn responses_respects_model_info_overrides_from_config() {
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
     let model = config.model.clone().expect("model configured");
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let auth_mode = auth_manager.auth_mode().map(TelemetryAuthMode::from);
     let models_manager = ModelsManager::new(config.codex_home.clone(), auth_manager);
     let config = Arc::new(config);

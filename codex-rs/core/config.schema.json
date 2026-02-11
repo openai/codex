@@ -460,7 +460,8 @@
       "type": "string"
     },
     "ModelInfoPatch": {
-      "description": "User-provided patch for overriding model metadata in local config.\n\nEvery field is optional so users can override only the parts they need. The target model slug is provided by the surrounding map key.",
+      "additionalProperties": false,
+      "description": "User-provided patch for overriding model metadata in local config.\n\nEvery field is optional so users can override only the parts of [`ModelInfo`] they need. The target model slug is provided by the surrounding map key.",
       "properties": {
         "apply_patch_tool_type": {
           "allOf": [

@@ -52,7 +52,7 @@ async fn model_info_patch_applies_for_fallback_and_prefix_resolution_paths() {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.enable(Feature::RemoteModels);
-    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
     let manager = ModelsManager::new(config.codex_home.clone(), auth_manager);

@@ -385,7 +385,10 @@ impl ModelsManager {
     ///
     /// This follows the same override precedence as `get_model_info`:
     /// per-model `model_info_overrides` are applied first, then top-level config overrides.
-    pub(crate) fn construct_model_info_offline_for_tests(model: &str, config: &Config) -> ModelInfo {
+    pub(crate) fn construct_model_info_offline_for_tests(
+        model: &str,
+        config: &Config,
+    ) -> ModelInfo {
         let model_info = model_info::model_info_from_slug(model);
         let model_info = model_info::with_model_info_patches(model_info, model, config);
         model_info::with_config_overrides(model_info, config)
