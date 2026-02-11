@@ -359,7 +359,7 @@ pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPr
     PRESETS.iter().cloned().collect()
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
     &PRESETS
 }

@@ -13,7 +13,7 @@ pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask>
     vec![plan_preset(), default_preset()]
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     builtin_collaboration_mode_presets()
 }

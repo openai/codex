@@ -143,9 +143,11 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
+#[doc(hidden)]
+pub use thread_manager::set_thread_manager_test_mode_for_tests;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub use unified_exec::set_deterministic_process_ids_for_tests;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
