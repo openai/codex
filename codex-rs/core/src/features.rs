@@ -474,7 +474,17 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
+        #[cfg(target_os = "linux")]
+        stage: Stage::Experimental {
+            name: "Bubblewrap sandbox",
+            menu_description: "Try the new linux sandbox based on bubblewrap.",
+            announcement: "NEW: Try Linux bubblewrap sandboxing in Codex. Enable in /experimental and restart Codex!",
+        },
+        #[cfg(target_os = "linux")]
+        default_enabled: false,
+        #[cfg(not(target_os = "linux"))]
         stage: Stage::UnderDevelopment,
+        #[cfg(not(target_os = "linux"))]
         default_enabled: false,
     },
     FeatureSpec {
@@ -651,5 +661,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
+        assert!(matches!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_under_development_off_linux() {
+        assert_eq!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
     }
 }
