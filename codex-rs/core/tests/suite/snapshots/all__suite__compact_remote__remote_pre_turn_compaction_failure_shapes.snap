@@ -1,9 +1,9 @@
 ---
 source: core/tests/suite/compact_remote.rs
 assertion_line: 1646
-expression: "sectioned_request_shapes(&[(\"Remote Compaction Request (Including Incoming User Message)\",\n&include_attempt_request),])"
+expression: "sectioned_request_shapes(&[(\"Remote Compaction Request (Incoming User Excluded on main)\",\n&include_attempt_request),])"
 ---
-## Remote Compaction Request (Including Incoming User Message)
+## Remote Compaction Request (Incoming User Excluded on main)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT>

@@ -3272,7 +3272,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
         sectioned_request_shapes(&[(
-            "Local Compaction Request (Including Incoming User Message)",
+            "Local Compaction Request (Incoming User Excluded on main)",
             &requests[1]
         ),])
     );
