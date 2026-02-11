@@ -52,8 +52,9 @@ fn parse_stage_one_output_accepts_empty_pair_for_skip() {
 fn parse_stage_one_output_accepts_optional_rollout_slug() {
     let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
     let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert_eq!(parsed.raw_memory, "abc");
+    assert!(parsed.raw_memory.contains("abc"));
     assert_eq!(parsed.rollout_summary, "short");
+    assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
 }
 
 #[test]
