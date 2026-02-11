@@ -121,6 +121,7 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_mcp_tool_selection().await;
+        self.clear_connector_selection().await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
 

@@ -3,6 +3,8 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -30,6 +32,9 @@ pub(crate) struct SessionState {
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
+    pub(crate) active_connector_selection: HashSet<String>,
+    pub(crate) whitelisted_skill_md_paths: HashSet<PathBuf>,
+    pub(crate) whitelisted_skill_dirs: HashSet<PathBuf>,
 }
 
 impl SessionState {
@@ -47,6 +52,9 @@ impl SessionState {
             previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
+            active_connector_selection: HashSet::new(),
+            whitelisted_skill_md_paths: HashSet::new(),
+            whitelisted_skill_dirs: HashSet::new(),
         }
     }
 
@@ -175,6 +183,57 @@ impl SessionState {
     pub(crate) fn clear_mcp_tool_selection(&mut self) {
         self.active_mcp_tool_selection = None;
     }
+
+    pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.active_connector_selection.extend(connector_ids);
+        self.active_connector_selection.clone()
+    }
+
+    pub(crate) fn get_connector_selection(&self) -> HashSet<String> {
+        self.active_connector_selection.clone()
+    }
+
+    pub(crate) fn clear_connector_selection(&mut self) {
+        self.active_connector_selection.clear();
+    }
+
+    pub(crate) fn record_whitelisted_skill_md_path(&mut self, path: &Path) {
+        let normalized = normalize_path(path);
+        self.whitelisted_skill_md_paths.insert(normalized.clone());
+        if let Some(parent) = normalized.parent() {
+            self.whitelisted_skill_dirs.insert(parent.to_path_buf());
+        }
+    }
+
+    pub(crate) fn is_whitelisted_skill_md_path(&self, path: &Path) -> bool {
+        if !is_skill_md_path(path) {
+            return false;
+        }
+
+        let normalized = normalize_path(path);
+        if self.whitelisted_skill_md_paths.contains(&normalized) {
+            return true;
+        }
+
+        normalized
+            .parent()
+            .is_some_and(|parent| self.whitelisted_skill_dirs.contains(parent))
+    }
+}
+
+const SKILL_FILENAME: &str = "SKILL.md";
+
+fn normalize_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_skill_md_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILENAME))
 }
 
 // Merge partial rate-limit updates: new fields overwrite existing values;
@@ -275,6 +334,57 @@ mod tests {
         state.clear_mcp_tool_selection();
 
         assert_eq!(state.get_mcp_tool_selection(), None);
+    }
+
+    #[tokio::test]
+    async fn merge_connector_selection_deduplicates_entries() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        let merged = state.merge_connector_selection([
+            "calendar".to_string(),
+            "calendar".to_string(),
+            "drive".to_string(),
+        ]);
+
+        assert_eq!(
+            merged,
+            HashSet::from(["calendar".to_string(), "drive".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_connector_selection_removes_entries() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        state.merge_connector_selection(["calendar".to_string()]);
+
+        state.clear_connector_selection();
+
+        assert_eq!(state.get_connector_selection(), HashSet::new());
+    }
+
+    #[tokio::test]
+    async fn whitelisted_skill_paths_match_by_file_and_directory() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        state.record_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md"));
+
+        assert_eq!(
+            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md")),
+            true
+        );
+        assert_eq!(
+            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/skill.md")),
+            true
+        );
+        assert_eq!(
+            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/README.md")),
+            false
+        );
+        assert_eq!(
+            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/beta/SKILL.md")),
+            false
+        );
     }
 
     #[tokio::test]

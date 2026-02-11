@@ -1411,6 +1411,36 @@ impl Session {
         state.clear_mcp_tool_selection();
     }
 
+    pub(crate) async fn merge_connector_selection(
+        &self,
+        connector_ids: HashSet<String>,
+    ) -> HashSet<String> {
+        let mut state = self.state.lock().await;
+        state.merge_connector_selection(connector_ids)
+    }
+
+    pub(crate) async fn get_connector_selection(&self) -> HashSet<String> {
+        let state = self.state.lock().await;
+        state.get_connector_selection()
+    }
+
+    pub(crate) async fn clear_connector_selection(&self) {
+        let mut state = self.state.lock().await;
+        state.clear_connector_selection();
+    }
+
+    pub(crate) async fn record_whitelisted_skill_sources(&self, skills: &[SkillMetadata]) {
+        let mut state = self.state.lock().await;
+        for skill in skills {
+            state.record_whitelisted_skill_md_path(&skill.path);
+        }
+    }
+
+    pub(crate) async fn is_whitelisted_skill_md_path(&self, path: &Path) -> bool {
+        let state = self.state.lock().await;
+        state.is_whitelisted_skill_md_path(path)
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         match conversation_history {
@@ -4014,7 +4044,11 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
+    sess.record_whitelisted_skill_sources(&mentioned_skills)
+        .await;
     let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
+    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
+        .await;
     let config = turn_context.config.clone();
     if config
         .features
@@ -4516,6 +4550,9 @@ async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
 
+    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
+    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
+
     let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
@@ -4524,7 +4561,7 @@ async fn built_tools(
         Some(filter_connectors_for_input(
             connectors,
             input,
-            explicitly_enabled_connectors,
+            &effective_explicitly_enabled_connectors,
             &skill_name_counts_lower,
         ))
     } else {

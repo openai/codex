@@ -8,6 +8,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
+use crate::tools::skill_mention_propagation::maybe_update_tool_selections_from_skill_read;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -155,9 +156,23 @@ impl ToolRouter {
             tool_name,
             payload,
         };
+        let mention_session = Arc::clone(&invocation.session);
+        let mention_turn = Arc::clone(&invocation.turn);
+        let mention_tool_name = invocation.tool_name.clone();
+        let mention_payload = invocation.payload.clone();
 
         match self.registry.dispatch(invocation).await {
-            Ok(response) => Ok(response),
+            Ok(response) => {
+                maybe_update_tool_selections_from_skill_read(
+                    mention_session.as_ref(),
+                    mention_turn.as_ref(),
+                    &mention_tool_name,
+                    &mention_payload,
+                    &response,
+                )
+                .await;
+                Ok(response)
+            }
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
             Err(err) => Ok(Self::failure_response(
                 failure_call_id,
