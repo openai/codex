@@ -255,6 +255,7 @@ async fn stdio_server_reconnects_after_disconnect() -> anyhow::Result<()> {
                         cwd: None,
                     },
                     enabled: true,
+                    required: false,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
