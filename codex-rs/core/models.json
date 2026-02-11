@@ -1,5 +1,5 @@
 {
-  "models": [
+  "models": [ 
     {
       "supports_reasoning_summaries": true,
       "support_verbosity": true,
