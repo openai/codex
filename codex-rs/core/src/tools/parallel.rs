@@ -155,6 +155,37 @@ impl ToolCallRuntime {
     }
 }
 
+impl ToolCallRuntime {
+    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
+        match &call.payload {
+            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
+                call_id: call.call_id.clone(),
+                output: Self::abort_message(call, secs),
+            },
+            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
+                call_id: call.call_id.clone(),
+                result: Err(Self::abort_message(call, secs)),
+            },
+            _ => ResponseInputItem::FunctionCallOutput {
+                call_id: call.call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
+                    ..Default::default()
+                },
+            },
+        }
+    }
+
+    fn abort_message(call: &ToolCall, secs: f32) -> String {
+        match call.tool_name.as_str() {
+            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec" => {
+                format!("Wall time: {secs:.1} seconds\naborted by user")
+            }
+            _ => format!("aborted by user after {secs:.1}s"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::FunctionCallOutputPayload;
@@ -200,36 +231,5 @@ mod tests {
                 &response
             )
         );
-    }
-}
-
-impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
-        match &call.payload {
-            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
-                call_id: call.call_id.clone(),
-                output: Self::abort_message(call, secs),
-            },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call.call_id.clone(),
-                result: Err(Self::abort_message(call, secs)),
-            },
-            _ => ResponseInputItem::FunctionCallOutput {
-                call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
-                    ..Default::default()
-                },
-            },
-        }
-    }
-
-    fn abort_message(call: &ToolCall, secs: f32) -> String {
-        match call.tool_name.as_str() {
-            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec" => {
-                format!("Wall time: {secs:.1} seconds\naborted by user")
-            }
-            _ => format!("aborted by user after {secs:.1}s"),
-        }
     }
 }

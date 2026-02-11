@@ -709,7 +709,6 @@ mod tests {
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::Text("use $beta-skill".to_string()),
                 success: Some(false),
-                ..Default::default()
             },
         };
         assert_eq!(false, tool_output_contains_mention_prefix(&failed_output));
