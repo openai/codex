@@ -1,5 +1,6 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -116,6 +117,15 @@ async fn run_rg_search(
     let mut command = Command::new("rg");
     command
         .current_dir(cwd)
+        // Prevent rg from hanging on stdin. Ripgrep has a heuristic where it
+        // may try to read from stdin when no file arguments are deemed present:
+        // https://github.com/BurntSushi/ripgrep/blob/e2362d4d5185d02fa857bf381e7bd52e66fafc73/crates/core/flags/hiargs.rs#L1101-L1103
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Ensure the child process is killed when the handle is dropped (e.g.
+        // on timeout cancellation), preventing orphaned rg processes.
+        .kill_on_drop(true)
         .arg("--files-with-matches")
         .arg("--sortr=modified")
         .arg("--regexp")
