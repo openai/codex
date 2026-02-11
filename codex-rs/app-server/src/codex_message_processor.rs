@@ -251,6 +251,7 @@ use uuid::Uuid;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
+use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -1963,6 +1964,7 @@ impl CodexMessageProcessor {
                 if let Err(err) = self
                     .attach_conversation_listener(
                         thread_id,
+                        request_id.connection_id,
                         experimental_raw_events,
                         ApiVersion::V2,
                     )
@@ -2628,21 +2630,15 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
+    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.thread_state_manager
+            .remove_connection(connection_id)
+            .await;
+    }
+
     /// Best-effort: attach a listener for thread_id if missing.
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
-        if self.thread_state_manager.has_listener_for_thread(thread_id) {
-            return;
-        }
-
-        if let Err(err) = self
-            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
-            .await
-        {
-            warn!(
-                "failed to attach listener for thread {thread_id}: {message}",
-                message = err.message
-            );
-        }
+        if self.thread_state_manager.has_listener_for_thread(thread_id) {}
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
@@ -2660,6 +2656,108 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         } = params;
+
+        if history.is_none()
+            && path.is_none()
+            && model.is_none()
+            && model_provider.is_none()
+            && cwd.is_none()
+            && approval_policy.is_none()
+            && sandbox.is_none()
+            && request_overrides.is_none()
+            && base_instructions.is_none()
+            && developer_instructions.is_none()
+            && personality.is_none()
+        {
+            let existing_thread_id = match ThreadId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+            if let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await {
+                let path = match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &existing_thread_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("no rollout found for thread id {existing_thread_id}"),
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(err) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to locate thread id {existing_thread_id}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                if let Err(err) = self
+                    .ensure_conversation_listener(
+                        existing_thread_id,
+                        request_id.connection_id,
+                        false,
+                        ApiVersion::V2,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for thread {}: {}",
+                        existing_thread_id,
+                        err.message
+                    );
+                }
+
+                let config_snapshot = existing_thread.config_snapshot().await;
+                let mut thread = build_thread_from_snapshot(
+                    existing_thread_id,
+                    &config_snapshot,
+                    Some(path.clone()),
+                );
+                match read_rollout_items_from_rollout(path.as_path()).await {
+                    Ok(items) => {
+                        thread.turns = build_turns_from_rollout_items(&items);
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                                path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: config_snapshot.model,
+                    model_provider: config_snapshot.model_provider_id,
+                    cwd: config_snapshot.cwd,
+                    approval_policy: config_snapshot.approval_policy.into(),
+                    sandbox: config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: config_snapshot.reasoning_effort,
+                };
+                self.outgoing.send_response(request_id, response).await;
+                return;
+            }
+        }
 
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
@@ -2793,7 +2891,12 @@ impl CodexMessageProcessor {
                 };
                 // Auto-attach a thread listener when resuming a thread.
                 if let Err(err) = self
-                    .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+                    .ensure_conversation_listener(
+                        thread_id,
+                        request_id.connection_id,
+                        false,
+                        ApiVersion::V2,
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -3019,7 +3122,12 @@ impl CodexMessageProcessor {
         };
         // Auto-attach a conversation listener when forking a thread.
         if let Err(err) = self
-            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .attach_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                false,
+                ApiVersion::V2,
+            )
             .await
         {
             tracing::warn!(
@@ -5136,7 +5244,12 @@ impl CodexMessageProcessor {
             })?;
 
         if let Err(err) = self
-            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .attach_conversation_listener(
+                thread_id,
+                request_id.connection_id,
+                false,
+                ApiVersion::V2,
+            )
             .await
         {
             tracing::warn!(
@@ -5282,7 +5395,12 @@ impl CodexMessageProcessor {
             experimental_raw_events,
         } = params;
         match self
-            .attach_conversation_listener(conversation_id, experimental_raw_events, ApiVersion::V1)
+            .attach_conversation_listener(
+                conversation_id,
+                request_id.connection_id,
+                experimental_raw_events,
+                ApiVersion::V1,
+            )
             .await
         {
             Ok(subscription_id) => {
@@ -5325,6 +5443,7 @@ impl CodexMessageProcessor {
     async fn attach_conversation_listener(
         &mut self,
         conversation_id: ThreadId,
+        connection_id: ConnectionId,
         raw_events_enabled: bool,
         api_version: ApiVersion,
     ) -> Result<Uuid, JSONRPCErrorError> {
@@ -5340,11 +5459,69 @@ impl CodexMessageProcessor {
         };
 
         let subscription_id = Uuid::new_v4();
-        let (cancel_tx, mut cancel_rx) = oneshot::channel();
         let thread_state = self
             .thread_state_manager
-            .set_listener(subscription_id, conversation_id, cancel_tx)
+            .set_listener(subscription_id, conversation_id, connection_id)
             .await;
+        self.start_conversation_listener(
+            conversation_id,
+            conversation,
+            thread_state,
+            raw_events_enabled,
+            api_version,
+        )
+        .await;
+        Ok(subscription_id)
+    }
+
+    async fn ensure_conversation_listener(
+        &mut self,
+        conversation_id: ThreadId,
+        connection_id: ConnectionId,
+        raw_events_enabled: bool,
+        api_version: ApiVersion,
+    ) -> Result<(), JSONRPCErrorError> {
+        let conversation = match self.thread_manager.get_thread(conversation_id).await {
+            Ok(conv) => conv,
+            Err(_) => {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("thread not found: {conversation_id}"),
+                    data: None,
+                });
+            }
+        };
+        let thread_state = self
+            .thread_state_manager
+            .ensure_connection_subscribed(conversation_id, connection_id)
+            .await;
+        self.start_conversation_listener(
+            conversation_id,
+            conversation,
+            thread_state,
+            raw_events_enabled,
+            api_version,
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn start_conversation_listener(
+        &self,
+        conversation_id: ThreadId,
+        conversation: Arc<CodexThread>,
+        thread_state: Arc<Mutex<ThreadState>>,
+        raw_events_enabled: bool,
+        api_version: ApiVersion,
+    ) {
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        {
+            let mut thread_state = thread_state.lock().await;
+            if thread_state.listener_matches(&conversation) {
+                return;
+            }
+            thread_state.set_listener(cancel_tx, &conversation);
+        }
         let outgoing_for_task = self.outgoing.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
         tokio::spawn(async move {
@@ -5391,12 +5568,17 @@ impl CodexMessageProcessor {
                             "conversationId".to_string(),
                             conversation_id.to_string().into(),
                         );
+                        let subscribed_connection_ids =
+                            thread_state.lock().await.subscribed_connection_ids();
 
                         outgoing_for_task
-                            .send_notification(OutgoingNotification {
-                                method: format!("codex/event/{event_formatted}"),
-                                params: Some(params.into()),
-                            })
+                            .send_notification_to_connections(
+                                &subscribed_connection_ids,
+                                OutgoingNotification {
+                                    method: format!("codex/event/{event_formatted}"),
+                                    params: Some(params.into()),
+                                },
+                            )
                             .await;
 
                         apply_bespoke_event_handling(
@@ -5405,6 +5587,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             thread_state.clone(),
+                            subscribed_connection_ids,
                             api_version,
                             fallback_model_provider.clone(),
                         )
@@ -5413,9 +5596,7 @@ impl CodexMessageProcessor {
                 }
             }
         });
-        Ok(subscription_id)
     }
-
     async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {
         let diff = git_diff_to_remote(&cwd).await;
         match diff {
@@ -6299,22 +6480,30 @@ mod tests {
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let listener_a = Uuid::new_v4();
         let listener_b = Uuid::new_v4();
-        let (cancel_a, cancel_rx_a) = oneshot::channel();
-        let (cancel_b, mut cancel_rx_b) = oneshot::channel();
+        let connection_a = ConnectionId(1);
+        let connection_b = ConnectionId(2);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
-        manager.set_listener(listener_a, thread_id, cancel_a).await;
-        manager.set_listener(listener_b, thread_id, cancel_b).await;
+        manager
+            .set_listener(listener_a, thread_id, connection_a)
+            .await;
+        manager
+            .set_listener(listener_b, thread_id, connection_b)
+            .await;
+        {
+            let state = manager.thread_state(thread_id);
+            state.lock().await.cancel_tx = Some(cancel_tx);
+        }
 
         assert_eq!(manager.remove_listener(listener_a).await, Some(thread_id));
-        assert_eq!(cancel_rx_a.await, Ok(()));
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx_b)
+            tokio::time::timeout(Duration::from_millis(20), &mut cancel_rx)
                 .await
                 .is_err()
         );
 
         assert_eq!(manager.remove_listener(listener_b).await, Some(thread_id));
-        assert_eq!(cancel_rx_b.await, Ok(()));
+        assert_eq!(cancel_rx.await, Ok(()));
         Ok(())
     }
 }

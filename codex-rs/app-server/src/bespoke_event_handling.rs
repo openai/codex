@@ -4,6 +4,8 @@ use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::outgoing_message::ConnectionId;
+use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -102,6 +104,52 @@ use tracing::error;
 
 type JsonValue = serde_json::Value;
 
+#[derive(Clone)]
+struct TargetedOutgoing {
+    outgoing: Arc<OutgoingMessageSender>,
+    connection_ids: Arc<Vec<ConnectionId>>,
+}
+
+impl TargetedOutgoing {
+    fn new(outgoing: Arc<OutgoingMessageSender>, connection_ids: Vec<ConnectionId>) -> Self {
+        Self {
+            outgoing,
+            connection_ids: Arc::new(connection_ids),
+        }
+    }
+
+    async fn send_request(&self, payload: ServerRequestPayload) -> oneshot::Receiver<JsonValue> {
+        if self.connection_ids.is_empty() {
+            let (_tx, rx) = oneshot::channel();
+            return rx;
+        }
+        self.outgoing
+            .send_request_to_connections(self.connection_ids.as_slice(), payload)
+            .await
+    }
+
+    async fn send_server_notification(&self, notification: ServerNotification) {
+        if self.connection_ids.is_empty() {
+            return;
+        }
+        self.outgoing
+            .send_server_notification_to_connections(self.connection_ids.as_slice(), notification)
+            .await;
+    }
+
+    async fn send_response<T: serde::Serialize>(
+        &self,
+        request_id: ConnectionRequestId,
+        response: T,
+    ) {
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn send_error(&self, request_id: ConnectionRequestId, error: JSONRPCErrorError) {
+        self.outgoing.send_error(request_id, error).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -109,9 +157,11 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
+    target_connection_ids: Vec<ConnectionId>,
     api_version: ApiVersion,
     fallback_model_provider: String,
 ) {
+    let outgoing = TargetedOutgoing::new(outgoing, target_connection_ids);
     let Event {
         id: event_turn_id,
         msg,
@@ -850,7 +900,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 &event_turn_id,
                 raw_response_item_event.item,
-                outgoing.as_ref(),
+                &outgoing,
             )
             .await;
         }
@@ -899,7 +949,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 changes,
                 status,
                 event_turn_id.clone(),
-                outgoing.as_ref(),
+                &outgoing,
                 &thread_state,
             )
             .await;
@@ -1142,7 +1192,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &event_turn_id,
                 turn_diff_event,
                 api_version,
-                outgoing.as_ref(),
+                &outgoing,
             )
             .await;
         }
@@ -1152,7 +1202,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &event_turn_id,
                 plan_update_event,
                 api_version,
-                outgoing.as_ref(),
+                &outgoing,
             )
             .await;
         }
@@ -1166,7 +1216,7 @@ async fn handle_turn_diff(
     event_turn_id: &str,
     turn_diff_event: TurnDiffEvent,
     api_version: ApiVersion,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     if let ApiVersion::V2 = api_version {
         let notification = TurnDiffUpdatedNotification {
@@ -1185,7 +1235,7 @@ async fn handle_turn_plan_update(
     event_turn_id: &str,
     plan_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     // `update_plan` is a todo/checklist tool; it is not related to plan-mode updates
     if let ApiVersion::V2 = api_version {
@@ -1210,7 +1260,7 @@ async fn emit_turn_completed_with_status(
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1232,7 +1282,7 @@ async fn complete_file_change_item(
     changes: Vec<FileUpdateChange>,
     status: PatchApplyStatus,
     turn_id: String,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let mut state = thread_state.lock().await;
@@ -1264,7 +1314,7 @@ async fn complete_command_execution_item(
     process_id: Option<String>,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     let item = ThreadItem::CommandExecution {
         id: item_id,
@@ -1292,7 +1342,7 @@ async fn maybe_emit_raw_response_item_completed(
     conversation_id: ThreadId,
     turn_id: &str,
     item: codex_protocol::models::ResponseItem,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     let ApiVersion::V2 = api_version else {
         return;
@@ -1319,7 +1369,7 @@ async fn find_and_remove_turn_summary(
 async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
@@ -1335,7 +1385,7 @@ async fn handle_turn_complete(
 async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     find_and_remove_turn_summary(conversation_id, thread_state).await;
@@ -1354,7 +1404,7 @@ async fn handle_thread_rollback_failed(
     _conversation_id: ThreadId,
     message: String,
     thread_state: &Arc<Mutex<ThreadState>>,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     let pending_rollback = thread_state.lock().await.pending_rollbacks.take();
 
@@ -1376,7 +1426,7 @@ async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
-    outgoing: &OutgoingMessageSender,
+    outgoing: &TargetedOutgoing,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
     if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
@@ -1633,7 +1683,7 @@ async fn on_file_change_request_approval_response(
     changes: Vec<FileUpdateChange>,
     receiver: oneshot::Receiver<JsonValue>,
     codex: Arc<CodexThread>,
-    outgoing: Arc<OutgoingMessageSender>,
+    outgoing: TargetedOutgoing,
     thread_state: Arc<Mutex<ThreadState>>,
 ) {
     let response = receiver.await;
@@ -1666,7 +1716,7 @@ async fn on_file_change_request_approval_response(
             changes,
             status,
             event_turn_id.clone(),
-            outgoing.as_ref(),
+            &outgoing,
             &thread_state,
         )
         .await;
@@ -1693,7 +1743,7 @@ async fn on_command_execution_request_approval_response(
     command_actions: Vec<V2ParsedCommand>,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
-    outgoing: Arc<OutgoingMessageSender>,
+    outgoing: TargetedOutgoing,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
@@ -1748,7 +1798,7 @@ async fn on_command_execution_request_approval_response(
             None,
             command_actions.clone(),
             status,
-            outgoing.as_ref(),
+            &outgoing,
         )
         .await;
     }
@@ -1876,6 +1926,7 @@ async fn construct_mcp_tool_call_end_notification(
 mod tests {
     use super::*;
     use crate::CHANNEL_CAPACITY;
+    use crate::outgoing_message::ConnectionId;
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use crate::outgoing_message::OutgoingMessageSender;
@@ -1914,9 +1965,7 @@ mod tests {
             .ok_or_else(|| anyhow!("should send one message"))?;
         match envelope {
             OutgoingEnvelope::Broadcast { message } => Ok(message),
-            OutgoingEnvelope::ToConnection { connection_id, .. } => {
-                bail!("unexpected targeted message for connection {connection_id:?}")
-            }
+            OutgoingEnvelope::ToConnection { message, .. } => Ok(message),
         }
     }
 
@@ -2011,12 +2060,13 @@ mod tests {
         let event_turn_id = "complete1".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
         let thread_state = new_thread_state();
 
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            &outgoing,
+            &targeted_outgoing,
             &thread_state,
         )
         .await;
@@ -2051,11 +2101,12 @@ mod tests {
         .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
 
         handle_turn_interrupted(
             conversation_id,
             event_turn_id.clone(),
-            &outgoing,
+            &targeted_outgoing,
             &thread_state,
         )
         .await;
@@ -2090,11 +2141,12 @@ mod tests {
         .await;
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
 
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            &outgoing,
+            &targeted_outgoing,
             &thread_state,
         )
         .await;
@@ -2122,7 +2174,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
         let update = UpdatePlanArgs {
             explanation: Some("need plan".to_string()),
             plan: vec![
@@ -2144,7 +2197,7 @@ mod tests {
             "turn-123",
             update,
             ApiVersion::V2,
-            &outgoing,
+            &targeted_outgoing,
         )
         .await;
 
@@ -2172,6 +2225,7 @@ mod tests {
         let turn_id = "turn-123".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
 
         let info = TokenUsageInfo {
             total_token_usage: TokenUsage {
@@ -2214,7 +2268,7 @@ mod tests {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
             },
-            &outgoing,
+            &targeted_outgoing,
         )
         .await;
 
@@ -2255,6 +2309,7 @@ mod tests {
         let turn_id = "turn-456".to_string();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
 
         handle_token_count_event(
             conversation_id,
@@ -2263,7 +2318,7 @@ mod tests {
                 info: None,
                 rate_limits: None,
             },
-            &outgoing,
+            &targeted_outgoing,
         )
         .await;
 
@@ -2321,6 +2376,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
 
         // Turn 1 on conversation A
         let a_turn1 = "a_turn1".to_string();
@@ -2334,7 +2390,13 @@ mod tests {
             &thread_state,
         )
         .await;
-        handle_turn_complete(conversation_a, a_turn1.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_a,
+            a_turn1.clone(),
+            &targeted_outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Turn 1 on conversation B
         let b_turn1 = "b_turn1".to_string();
@@ -2348,11 +2410,23 @@ mod tests {
             &thread_state,
         )
         .await;
-        handle_turn_complete(conversation_b, b_turn1.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_b,
+            b_turn1.clone(),
+            &targeted_outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Turn 2 on conversation A
         let a_turn2 = "a_turn2".to_string();
-        handle_turn_complete(conversation_a, a_turn2.clone(), &outgoing, &thread_state).await;
+        handle_turn_complete(
+            conversation_a,
+            a_turn2.clone(),
+            &targeted_outgoing,
+            &thread_state,
+        )
+        .await;
 
         // Verify: A turn 1
         let msg = recv_broadcast_message(&mut rx).await?;
@@ -2542,7 +2616,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_diff_emits_v2_notification() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
         let unified_diff = "--- a\n+++ b\n".to_string();
         let conversation_id = ThreadId::new();
 
@@ -2553,7 +2628,7 @@ mod tests {
                 unified_diff: unified_diff.clone(),
             },
             ApiVersion::V2,
-            &outgoing,
+            &targeted_outgoing,
         )
         .await;
 
@@ -2575,7 +2650,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_turn_diff_is_noop_for_v1() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
-        let outgoing = OutgoingMessageSender::new(tx);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let targeted_outgoing = TargetedOutgoing::new(outgoing, vec![ConnectionId(1)]);
         let conversation_id = ThreadId::new();
 
         handle_turn_diff(
@@ -2585,7 +2661,7 @@ mod tests {
                 unified_diff: "diff".to_string(),
             },
             ApiVersion::V1,
-            &outgoing,
+            &targeted_outgoing,
         )
         .await;
 

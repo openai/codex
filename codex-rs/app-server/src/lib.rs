@@ -490,6 +490,7 @@ pub async fn run_main_with_transport(
                                 {
                                     break;
                                 }
+                                processor.connection_closed(connection_id).await;
                                 connections.remove(&connection_id);
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
