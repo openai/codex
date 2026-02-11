@@ -18,6 +18,18 @@ use super::super::storage::rebuild_raw_memories_file_from_memories;
 use super::super::storage::sync_rollout_summaries_from_memories;
 use super::phase2::spawn_phase2_completion_task;
 
+fn completion_watermark(
+    claimed_watermark: i64,
+    latest_memories: &[codex_state::Stage1Output],
+) -> i64 {
+    latest_memories
+        .iter()
+        .map(|memory| memory.source_updated_at.timestamp())
+        .max()
+        .unwrap_or(claimed_watermark)
+        .max(claimed_watermark)
+}
+
 pub(super) async fn run_global_memory_consolidation(
     session: &Arc<Session>,
     config: Arc<Config>,
@@ -70,11 +82,7 @@ pub(super) async fn run_global_memory_consolidation(
         }
     };
     let root = memory_root(&config.codex_home);
-    let materialized_watermark = latest_memories
-        .iter()
-        .map(|memory| memory.source_updated_at.timestamp())
-        .max()
-        .unwrap_or(claimed_watermark);
+    let completion_watermark = completion_watermark(claimed_watermark, &latest_memories);
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
         warn!("failed syncing phase-1 rollout summaries for global consolidation: {err}");
         let _ = state_db
@@ -101,7 +109,7 @@ pub(super) async fn run_global_memory_consolidation(
     if latest_memories.is_empty() {
         debug!("memory phase-2 has no stage-1 outputs; finalized local memory artifacts only");
         let _ = state_db
-            .mark_global_phase2_job_succeeded(&ownership_token, materialized_watermark)
+            .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await;
         return false;
     }
@@ -130,7 +138,7 @@ pub(super) async fn run_global_memory_consolidation(
             spawn_phase2_completion_task(
                 session.as_ref(),
                 ownership_token,
-                materialized_watermark,
+                completion_watermark,
                 consolidation_agent_id,
             );
             true
@@ -151,6 +159,7 @@ pub(super) async fn run_global_memory_consolidation(
 
 #[cfg(test)]
 mod tests {
+    use super::completion_watermark;
     use super::memory_root;
     use super::run_global_memory_consolidation;
     use crate::CodexAuth;
@@ -167,6 +176,7 @@ mod tests {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SessionSource;
     use codex_state::Phase2JobClaimOutcome;
+    use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
@@ -277,6 +287,22 @@ mod tests {
                 .filter(|(_, op)| matches!(op, Op::UserInput { .. }))
                 .count()
         }
+    }
+
+    #[test]
+    fn completion_watermark_never_regresses_below_claimed_input_watermark() {
+        let stage1_output = Stage1Output {
+            thread_id: ThreadId::new(),
+            source_updated_at: chrono::DateTime::<Utc>::from_timestamp(123, 0)
+                .expect("valid source_updated_at timestamp"),
+            raw_memory: "raw memory".to_string(),
+            rollout_summary: "rollout summary".to_string(),
+            generated_at: chrono::DateTime::<Utc>::from_timestamp(124, 0)
+                .expect("valid generated_at timestamp"),
+        };
+
+        let completion = completion_watermark(1_000, &[stage1_output]);
+        assert_eq!(completion, 1_000);
     }
 
     #[tokio::test]
