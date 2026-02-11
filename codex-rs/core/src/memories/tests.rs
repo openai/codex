@@ -17,6 +17,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
@@ -55,6 +56,30 @@ fn parse_stage_one_output_accepts_optional_rollout_slug() {
     assert!(parsed.raw_memory.contains("abc"));
     assert_eq!(parsed.rollout_summary, "short");
     assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
+}
+
+#[test]
+fn stage_one_output_schema_requires_all_declared_properties() {
+    let schema = super::stage_one::stage_one_output_schema();
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("properties object");
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("required array");
+
+    let mut property_keys = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    property_keys.sort_unstable();
+
+    let mut required_keys = required
+        .iter()
+        .map(|key| key.as_str().expect("required key string"))
+        .collect::<Vec<_>>();
+    required_keys.sort_unstable();
+
+    assert_eq!(required_keys, property_keys);
 }
 
 #[test]

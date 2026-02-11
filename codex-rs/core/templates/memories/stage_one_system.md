@@ -4,7 +4,7 @@ You are in Phase 1 of the memory pipeline.
 Your job is to convert one rollout into:
 - `raw_memory` (detailed, structured markdown for later consolidation)
 - `rollout_summary` (compact retrieval summary for routing/indexing)
-- `rollout_slug` (optional; accepted by the caller but currently not used downstream)
+- `rollout_slug` (required string; use `""` when unknown; currently not used downstream)
 
 The rollout payload is already embedded in the user message.
 Do not ask to open files or use tools.
@@ -76,8 +76,7 @@ Output contract (strict):
 - Return exactly one JSON object.
 - Required keys:
   - `rollout_summary` (string)
+  - `rollout_slug` (string; use `""` when unknown; currently unused)
   - `raw_memory` (string)
-- Optional key:
-  - `rollout_slug` (string; accepted but currently unused)
 - Empty-field no-op must use empty strings.
 - No additional commentary outside the JSON object.

@@ -32,7 +32,7 @@ pub(super) fn stage_one_output_schema() -> Value {
             "rollout_slug": { "type": "string" },
             "raw_memory": { "type": "string" }
         },
-        "required": ["rollout_summary", "raw_memory"],
+        "required": ["rollout_summary", "rollout_slug", "raw_memory"],
         "additionalProperties": false
     })
 }
