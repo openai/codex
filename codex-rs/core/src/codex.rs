@@ -93,6 +93,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::debug;
@@ -584,8 +585,8 @@ impl TurnContext {
 
     /// Resolves the per-turn metadata header under a shared timeout policy.
     ///
-    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
-    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
+    /// This uses the same timeout helper as websocket request prewarm so both turn execution and
+    /// prewarm observe identical "timeout means best-effort fallback" behavior.
     pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
         resolve_turn_metadata_header_with_timeout(
             self.build_turn_metadata_header(),
@@ -597,7 +598,7 @@ impl TurnContext {
     /// Starts best-effort background computation of turn metadata.
     ///
     /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
+    /// and websocket request prewarm are less likely to pay metadata construction latency on demand.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
         let context = Arc::clone(self);
         tokio::spawn(async move {
@@ -1069,7 +1070,7 @@ impl Session {
                 }
             };
         session_configuration.thread_name = thread_name.clone();
-        let mut state = SessionState::new(session_configuration.clone());
+        let state = SessionState::new(session_configuration.clone());
         let network_proxy =
             match config.network.as_ref() {
                 Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
@@ -1124,23 +1125,6 @@ impl Session {
             ),
         };
 
-        let prewarm_model_info = models_manager
-            .get_model_info(session_configuration.collaboration_mode.model(), &config)
-            .await;
-        let prewarm_cwd = session_configuration.cwd.clone();
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
-            None,
-        )
-        .boxed();
-        let startup_regular_task = RegularTask::with_startup_prewarm(
-            services.model_client.clone(),
-            services.otel_manager.clone(),
-            prewarm_model_info,
-            turn_metadata_header,
-        );
-        state.set_startup_regular_task(startup_regular_task);
-
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1152,7 +1136,6 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
-
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -1182,7 +1165,6 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();
-
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
@@ -1231,6 +1213,8 @@ impl Session {
                 ));
             }
         }
+        sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
+            .await;
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
@@ -1614,8 +1598,68 @@ impl Session {
     }
 
     pub(crate) async fn take_startup_regular_task(&self) -> Option<RegularTask> {
+        let startup_regular_task = {
+            let mut state = self.state.lock().await;
+            state.take_startup_regular_task()
+        };
+        let startup_regular_task = startup_regular_task?;
+        match startup_regular_task.await {
+            Ok(Ok(regular_task)) => Some(regular_task),
+            Ok(Err(err)) => {
+                warn!("startup websocket prewarm setup failed: {err:#}");
+                None
+            }
+            Err(err) => {
+                warn!("startup websocket prewarm setup join failed: {err}");
+                None
+            }
+        }
+    }
+
+    async fn schedule_startup_prewarm(self: &Arc<Self>, base_instructions: String) {
+        let sess = Arc::clone(self);
+        let startup_regular_task: JoinHandle<CodexResult<RegularTask>> =
+            tokio::spawn(
+                async move { sess.schedule_startup_prewarm_inner(base_instructions).await },
+            );
         let mut state = self.state.lock().await;
-        state.take_startup_regular_task()
+        state.set_startup_regular_task(startup_regular_task);
+    }
+
+    async fn schedule_startup_prewarm_inner(
+        self: &Arc<Self>,
+        base_instructions: String,
+    ) -> CodexResult<RegularTask> {
+        let startup_turn_context = self
+            .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+            .await;
+        let startup_cancellation_token = CancellationToken::new();
+        let startup_router = built_tools(
+            self,
+            startup_turn_context.as_ref(),
+            &[],
+            &HashSet::new(),
+            None,
+            &startup_cancellation_token,
+        )
+        .await?;
+        let startup_prompt = build_prompt(
+            Vec::new(),
+            startup_router.as_ref(),
+            startup_turn_context.as_ref(),
+            BaseInstructions {
+                text: base_instructions,
+            },
+        );
+        let startup_turn_metadata_header =
+            startup_turn_context.resolve_turn_metadata_header().await;
+        RegularTask::with_startup_prewarm(
+            self.services.model_client.clone(),
+            startup_prompt,
+            startup_turn_context,
+            startup_turn_metadata_header,
+        )
+        .await
     }
 
     async fn get_config(&self) -> std::sync::Arc<Config> {
@@ -4221,6 +4265,21 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+fn build_prompt(
+    input: Vec<ResponseItem>,
+    router: &ToolRouter,
+    turn_context: &TurnContext,
+    base_instructions: BaseInstructions,
+) -> Prompt {
+    Prompt {
+        input,
+        tools: router.specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: turn_context.final_output_json_schema.clone(),
+    }
+}
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -4251,18 +4310,14 @@ async fn run_sampling_request(
     )
     .await?;
 
-    let model_supports_parallel = turn_context.model_info.supports_parallel_tool_calls;
-
     let base_instructions = sess.get_base_instructions().await;
 
-    let prompt = Prompt {
+    let prompt = build_prompt(
         input,
-        tools: router.specs(),
-        parallel_tool_calls: model_supports_parallel,
+        router.as_ref(),
+        turn_context.as_ref(),
         base_instructions,
-        personality: turn_context.personality,
-        output_schema: turn_context.final_output_json_schema.clone(),
-    };
+    );
 
     let mut retries = 0;
     loop {

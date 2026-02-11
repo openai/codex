@@ -12,19 +12,16 @@
 //! requests during that turn. It caches a Responses WebSocket connection (opened lazily) and stores
 //! per-turn state such as the `x-codex-turn-state` token used for sticky routing.
 //!
-//! Prewarm is intentionally handshake-only: it may warm a socket and capture sticky-routing
-//! state, but the first `response.create` payload is still sent only when a turn starts.
+//! Prewarm sends a deferred `response.create` and waits for completion so the next request can
+//! append onto the same websocket connection.
 //!
-//! Startup prewarm is owned by turn-scoped callers (for example, a pre-created regular task). When
-//! a warmed [`ModelClientSession`] is available, turn execution can reuse it; otherwise the turn
-//! lazily opens a websocket on first stream call.
+//! Turn execution performs prewarm as a best-effort step before the first stream request so the
+//! subsequent request can reuse the same connection via append semantics.
 //!
 //! ## Retry-Budget Tradeoff
 //!
-//! Startup prewarm is treated as the first websocket connection attempt for the first turn. If
-//! it fails, the stream attempt fails and the retry/fallback loop decides whether to retry or fall
-//! back. This avoids duplicate handshakes but means a failed prewarm can consume one retry
-//! budget slot before any turn payload is sent.
+//! Deferred request prewarm is treated as the first websocket connection attempt for a turn. If
+//! it fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -564,10 +561,7 @@ impl ModelClientSession {
         }
 
         let baseline_len = baseline.len();
-        if baseline_len > 0
-            && request.input.starts_with(&baseline)
-            && baseline_len < request.input.len()
-        {
+        if request.input.starts_with(&baseline) && baseline_len < request.input.len() {
             Some(request.input[baseline_len..].to_vec())
         } else {
             trace!("incremental request failed, items didn't match");
@@ -616,43 +610,6 @@ impl ModelClientSession {
         }
 
         ResponsesWsRequest::ResponseCreate(payload)
-    }
-
-    /// Opportunistically warms a websocket for this turn-scoped client session.
-    ///
-    /// This performs only connection setup; it never sends prompt payloads.
-    pub async fn prewarm_websocket(
-        &mut self,
-        otel_manager: &OtelManager,
-        model_info: &ModelInfo,
-        turn_metadata_header: Option<&str>,
-    ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
-        {
-            return Ok(());
-        }
-        if self.connection.is_some() {
-            return Ok(());
-        }
-
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
-            ApiError::Stream(format!(
-                "failed to build websocket prewarm client setup: {err}"
-            ))
-        })?;
-
-        let connection = self
-            .client
-            .connect_websocket(
-                otel_manager,
-                client_setup.api_provider,
-                client_setup.api_auth,
-                Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
-            )
-            .await?;
-        self.connection = Some(connection);
-        Ok(())
     }
 
     /// Returns a websocket connection for this turn.
@@ -782,6 +739,7 @@ impl ModelClientSession {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         turn_metadata_header: Option<&str>,
+        defer: bool,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
 
@@ -800,7 +758,10 @@ impl ModelClientSession {
                 effort,
                 summary,
             )?;
-            let ws_payload = ResponseCreateWsRequest::from(&request);
+            let mut ws_payload = ResponseCreateWsRequest::from(&request);
+            if defer {
+                ws_payload.defer = Some(true);
+            }
 
             match self
                 .websocket_connection(
@@ -828,25 +789,30 @@ impl ModelClientSession {
             }
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request);
-
-            let stream_result = self
-                .connection
-                .as_ref()
-                .ok_or_else(|| {
-                    map_api_error(ApiError::Stream(
-                        "websocket connection is unavailable".to_string(),
-                    ))
-                })?
-                .stream_request(ws_request)
-                .await
-                .map_err(map_api_error)?;
             self.websocket_last_request = Some(request);
-            let (stream, last_request_rx) =
-                map_response_stream(stream_result, otel_manager.clone());
-            self.websocket_last_response_rx = Some(last_request_rx);
-
-            return Ok(WebsocketStreamOutcome::Stream(stream));
+            return self.send_websocket_request(ws_request, otel_manager).await;
         }
+    }
+
+    async fn send_websocket_request(
+        &mut self,
+        request: ResponsesWsRequest,
+        otel_manager: &OtelManager,
+    ) -> Result<WebsocketStreamOutcome> {
+        let stream_result = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| {
+                map_api_error(ApiError::Stream(
+                    "websocket connection is unavailable".to_string(),
+                ))
+            })?
+            .stream_request(request)
+            .await
+            .map_err(map_api_error)?;
+        let (stream, last_request_rx) = map_response_stream(stream_result, otel_manager.clone());
+        self.websocket_last_response_rx = Some(last_request_rx);
+        Ok(WebsocketStreamOutcome::Stream(stream))
     }
 
     /// Builds request and SSE telemetry for streaming API calls.
@@ -864,6 +830,59 @@ impl ModelClientSession {
         let telemetry = Arc::new(ApiTelemetry::new(otel_manager.clone()));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prewarm_websocket(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<()> {
+        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
+        {
+            return Ok(());
+        }
+        if self.websocket_last_request.is_some() {
+            return Ok(());
+        }
+
+        match self
+            .stream_responses_websocket(
+                prompt,
+                model_info,
+                otel_manager,
+                effort,
+                summary,
+                turn_metadata_header,
+                true,
+            )
+            .await
+        {
+            Ok(WebsocketStreamOutcome::Stream(mut stream)) => {
+                // Wait for the deferred warmup request to complete before sending append.
+                while let Some(event) = stream.next().await {
+                    match event {
+                        Ok(ResponseEvent::Completed { .. }) => {
+                            if let Some(last_request) = self.websocket_last_request.as_mut() {
+                                last_request.input.clear();
+                            }
+                        }
+                        Err(err) => return Err(err),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            Ok(WebsocketStreamOutcome::FallbackToHttp) => {
+                self.try_switch_fallback_transport(otel_manager, model_info);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -897,6 +916,7 @@ impl ModelClientSession {
                             effort,
                             summary,
                             turn_metadata_header,
+                            false,
                         )
                         .await?
                     {

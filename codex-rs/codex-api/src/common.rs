@@ -172,6 +172,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             include: request.include.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
+            defer: None,
         }
     }
 }
@@ -194,6 +195,8 @@ pub struct ResponseCreateWsRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
