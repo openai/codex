@@ -2295,6 +2295,14 @@ impl Session {
                 DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
             );
         }
+        // Add developer instructions for memories.
+        if let Some(memory_prompt) =
+            memories::build_memory_tool_developer_instructions(&turn_context.config.codex_home)
+                .await
+            && turn_context.features.enabled(Feature::MemoryTool)
+        {
+            items.push(DeveloperInstructions::new(memory_prompt).into());
+        }
         // Add developer instructions from collaboration_mode if they exist and are non-empty
         let (collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
