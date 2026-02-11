@@ -98,7 +98,7 @@ mod tests {
             .split_once("rendered conversation:\n")
             .expect("stage-one prompt must include rendered conversation section");
 
-        assert!(truncated_rollout.contains("chars truncated"));
+        assert!(truncated_rollout.contains("tokens truncated"));
         assert!(truncated_rollout.starts_with('a'));
         assert!(truncated_rollout.ends_with('z'));
     }

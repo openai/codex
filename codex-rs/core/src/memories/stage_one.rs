@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_stage_one_output_redacts_and_compacts_summary() {
+    fn normalize_stage_one_output_redacts_summary() {
         let output = StageOneOutput {
             raw_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
             rollout_summary: "password = mysecret123456\n\nsmall".to_string(),
@@ -179,7 +179,7 @@ mod tests {
         assert!(!normalized.rollout_summary.contains("mysecret123456"));
         assert_eq!(
             normalized.rollout_summary,
-            "password = [REDACTED_SECRET] small"
+            "password = [REDACTED_SECRET]\n\nsmall"
         );
     }
 
