@@ -61,7 +61,7 @@ struct StageOneOutput {
     _rollout_slug: Option<String>,
 }
 
-fn memory_root(codex_home: &Path) -> PathBuf {
+pub fn memory_root(codex_home: &Path) -> PathBuf {
     codex_home.join("memories")
 }
 
@@ -77,6 +77,7 @@ async fn ensure_layout(root: &Path) -> std::io::Result<()> {
     tokio::fs::create_dir_all(rollout_summaries_dir(root)).await
 }
 
+pub(crate) use prompts::build_memory_tool_developer_instructions;
 /// Starts the memory startup pipeline for eligible root sessions.
 ///
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
