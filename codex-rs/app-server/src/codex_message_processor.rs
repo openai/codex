@@ -148,7 +148,7 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_app_server_protocol::build_turns_from_event_msgs;
+use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
@@ -202,7 +202,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::open_if_present;
+use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -977,6 +977,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1011,6 +1012,7 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
+                                codex_home.clone(),
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
@@ -1083,6 +1085,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1117,6 +1120,7 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
+                                codex_home.clone(),
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
@@ -1288,6 +1292,7 @@ impl CodexMessageProcessor {
             self.cloud_requirements.as_ref(),
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.clone(),
         );
         sync_default_client_residency_requirement(
             &self.cli_overrides,
@@ -1501,9 +1506,15 @@ impl CodexMessageProcessor {
 
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
         match self.fetch_account_rate_limits().await {
-            Ok(rate_limits) => {
+            Ok((rate_limits, rate_limits_by_limit_id)) => {
                 let response = GetAccountRateLimitsResponse {
                     rate_limits: rate_limits.into(),
+                    rate_limits_by_limit_id: Some(
+                        rate_limits_by_limit_id
+                            .into_iter()
+                            .map(|(limit_id, snapshot)| (limit_id, snapshot.into()))
+                            .collect(),
+                    ),
                 };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -1513,7 +1524,15 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fetch_account_rate_limits(&self) -> Result<CoreRateLimitSnapshot, JSONRPCErrorError> {
+    async fn fetch_account_rate_limits(
+        &self,
+    ) -> Result<
+        (
+            CoreRateLimitSnapshot,
+            HashMap<String, CoreRateLimitSnapshot>,
+        ),
+        JSONRPCErrorError,
+    > {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1537,14 +1556,41 @@ impl CodexMessageProcessor {
                 data: None,
             })?;
 
-        client
-            .get_rate_limits()
+        let snapshots = client
+            .get_rate_limits_many()
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to fetch codex rate limits: {err}"),
                 data: None,
+            })?;
+        if snapshots.is_empty() {
+            return Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: "failed to fetch codex rate limits: no snapshots returned".to_string(),
+                data: None,
+            });
+        }
+
+        let rate_limits_by_limit_id: HashMap<String, CoreRateLimitSnapshot> = snapshots
+            .iter()
+            .cloned()
+            .map(|snapshot| {
+                let limit_id = snapshot
+                    .limit_id
+                    .clone()
+                    .unwrap_or_else(|| "codex".to_string());
+                (limit_id, snapshot)
             })
+            .collect();
+
+        let primary = snapshots
+            .iter()
+            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
+            .cloned()
+            .unwrap_or_else(|| snapshots[0].clone());
+
+        Ok((primary, rate_limits_by_limit_id))
     }
 
     async fn get_user_saved_config(&self, request_id: ConnectionRequestId) {
@@ -1634,13 +1680,30 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let started_network_proxy = match self.config.network.as_ref() {
+            Some(spec) => match spec.start_proxy().await {
+                Ok(started) => Some(started),
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start managed network proxy: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            },
+            None => None,
+        };
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         let exec_params = ExecParams {
             command: params.command,
             cwd,
             expiration: timeout_ms.into(),
             env,
-            network: self.config.network.clone(),
+            network: started_network_proxy
+                .as_ref()
+                .map(codex_core::config::StartedNetworkProxy::proxy),
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
             justification: None,
@@ -1668,9 +1731,11 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let request_for_task = request;
         let sandbox_cwd = self.config.cwd.clone();
+        let started_network_proxy_for_task = started_network_proxy;
         let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
 
         tokio::spawn(async move {
+            let _started_network_proxy = started_network_proxy_for_task;
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
@@ -2101,11 +2166,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = open_if_present(
-            &self.config.codex_home,
-            self.config.model_provider_id.as_str(),
-        )
-        .await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -2538,9 +2599,9 @@ impl CodexMessageProcessor {
         };
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
-            match read_event_msgs_from_rollout(rollout_path).await {
-                Ok(events) => {
-                    thread.turns = build_turns_from_event_msgs(&events);
+            match read_rollout_items_from_rollout(rollout_path).await {
+                Ok(items) => {
+                    thread.turns = build_turns_from_rollout_items(&items);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     self.send_invalid_request_error(
@@ -2732,11 +2793,7 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let SessionConfiguredEvent {
-                    rollout_path,
-                    initial_messages,
-                    ..
-                } = session_configured;
+                let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
                         request_id,
@@ -2776,9 +2833,22 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
-                thread.turns = initial_messages
-                    .as_deref()
-                    .map_or_else(Vec::new, build_turns_from_event_msgs);
+                match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                    Ok(items) => {
+                        thread.turns = build_turns_from_rollout_items(&items);
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {thread_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
+                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -2940,11 +3010,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let SessionConfiguredEvent {
-            rollout_path,
-            initial_messages,
-            ..
-        } = session_configured;
+        let SessionConfiguredEvent { rollout_path, .. } = session_configured;
         let Some(rollout_path) = rollout_path else {
             self.send_internal_error(
                 request_id,
@@ -2984,9 +3050,22 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        thread.turns = initial_messages
-            .as_deref()
-            .map_or_else(Vec::new, build_turns_from_event_msgs);
+        match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+            Ok(items) => {
+                thread.turns = build_turns_from_rollout_items(&items);
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+        }
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
@@ -3144,17 +3223,13 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = open_if_present(
-            &self.config.codex_home,
-            self.config.model_provider_id.as_str(),
-        )
-        .await;
+        let state_db_ctx = get_state_db(&self.config, None).await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = if archived {
                 RolloutRecorder::list_archived_threads(
-                    &self.config.codex_home,
+                    &self.config,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -3170,7 +3245,7 @@ impl CodexMessageProcessor {
                 })?
             } else {
                 RolloutRecorder::list_threads(
-                    &self.config.codex_home,
+                    &self.config,
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
@@ -4229,11 +4304,7 @@ impl CodexMessageProcessor {
         }
 
         if state_db_ctx.is_none() {
-            state_db_ctx = open_if_present(
-                &self.config.codex_home,
-                self.config.model_provider_id.as_str(),
-            )
-            .await;
+            state_db_ctx = get_state_db(&self.config, None).await;
         }
 
         // Move the rollout file to archived.
@@ -5588,8 +5659,9 @@ fn replace_cloud_requirements_loader(
     cloud_requirements: &RwLock<CloudRequirementsLoader>,
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
+    codex_home: std::path::PathBuf,
 ) {
-    let loader = cloud_requirements_loader(auth_manager, chatgpt_base_url);
+    let loader = cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home);
     if let Ok(mut guard) = cloud_requirements.write() {
         *guard = loader;
     } else {
@@ -5686,8 +5758,7 @@ async fn read_history_cwd_from_state_db(
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) =
-        open_if_present(&config.codex_home, config.model_provider_id.as_str()).await
+    if let Some(state_db_ctx) = get_state_db(config, None).await
         && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -5708,7 +5779,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = open_if_present(&config.codex_home, config.model_provider_id.as_str()).await;
+    let state_db_ctx = get_state_db(config, None).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 
@@ -5911,22 +5982,16 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
-pub(crate) async fn read_event_msgs_from_rollout(
+pub(crate) async fn read_rollout_items_from_rollout(
     path: &Path,
-) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
+) -> std::io::Result<Vec<RolloutItem>> {
     let items = match RolloutRecorder::get_rollout_history(path).await? {
         InitialHistory::New => Vec::new(),
         InitialHistory::Forked(items) => items,
         InitialHistory::Resumed(resumed) => resumed.history,
     };
 
-    Ok(items
-        .into_iter()
-        .filter_map(|item| match item {
-            RolloutItem::EventMsg(event) => Some(event),
-            _ => None,
-        })
-        .collect())
+    Ok(items)
 }
 
 fn extract_conversation_summary(

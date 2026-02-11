@@ -116,6 +116,7 @@ fn timestamp_at(
     )
 }
 
+#[allow(dead_code)]
 fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
     let parsed = DateTime::parse_from_rfc3339(updated_at_rfc3339)?.with_timezone(&Utc);
     let times = FileTimes::new().set_modified(parsed.into());

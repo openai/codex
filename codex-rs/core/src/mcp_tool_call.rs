@@ -14,6 +14,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -75,10 +76,17 @@ pub(crate) async fn handle_mcp_tool_call(
                     .await;
 
                 let start = Instant::now();
-                let result: Result<CallToolResult, String> = sess
+                let result = sess
                     .call_tool(&server, &tool_name, arguments_value.clone())
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
+                let result = sanitize_mcp_tool_result_for_model(
+                    turn_context
+                        .model_info
+                        .input_modalities
+                        .contains(&InputModality::Image),
+                    result,
+                );
                 if let Err(e) = &result {
                     tracing::warn!("MCP tool call error: {e:?}");
                 }
@@ -136,10 +144,17 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result: Result<CallToolResult, String> = sess
+    let result = sess
         .call_tool(&server, &tool_name, arguments_value.clone())
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
+    let result = sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        result,
+    );
     if let Err(e) = &result {
         tracing::warn!("MCP tool call error: {e:?}");
     }
@@ -158,6 +173,37 @@ pub(crate) async fn handle_mcp_tool_call(
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
     ResponseInputItem::McpToolCallOutput { call_id, result }
+}
+
+fn sanitize_mcp_tool_result_for_model(
+    supports_image_input: bool,
+    result: Result<CallToolResult, String>,
+) -> Result<CallToolResult, String> {
+    if supports_image_input {
+        return result;
+    }
+
+    result.map(|call_tool_result| CallToolResult {
+        content: call_tool_result
+            .content
+            .iter()
+            .map(|block| {
+                if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
+                    && content_type == "image"
+                {
+                    return serde_json::json!({
+                        "type": "text",
+                        "text": "<image content omitted because you do not support image input>",
+                    });
+                }
+
+                block.clone()
+            })
+            .collect::<Vec<_>>(),
+        structured_content: call_tool_result.structured_content,
+        is_error: call_tool_result.is_error,
+        meta: call_tool_result.meta,
+    })
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
@@ -449,5 +495,60 @@ mod tests {
     fn approval_not_required_when_read_only_true() {
         let annotations = annotations(Some(true), Some(true), Some(true));
         assert_eq!(requires_mcp_tool_approval(&annotations), false);
+    }
+
+    #[test]
+    fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
+        let result = Ok(CallToolResult {
+            content: vec![
+                serde_json::json!({
+                    "type": "image",
+                    "data": "Zm9v",
+                    "mimeType": "image/png",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "hello",
+                }),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        });
+
+        let got = sanitize_mcp_tool_result_for_model(false, result).expect("sanitized result");
+
+        assert_eq!(
+            got.content,
+            vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": "<image content omitted because you do not support image input>",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "hello",
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
+        let original = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "Zm9v",
+                "mimeType": "image/png",
+            })],
+            structured_content: Some(serde_json::json!({"x": 1})),
+            is_error: Some(false),
+            meta: Some(serde_json::json!({"k": "v"})),
+        };
+
+        let got = sanitize_mcp_tool_result_for_model(true, Ok(original.clone()))
+            .expect("unsanitized result");
+
+        assert_eq!(got, original);
     }
 }

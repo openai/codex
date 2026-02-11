@@ -2,8 +2,8 @@ use clap::Parser;
 use codex_app_server::AppServerTransport;
 use codex_app_server::run_main_with_transport;
 use codex_arg0::arg0_dispatch_or_else;
-use codex_common::CliConfigOverrides;
 use codex_core::config_loader::LoaderOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 // Debug-only test hook: lets integration tests point the server at a temporary

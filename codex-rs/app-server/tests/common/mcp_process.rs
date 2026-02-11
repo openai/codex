@@ -174,6 +174,7 @@ impl McpProcess {
             client_info,
             Some(InitializeCapabilities {
                 experimental_api: true,
+                ..Default::default()
             }),
         )
         .await

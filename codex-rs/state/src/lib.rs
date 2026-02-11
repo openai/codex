@@ -14,6 +14,7 @@ mod runtime;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
+pub use model::Phase2JobClaimOutcome;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
@@ -27,7 +28,10 @@ pub use model::BackfillStats;
 pub use model::BackfillStatus;
 pub use model::ExtractionOutcome;
 pub use model::SortKey;
-pub use model::ThreadMemory;
+pub use model::Stage1JobClaim;
+pub use model::Stage1JobClaimOutcome;
+pub use model::Stage1Output;
+pub use model::Stage1StartupClaimParams;
 pub use model::ThreadMetadata;
 pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;

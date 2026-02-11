@@ -10,6 +10,7 @@ use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -44,7 +45,6 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
-static RUSTLS_PROVIDER_INSTALLED: OnceLock<()> = OnceLock::new();
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -218,12 +218,6 @@ async fn connect_websocket(
     Ok((stream, reasoning_included, models_etag))
 }
 
-fn ensure_rustls_crypto_provider() {
-    let _ = RUSTLS_PROVIDER_INSTALLED.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
 fn websocket_config() -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();
     extensions.permessage_deflate = Some(DeflateConfig::default());
@@ -349,6 +343,7 @@ async fn run_websocket_response_stream(
             )));
         }
     };
+    trace!("websocket request: {request_text}");
 
     let request_start = Instant::now();
     let result = ws_stream
