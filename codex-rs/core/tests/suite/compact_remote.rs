@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
@@ -42,6 +43,8 @@ fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64
 }
 
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const PRETURN_CONTEXT_DIFF_CWD_MARKER: &str = "PRETURN_CONTEXT_DIFF_CWD";
+const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
@@ -66,14 +69,33 @@ fn normalize_shape_text(text: &str) -> String {
     if text.starts_with("# AGENTS.md instructions for ") {
         return "<AGENTS_MD>".to_string();
     }
-    if text.starts_with("<environment_context>") {
-        return "<ENVIRONMENT_CONTEXT>".to_string();
+    if let Some(env_context) = normalize_environment_context_for_shape(text) {
+        return env_context;
     }
     if text.contains("<permissions instructions>") {
         return "<PERMISSIONS_INSTRUCTIONS>".to_string();
     }
 
     text.replace('\n', "\\n")
+}
+
+fn normalize_environment_context_for_shape(text: &str) -> Option<String> {
+    if !text.starts_with("<environment_context>") {
+        return None;
+    }
+    let cwd = text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let cwd = trimmed.strip_prefix("<cwd>")?.strip_suffix("</cwd>")?;
+        Some(if cwd.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER) {
+            PRETURN_CONTEXT_DIFF_CWD_MARKER.to_string()
+        } else {
+            "<CWD>".to_string()
+        })
+    });
+    Some(match cwd {
+        Some(cwd) => format!("<ENVIRONMENT_CONTEXT:cwd={cwd}>"),
+        None => "<ENVIRONMENT_CONTEXT:cwd=<NONE>>".to_string(),
+    })
 }
 
 fn message_text_for_shape(item: &Value) -> String {
@@ -178,12 +200,16 @@ fn request_input_shape(request: &responses::ResponsesRequest) -> String {
         .join("\n")
 }
 
-fn sectioned_request_shapes(sections: &[(&str, &responses::ResponsesRequest)]) -> String {
-    sections
+fn sectioned_request_shapes(
+    scenario: &str,
+    sections: &[(&str, &responses::ResponsesRequest)],
+) -> String {
+    let sections = sections
         .iter()
         .map(|(title, request)| format!("## {title}\n{}", request_input_shape(request)))
         .collect::<Vec<String>>()
-        .join("\n\n")
+        .join("\n\n");
+    format!("Scenario: {scenario}\n\n{sections}")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1515,6 +1541,21 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     .await;
 
     for user in ["USER_ONE", "USER_TWO", "USER_THREE"] {
+        if user == "USER_THREE" {
+            codex
+                .submit(Op::OverrideTurnContext {
+                    cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+                .await?;
+        }
         codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text {
@@ -1540,10 +1581,17 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_including_incoming_shapes",
-        sectioned_request_shapes(&[
-            ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Layout", &requests[2]),
-        ])
+        sectioned_request_shapes(
+            "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message on main.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &requests[2]),
+            ]
+        )
+    );
+    assert!(
+        compact_shape.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER),
+        "expected remote compact request to include pre-turn context diff"
     );
     assert!(
         !compact_shape.contains("USER_THREE"),
@@ -1640,10 +1688,13 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     let include_attempt_shape = request_input_shape(&include_attempt_request);
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
-        sectioned_request_shapes(&[(
-            "Remote Compaction Request (Incoming User Excluded on main)",
-            &include_attempt_request
-        ),])
+        sectioned_request_shapes(
+            "Remote pre-turn auto-compaction parse failure on main: compaction request excludes the incoming user message and the turn stops.",
+            &[(
+                "Remote Compaction Request (Incoming User Excluded on main)",
+                &include_attempt_request
+            ),]
+        )
     );
     assert!(
         !include_attempt_shape.contains("USER_TWO"),
@@ -1721,10 +1772,13 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_shapes",
-        sectioned_request_shapes(&[
-            ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Layout", &requests[1]),
-        ])
+        sectioned_request_shapes(
+            "Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &requests[1]),
+            ]
+        )
     );
     assert!(
         compact_shape.contains("function_call_output"),
@@ -1787,10 +1841,13 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     let follow_up_shape = request_input_shape(&follow_up_request);
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
-        sectioned_request_shapes(&[
-            ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Layout", &follow_up_request),
-        ])
+        sectioned_request_shapes(
+            "Remote manual /compact with no prior user turn still issues a compact request on main; follow-up turn carries canonical context and new user message.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &follow_up_request),
+            ]
+        )
     );
     assert!(
         !follow_up_shape.contains("<SUMMARY:REMOTE_MANUAL_EMPTY_SUMMARY>"),
@@ -1873,10 +1930,13 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
     let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "remote_manual_compact_with_history_shapes",
-        sectioned_request_shapes(&[
-            ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Layout", &requests[1]),
-        ])
+        sectioned_request_shapes(
+            "Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &requests[1]),
+            ]
+        )
     );
     assert!(
         compact_shape.contains("USER_ONE"),
