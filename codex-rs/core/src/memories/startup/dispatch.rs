@@ -83,6 +83,7 @@ pub(super) async fn run_global_memory_consolidation(
         }
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
