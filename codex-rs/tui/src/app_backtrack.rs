@@ -12,8 +12,8 @@
 //! - The first `Esc` in the main view "primes" the feature and captures a base thread id.
 //! - A subsequent `Esc` opens the transcript overlay (`Ctrl+T`) and highlights a user message.
 //! - `Enter` requests a rollback from core and records a `pending_rollback` guard.
-//! - On `EventMsg::ThreadRolledBack`, we trim local transcript state and schedule a one-time
-//!   scrollback refresh.
+//! - On `EventMsg::ThreadRolledBack`, we either finish an in-flight backtrack request or queue a
+//!   rollback trim so it runs in event order with transcript inserts.
 //!
 //! The transcript overlay (`Ctrl+T`) renders committed transcript cells plus a render-only live
 //! tail derived from the current in-flight `ChatWidget.active_cell`.
@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::app_event::AppEvent;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -456,13 +457,10 @@ impl App {
             EventMsg::ThreadRolledBack(rollback) => {
                 if self.backtrack.pending_rollback.is_some() {
                     self.finish_pending_backtrack();
-                } else if trim_transcript_cells_drop_last_n_user_turns(
-                    &mut self.transcript_cells,
-                    rollback.num_turns,
-                ) {
-                    // This rollback was not initiated by the current backtrack flow.
-                    // Refresh visible chat history so removed messages disappear.
-                    self.backtrack_render_pending = true;
+                } else {
+                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
+                        num_turns: rollback.num_turns,
+                    });
                 }
             }
             EventMsg::Error(ErrorEvent {

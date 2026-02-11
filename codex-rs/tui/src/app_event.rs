@@ -126,12 +126,12 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
-    /// Apply replayed rollback semantics to local transcript cells.
+    /// Apply rollback semantics to local transcript cells.
     ///
-    /// This is emitted by `ChatWidget` for replay-only rollback markers so
-    /// trimming occurs in AppEvent queue order relative to inserted history
-    /// cells.
-    ApplyReplayedThreadRollback {
+    /// This is emitted when rollback was not initiated by the current
+    /// backtrack flow so trimming occurs in AppEvent queue order relative to
+    /// inserted history cells.
+    ApplyThreadRollback {
         num_turns: u32,
     },
 

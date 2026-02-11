@@ -1702,7 +1702,7 @@ async fn replayed_thread_rollback_emits_ordered_app_event() {
 
     let mut saw = false;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::ApplyReplayedThreadRollback { num_turns } = event {
+        if let AppEvent::ApplyThreadRollback { num_turns } = event {
             saw = true;
             assert_eq!(num_turns, 2);
             break;

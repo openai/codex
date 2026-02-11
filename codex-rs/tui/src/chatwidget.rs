@@ -4043,10 +4043,9 @@ impl ChatWidget {
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
-                    self.app_event_tx
-                        .send(AppEvent::ApplyReplayedThreadRollback {
-                            num_turns: rollback.num_turns,
-                        });
+                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
+                        num_turns: rollback.num_turns,
+                    });
                 }
             }
             EventMsg::RawResponseItem(_)
