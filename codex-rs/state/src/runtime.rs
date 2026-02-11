@@ -108,6 +108,34 @@ WHERE id = 1
         crate::BackfillState::try_from_row(&row)
     }
 
+    /// Attempt to claim ownership of rollout metadata backfill.
+    ///
+    /// Returns `true` when this runtime claimed the backfill worker slot.
+    /// Returns `false` if backfill is already complete or currently owned by a
+    /// non-expired worker.
+    pub async fn try_claim_backfill(&self, lease_seconds: i64) -> anyhow::Result<bool> {
+        self.ensure_backfill_state_row().await?;
+        let now = Utc::now().timestamp();
+        let lease_cutoff = now.saturating_sub(lease_seconds.max(0));
+        let result = sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+  AND status != ?
+  AND (status != ? OR updated_at <= ?)
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(now)
+        .bind(crate::BackfillStatus::Complete.as_str())
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(lease_cutoff)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Mark rollout metadata backfill as running.
     pub async fn mark_backfill_running(&self) -> anyhow::Result<()> {
         self.ensure_backfill_state_row().await?;
@@ -1024,6 +1052,58 @@ mod tests {
             Some("sessions/2026/01/28/rollout-b.jsonl".to_string())
         );
         assert!(completed.last_success_at.is_some());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn backfill_claim_is_singleton_until_stale_and_blocked_when_complete() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let claimed = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("initial backfill claim");
+        assert_eq!(claimed, true);
+
+        let duplicate_claim = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("duplicate backfill claim");
+        assert_eq!(duplicate_claim, false);
+
+        let stale_updated_at = Utc::now().timestamp().saturating_sub(10_000);
+        sqlx::query(
+            r#"
+UPDATE backfill_state
+SET status = ?, updated_at = ?
+WHERE id = 1
+            "#,
+        )
+        .bind(crate::BackfillStatus::Running.as_str())
+        .bind(stale_updated_at)
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("force stale backfill lease");
+
+        let stale_claim = runtime
+            .try_claim_backfill(10)
+            .await
+            .expect("stale backfill claim");
+        assert_eq!(stale_claim, true);
+
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .expect("mark complete");
+        let claim_after_complete = runtime
+            .try_claim_backfill(3600)
+            .await
+            .expect("claim after complete");
+        assert_eq!(claim_after_complete, false);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -1,5 +1,5 @@
 [package]
-name = "codex-command"
+name = "codex-shell-command"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
