@@ -4,7 +4,7 @@ pub(crate) fn default_empty_table() -> TomlValue {
     TomlValue::Table(Default::default())
 }
 
-pub(crate) fn build_cli_overrides_layer(cli_overrides: &[(String, TomlValue)]) -> TomlValue {
+pub fn build_cli_overrides_layer(cli_overrides: &[(String, TomlValue)]) -> TomlValue {
     let mut root = default_empty_table();
     for (path, value) in cli_overrides {
         apply_toml_override(&mut root, path, value.clone());

@@ -34,7 +34,7 @@ pub(super) fn record_origins(
     }
 }
 
-pub(super) fn version_for_toml(value: &TomlValue) -> String {
+pub fn version_for_toml(value: &TomlValue) -> String {
     let json = serde_json::to_value(value).unwrap_or(JsonValue::Null);
     let canonical = canonical_json(&json);
     let serialized = serde_json::to_vec(&canonical).unwrap_or_default();
