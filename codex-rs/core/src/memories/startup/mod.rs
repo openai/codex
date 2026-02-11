@@ -1,13 +1,12 @@
 mod dispatch;
 mod extract;
-mod watch;
+mod phase2;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
-use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -15,7 +14,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
@@ -80,10 +78,6 @@ pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> CodexResult<()> {
-    if let Err(err) = migrate_legacy_user_memory_root_if_needed(&config.codex_home).await {
-        warn!("failed migrating legacy shared memory root: {err}");
-    }
-
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable for memories startup pipeline; skipping");
         return Ok(());
@@ -91,11 +85,7 @@ pub(super) async fn run_memories_startup_pipeline(
 
     let allowed_sources = INTERACTIVE_SESSION_SOURCES
         .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
+        .map(ToString::to_string)
         .collect::<Vec<_>>();
 
     let claimed_candidates = match state_db
@@ -137,6 +127,7 @@ pub(super) async fn run_memories_startup_pipeline(
                     let stage_one_output = match extract::extract_stage_one_output(
                         session.as_ref(),
                         &thread.rollout_path,
+                        &thread.cwd,
                         &stage_one_context,
                     )
                     .await
@@ -160,6 +151,15 @@ pub(super) async fn run_memories_startup_pipeline(
                     let Some(state_db) = session.services.state_db.as_deref() else {
                         return false;
                     };
+
+                    if stage_one_output.raw_memory.is_empty()
+                        && stage_one_output.rollout_summary.is_empty()
+                    {
+                        return state_db
+                            .mark_stage1_job_succeeded_no_output(thread.id, &claim.ownership_token)
+                            .await
+                            .unwrap_or(false);
+                    }
 
                     state_db
                         .mark_stage1_job_succeeded(
@@ -186,7 +186,8 @@ pub(super) async fn run_memories_startup_pipeline(
         claimed_count, succeeded_count
     );
 
-    let consolidation_job_count = run_consolidation_dispatch(session, config).await;
+    let consolidation_job_count =
+        usize::from(dispatch::run_global_memory_consolidation(session, config).await);
     info!(
         "memory consolidation dispatch complete: {} job(s) scheduled",
         consolidation_job_count
@@ -195,6 +196,20 @@ pub(super) async fn run_memories_startup_pipeline(
     Ok(())
 }
 
-async fn run_consolidation_dispatch(session: &Arc<Session>, config: Arc<Config>) -> usize {
-    usize::from(dispatch::run_global_memory_consolidation(session, config).await)
+#[cfg(test)]
+mod tests {
+    use super::run_memories_startup_pipeline;
+    use crate::codex::make_session_and_context;
+    use crate::config::test_config;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn startup_pipeline_is_noop_when_state_db_is_unavailable() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let config = Arc::new(test_config());
+        run_memories_startup_pipeline(&session, config)
+            .await
+            .expect("startup pipeline should skip cleanly without state db");
+    }
 }

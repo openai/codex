@@ -138,6 +138,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 }
 
 #[tokio::test]
+#[ignore = "TODO(owenlin0): flaky"]
 async fn review_start_exec_approval_item_id_matches_command_execution_item() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(

@@ -1,15 +1,12 @@
-use super::rollout::StageOneResponseItemKinds;
 use super::rollout::StageOneRolloutFilter;
 use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use super::storage::wipe_consolidation_outputs;
-use crate::memories::layout::ensure_layout;
-use crate::memories::layout::memory_root;
-use crate::memories::layout::migrate_legacy_user_memory_root_if_needed;
-use crate::memories::layout::raw_memories_file;
-use crate::memories::layout::rollout_summaries_dir;
+use crate::memories::ensure_layout;
+use crate::memories::memory_root;
+use crate::memories::raw_memories_file;
+use crate::memories::rollout_summaries_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -19,6 +16,7 @@ use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
@@ -28,49 +26,59 @@ fn memory_root_uses_shared_global_path() {
     assert_eq!(memory_root(&codex_home), codex_home.join("memories"));
 }
 
-#[tokio::test]
-async fn migrate_legacy_user_memory_root_if_needed_copies_contents() {
-    let dir = tempdir().expect("tempdir");
-    let codex_home = dir.path().join("codex");
-    let legacy_root = codex_home.join("memories").join("user").join("memory");
-    tokio::fs::create_dir_all(legacy_root.join("rollout_summaries"))
-        .await
-        .expect("create legacy rollout summaries dir");
-    tokio::fs::write(
-        legacy_root.join("rollout_summaries").join("thread.md"),
-        "summary",
-    )
-    .await
-    .expect("write legacy rollout summary");
-    tokio::fs::write(legacy_root.join("raw_memories.md"), "raw")
-        .await
-        .expect("write legacy raw memories");
-
-    migrate_legacy_user_memory_root_if_needed(&codex_home)
-        .await
-        .expect("migrate legacy memory root");
-
-    let root = memory_root(&codex_home);
-    assert!(root.join("rollout_summaries").join("thread.md").is_file());
-    assert!(root.join("raw_memories.md").is_file());
-}
-
 #[test]
 fn parse_stage_one_output_accepts_fenced_json() {
-    let raw = "```json\n{\"raw_memory\":\"abc\",\"rollout_summary\":\"short\",\"rollout_slug\":\"slug\"}\n```";
+    let raw = "```json\n{\"raw_memory\":\"abc\",\"rollout_summary\":\"short\"}\n```";
     let parsed = parse_stage_one_output(raw).expect("parsed");
     assert!(parsed.raw_memory.contains("abc"));
     assert_eq!(parsed.rollout_summary, "short");
-    assert_eq!(parsed.rollout_slug, Some("slug".to_string()));
 }
 
 #[test]
-fn parse_stage_one_output_accepts_legacy_keys() {
+fn parse_stage_one_output_rejects_legacy_keys() {
     let raw = r#"{"rawMemory":"abc","summary":"short"}"#;
+    assert!(parse_stage_one_output(raw).is_err());
+}
+
+#[test]
+fn parse_stage_one_output_accepts_empty_pair_for_skip() {
+    let raw = r#"{"raw_memory":"","rollout_summary":""}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert_eq!(parsed.raw_memory, "");
+    assert_eq!(parsed.rollout_summary, "");
+}
+
+#[test]
+fn parse_stage_one_output_accepts_optional_rollout_slug() {
+    let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
     let parsed = parse_stage_one_output(raw).expect("parsed");
     assert!(parsed.raw_memory.contains("abc"));
     assert_eq!(parsed.rollout_summary, "short");
-    assert_eq!(parsed.rollout_slug, None);
+    assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
+}
+
+#[test]
+fn stage_one_output_schema_requires_all_declared_properties() {
+    let schema = super::stage_one::stage_one_output_schema();
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("properties object");
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("required array");
+
+    let mut property_keys = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    property_keys.sort_unstable();
+
+    let mut required_keys = required
+        .iter()
+        .map(|key| key.as_str().expect("required key string"))
+        .collect::<Vec<_>>();
+    required_keys.sort_unstable();
+
+    assert_eq!(required_keys, property_keys);
 }
 
 #[test]
@@ -126,7 +134,7 @@ fn serialize_filtered_rollout_response_items_supports_response_only_filter() {
         StageOneRolloutFilter {
             keep_response_items: true,
             keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::all(),
+            response_item_filter: crate::rollout::policy::should_persist_response_item,
             max_items: None,
         },
     )
@@ -162,7 +170,7 @@ fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
         StageOneRolloutFilter {
             keep_response_items: true,
             keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::messages_only(),
+            response_item_filter: |item| matches!(item, ResponseItem::Message { .. }),
             max_items: None,
         },
     )
@@ -194,7 +202,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         thread_id: ThreadId::try_from(keep_id.clone()).expect("thread id"),
         source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
         raw_memory: "raw memory".to_string(),
-        summary: "short summary".to_string(),
+        rollout_summary: "short summary".to_string(),
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
@@ -213,33 +221,4 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
-}
-
-#[tokio::test]
-async fn wipe_consolidation_outputs_removes_registry_skills_and_legacy_file() {
-    let dir = tempdir().expect("tempdir");
-    let root = dir.path().join("memory");
-    ensure_layout(&root).await.expect("ensure layout");
-
-    let memory_registry = root.join("MEMORY.md");
-    let legacy_consolidated = root.join("consolidated.md");
-    let skills_dir = root.join("skills").join("example");
-
-    tokio::fs::create_dir_all(&skills_dir)
-        .await
-        .expect("create skills dir");
-    tokio::fs::write(&memory_registry, "memory")
-        .await
-        .expect("write memory registry");
-    tokio::fs::write(&legacy_consolidated, "legacy")
-        .await
-        .expect("write legacy consolidated");
-
-    wipe_consolidation_outputs(&root)
-        .await
-        .expect("wipe consolidation outputs");
-
-    assert!(!memory_registry.exists());
-    assert!(!legacy_consolidated.exists());
-    assert!(!root.join("skills").exists());
 }

@@ -1,6 +1,10 @@
 use super::*;
-use crate::Stage1Output;
+use crate::model::Phase2JobClaimOutcome;
+use crate::model::Stage1JobClaim;
+use crate::model::Stage1JobClaimOutcome;
+use crate::model::Stage1Output;
 use crate::model::Stage1OutputRow;
+use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
 use chrono::Duration;
 use sqlx::Executor;
@@ -117,7 +121,7 @@ FROM threads
     ) -> anyhow::Result<Option<Stage1Output>> {
         let row = sqlx::query(
             r#"
-SELECT thread_id, source_updated_at, raw_memory, summary, generated_at
+SELECT thread_id, source_updated_at, raw_memory, rollout_summary, generated_at
 FROM stage1_outputs
 WHERE thread_id = ?
             "#,
@@ -140,9 +144,9 @@ WHERE thread_id = ?
 
         let rows = sqlx::query(
             r#"
-SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.summary, so.generated_at
+SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
 FROM stage1_outputs AS so
-JOIN threads AS t ON t.id = so.thread_id
+WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
             "#,
@@ -171,7 +175,7 @@ LIMIT ?
         let thread_id = thread_id.to_string();
         let worker_id = worker_id.to_string();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let existing_output = sqlx::query(
             r#"
@@ -190,10 +194,9 @@ WHERE thread_id = ?
                 return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
             }
         }
-
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining
+SELECT last_success_watermark
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -202,56 +205,17 @@ WHERE kind = ? AND job_key = ?
         .bind(thread_id.as_str())
         .fetch_optional(&mut *tx)
         .await?;
-
-        let should_insert = if let Some(existing_job) = existing_job {
-            let status: String = existing_job.try_get("status")?;
-            let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
-            let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
-            let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
-
-            if retry_remaining <= 0 {
+        if let Some(existing_job) = existing_job {
+            let last_success_watermark =
+                existing_job.try_get::<Option<i64>, _>("last_success_watermark")?;
+            if last_success_watermark.is_some_and(|watermark| watermark >= source_updated_at) {
                 tx.commit().await?;
-                return Ok(Stage1JobClaimOutcome::SkippedRetryExhausted);
+                return Ok(Stage1JobClaimOutcome::SkippedUpToDate);
             }
-            if retry_at.is_some_and(|retry_at| retry_at > now) {
-                tx.commit().await?;
-                return Ok(Stage1JobClaimOutcome::SkippedRetryBackoff);
-            }
-            if status == "running"
-                && existing_lease_until.is_some_and(|lease_until| lease_until > now)
-            {
-                tx.commit().await?;
-                return Ok(Stage1JobClaimOutcome::SkippedRunning);
-            }
-
-            false
-        } else {
-            true
-        };
-
-        let fresh_running_jobs = sqlx::query(
-            r#"
-SELECT COUNT(*) AS count
-FROM jobs
-WHERE kind = ?
-  AND status = 'running'
-  AND lease_until IS NOT NULL
-  AND lease_until > ?
-            "#,
-        )
-        .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(now)
-        .fetch_one(&mut *tx)
-        .await?
-        .try_get::<i64, _>("count")?;
-        if fresh_running_jobs >= max_running_jobs {
-            tx.commit().await?;
-            return Ok(Stage1JobClaimOutcome::SkippedRunning);
         }
 
-        if should_insert {
-            sqlx::query(
-                r#"
+        let rows_affected = sqlx::query(
+            r#"
 INSERT INTO jobs (
     kind,
     job_key,
@@ -266,61 +230,96 @@ INSERT INTO jobs (
     last_error,
     input_watermark,
     last_success_watermark
-) VALUES (?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, NULL)
-                "#,
-            )
-            .bind(JOB_KIND_MEMORY_STAGE1)
-            .bind(thread_id.as_str())
-            .bind(worker_id.as_str())
-            .bind(ownership_token.as_str())
-            .bind(now)
-            .bind(lease_until)
-            .bind(DEFAULT_RETRY_REMAINING)
-            .bind(source_updated_at)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Ok(Stage1JobClaimOutcome::Claimed { ownership_token });
-        }
-
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE jobs
-SET
+)
+SELECT ?, ?, 'running', ?, ?, ?, NULL, ?, NULL, ?, NULL, ?, NULL
+WHERE (
+    SELECT COUNT(*)
+    FROM jobs
+    WHERE kind = ?
+      AND status = 'running'
+      AND lease_until IS NOT NULL
+      AND lease_until > ?
+) < ?
+ON CONFLICT(kind, job_key) DO UPDATE SET
     status = 'running',
-    worker_id = ?,
-    ownership_token = ?,
-    started_at = ?,
+    worker_id = excluded.worker_id,
+    ownership_token = excluded.ownership_token,
+    started_at = excluded.started_at,
     finished_at = NULL,
-    lease_until = ?,
+    lease_until = excluded.lease_until,
     retry_at = NULL,
     last_error = NULL,
-    input_watermark = ?
-WHERE kind = ? AND job_key = ?
-  AND (status != 'running' OR lease_until IS NULL OR lease_until <= ?)
-  AND (retry_at IS NULL OR retry_at <= ?)
-  AND retry_remaining > 0
+    input_watermark = excluded.input_watermark
+WHERE
+    (jobs.status != 'running' OR jobs.lease_until IS NULL OR jobs.lease_until <= excluded.started_at)
+    AND (jobs.retry_at IS NULL OR jobs.retry_at <= excluded.started_at)
+    AND jobs.retry_remaining > 0
+    AND (
+        SELECT COUNT(*)
+        FROM jobs AS running_jobs
+        WHERE running_jobs.kind = excluded.kind
+          AND running_jobs.status = 'running'
+          AND running_jobs.lease_until IS NOT NULL
+          AND running_jobs.lease_until > excluded.started_at
+          AND running_jobs.job_key != excluded.job_key
+    ) < ?
             "#,
         )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
         .bind(worker_id.as_str())
         .bind(ownership_token.as_str())
         .bind(now)
         .bind(lease_until)
+        .bind(DEFAULT_RETRY_REMAINING)
         .bind(source_updated_at)
         .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(thread_id.as_str())
         .bind(now)
-        .bind(now)
+        .bind(max_running_jobs)
+        .bind(max_running_jobs)
         .execute(&mut *tx)
         .await?
         .rows_affected();
 
-        tx.commit().await?;
-        if rows_affected == 0 {
-            Ok(Stage1JobClaimOutcome::SkippedRunning)
-        } else {
-            Ok(Stage1JobClaimOutcome::Claimed { ownership_token })
+        if rows_affected > 0 {
+            tx.commit().await?;
+            return Ok(Stage1JobClaimOutcome::Claimed { ownership_token });
         }
+
+        let existing_job = sqlx::query(
+            r#"
+SELECT status, lease_until, retry_at, retry_remaining
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        if let Some(existing_job) = existing_job {
+            let status: String = existing_job.try_get("status")?;
+            let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
+            let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
+            let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
+
+            if retry_remaining <= 0 {
+                return Ok(Stage1JobClaimOutcome::SkippedRetryExhausted);
+            }
+            if retry_at.is_some_and(|retry_at| retry_at > now) {
+                return Ok(Stage1JobClaimOutcome::SkippedRetryBackoff);
+            }
+            if status == "running"
+                && existing_lease_until.is_some_and(|lease_until| lease_until > now)
+            {
+                return Ok(Stage1JobClaimOutcome::SkippedRunning);
+            }
+        }
+
+        Ok(Stage1JobClaimOutcome::SkippedRunning)
     }
 
     pub async fn mark_stage1_job_succeeded(
@@ -329,7 +328,7 @@ WHERE kind = ? AND job_key = ?
         ownership_token: &str,
         source_updated_at: i64,
         raw_memory: &str,
-        summary: &str,
+        rollout_summary: &str,
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
@@ -367,13 +366,13 @@ INSERT INTO stage1_outputs (
     thread_id,
     source_updated_at,
     raw_memory,
-    summary,
+    rollout_summary,
     generated_at
 ) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     source_updated_at = excluded.source_updated_at,
     raw_memory = excluded.raw_memory,
-    summary = excluded.summary,
+    rollout_summary = excluded.rollout_summary,
     generated_at = excluded.generated_at
 WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
             "#,
@@ -381,8 +380,73 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         .bind(thread_id.as_str())
         .bind(source_updated_at)
         .bind(raw_memory)
-        .bind(summary)
+        .bind(rollout_summary)
         .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        enqueue_global_consolidation_with_executor(&mut *tx, source_updated_at).await?;
+
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn mark_stage1_job_succeeded_no_output(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let thread_id = thread_id.to_string();
+
+        let mut tx = self.pool.begin().await?;
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE jobs
+SET
+    status = 'done',
+    finished_at = ?,
+    lease_until = NULL,
+    last_error = NULL,
+    last_success_watermark = input_watermark
+WHERE kind = ? AND job_key = ?
+  AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            tx.commit().await?;
+            return Ok(false);
+        }
+
+        let source_updated_at = sqlx::query(
+            r#"
+SELECT input_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ? AND ownership_token = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .bind(ownership_token)
+        .fetch_one(&mut *tx)
+        .await?
+        .try_get::<i64, _>("input_watermark")?;
+
+        sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
         .execute(&mut *tx)
         .await?;
 
@@ -445,7 +509,7 @@ WHERE kind = ? AND job_key = ?
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let existing_job = sqlx::query(
             r#"
@@ -610,6 +674,42 @@ SET
     last_error = ?
 WHERE kind = ? AND job_key = ?
   AND status = 'running' AND ownership_token = ?
+            "#,
+        )
+        .bind(now)
+        .bind(retry_at)
+        .bind(failure_reason)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(ownership_token)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
+    pub async fn mark_global_phase2_job_failed_if_unowned(
+        &self,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let retry_at = now.saturating_add(retry_delay_seconds.max(0));
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE jobs
+SET
+    status = 'error',
+    finished_at = ?,
+    lease_until = NULL,
+    retry_at = ?,
+    retry_remaining = retry_remaining - 1,
+    last_error = ?
+WHERE kind = ? AND job_key = ?
+  AND status = 'running'
+  AND (ownership_token = ? OR ownership_token IS NULL)
             "#,
         )
         .bind(now)

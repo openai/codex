@@ -278,9 +278,10 @@ pub async fn load_config_layers_state(
         ));
     }
     if let Some(config) = managed_config_from_mdm {
-        layers.push(ConfigLayerEntry::new(
+        layers.push(ConfigLayerEntry::new_with_raw_toml(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
-            config,
+            config.managed_config,
+            config.raw_toml,
         ));
     }
 
@@ -485,7 +486,12 @@ async fn load_requirements_from_legacy_scheme(
     } = loaded_config_layers;
 
     for (source, config) in managed_config_from_mdm
-        .map(|config| (RequirementSource::LegacyManagedConfigTomlFromMdm, config))
+        .map(|config| {
+            (
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
+                config.managed_config,
+            )
+        })
         .into_iter()
         .chain(managed_config.map(|c| {
             (

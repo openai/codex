@@ -264,6 +264,7 @@ async fn returns_empty_when_all_layers_missing() {
                     .expect("resolve user config.toml path")
             },
             config: TomlValue::Table(toml::map::Map::new()),
+            raw_toml: None,
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
         },
@@ -325,18 +326,17 @@ flag = true
 "#,
     )
     .expect("write managed config");
+    let raw_managed_preferences = r#"
+# managed profile
+[nested]
+value = "managed"
+flag = false
+"#;
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         managed_preferences_base64: Some(
-            base64::prelude::BASE64_STANDARD.encode(
-                r#"
-[nested]
-value = "managed"
-flag = false
-"#
-                .as_bytes(),
-            ),
+            base64::prelude::BASE64_STANDARD.encode(raw_managed_preferences.as_bytes()),
         ),
         macos_managed_config_requirements_base64: None,
     };
@@ -361,6 +361,19 @@ flag = false
         Some(&TomlValue::String("managed".to_string()))
     );
     assert_eq!(nested.get("flag"), Some(&TomlValue::Boolean(false)));
+    let mdm_layer = state
+        .layers_high_to_low()
+        .into_iter()
+        .find(|layer| {
+            matches!(
+                layer.name,
+                super::ConfigLayerSource::LegacyManagedConfigTomlFromMdm
+            )
+        })
+        .expect("mdm layer");
+    let raw = mdm_layer.raw_toml().expect("preserved mdm toml");
+    assert!(raw.contains("# managed profile"));
+    assert!(raw.contains("value = \"managed\""));
 }
 
 #[cfg(target_os = "macos")]
@@ -862,6 +875,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
                 dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
             },
             config: TomlValue::Table(toml::map::Map::new()),
+            raw_toml: None,
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
             disabled_reason: None,
         }],
@@ -955,6 +969,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
                 dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_codex)?,
             },
             config: child_config.clone(),
+            raw_toml: None,
             version: version_for_toml(&child_config),
             disabled_reason: None,
         }],

@@ -1,13 +1,13 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
@@ -237,7 +237,11 @@ pub async fn run_main(
                 false,
                 config.cli_auth_credentials_store_mode,
             );
-            cloud_requirements_loader(auth_manager, config.chatgpt_base_url)
+            cloud_requirements_loader(
+                auth_manager,
+                config.chatgpt_base_url,
+                config.codex_home.clone(),
+            )
         }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud requirements");

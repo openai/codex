@@ -345,7 +345,9 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 }
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
-    if let Some(commands) = parse_shell_lc_plain_commands(command) {
+    if let Some(commands) = parse_shell_lc_plain_commands(command)
+        && !commands.is_empty()
+    {
         return (commands, false);
     }
 
@@ -814,6 +816,24 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
+    #[test]
+    fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
+        let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    }
+
+    #[test]
+    fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "  \n\t  ".to_string(),
+        ];
+
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    }
+
     #[tokio::test]
     async fn evaluates_heredoc_script_against_prefix_rules() {
         let policy_src = r#"prefix_rule(pattern=["python3"], decision="allow")"#;
@@ -1019,6 +1039,58 @@ prefix_rule(
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_bash_lc_script_falls_back_to_original_command() {
+        let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn whitespace_bash_lc_script_falls_back_to_original_command() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "  \n\t  ".to_string(),
+        ];
+
+        let manager = ExecPolicyManager::default();
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
             }
         );
     }
