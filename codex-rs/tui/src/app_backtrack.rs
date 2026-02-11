@@ -548,6 +548,13 @@ impl App {
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message)
     }
 
+    /// Keep transcript-related UI state aligned after `transcript_cells` was trimmed.
+    ///
+    /// This does three things:
+    /// 1. If transcript overlay is open, replace its committed cells so removed turns disappear.
+    /// 2. If backtrack preview is active, clamp/recompute the highlighted user selection.
+    /// 3. Drop deferred transcript lines buffered while overlay was open to avoid flushing lines
+    ///    for cells that were just removed by the trim.
     fn sync_overlay_after_transcript_trim(&mut self) {
         if let Some(Overlay::Transcript(t)) = &mut self.overlay {
             t.replace_cells(self.transcript_cells.clone());
@@ -565,8 +572,8 @@ impl App {
             };
             self.apply_backtrack_selection_internal(next_selection);
         }
-        // While an overlay is open, new history cells are buffered here before flush on close.
-        // After a trim, old buffered lines may no longer exist in transcript state.
+        // While overlay is open, we buffer rendered history lines and flush them on close.
+        // If rollback trimmed cells meanwhile, those buffered lines can reference removed turns.
         self.deferred_history_lines.clear();
     }
 }
