@@ -39,7 +39,7 @@ struct FileWatcherInner {
     watched_paths: HashMap<PathBuf, RecursiveMode>,
 }
 
-const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(1);
+const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Coalesces bursts of paths and emits at most once per interval.
 struct ThrottledPaths {

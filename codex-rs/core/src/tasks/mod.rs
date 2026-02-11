@@ -140,6 +140,7 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
+                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -158,7 +159,7 @@ impl Session {
                     // Set previous model regardless of completion or interruption for model-switch handling.
                     session_ctx
                         .clone_session()
-                        .set_previous_model(Some(ctx_for_finish.model_info.slug.clone()))
+                        .set_previous_model(Some(model_slug))
                         .await;
                     done_clone.notify_waiters();
                 }
@@ -219,7 +220,10 @@ impl Session {
             self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
                 .await;
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_context.sub_id.clone(),
+            last_agent_message,
+        });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
@@ -299,7 +303,10 @@ impl Session {
             self.flush_rollout().await;
         }
 
-        let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(task.turn_context.sub_id.clone()),
+            reason,
+        });
         self.send_event(task.turn_context.as_ref(), event).await;
     }
 }

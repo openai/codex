@@ -20,10 +20,10 @@ codex-cloud-tasks-client = { path = "../cloud-tasks-client", features = [
     "mock",
     "online",
 ] }
-codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
 codex-login = { path = "../login" }
 codex-tui = { path = "../tui" }
+codex-utils-cli = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 ratatui = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
