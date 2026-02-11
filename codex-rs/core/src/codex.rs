@@ -1450,12 +1450,12 @@ impl Session {
 
     async fn previous_model(&self) -> Option<String> {
         let state = self.state.lock().await;
-        state.previous_model.clone()
+        state.previous_model()
     }
 
     pub(crate) async fn set_previous_model(&self, previous_model: Option<String>) {
         let mut state = self.state.lock().await;
-        state.previous_model = previous_model;
+        state.set_previous_model(previous_model);
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(

@@ -59,6 +59,13 @@ impl SessionState {
         self.history.record_items(items, policy);
     }
 
+    pub(crate) fn previous_model(&self) -> Option<String> {
+        self.previous_model.clone()
+    }
+    pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
+        self.previous_model = previous_model;
+    }
+
     pub(crate) fn clone_history(&self) -> ContextManager {
         self.history.clone()
     }
