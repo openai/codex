@@ -31,6 +31,7 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ContextCompactedEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -193,6 +194,370 @@ async fn resumed_initial_messages_render_history() {
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
     );
+}
+
+#[tokio::test]
+async fn resumed_initial_messages_set_last_agent_markdown_for_copy() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hello from user".to_string(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "assistant reply".to_string(),
+            }),
+        ]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "expected replayed assistant message to seed copy state",
+    );
+    assert_eq!(
+        chat.agent_turn_markdowns
+            .iter()
+            .map(|entry| entry.markdown.clone())
+            .collect::<Vec<String>>(),
+        vec!["assistant reply".to_string()],
+        "expected replayed assistant message to seed agent markdown timeline",
+    );
+}
+
+#[tokio::test]
+async fn context_compacted_does_not_replace_last_agent_markdown() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "compacted".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "context compacted marker should not overwrite last agent copy state",
+    );
+}
+
+#[tokio::test]
+async fn turn_complete_without_last_agent_message_preserves_previous_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "empty turn completion should preserve previous copy source",
+    );
+}
+
+#[tokio::test]
+async fn plan_item_completion_replaces_commentary_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let plan_text = "<proposed_plan>\n# Fake plan\n- Step 1\n</proposed_plan>";
+
+    chat.replay_initial_messages(vec![EventMsg::UserMessage(
+        codex_core::protocol::UserMessageEvent {
+            message: "create a fake plan".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        },
+    )]);
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Plan,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "commentary".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "I’ll create a minimal fake plan.".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "plan-item-completed".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::Plan(codex_protocol::items::PlanItem {
+                id: "plan-item-1".to_string(),
+                text: plan_text.to_string(),
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some(plan_text));
+    assert_eq!(
+        chat.agent_turn_markdowns
+            .last()
+            .map(|entry| (entry.ordinal, entry.markdown.as_str())),
+        Some((1, plan_text)),
+        "expected completed plan item to become copy source for the current user turn",
+    );
+}
+
+#[tokio::test]
+async fn turn_complete_with_last_agent_message_seeds_copy_when_agent_message_is_missing() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("assistant fallback".to_string()),
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant fallback")
+    );
+    assert_eq!(
+        chat.agent_turn_markdowns
+            .iter()
+            .map(|entry| entry.markdown.clone())
+            .collect::<Vec<String>>(),
+        vec!["assistant fallback".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn turn_complete_does_not_duplicate_when_agent_message_already_recorded() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: Some("assistant reply".to_string()),
+        }),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "assistant reply");
+}
+
+#[tokio::test]
+async fn turn_started_preserves_previous_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "assistant reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("assistant reply"));
+
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("assistant reply"),
+        "starting a new turn should keep the previous copy source until a newer assistant message arrives",
+    );
+}
+
+#[tokio::test]
+async fn session_configured_resets_copy_state_before_replay() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "old reply".to_string(),
+        }),
+    });
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("old reply"));
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+
+    let conversation_id = ThreadId::new();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "session".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), None);
+    assert!(chat.agent_turn_markdowns.is_empty());
+}
+
+#[tokio::test]
+async fn copy_history_is_bounded_to_recent_agent_messages() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let total_messages = MAX_AGENT_COPY_HISTORY + 5;
+
+    for index in 0..total_messages {
+        chat.handle_codex_event(Event {
+            id: format!("assistant-{index}"),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: format!("reply {index}"),
+            }),
+        });
+    }
+
+    let first_retained_index = total_messages - MAX_AGENT_COPY_HISTORY;
+    let expected_first = format!("reply {first_retained_index}");
+    let expected_last = format!("reply {}", total_messages - 1);
+    assert_eq!(chat.agent_turn_markdowns.len(), MAX_AGENT_COPY_HISTORY);
+    assert_eq!(
+        chat.agent_turn_markdowns
+            .first()
+            .map(|entry| entry.markdown.as_str()),
+        Some(expected_first.as_str())
+    );
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some(expected_last.as_str())
+    );
+}
+
+#[tokio::test]
+async fn truncate_copy_history_keeps_surviving_entry_when_nonempty() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant-1".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "assistant-2".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "second".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "assistant-3".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "third".to_string(),
+        }),
+    });
+
+    chat.truncate_agent_turn_markdowns_to_turn_count(1, Some("second".to_string()));
+
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+    assert_eq!(chat.agent_turn_markdowns[0].ordinal, 1);
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "first");
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("first"));
+}
+
+#[tokio::test]
+async fn truncate_copy_history_uses_transcript_fallback_when_empty() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "assistant-1".to_string(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first".to_string(),
+        }),
+    });
+
+    chat.truncate_agent_turn_markdowns_to_turn_count(0, Some("fallback".to_string()));
+
+    assert_eq!(chat.agent_turn_markdowns.len(), 1);
+    assert_eq!(chat.agent_turn_markdowns[0].ordinal, 0);
+    assert_eq!(chat.agent_turn_markdowns[0].markdown, "fallback");
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some("fallback"));
 }
 
 #[tokio::test]
@@ -888,6 +1253,60 @@ async fn review_restores_context_window_indicator() {
     assert!(!chat.is_review_mode);
 }
 
+#[tokio::test]
+async fn exited_review_mode_explanation_only_updates_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let output = codex_core::protocol::ReviewOutputEvent {
+        findings: Vec::new(),
+        overall_correctness: "correct".to_string(),
+        overall_explanation: "Review explanation body".to_string(),
+        overall_confidence_score: 0.9,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(output),
+        }),
+    });
+
+    assert_eq!(
+        chat.last_agent_markdown.as_deref(),
+        Some("Review explanation body")
+    );
+}
+
+#[tokio::test]
+async fn exited_review_mode_findings_updates_copy_source() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let finding = codex_core::protocol::ReviewFinding {
+        title: "Preserve copy source".to_string(),
+        body: "Review details.".to_string(),
+        confidence_score: 0.8,
+        priority: 2,
+        code_location: codex_core::protocol::ReviewCodeLocation {
+            absolute_file_path: PathBuf::from("tui/src/chatwidget.rs"),
+            line_range: codex_core::protocol::ReviewLineRange { start: 1, end: 2 },
+        },
+    };
+    let output = codex_core::protocol::ReviewOutputEvent {
+        findings: vec![finding],
+        overall_correctness: "incorrect".to_string(),
+        overall_explanation: String::new(),
+        overall_confidence_score: 0.9,
+    };
+    let expected = codex_core::review_format::render_review_output_text(&output);
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(output),
+        }),
+    });
+
+    assert_eq!(chat.last_agent_markdown.as_deref(), Some(expected.as_str()));
+}
+
 /// Receiving a TokenCount event without usage clears the context indicator.
 #[tokio::test]
 async fn token_count_none_resets_context_indicator() {
@@ -1119,6 +1538,10 @@ async fn make_chatwidget_manual(
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
         external_editor_state: ExternalEditorState::Closed,
+        last_agent_markdown: None,
+        agent_turn_markdowns: Vec::new(),
+        completed_turn_count: 0,
+        saw_copy_source_this_turn: false,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -3238,6 +3661,51 @@ async fn slash_clean_submits_background_terminal_cleanup() {
     assert!(
         rendered.contains("Stopping all background terminals."),
         "expected cleanup confirmation, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_copy_is_available_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    chat.dispatch_command(SlashCommand::Copy);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected copy feedback message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No agent response to copy"),
+        "expected copy empty-state message, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("disabled while a task is in progress"),
+        "did not expect task-running disabled message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn alt_c_clears_armed_quit_shortcut_state() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_agent_markdown = Some("assistant reply".to_string());
+    chat.quit_shortcut_expires_at = Some(
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(5))
+            .expect("expiry time"),
+    );
+    chat.quit_shortcut_key = Some(key_hint::ctrl(KeyCode::Char('c')));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
+
+    assert_eq!(chat.quit_shortcut_expires_at, None);
+    assert_eq!(chat.quit_shortcut_key, None);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected copy feedback message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Copied last message to clipboard") || rendered.contains("Copy failed:"),
+        "expected copy result message, got {rendered:?}"
     );
 }
 

@@ -28,6 +28,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::history_cell::AgentMessageCell;
+use crate::history_cell::HistoryCell;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
@@ -508,9 +510,20 @@ impl App {
         })
     }
 
-    /// Trim `transcript_cells` to preserve only content before the selected user message.
+    /// Trim `transcript_cells` to preserve only content before the selected user message,
+    /// then synchronise the copy-history timeline to match.
+    ///
+    /// After truncating, the number of surviving user-message cells gives the
+    /// remaining turn count.  The copy-history entries with a higher ordinal are
+    /// discarded.  Because the copy history is bounded (256 entries) it may no
+    /// longer contain the entry for the last surviving turn; in that case we
+    /// reconstruct it from the transcript cells themselves.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
         trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
+        let remaining_turns = user_count(&self.transcript_cells);
+        let fallback_markdown = last_agent_markdown_from_transcript(&self.transcript_cells);
+        self.chat_widget
+            .truncate_agent_turn_markdowns_to_turn_count(remaining_turns, fallback_markdown);
     }
 }
 
@@ -557,6 +570,56 @@ fn user_positions_iter(
         .enumerate()
         .skip(start)
         .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
+}
+
+/// Reconstruct the raw markdown of the last agent response from transcript cells.
+///
+/// This is the fallback path used when the bounded copy-history no longer
+/// contains the entry for the target turn after a deep rollback.  It walks the
+/// transcript cells backwards to find the last `AgentMessageCell` group
+/// (consecutive cells where subsequent entries are stream-continuations of the
+/// first), then joins their `plain_text()` output.
+///
+/// Info-event cells (e.g. "Context compacted" markers) are skipped because
+/// they are not agent responses.
+///
+/// The reconstruction is lossy: `plain_text()` flattens styled `Span`s back to
+/// plain strings, so any markdown syntax that was consumed during rendering
+/// (bold markers, fenced-code delimiters that became styled regions, etc.) may
+/// differ from the original protocol-level markdown.
+fn last_agent_markdown_from_transcript(
+    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
+) -> Option<String> {
+    let session_start_type = TypeId::of::<SessionInfoCell>();
+    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
+
+    let start = cells
+        .iter()
+        .rposition(|cell| type_of(cell) == session_start_type)
+        .map_or(0, |idx| idx + 1);
+    let visible_cells = &cells[start..];
+
+    let group_start = visible_cells.iter().rposition(|cell| {
+        cell.as_any().downcast_ref::<AgentMessageCell>().is_some() && !cell.is_stream_continuation()
+    })?;
+
+    let mut blocks: Vec<String> = Vec::new();
+    for (offset, cell) in visible_cells[group_start..].iter().enumerate() {
+        let Some(agent_cell) = cell.as_any().downcast_ref::<AgentMessageCell>() else {
+            break;
+        };
+        if offset > 0 && !agent_cell.is_stream_continuation() {
+            break;
+        }
+        blocks.push(agent_cell.plain_text());
+    }
+
+    let merged = blocks
+        .into_iter()
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<String>>()
+        .join("\n");
+    (!merged.is_empty()).then_some(merged)
 }
 
 #[cfg(test)]
@@ -665,5 +728,53 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(between_text, "  between");
+    }
+
+    #[test]
+    fn last_agent_markdown_from_transcript_joins_stream_continuation_group() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "user".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("first-a")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("first-b")], false))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("second-a")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("second-b")], false))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(
+            last_agent_markdown_from_transcript(&cells),
+            Some("second-a\nsecond-b".to_string())
+        );
+    }
+
+    #[test]
+    fn last_agent_markdown_from_transcript_ignores_context_compacted_info_marker() {
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(UserHistoryCell {
+                message: "user".to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("first")], true))
+                as Arc<dyn HistoryCell>,
+            Arc::new(crate::history_cell::new_info_event(
+                "Context compacted".to_string(),
+                None,
+            )) as Arc<dyn HistoryCell>,
+            Arc::new(AgentMessageCell::new(vec![Line::from("second")], true))
+                as Arc<dyn HistoryCell>,
+        ];
+
+        assert_eq!(
+            last_agent_markdown_from_transcript(&cells),
+            Some("second".to_string())
+        );
     }
 }

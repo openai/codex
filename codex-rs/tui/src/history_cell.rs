@@ -361,6 +361,25 @@ impl AgentMessageCell {
             is_first_line,
         }
     }
+
+    /// Flatten the rendered lines back to plain text (no ANSI styles).
+    ///
+    /// Used by the rollback fallback path to reconstruct copy-source markdown
+    /// when the bounded copy-history has already evicted the original entry.
+    /// The result is lossy — markdown syntax consumed during rendering is not
+    /// recovered.
+    pub(crate) fn plain_text(&self) -> String {
+        self.lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
 }
 
 impl HistoryCell for AgentMessageCell {
