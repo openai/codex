@@ -1,9 +1,9 @@
 ---
 source: core/tests/suite/compact.rs
 assertion_line: 2878
-expression: "sectioned_request_shapes(&[(\"Local Compaction Request (Including Incoming User Message)\",\n&requests[1]),])"
+expression: "sectioned_request_shapes(&[(\"Local Compaction Request (Incoming User Excluded on main)\",\n&requests[1]),])"
 ---
-## Local Compaction Request (Including Incoming User Message)
+## Local Compaction Request (Incoming User Excluded on main)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT>

@@ -1641,7 +1641,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
         sectioned_request_shapes(&[(
-            "Remote Compaction Request (Including Incoming User Message)",
+            "Remote Compaction Request (Incoming User Excluded on main)",
             &include_attempt_request
         ),])
     );
