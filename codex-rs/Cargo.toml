@@ -15,7 +15,6 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
-    "common",
     "shell-command",
     "core",
     "hooks",
@@ -50,6 +49,12 @@ members = [
     "utils/readiness",
     "utils/rustls-provider",
     "utils/string",
+    "utils/cli",
+    "utils/elapsed",
+    "utils/sandbox-summary",
+    "utils/approval-presets",
+    "utils/oss",
+    "utils/fuzzy-match",
     "codex-client",
     "codex-api",
     "state",
@@ -82,7 +87,6 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli"}
 codex-client = { path = "codex-client" }
-codex-common = { path = "common" }
 codex-shell-command = { path = "shell-command" }
 codex-core = { path = "core" }
 codex-hooks = { path = "hooks" }
@@ -118,6 +122,12 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-cli = { path = "utils/cli" }
+codex-utils-elapsed = { path = "utils/elapsed" }
+codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
+codex-utils-approval-presets = { path = "utils/approval-presets" }
+codex-utils-oss = { path = "utils/oss" }
+codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 exec_server_test_support = { path = "exec-server/tests/common" }

@@ -149,7 +149,7 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
         .ok_or_else(|| SerdeError::custom("missing sentinel key"))
 }
 
-#[cfg(all(test, feature = "cli"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

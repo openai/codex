@@ -1,4 +1,3 @@
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
@@ -17,7 +16,6 @@ use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -573,7 +571,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let auth_manager =
         match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
@@ -1318,12 +1316,14 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
-    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
-    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let conversation_id = ThreadId::new();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),

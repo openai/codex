@@ -259,6 +259,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
+                            can_append: false,
                         }));
                     }
                     Err(err) => {
@@ -276,6 +277,7 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id.unwrap_or_default(),
                             token_usage: resp.usage.map(Into::into),
+                            can_append: true,
                         }));
                     }
                     Err(err) => {
@@ -290,6 +292,7 @@ pub fn process_responses_event(
             return Ok(Some(ResponseEvent::Completed {
                 response_id: String::new(),
                 token_usage: None,
+                can_append: true,
             }));
         }
         "response.output_item.added" => {
@@ -548,9 +551,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(!can_append);
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -585,7 +590,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_done_emits_completed() {
+    async fn response_done_emits_incremental_completed() {
         let done = json!({
             "type": "response.done",
             "response": {
@@ -610,9 +615,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "");
                 assert!(token_usage.is_some());
+                assert!(*can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -635,9 +642,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "");
                 assert!(token_usage.is_none());
+                assert!(*can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -673,9 +682,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
+                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
+                assert!(!can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }

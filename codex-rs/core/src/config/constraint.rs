@@ -92,6 +92,29 @@ impl<T: Send + Sync> Constrained<T> {
         }
     }
 
+    pub fn allow_only(only_value: T) -> Self
+    where
+        T: Clone + fmt::Debug + PartialEq + 'static,
+    {
+        let allowed_value = only_value.clone();
+        Self {
+            value: only_value,
+            validator: Arc::new(move |candidate| {
+                if candidate == &allowed_value {
+                    Ok(())
+                } else {
+                    Err(ConstraintError::InvalidValue {
+                        field_name: "<unknown>",
+                        candidate: format!("{candidate:?}"),
+                        allowed: format!("[{allowed_value:?}]"),
+                        requirement_source: RequirementSource::Unknown,
+                    })
+                }
+            }),
+            normalizer: None,
+        }
+    }
+
     /// Allow any value of T, using T's Default as the initial value.
     pub fn allow_any_from_default() -> Self
     where
@@ -174,6 +197,20 @@ mod tests {
     fn constrained_allow_any_default_uses_default_value() {
         let constrained = Constrained::<i32>::allow_any_from_default();
         assert_eq!(constrained.value(), 0);
+    }
+
+    #[test]
+    fn constrained_allow_only_rejects_different_values() {
+        let mut constrained = Constrained::allow_only(5);
+        constrained
+            .set(5)
+            .expect("allowed value should be accepted");
+
+        let err = constrained
+            .set(6)
+            .expect_err("different value should be rejected");
+        assert_eq!(err, invalid_value("6", "[5]"));
+        assert_eq!(constrained.value(), 5);
     }
 
     #[test]

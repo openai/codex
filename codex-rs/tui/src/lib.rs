@@ -8,8 +8,6 @@ use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::oss::ensure_oss_provider_ready;
-use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -41,6 +39,8 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_oss::ensure_oss_provider_ready;
+use codex_utils_oss::get_default_model_for_oss_provider;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
@@ -156,7 +156,7 @@ pub async fn run_main(
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     // `oss` model provider.
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let overrides_cli = codex_utils_cli::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         // Parse `-c` overrides from the CLI.
         Ok(v) => v,
@@ -225,7 +225,11 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements = cloud_requirements_loader(
+        cloud_auth_manager,
+        chatgpt_base_url,
+        codex_home.to_path_buf(),
+    );
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -502,6 +506,7 @@ async fn run_ratatui_app(
             cloud_requirements = cloud_requirements_loader(
                 auth_manager.clone(),
                 initial_config.chatgpt_base_url.clone(),
+                initial_config.codex_home.clone(),
             );
         }
 

@@ -5,8 +5,8 @@ use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 
-use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
+use codex_utils_cli::CliConfigOverrides;
 
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;

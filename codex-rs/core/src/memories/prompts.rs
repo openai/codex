@@ -5,7 +5,8 @@ use tracing::warn;
 use super::text::prefix_at_char_boundary;
 use super::text::suffix_at_char_boundary;
 
-const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 1_000_000;
+// TODO(jif) use proper truncation
+const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 100_000;
 
 #[derive(Template)]
 #[template(path = "memories/consolidation.md", escape = "none")]
@@ -17,6 +18,7 @@ struct ConsolidationPromptTemplate<'a> {
 #[template(path = "memories/stage_one_input.md", escape = "none")]
 struct StageOneInputTemplate<'a> {
     rollout_path: &'a str,
+    rollout_cwd: &'a str,
     rollout_contents: &'a str,
 }
 
@@ -42,7 +44,11 @@ pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
 ///
 /// Large rollout payloads are truncated to a bounded byte budget while keeping
 /// both head and tail context.
-pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_contents: &str) -> String {
+pub(super) fn build_stage_one_input_message(
+    rollout_path: &Path,
+    rollout_cwd: &Path,
+    rollout_contents: &str,
+) -> String {
     let (rollout_contents, truncated) = truncate_rollout_for_prompt(rollout_contents);
     if truncated {
         warn!(
@@ -53,16 +59,20 @@ pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_content
     }
 
     let rollout_path = rollout_path.display().to_string();
+    let rollout_cwd = rollout_cwd.display().to_string();
     let template = StageOneInputTemplate {
         rollout_path: &rollout_path,
+        rollout_cwd: &rollout_cwd,
         rollout_contents: &rollout_contents,
     };
+    // TODO(jif) use askama
     match template.render() {
         Ok(prompt) => prompt,
         Err(err) => {
             warn!("failed to render memories stage-one input template: {err}");
             include_str!("../../templates/memories/stage_one_input.md")
                 .replace("{{ rollout_path }}", &rollout_path)
+                .replace("{{ rollout_cwd }}", &rollout_cwd)
                 .replace("{{ rollout_contents }}", &rollout_contents)
         }
     }

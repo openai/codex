@@ -395,21 +395,30 @@ pub async fn read_repair_rollout_path(
         return;
     };
 
+    // Fast path: update an existing metadata row in place, but avoid writes when
+    // read-repair computes no effective change.
+    let mut saw_existing_metadata = false;
     if let Some(thread_id) = thread_id
-        && let Ok(Some(mut metadata)) = ctx.get_thread(thread_id).await
+        && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
-        metadata.rollout_path = rollout_path.to_path_buf();
-        metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+        saw_existing_metadata = true;
+        let mut repaired = metadata.clone();
+        repaired.rollout_path = rollout_path.to_path_buf();
+        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
         match archived_only {
-            Some(true) if metadata.archived_at.is_none() => {
-                metadata.archived_at = Some(metadata.updated_at);
+            Some(true) if repaired.archived_at.is_none() => {
+                repaired.archived_at = Some(repaired.updated_at);
             }
             Some(false) => {
-                metadata.archived_at = None;
+                repaired.archived_at = None;
             }
             Some(true) | None => {}
         }
-        if let Err(err) = ctx.upsert_thread(&metadata).await {
+        if repaired == metadata {
+            return;
+        }
+        record_discrepancy("read_repair_rollout_path", "upsert_needed");
+        if let Err(err) = ctx.upsert_thread(&repaired).await {
             warn!(
                 "state db read-repair upsert failed for {}: {err}",
                 rollout_path.display()
@@ -419,6 +428,11 @@ pub async fn read_repair_rollout_path(
         }
     }
 
+    // Slow path: when the row is missing/unreadable (or direct upsert failed),
+    // rebuild metadata from rollout contents and reconcile it into SQLite.
+    if !saw_existing_metadata {
+        record_discrepancy("read_repair_rollout_path", "upsert_needed");
+    }
     let default_provider = crate::rollout::list::read_session_meta_line(rollout_path)
         .await
         .ok()
