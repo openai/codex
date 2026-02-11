@@ -1597,6 +1597,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
 async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window_model() {
     skip_if_no_network!();
 
+    // Phase 1: configure models and mock responses for large->small model switch.
     let server = MockServer::start().await;
     let large_model = "test-large-context-model";
     let small_model = "test-small-context-model";
@@ -1666,6 +1667,7 @@ async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window
         });
     let test = builder.build(&server).await.unwrap();
 
+    // Phase 2: warm model metadata and seed token usage on the large model.
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
@@ -1701,6 +1703,7 @@ async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window
     })
     .await;
 
+    // Phase 3: run the follow-up turn on the smaller model and validate lifecycle integrity.
     test.codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -1751,6 +1754,7 @@ async fn auto_compact_runs_pre_sampling_when_switching_to_smaller_context_window
         "expected TurnStarted and TurnComplete to use the same follow-up turn id"
     );
 
+    // Phase 4: assert pre-sampling compact request ordering and model selection.
     let mut compact_requests = compact_mock_1.requests();
     compact_requests.extend(compact_mock_2.requests());
     assert!(
@@ -1790,6 +1794,7 @@ async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_c
  {
     skip_if_no_network!();
 
+    // Phase 1: configure models and seed over-limit usage on the large model.
     let server = MockServer::start().await;
     let large_model = "test-large-context-model";
     let small_model = "test-small-context-model";
@@ -1834,6 +1839,7 @@ async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_c
         .list_models(&initial.config, RefreshStrategy::OnlineIfUncached)
         .await;
 
+    // Phase 2: complete the initial large-model turn, then set up compact and follow-up mocks.
     initial
         .codex
         .submit(Op::UserTurn {
@@ -1894,6 +1900,7 @@ async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_c
     )
     .await;
 
+    // Phase 3: resume, submit the smaller-model turn, and validate lifecycle integrity.
     let mut resume_builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
@@ -1956,6 +1963,7 @@ async fn auto_compact_runs_pre_sampling_after_resume_when_switching_to_smaller_c
         "expected TurnStarted and TurnComplete to use the same resumed follow-up turn id"
     );
 
+    // Phase 4: assert pre-sampling compact request ordering and model selection after resume.
     let mut compact_requests = compact_mock_1.requests();
     compact_requests.extend(compact_mock_2.requests());
     assert!(
