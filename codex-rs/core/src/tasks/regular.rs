@@ -8,6 +8,7 @@ use crate::codex::run_turn;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_otel::OtelManager;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::user_input::UserInput;
 use futures::future::BoxFuture;
 use tokio::task::JoinHandle;
@@ -37,13 +38,14 @@ impl RegularTask {
     pub(crate) fn with_startup_prewarm(
         model_client: ModelClient,
         otel_manager: OtelManager,
+        model_info: ModelInfo,
         turn_metadata_header: BoxFuture<'static, Option<String>>,
     ) -> Self {
         let prewarmed_session_task = tokio::spawn(async move {
             let mut client_session = model_client.new_session();
             let turn_metadata_header = turn_metadata_header.await;
             match client_session
-                .prewarm_websocket(&otel_manager, turn_metadata_header.as_deref())
+                .prewarm_websocket(&otel_manager, &model_info, turn_metadata_header.as_deref())
                 .await
             {
                 Ok(()) => Some(client_session),
