@@ -27,7 +27,7 @@ const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.
 const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
 /// Maximum number of recent raw memories retained for global consolidation.
-const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 64;
+const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
 /// Maximum rollout age considered for phase-1 extraction.
 const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 /// Minimum rollout idle time required before phase-1 extraction.
