@@ -1629,6 +1629,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-config"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
+ "codex-execpolicy",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "futures",
+ "multimap",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -1650,6 +1670,7 @@ dependencies = [
  "codex-arg0",
  "codex-async-utils",
  "codex-client",
+ "codex-config",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1686,7 +1707,6 @@ dependencies = [
  "landlock",
  "libc",
  "maplit",
- "multimap",
  "notify",
  "once_cell",
  "openssl-sys",
