@@ -1,9 +1,13 @@
 use crate::codex::Session;
 use crate::config::Config;
+use crate::config::Constrained;
 use crate::memories::memory_root;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
@@ -121,6 +125,21 @@ pub(super) async fn run_global_memory_consolidation(
     }];
     let mut consolidation_config = config.as_ref().clone();
     consolidation_config.cwd = root.clone();
+    consolidation_config.approval_policy = Constrained::allow_any(AskForApproval::Never);
+    let mut writable_roots = Vec::new();
+    match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
+        Ok(codex_home) => writable_roots.push(codex_home),
+        Err(err) => warn!(
+            "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
+            consolidation_config.codex_home.display()
+        ),
+    }
+    consolidation_config.sandbox_policy = Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+        writable_roots,
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    });
     let source = SessionSource::SubAgent(SubAgentSource::Other(
         MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
     ));
@@ -173,7 +192,9 @@ mod tests {
     use crate::memories::rollout_summaries_dir;
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_state::Phase2JobClaimOutcome;
     use codex_state::Stage1Output;
@@ -336,6 +357,27 @@ mod tests {
 
         let user_input_ops = harness.user_input_ops_count();
         assert_eq!(user_input_ops, 1);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        assert_eq!(thread_ids.len(), 1);
+        let subagent = harness
+            .manager
+            .get_thread(thread_ids[0])
+            .await
+            .expect("get consolidation thread");
+        let config_snapshot = subagent.config_snapshot().await;
+        assert_eq!(config_snapshot.approval_policy, AskForApproval::Never);
+        assert_eq!(config_snapshot.cwd, memory_root(&harness.config.codex_home));
+        match config_snapshot.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+                assert!(
+                    writable_roots
+                        .iter()
+                        .any(|root| root.as_path() == harness.config.codex_home.as_path()),
+                    "consolidation subagent should have codex_home as writable root"
+                );
+            }
+            other => panic!("unexpected sandbox policy: {other:?}"),
+        }
 
         harness.shutdown_threads().await;
     }
