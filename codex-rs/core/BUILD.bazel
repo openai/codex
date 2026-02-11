@@ -5,6 +5,8 @@ codex_rust_crate(
     crate_name = "codex_core",
     compile_data = glob(
         include = [
+            "*.json",
+            "*.md",
             "src/**",
             "templates/**",
         ],
