@@ -820,7 +820,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
     fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
         let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
 
-        assert_eq!(commands_for_exec_policy(&command), (vec![command], false),);
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
     }
 
     #[test]
@@ -831,7 +831,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
             "  \n\t  ".to_string(),
         ];
 
-        assert_eq!(commands_for_exec_policy(&command), (vec![command], false),);
+        assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
     }
 
     #[tokio::test]
