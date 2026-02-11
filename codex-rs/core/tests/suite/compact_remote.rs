@@ -26,6 +26,7 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use wiremock::ResponseTemplate;
 
 fn approx_token_count(text: &str) -> i64 {
     i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
@@ -1689,7 +1690,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
         sectioned_request_shapes(
-            "Remote pre-turn auto-compaction parse failure : compaction request excludes the incoming user message and the turn stops.",
+            "Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.",
             &[(
                 "Remote Compaction Request (Incoming User Excluded)",
                 &include_attempt_request
@@ -1704,6 +1705,113 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
         error_message.contains("invalid compact payload shape")
             || error_message.contains("invalid type: string"),
         "expected compact parse failure to surface, got {error_message}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Update once remote pre-turn compaction context-overflow handling includes
+// incoming user input and emits richer oversized-input messaging.
+async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceeded() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![responses::sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+            responses::ev_completed_with_tokens("r1", 500),
+        ])],
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
+            }
+        })),
+    )
+    .await;
+    let post_compact_turn_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m2", "REMOTE_POST_COMPACT_SHOULD_NOT_RUN"),
+            responses::ev_completed_with_tokens("r2", 80),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "expected no post-compaction follow-up turn request after compact failure"
+    );
+    assert!(
+        post_compact_turn_mock.requests().is_empty(),
+        "expected turn to stop after compaction failure"
+    );
+
+    let include_attempt_request = compact_mock.single_request();
+    let include_attempt_shape = request_input_shape(&include_attempt_request);
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_context_window_exceeded_shapes",
+        sectioned_request_shapes(
+            "Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
+            &[(
+                "Remote Compaction Request (Incoming User Excluded)",
+                &include_attempt_request
+            ),]
+        )
+    );
+    assert!(
+        !include_attempt_shape.contains("USER_TWO"),
+        "current behavior excludes incoming user message from remote pre-turn compaction input"
+    );
+    assert!(
+        error_message.to_lowercase().contains("context window"),
+        "expected context window failure to surface, got {error_message}"
     );
 
     Ok(())
