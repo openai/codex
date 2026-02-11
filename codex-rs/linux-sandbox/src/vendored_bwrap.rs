@@ -54,7 +54,7 @@ mod imp {
 codex-linux-sandbox should always compile vendored bubblewrap on Linux targets.\n\
 Notes:\n\
 - ensure the target OS is Linux\n\
-- libcap headers must be available via pkg-config\n\
+- libcap via pkg-config is recommended (a compatibility shim is used when unavailable)\n\
 - bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"
         );
     }
