@@ -539,7 +539,8 @@ impl TranscriptOverlay {
         }
     }
 
-    /// Replace committed transcript cells while preserving any cached live tail.
+    /// Replace committed transcript cells while keeping any cached in-progress output that is
+    /// currently shown at the end of the overlay.
     ///
     /// This is used when existing history is trimmed (for example after rollback) so the
     /// transcript overlay immediately reflects the same committed cells as the main transcript.
