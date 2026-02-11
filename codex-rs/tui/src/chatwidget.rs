@@ -4041,7 +4041,13 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
-            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::ThreadRolledBack(rollback) => {
+                if from_replay {
+                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
+                        num_turns: rollback.num_turns,
+                    });
+                }
+            }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)

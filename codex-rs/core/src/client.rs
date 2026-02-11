@@ -340,8 +340,9 @@ impl ModelClient {
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    fn responses_websocket_enabled(&self) -> bool {
-        self.state.provider.supports_websockets && self.state.enable_responses_websockets
+    fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+        self.state.provider.supports_websockets
+            && (self.state.enable_responses_websockets || model_info.prefer_websockets)
     }
 
     fn responses_websockets_v2_enabled(&self) -> bool {
@@ -612,9 +613,11 @@ impl ModelClientSession {
     pub async fn prewarm_websocket(
         &mut self,
         otel_manager: &OtelManager,
+        model_info: &ModelInfo,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
+        if !self.client.responses_websocket_enabled(model_info) || self.client.disable_websockets()
+        {
             return Ok(());
         }
         if self.connection.is_some() {
@@ -881,8 +884,8 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                let websocket_enabled =
-                    self.client.responses_websocket_enabled() && !self.client.disable_websockets();
+                let websocket_enabled = self.client.responses_websocket_enabled(model_info)
+                    && !self.client.disable_websockets();
 
                 if websocket_enabled {
                     match self
@@ -898,7 +901,7 @@ impl ModelClientSession {
                     {
                         WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
                         WebsocketStreamOutcome::FallbackToHttp => {
-                            self.try_switch_fallback_transport(otel_manager);
+                            self.try_switch_fallback_transport(otel_manager, model_info);
                         }
                     }
                 }
@@ -922,8 +925,12 @@ impl ModelClientSession {
     /// the HTTP transport.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
-    pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled();
+    pub(crate) fn try_switch_fallback_transport(
+        &mut self,
+        otel_manager: &OtelManager,
+        model_info: &ModelInfo,
+    ) -> bool {
+        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
         let activated = self.activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");

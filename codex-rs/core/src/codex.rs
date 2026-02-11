@@ -1124,6 +1124,9 @@ impl Session {
             ),
         };
 
+        let prewarm_model_info = models_manager
+            .get_model_info(session_configuration.collaboration_mode.model(), &config)
+            .await;
         let prewarm_cwd = session_configuration.cwd.clone();
         let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
             async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
@@ -1133,6 +1136,7 @@ impl Session {
         let startup_regular_task = RegularTask::with_startup_prewarm(
             services.model_client.clone(),
             services.otel_manager.clone(),
+            prewarm_model_info,
             turn_metadata_header,
         );
         state.set_startup_regular_task(startup_regular_task);
@@ -4290,7 +4294,8 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries
-            && client_session.try_switch_fallback_transport(&turn_context.otel_manager)
+            && client_session
+                .try_switch_fallback_transport(&turn_context.otel_manager, &turn_context.model_info)
         {
             sess.send_event(
                 &turn_context,
@@ -6259,7 +6264,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),
@@ -6394,7 +6400,8 @@ mod tests {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                config.features.enabled(Feature::ResponsesWebsockets)
+                model_info.prefer_websockets
+                    || config.features.enabled(Feature::ResponsesWebsockets)
                     || config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::ResponsesWebsocketsV2),
                 config.features.enabled(Feature::EnableRequestCompression),

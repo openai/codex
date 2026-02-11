@@ -126,6 +126,15 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Apply rollback semantics to local transcript cells.
+    ///
+    /// This is emitted when rollback was not initiated by the current
+    /// backtrack flow so trimming occurs in AppEvent queue order relative to
+    /// inserted history cells.
+    ApplyThreadRollback {
+        num_turns: u32,
+    },
+
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,

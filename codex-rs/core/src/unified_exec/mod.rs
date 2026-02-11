@@ -42,6 +42,11 @@ mod head_tail_buffer;
 mod process;
 mod process_manager;
 
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_deterministic_process_ids_for_tests(enabled: bool) {
+    process_manager::set_deterministic_process_ids_for_tests(enabled);
+}
+
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::UnifiedExecProcess;
 
