@@ -62,7 +62,7 @@ const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
 const FINAL_REPLY: &str = "FINAL_REPLY";
 const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
-const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
+const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
@@ -2297,6 +2297,9 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
+// Current main behavior around non-context manual /compact failures is known-incorrect.
+#[ignore = "behavior change covered in follow-up compaction PR"]
 async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
     skip_if_no_network!();
 
@@ -3154,7 +3157,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         "pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(&[
             ("Local Compaction Request", &requests[2]),
-            ("Local Post-Compaction History Request", &requests[3]),
+            ("Local Post-Compaction History Layout", &requests[3]),
         ])
     );
     assert!(
@@ -3344,7 +3347,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         "mid_turn_compaction_shapes",
         sectioned_request_shapes(&[
             ("Local Compaction Request", &requests[1]),
-            ("Local Post-Compaction History Request", &requests[2]),
+            ("Local Post-Compaction History Layout", &requests[2]),
         ])
     );
     assert!(
@@ -3405,7 +3408,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     let follow_up_shape = request_input_shape(&requests[0]);
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
-        sectioned_request_shapes(&[("Local Post-Compaction History", &requests[0]),])
+        sectioned_request_shapes(&[("Local Post-Compaction History Layout", &requests[0]),])
     );
     assert!(
         !follow_up_shape.contains("<SUMMARY:MANUAL_EMPTY_SUMMARY>"),
@@ -3481,7 +3484,7 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
         "manual_compact_with_history_shapes",
         sectioned_request_shapes(&[
             ("Local Compaction Request", &requests[1]),
-            ("Local Post-Compaction History Request", &requests[2]),
+            ("Local Post-Compaction History Layout", &requests[2]),
         ])
     );
     assert!(

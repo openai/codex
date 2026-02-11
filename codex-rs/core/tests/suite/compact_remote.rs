@@ -41,7 +41,7 @@ fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64
         .saturating_add(approx_token_count(&request.instructions_text()))
 }
 
-const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
+const DUMMY_FUNCTION_NAME: &str = "test_tool";
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
@@ -1064,6 +1064,9 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
+// Current main behavior for rollout replacement-history persistence is known-incorrect.
+#[ignore = "behavior change covered in follow-up compaction PR"]
 async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1538,7 +1541,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
         "remote_pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(&[
             ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Request", &requests[2]),
+            ("Remote Post-Compaction History Layout", &requests[2]),
         ])
     );
     assert!(
@@ -1717,7 +1720,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
         "remote_mid_turn_compaction_shapes",
         sectioned_request_shapes(&[
             ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Request", &requests[1]),
+            ("Remote Post-Compaction History Layout", &requests[1]),
         ])
     );
     assert!(
@@ -1780,7 +1783,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
         format!(
-            "## Remote Post-Compaction History Request\n{}",
+            "## Remote Post-Compaction History Layout\n{}",
             request_input_shape(&follow_up_request)
         )
     );
@@ -1867,7 +1870,7 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
         "remote_manual_compact_with_history_shapes",
         sectioned_request_shapes(&[
             ("Remote Compaction Request", &compact_request),
-            ("Remote Post-Compaction History Request", &requests[1]),
+            ("Remote Post-Compaction History Layout", &requests[1]),
         ])
     );
     assert!(

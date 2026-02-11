@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Request\", &requests[1]),])"
+expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
@@ -9,7 +9,7 @@ expression: "sectioned_request_shapes(&[(\"Remote Compaction Request\", &compact
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_MANUAL_FIRST_REPLY
 
-## Remote Post-Compaction History Request
+## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
 01:message/user:<SUMMARY:REMOTE_MANUAL_WITH_HISTORY_SUMMARY>
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>

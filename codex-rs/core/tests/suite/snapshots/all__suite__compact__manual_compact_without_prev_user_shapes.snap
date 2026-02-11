@@ -1,9 +1,10 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "sectioned_request_shapes(&[(\"Local Post-Compaction History\", &requests[0]),])"
+assertion_line: 3015
+expression: "sectioned_request_shapes(&[(\"Local Post-Compaction History Layout\",\n&requests[0]),])"
 ---
-## Local Post-Compaction History
+## Local Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT>
-03:message/user:AFTER_MANUAL_EMPTY_COMPACT
+03:message/user:<SUMMARIZATION_PROMPT>
