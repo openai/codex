@@ -103,9 +103,42 @@ jobs:
           CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
         shell: bash
         run: |
-          bazel $BAZEL_STARTUP_ARGS --bazelrc=.github/workflows/ci.bazelrc test //... \
-            --build_metadata=REPO_URL=https://github.com/openai/codex.git \
-            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
-            --build_metadata=ROLE=CI \
-            --build_metadata=VISIBILITY=PUBLIC \
-            "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+          bazel_args=(
+            test
+            //...
+            --build_metadata=REPO_URL=https://github.com/openai/codex.git
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=ROLE=CI
+            --build_metadata=VISIBILITY=PUBLIC
+          )
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            echo "BuildBuddy API key is available; using remote Bazel configuration."
+            bazel $BAZEL_STARTUP_ARGS \
+              --bazelrc=.github/workflows/ci.bazelrc \
+              "${bazel_args[@]}" \
+              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+          else
+            echo "BuildBuddy API key is not available; using local Bazel configuration."
+            # Keep fork/community PRs on Bazel but disable remote services that are
+            # configured in .bazelrc and require auth.
+            #
+            # Flag docs:
+            # - Command-line reference: https://bazel.build/reference/command-line-reference
+            # - Remote caching overview: https://bazel.build/remote/caching
+            # - Remote execution overview: https://bazel.build/remote/rbe
+            # - Build Event Protocol overview: https://bazel.build/remote/bep
+            #
+            # --noexperimental_remote_repo_contents_cache:
+            #   disable remote repo contents cache enabled in .bazelrc startup options.
+            #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
+            # --remote_cache= and --remote_executor=:
+            #   clear remote cache/execution endpoints configured in .bazelrc.
+            #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
+            #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+            bazel $BAZEL_STARTUP_ARGS \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_cache= \
+              --remote_executor=
+          fi

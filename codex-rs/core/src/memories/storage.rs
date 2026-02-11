@@ -4,14 +4,13 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tracing::warn;
 
-use super::MAX_RAW_MEMORIES_PER_SCOPE;
+use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
+use super::MEMORY_REGISTRY_FILENAME;
+use super::SKILLS_SUBDIR;
+use super::ensure_layout;
+use super::raw_memories_file;
+use super::rollout_summaries_dir;
 use super::text::compact_whitespace;
-use crate::memories::layout::LEGACY_CONSOLIDATED_FILENAME;
-use crate::memories::layout::MEMORY_REGISTRY_FILENAME;
-use crate::memories::layout::SKILLS_SUBDIR;
-use crate::memories::layout::ensure_layout;
-use crate::memories::layout::raw_memories_file;
-use crate::memories::layout::rollout_summaries_dir;
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
@@ -31,7 +30,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_PER_SCOPE)
+        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
@@ -49,16 +48,14 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 ///
 /// Phase-1 artifacts (`rollout_summaries/` and `raw_memories.md`) are preserved.
 pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<()> {
-    for file_name in [MEMORY_REGISTRY_FILENAME, LEGACY_CONSOLIDATED_FILENAME] {
-        let path = root.join(file_name);
-        if let Err(err) = tokio::fs::remove_file(&path).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            warn!(
-                "failed removing consolidation file {}: {err}",
-                path.display()
-            );
-        }
+    let path = root.join(MEMORY_REGISTRY_FILENAME);
+    if let Err(err) = tokio::fs::remove_file(&path).await
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            "failed removing consolidation file {}: {err}",
+            path.display()
+        );
     }
 
     let skills_dir = root.join(SKILLS_SUBDIR);
@@ -77,7 +74,7 @@ pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<(
 async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_PER_SCOPE)
+        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 
@@ -152,7 +149,7 @@ async fn write_rollout_summary_for_thread(
     .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
     writeln!(body)
         .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
-    body.push_str(&compact_whitespace(&memory.summary));
+    body.push_str(&compact_whitespace(&memory.rollout_summary));
     body.push('\n');
 
     tokio::fs::write(path, body).await

@@ -5,9 +5,9 @@ use regex::Regex;
 use serde_json::Value;
 use serde_json::json;
 
+use super::StageOneOutput;
 use super::text::compact_whitespace;
 use super::text::truncate_text_for_storage;
-use super::types::StageOneOutput;
 
 /// System prompt for stage-1 raw memory extraction.
 pub(super) const RAW_MEMORY_PROMPT: &str =
@@ -28,7 +28,6 @@ pub(super) fn stage_one_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "rollout_slug": { "type": "string" },
             "rollout_summary": { "type": "string" },
             "raw_memory": { "type": "string" }
         },
@@ -97,12 +96,6 @@ fn parse_json_object_loose(raw: &str) -> Result<Value> {
 fn normalize_stage_one_output(mut output: StageOneOutput) -> Result<StageOneOutput> {
     output.raw_memory = output.raw_memory.trim().to_string();
     output.rollout_summary = output.rollout_summary.trim().to_string();
-    if let Some(slug) = output.rollout_slug.take() {
-        let slug = slug.trim();
-        if !slug.is_empty() {
-            output.rollout_slug = Some(slug.to_string());
-        }
-    }
 
     if output.raw_memory.is_empty() {
         return Err(CodexErr::InvalidRequest(
@@ -195,7 +188,6 @@ mod tests {
     fn normalize_stage_one_output_redacts_and_compacts_summary() {
         let output = StageOneOutput {
             raw_memory: "Token: sk-abcdefghijklmnopqrstuvwxyz123456\nBearer abcdefghijklmnopqrstuvwxyz012345".to_string(),
-            rollout_slug: None,
             rollout_summary: "password = mysecret123456\n\nsmall".to_string(),
         };
 

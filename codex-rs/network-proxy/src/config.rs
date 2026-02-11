@@ -15,6 +15,7 @@ pub struct NetworkProxyConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
@@ -22,13 +23,10 @@ pub struct NetworkProxySettings {
     pub proxy_url: String,
     #[serde(default = "default_admin_url")]
     pub admin_url: String,
-    #[serde(default)]
     pub enable_socks5: bool,
     #[serde(default = "default_socks_url")]
     pub socks_url: String,
-    #[serde(default)]
     pub enable_socks5_udp: bool,
-    #[serde(default)]
     pub allow_upstream_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
@@ -42,7 +40,6 @@ pub struct NetworkProxySettings {
     pub denied_domains: Vec<String>,
     #[serde(default)]
     pub allow_unix_sockets: Vec<String>,
-    #[serde(default)]
     pub allow_local_binding: bool,
 }
 
@@ -52,17 +49,17 @@ impl Default for NetworkProxySettings {
             enabled: false,
             proxy_url: default_proxy_url(),
             admin_url: default_admin_url(),
-            enable_socks5: false,
+            enable_socks5: true,
             socks_url: default_socks_url(),
-            enable_socks5_udp: false,
-            allow_upstream_proxy: false,
+            enable_socks5_udp: true,
+            allow_upstream_proxy: true,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),
             allowed_domains: Vec::new(),
             denied_domains: Vec::new(),
             allow_unix_sockets: Vec::new(),
-            allow_local_binding: false,
+            allow_local_binding: true,
         }
     }
 }
@@ -328,6 +325,47 @@ mod tests {
     use super::*;
 
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn network_proxy_settings_default_matches_local_use_baseline() {
+        assert_eq!(
+            NetworkProxySettings::default(),
+            NetworkProxySettings {
+                enabled: false,
+                proxy_url: "http://127.0.0.1:3128".to_string(),
+                admin_url: "http://127.0.0.1:8080".to_string(),
+                enable_socks5: true,
+                socks_url: "http://127.0.0.1:8081".to_string(),
+                enable_socks5_udp: true,
+                allow_upstream_proxy: true,
+                dangerously_allow_non_loopback_proxy: false,
+                dangerously_allow_non_loopback_admin: false,
+                mode: NetworkMode::Full,
+                allowed_domains: Vec::new(),
+                denied_domains: Vec::new(),
+                allow_unix_sockets: Vec::new(),
+                allow_local_binding: true,
+            }
+        );
+    }
+
+    #[test]
+    fn partial_network_config_uses_struct_defaults_for_missing_fields() {
+        let config: NetworkProxyConfig = serde_json::from_str(
+            r#"{
+                "network": {
+                    "enabled": true
+                }
+            }"#,
+        )
+        .unwrap();
+        let expected = NetworkProxySettings {
+            enabled: true,
+            ..NetworkProxySettings::default()
+        };
+
+        assert_eq!(config.network, expected);
+    }
 
     #[test]
     fn parse_host_port_defaults_for_empty_string() {
