@@ -375,6 +375,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let writable = TempDir::new().unwrap();
     let new_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![writable.path().try_into().unwrap()],
+        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -618,6 +619,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let writable = TempDir::new().unwrap();
     let new_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
+        read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
