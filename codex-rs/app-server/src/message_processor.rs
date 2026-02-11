@@ -402,6 +402,12 @@ impl MessageProcessor {
             .await;
     }
 
+    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_closed(connection_id)
+            .await;
+    }
+
     /// Handle a standalone JSON-RPC response originating from the peer.
     pub(crate) async fn process_response(&mut self, response: JSONRPCResponse) {
         tracing::info!("<- response: {:?}", response);
