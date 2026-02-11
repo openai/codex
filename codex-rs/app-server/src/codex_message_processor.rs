@@ -137,7 +137,6 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::Turn;
-use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
@@ -252,100 +251,7 @@ use uuid::Uuid;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
-
-type PendingInterruptQueue = Vec<(ConnectionRequestId, ApiVersion)>;
-
-/// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
-#[derive(Default, Clone)]
-pub(crate) struct TurnSummary {
-    pub(crate) file_change_started: HashSet<String>,
-    pub(crate) last_error: Option<TurnError>,
-}
-
-#[derive(Default)]
-pub(crate) struct ThreadState {
-    pub(crate) pending_interrupts: PendingInterruptQueue,
-    pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
-    pub(crate) turn_summary: TurnSummary,
-    pub(crate) listener_cancel_txs: HashMap<Uuid, oneshot::Sender<()>>,
-}
-
-impl ThreadState {
-    fn set_listener(&mut self, subscription_id: Uuid, cancel_tx: oneshot::Sender<()>) {
-        if let Some(previous) = self.listener_cancel_txs.insert(subscription_id, cancel_tx) {
-            let _ = previous.send(());
-        }
-    }
-
-    fn clear_listener(&mut self, subscription_id: Uuid) {
-        if let Some(cancel_tx) = self.listener_cancel_txs.remove(&subscription_id) {
-            let _ = cancel_tx.send(());
-        }
-    }
-
-    fn clear_listeners(&mut self) {
-        for (_, cancel_tx) in self.listener_cancel_txs.drain() {
-            let _ = cancel_tx.send(());
-        }
-    }
-}
-
-#[derive(Default)]
-struct ThreadStateManager {
-    thread_states: HashMap<ThreadId, Arc<Mutex<ThreadState>>>,
-    thread_id_by_subscription: HashMap<Uuid, ThreadId>,
-}
-
-impl ThreadStateManager {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn has_listener_for_thread(&self, thread_id: ThreadId) -> bool {
-        self.thread_id_by_subscription
-            .values()
-            .any(|existing| *existing == thread_id)
-    }
-
-    fn thread_state(&mut self, thread_id: ThreadId) -> Arc<Mutex<ThreadState>> {
-        self.thread_states
-            .entry(thread_id)
-            .or_insert_with(|| Arc::new(Mutex::new(ThreadState::default())))
-            .clone()
-    }
-
-    async fn remove_listener(&mut self, subscription_id: Uuid) -> Option<ThreadId> {
-        let thread_id = self.thread_id_by_subscription.remove(&subscription_id)?;
-        if let Some(thread_state) = self.thread_states.get(&thread_id) {
-            thread_state.lock().await.clear_listener(subscription_id);
-        }
-        Some(thread_id)
-    }
-
-    async fn remove_thread_state(&mut self, thread_id: ThreadId) {
-        if let Some(thread_state) = self.thread_states.remove(&thread_id) {
-            thread_state.lock().await.clear_listeners();
-        }
-        self.thread_id_by_subscription
-            .retain(|_, existing_thread_id| *existing_thread_id != thread_id);
-    }
-
-    async fn set_listener(
-        &mut self,
-        subscription_id: Uuid,
-        thread_id: ThreadId,
-        cancel_tx: oneshot::Sender<()>,
-    ) -> Arc<Mutex<ThreadState>> {
-        self.thread_id_by_subscription
-            .insert(subscription_id, thread_id);
-        let thread_state = self.thread_state(thread_id);
-        thread_state
-            .lock()
-            .await
-            .set_listener(subscription_id, cancel_tx);
-        thread_state
-    }
-}
+use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -1048,6 +954,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1082,6 +989,7 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
+                                codex_home,
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
@@ -1154,6 +1062,7 @@ impl CodexMessageProcessor {
                     let auth_manager = self.auth_manager.clone();
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
+                    let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1188,6 +1097,7 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
+                                codex_home,
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
@@ -1359,6 +1269,7 @@ impl CodexMessageProcessor {
             self.cloud_requirements.as_ref(),
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.clone(),
         );
         sync_default_client_residency_requirement(
             &self.cli_overrides,
@@ -5723,8 +5634,9 @@ fn replace_cloud_requirements_loader(
     cloud_requirements: &RwLock<CloudRequirementsLoader>,
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
+    codex_home: PathBuf,
 ) {
-    let loader = cloud_requirements_loader(auth_manager, chatgpt_base_url);
+    let loader = cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home);
     if let Ok(mut guard) = cloud_requirements.write() {
         *guard = loader;
     } else {

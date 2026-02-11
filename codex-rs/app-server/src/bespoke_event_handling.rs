@@ -1,12 +1,12 @@
 use crate::codex_message_processor::ApiVersion;
-use crate::codex_message_processor::ThreadState;
-use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::thread_state::ThreadState;
+use crate::thread_state::TurnSummary;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -1903,21 +1903,6 @@ mod tests {
 
     fn new_thread_state() -> Arc<Mutex<ThreadState>> {
         Arc::new(Mutex::new(ThreadState::default()))
-    }
-
-    async fn recv_broadcast_message(
-        rx: &mut mpsc::Receiver<OutgoingEnvelope>,
-    ) -> Result<OutgoingMessage> {
-        let envelope = rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("should send one message"))?;
-        match envelope {
-            OutgoingEnvelope::Broadcast { message } => Ok(message),
-            OutgoingEnvelope::ToConnection { connection_id, .. } => {
-                bail!("unexpected targeted message for connection {connection_id:?}")
-            }
-        }
     }
 
     async fn recv_broadcast_message(
