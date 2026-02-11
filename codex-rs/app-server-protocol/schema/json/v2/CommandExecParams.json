@@ -84,6 +84,9 @@
               "default": false,
               "type": "boolean"
             },
+            "readAccess": {
+              "$ref": "#/definitions/WorkspaceReadAccess"
+            },
             "type": {
               "enum": [
                 "workspaceWrite"
@@ -103,6 +106,49 @@
             "type"
           ],
           "title": "WorkspaceWriteSandboxPolicy",
+          "type": "object"
+        }
+      ]
+    },
+    "WorkspaceReadAccess": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "fullReadAccess"
+              ],
+              "title": "FullReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullReadAccessWorkspaceReadAccess",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "readableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restrictedReadAccess"
+              ],
+              "title": "RestrictedReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadAccessWorkspaceReadAccess",
           "type": "object"
         }
       ]

@@ -581,6 +581,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
     harness
         .submit_with_policy(
@@ -637,6 +638,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
     harness
         .submit_with_policy("attempt move traversal via apply_patch", sandbox_policy)

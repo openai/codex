@@ -288,7 +288,11 @@ You can optionally specify config overrides on the new turn. If specified, these
     "sandboxPolicy": {
         "type": "workspaceWrite",
         "writableRoots": ["/Users/me/project"],
-        "networkAccess": true
+        "networkAccess": true,
+        "readAccess": {
+            "type": "restrictedReadAccess",
+            "readableRoots": ["/Users/me/project", "/Users/me/project/.cache"]
+        }
     },
     "model": "gpt-5.1-codex",
     "effort": "medium",
@@ -468,7 +472,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 Notes:
 
 - Empty `command` arrays are rejected.
-- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags including optional `readAccess`, `externalSandbox` with `networkAccess` `restricted|enabled`).
 - When omitted, `timeoutMs` falls back to the server default.
 
 ## Events

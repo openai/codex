@@ -329,6 +329,8 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
+    #[serde(default, skip_serializing_if = "WorkspaceReadAccess::is_full")]
+    pub read_access: WorkspaceReadAccess,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -595,6 +597,27 @@ pub enum NetworkAccess {
     Enabled,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum WorkspaceReadAccess {
+    #[default]
+    FullReadAccess,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    RestrictedReadAccess {
+        #[serde(default)]
+        readable_roots: Vec<AbsolutePathBuf>,
+    },
+}
+
+impl WorkspaceReadAccess {
+    pub fn is_full(&self) -> bool {
+        matches!(self, WorkspaceReadAccess::FullReadAccess)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -619,6 +642,8 @@ pub enum SandboxPolicy {
         exclude_tmpdir_env_var: bool,
         #[serde(default)]
         exclude_slash_tmp: bool,
+        #[serde(default, skip_serializing_if = "WorkspaceReadAccess::is_full")]
+        read_access: WorkspaceReadAccess,
     },
 }
 
@@ -642,11 +667,22 @@ impl SandboxPolicy {
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                read_access,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
+                read_access: match read_access {
+                    WorkspaceReadAccess::FullReadAccess => {
+                        codex_protocol::protocol::WorkspaceReadAccess::FullReadAccess
+                    }
+                    WorkspaceReadAccess::RestrictedReadAccess { readable_roots } => {
+                        codex_protocol::protocol::WorkspaceReadAccess::RestrictedReadAccess {
+                            readable_roots: readable_roots.clone(),
+                        }
+                    }
+                },
             },
         }
     }
@@ -672,11 +708,20 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                read_access,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                read_access: match read_access {
+                    codex_protocol::protocol::WorkspaceReadAccess::FullReadAccess => {
+                        WorkspaceReadAccess::FullReadAccess
+                    }
+                    codex_protocol::protocol::WorkspaceReadAccess::RestrictedReadAccess {
+                        readable_roots,
+                    } => WorkspaceReadAccess::RestrictedReadAccess { readable_roots },
+                },
             },
         }
     }
@@ -3139,6 +3184,34 @@ mod tests {
             }
         );
 
+        let back_to_v2 = SandboxPolicy::from(core_policy);
+        assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn sandbox_policy_round_trips_workspace_write_restricted_read_access() {
+        let readable_root = if cfg!(windows) {
+            AbsolutePathBuf::from_absolute_path("C:\\repo\\readable").expect("absolute path")
+        } else {
+            AbsolutePathBuf::from_absolute_path("/repo/readable").expect("absolute path")
+        };
+        let writable_root = if cfg!(windows) {
+            AbsolutePathBuf::from_absolute_path("C:\\repo\\writable").expect("absolute path")
+        } else {
+            AbsolutePathBuf::from_absolute_path("/repo/writable").expect("absolute path")
+        };
+
+        let v2_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![writable_root],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            read_access: WorkspaceReadAccess::RestrictedReadAccess {
+                readable_roots: vec![readable_root],
+            },
+        };
+
+        let core_policy = v2_policy.to_core();
         let back_to_v2 = SandboxPolicy::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
     }

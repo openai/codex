@@ -3490,6 +3490,7 @@ async fn preset_matching_ignores_extra_writable_roots() {
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        read_access: Default::default(),
     };
 
     assert!(

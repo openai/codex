@@ -135,6 +135,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        read_access: Default::default(),
     };
 
     let python_code = r#"import multiprocessing
@@ -248,6 +249,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
 
     // Attempt to write inside the command cwd, which is outside of the sandbox policy cwd.

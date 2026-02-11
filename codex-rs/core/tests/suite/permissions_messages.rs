@@ -460,6 +460,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        read_access: Default::default(),
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
 

@@ -377,6 +377,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
     codex
         .submit(Op::OverrideTurnContext {
@@ -618,6 +619,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
     codex
         .submit(Op::UserTurn {

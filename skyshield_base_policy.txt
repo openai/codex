@@ -1,0 +1,351 @@
+private func baseSandboxPolicy(
+  temporaryDirectory: URL,
+  allowedReadFolders: [URL],
+  allowedWriteFolders: [URL],
+  sandboxPolicyOptions: TinyskySandboxPolicyOptions?,
+) -> String {
+  // Sandbox policies require fully-resolved paths
+  var temporaryPath = temporaryDirectory.resolvingSymlinksInPath().path
+
+  // Per documentation, URL.resolveSymlinksInPath() strips /private from /var paths; we re-add it
+  if temporaryPath.hasPrefix("/var") {
+    temporaryPath = "/private" + temporaryDirectory.path
+  }
+
+  let allowedReadOnlyFolderRules = allowedReadOnlyFolderRules(for: allowedReadFolders)
+  let allowedWriteOnlyFolderRules = allowedWriteFolderRules(for: allowedWriteFolders)
+  let sandboxPolicyOptionsRules = rules(for: sandboxPolicyOptions) ?? ""
+
+  return """
+    (version 1)
+
+    ; inspired by Chrome's sandbox policy:
+    ; https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/common.sb;l=273-319;drc=7b3962fe2e5fc9e2ee58000dc8fbf3429d84d3bd
+    ; https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/renderer.sb;l=64;drc=7b3962fe2e5fc9e2ee58000dc8fbf3429d84d3bd
+
+    ; start with closed-by-default
+    (deny default)
+
+    ; Read access to standard system paths
+    (allow file-read* file-test-existence
+           (subpath "/Library/Apple")
+           (subpath "/Library/Filesystems/NetFSPlugins")
+           (subpath "/Library/Preferences/Logging")
+           (subpath "/System")
+           (literal "/private/var/db/DarwinDirectory/local/recordStore.data")
+           (subpath "/private/var/db/timezone")
+           (subpath "/usr/lib")
+           (subpath "/usr/share"))
+
+    ; Map system frameworks + dylibs
+    (allow file-map-executable
+           (subpath "/Library/Apple/System/Library/Frameworks")
+           (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+           (subpath "/Library/Apple/usr/lib")
+           (subpath "/System/Library/Extensions")
+           (subpath "/System/Library/Frameworks")
+           (subpath "/System/Library/PrivateFrameworks")
+           (subpath "/System/Library/SubFrameworks")
+           (subpath "/System/iOSSupport/System/Library/Frameworks")
+           (subpath "/System/iOSSupport/System/Library/PrivateFrameworks")
+           (subpath "/System/iOSSupport/System/Library/SubFrameworks")
+           (subpath "/usr/lib"))
+
+    ; Allow guarded vnodes.
+    (allow system-mac-syscall (mac-policy-name "vnguard"))
+
+    ; Determine whether a container is expected.
+    (allow system-mac-syscall
+           (require-all
+             (mac-policy-name "Sandbox")
+             (mac-syscall-number 67)))
+
+    ; Allow resolution of standard system symlinks.
+    (allow file-read-metadata file-test-existence
+           (literal "/etc")
+           (literal "/tmp")
+           (literal "/var")
+           (literal "/private/etc/localtime"))
+
+    ; Allow stat'ing of path components of firmlink targets.
+    (allow file-read-metadata file-test-existence
+           (path-ancestors "/System/Volumes/Data/private"))
+
+    ; Allow processes to get their current working directory.
+    (allow file-read* file-test-existence
+           (literal "/"))
+
+    ; Allow FSIOC_CAS_BSDFLAGS as an alternate chflags(2).
+    (allow system-fsctl (fsctl-command FSIOC_CAS_BSDFLAGS))
+
+    ; Allow access to standard special files.
+    (allow file-read* file-test-existence
+           (literal "/dev/autofs_nowait")
+           (literal "/dev/random")
+           (literal "/dev/urandom")
+           (literal "/private/etc/master.passwd")
+           (literal "/private/etc/passwd")
+           (literal "/private/etc/protocols")
+           (literal "/private/etc/services"))
+
+    (allow file-read* file-test-existence file-write-data
+           (literal "/dev/null")
+           (literal "/dev/zero"))
+
+    ; Allow read/write access to the file descriptors.
+    (allow file-read-data file-test-existence file-write-data
+           (subpath "/dev/fd"))
+
+    (allow file-read* file-test-existence file-write-data file-ioctl
+           (literal "/dev/dtracehelper"))
+
+    ; Regulatory domain support
+    (allow file-read*
+           (literal "/private/var/db/eligibilityd/eligibility.plist"))
+
+    ; Allow IPC to standard system agents.
+    (allow network-outbound
+           (literal "/private/var/run/syslog"))
+
+    (allow ipc-posix-shm-read*
+           (ipc-posix-name "apple.shm.notification_center")
+           (ipc-posix-name-prefix "apple.cfprefs."))
+
+    (allow mach-lookup
+           (global-name "com.apple.analyticsd")
+           (global-name "com.apple.analyticsd.messagetracer")
+           (global-name "com.apple.appsleep")
+           (global-name "com.apple.bsd.dirhelper")
+           (global-name "com.apple.cfprefsd.agent")
+           (global-name "com.apple.cfprefsd.daemon")
+           (global-name "com.apple.diagnosticd")
+           (global-name "com.apple.dt.automationmode.reader")
+           (global-name "com.apple.espd")
+           (global-name "com.apple.logd")
+           (global-name "com.apple.logd.events")
+           (global-name "com.apple.runningboard")
+           (global-name "com.apple.secinitd")
+           (global-name "com.apple.system.DirectoryService.libinfo_v1")
+           (global-name "com.apple.system.logger")
+           (global-name "com.apple.system.notification_center")
+           (global-name "com.apple.system.opendirectoryd.libinfo")
+           (global-name "com.apple.system.opendirectoryd.membership")
+           (global-name "com.apple.trustd")
+           (global-name "com.apple.trustd.agent")
+           (global-name "com.apple.xpc.activity.unmanaged")
+           (local-name "com.apple.cfprefsd.agent"))
+
+    ; Allow mostly harmless operations.
+    (allow sysctl-read)
+    (allow sysctl-write
+           (sysctl-name "kern.grade_cputype"
+                        "kern.wq_limit_cooperative_threads"))
+
+    ; (system-graphics)
+    (define (system-graphics)
+      (allow user-preference-read
+             (preference-domain "com.apple.gpu")
+             (preference-domain "com.apple.opengl")
+             (preference-domain "com.nvidia.OpenGL"))
+      (allow mach-lookup
+             (global-name "com.apple.gpumemd.source"))
+      (allow mach-lookup
+             (global-name "com.apple.lsd.mapdb"))
+      (allow mach-lookup
+             (global-name "com.apple.CARenderServer")
+             (global-name "com.apple.CoreDisplay.master")
+             (global-name "com.apple.CoreDisplay.Notification"))
+      (allow mach-lookup
+             (global-name "com.apple.cvmsServ"))
+      (allow file-read*
+             (subpath "/private/var/db/CVMS"))
+      (allow iokit-open-service
+             (iokit-registry-entry-class "IOAccelerator"
+                                         "IOSurfaceRoot"))
+      (allow iokit-open-user-client
+             (iokit-connection "IOAccelerator")
+             (iokit-user-client-class "IOAccelerationUserClient"
+                                      "IOSurfaceAcceleratorClient"
+                                      "IOSurfaceRootUserClient"
+                                      "IOSurfaceSendRight"))
+      (allow iokit-open-service
+             (iokit-registry-entry-class "IOFramebuffer"))
+      (allow iokit-open-user-client
+             (iokit-user-client-class "IOFramebufferSharedUserClient"))
+      (allow iokit-open-service
+             (iokit-connection "AppleGraphicsDeviceControl"))
+      (allow iokit-open-user-client
+             (iokit-user-client-class "AppleIntelMEUserClient"
+                                      "AppleSNBFBUserClient"))
+      (allow iokit-open-service
+             (iokit-registry-entry-class "AGPM"
+                                         "AppleGraphicsControl"
+                                         "AppleGraphicsPolicy"))
+      (allow iokit-open-user-client
+             (iokit-user-client-class "AGPMClient"
+                                      "AppleGraphicsControlClient"
+                                      "AppleGraphicsPolicyClient"))
+      (allow iokit-open-user-client
+             (iokit-user-client-class "AppleMGPUPowerControlClient"))
+      (allow file-read* file-test-existence
+             (subpath "/Library/GPUBundles"))
+      (allow iokit-set-properties
+             (require-all
+               (iokit-connection "IODisplay")
+               (require-any
+                 (iokit-property "brightness"
+                                 "linear-brightness"
+                                 "commit"
+                                 "rgcs"
+                                 "ggcs"
+                                 "bgcs")))))
+
+    ; OOPJIT support
+    (define (oopjit-runner)
+      (allow file-read* file-map-executable file-write-unlink
+             (extension "com.apple.sandbox.oopjit")))
+
+    ; child processes inherit the policy of their parent
+    (allow process-exec)
+    (allow process-fork)
+    (allow signal (target same-sandbox))
+
+    ; Allow cf prefs to work.
+    (allow user-preference-read)
+
+    ; process-info
+    (allow process-info* (target same-sandbox))
+
+    (allow file-write-data
+      (require-all
+        (path "/dev/null")
+        (vnode-type CHARACTER-DEVICE)))
+
+    ; --- Allow reading the minimum system runtime so exec works ---
+    (allow file-read-data (subpath "/bin"))
+    (allow file-read-metadata (subpath "/bin"))
+    (allow file-read-data (subpath "/sbin"))
+    (allow file-read-metadata (subpath "/sbin"))
+    (allow file-read-data (subpath "/usr/bin"))
+    (allow file-read-metadata (subpath "/usr/bin"))
+    (allow file-read-data (subpath "/usr/sbin"))
+    (allow file-read-metadata (subpath "/usr/sbin"))
+    (allow file-read-data (subpath "/usr/libexec"))
+    (allow file-read-metadata (subpath "/usr/libexec"))
+
+    ; zsh system config
+    (allow file-read-data (literal "/etc/zshenv"))
+    (allow file-read-metadata (literal "/etc/zshenv"))
+    (allow file-read-data (literal "/etc/zprofile"))
+    (allow file-read-metadata (literal "/etc/zprofile"))
+    (allow file-read-data (literal "/etc/zlogin"))
+    (allow file-read-metadata (literal "/etc/zlogin"))
+
+    (allow file-read* (subpath "/Library/Preferences"))
+    (allow file-read* (subpath "/var/db"))
+    (allow file-read* (subpath "/private/var/db"))
+
+    ; dyld cache metadata outside /System
+    (allow file-read* (subpath "/private/var/db/dyld"))
+    (allow file-read* (subpath "/var/db/dyld"))
+
+    ; common 3rd-party dylib / framework locations
+    ; Homebrew
+    (allow file-read* (subpath "/opt/homebrew/lib"))
+    (allow file-read* (subpath "/usr/local/lib"))
+
+    ; App bundles
+    (allow file-read* (subpath "/Applications"))
+
+    ; terminal basics
+    (allow file-read*  (regex "^/dev/fd/(0|1|2)$"))
+    (allow file-write* (regex "^/dev/fd/(1|2)$"))
+    (allow file-read* file-write* (literal "/dev/null"))
+    (allow file-read* file-write* (literal "/dev/tty"))
+    (allow file-read-metadata (literal "/dev"))
+    (allow file-read-metadata (regex "^/dev/.*$"))
+    (allow file-read-metadata (literal "/dev/stdin"))
+    (allow file-read-metadata (literal "/dev/stdout"))
+    (allow file-read-metadata (literal "/dev/stderr"))
+    (allow file-read-metadata (regex "^/dev/tty[^/]*$"))
+    (allow file-read-metadata (regex "^/dev/pty[^/]*$"))
+    (allow file-read* file-write* (regex "^/dev/ttys[0-9]+$"))
+    (allow file-read* file-write* (literal "/dev/ptmx"))
+
+    ; scratch space (so tools can create temp files)
+    (allow file-read* file-write* (subpath "/tmp"))
+    (allow file-read* file-write* (subpath "/private/tmp"))
+    (allow file-read* file-write* (subpath "/var/tmp"))
+    (allow file-read* file-write* (subpath "/private/var/tmp"))
+
+    (allow file-read* (subpath "/etc"))
+    (allow file-read* (subpath "/private/etc"))
+
+    ; Some processes read /var metadata during startup
+    (allow file-read-metadata (subpath "/var"))
+    (allow file-read-metadata (subpath "/private/var"))
+
+    ; IOKit
+    (allow iokit-open
+      (iokit-registry-entry-class "RootDomainUserClient")
+    )
+
+    ; needed to look up user info, see https://crbug.com/792228
+    (allow mach-lookup
+      (global-name "com.apple.system.opendirectoryd.libinfo")
+    )
+
+    ; Unified logging (os_log) needs logd
+    (allow mach-lookup
+      (global-name-prefix "com.apple.logd")
+      (global-name "com.apple.system.logger")
+    )
+
+    ; Diagnostics daemon (sometimes queried on startup)
+    (allow mach-lookup
+      (global-name "com.apple.diagnosticd")
+      (global-name-prefix "com.apple.diagnosticd")
+    )
+
+    ; Needed for python multiprocessing on MacOS for the SemLock
+    (allow ipc-posix-sem)
+
+    (allow mach-lookup
+      (global-name "com.apple.PowerManagement.control")
+    )
+
+    ; allow openpty()
+    (allow pseudo-tty)
+    (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+    (allow file-read* file-write*
+      (require-all
+        (regex #"^/dev/ttys[0-9]+")))
+    ; PTYs created before entering seatbelt may lack the extension; allow ioctl
+    ; on those slave ttys so interactive shells detect a TTY and remain functional.
+    (allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
+
+    (allow mach-lookup (global-name "com.apple.audio.audiohald"))
+    (allow mach-lookup (global-name "com.apple.audio.AudioComponentRegistrar"))
+    (allow file-read-data (subpath "/etc"))
+    (allow file-read-metadata (subpath "/etc"))
+    (allow file-read-data (subpath "/usr"))
+    (allow file-read-metadata (subpath "/usr"))
+
+    ; allow metadata traversal for firmlink parents
+    (allow file-read-metadata (literal "/System/Volumes") (vnode-type DIRECTORY))
+    (allow file-read-metadata (literal "/System/Volumes/Data") (vnode-type DIRECTORY))
+    (allow file-read-metadata (literal "/System/Volumes/Data/Users") (vnode-type DIRECTORY))
+
+    \(allowedReadOnlyFolderRules)
+    \(allowedWriteOnlyFolderRules)
+    \(sandboxPolicyOptionsRules)
+    (allow file-read* file-write* (subpath "\(temporaryPath)"))
+
+    (allow mach-lookup (global-name "\(SkyShieldCommandProxyIPCServer.messagePortName)"))
+    (allow mach-lookup (global-name "\(SkyShieldSandboxExtensionIPCServer.messagePortName)"))
+
+    ; Allow app-sandbox file extensions to grant access
+    (allow file-read* (extension "com.apple.app-sandbox.read"))
+    (allow file-read* file-write* (extension "com.apple.app-sandbox.read-write"))
+    """
+}

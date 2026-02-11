@@ -472,6 +472,7 @@ mod windows_impl {
                 network_access,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
+                read_access: Default::default(),
             }
         }
 

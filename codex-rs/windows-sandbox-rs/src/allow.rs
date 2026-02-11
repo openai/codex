@@ -111,6 +111,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
+        read_access: Default::default(),
         };
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
@@ -137,6 +138,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
+        read_access: Default::default(),
         };
         let mut env_map = HashMap::new();
         env_map.insert("TEMP".into(), temp_dir.to_string_lossy().to_string());
@@ -164,6 +166,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
+        read_access: Default::default(),
         };
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
@@ -191,6 +194,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
+        read_access: Default::default(),
         };
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
@@ -216,6 +220,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,
+        read_access: Default::default(),
         };
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());

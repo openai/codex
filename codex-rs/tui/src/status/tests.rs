@@ -103,6 +103,7 @@ async fn status_snapshot_includes_reasoning_details() {
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
+            read_access: Default::default(),
         })
         .expect("set sandbox policy");
 

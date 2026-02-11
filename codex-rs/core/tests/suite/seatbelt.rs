@@ -80,6 +80,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
 
     test_scenario
@@ -106,6 +107,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
 
     test_scenario

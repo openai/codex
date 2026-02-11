@@ -185,4 +185,5 @@ export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
+export type { WorkspaceReadAccess } from "./WorkspaceReadAccess";
 export type { WriteStatus } from "./WriteStatus";

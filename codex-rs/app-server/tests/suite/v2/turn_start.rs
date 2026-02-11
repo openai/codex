@@ -1102,6 +1102,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
+                read_access: Default::default(),
             }),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),

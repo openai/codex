@@ -1,0 +1,49 @@
+; baseline read access for restricted-read workspace-write policies
+; keeps the runtime and dynamic loader functional without globally allowing
+; file-read* on all paths.
+
+; shell/runtime binaries
+(allow file-read-data file-read-metadata
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/usr/libexec"))
+
+; standard shell configuration loaded by /bin/zsh
+(allow file-read-data file-read-metadata
+  (literal "/etc/zshenv")
+  (literal "/etc/zprofile")
+  (literal "/etc/zlogin"))
+
+; dynamic loader + frameworks
+(allow file-read* file-test-existence
+  (subpath "/Library/Apple")
+  (subpath "/System")
+  (subpath "/usr/lib")
+  (subpath "/usr/share"))
+
+(allow file-map-executable
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+  (subpath "/Library/Apple/usr/lib")
+  (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/PrivateFrameworks")
+  (subpath "/System/Library/SubFrameworks")
+  (subpath "/usr/lib"))
+
+; allow path traversal for common symlinked roots
+(allow file-read-metadata file-test-existence
+  (literal "/")
+  (literal "/etc")
+  (literal "/tmp")
+  (literal "/var")
+  (literal "/private/etc/localtime")
+  (path-ancestors "/System/Volumes/Data/private"))
+
+; resolver / service metadata commonly read at startup
+(allow file-read* file-test-existence
+  (literal "/private/etc/master.passwd")
+  (literal "/private/etc/passwd")
+  (literal "/private/etc/protocols")
+  (literal "/private/etc/services"))

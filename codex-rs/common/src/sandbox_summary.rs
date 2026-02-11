@@ -1,5 +1,6 @@
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::WorkspaceReadAccess;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
     match sandbox_policy {
@@ -17,6 +18,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
+            read_access,
         } => {
             let mut summary = "workspace-write".to_string();
 
@@ -35,6 +37,18 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             );
 
             summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
+            if let WorkspaceReadAccess::RestrictedReadAccess { readable_roots } = read_access {
+                summary.push_str(" (restricted read access");
+                if !readable_roots.is_empty() {
+                    let roots = readable_roots
+                        .iter()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    summary.push_str(&format!(": {roots}"));
+                }
+                summary.push(')');
+            }
             if *network_access {
                 summary.push_str(" (network access enabled)");
             }
@@ -74,12 +88,38 @@ mod tests {
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         });
         assert_eq!(
             summary,
             format!(
                 "workspace-write [workdir, {}] (network access enabled)",
                 writable_root.to_string_lossy()
+            )
+        );
+    }
+
+    #[test]
+    fn workspace_write_summary_includes_restricted_read_access() {
+        let read_root = if cfg!(windows) {
+            AbsolutePathBuf::try_from("C:\\read").unwrap()
+        } else {
+            AbsolutePathBuf::try_from("/read").unwrap()
+        };
+        let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            read_access: WorkspaceReadAccess::RestrictedReadAccess {
+                readable_roots: vec![read_root.clone()],
+            },
+        });
+        assert_eq!(
+            summary,
+            format!(
+                "workspace-write [workdir] (restricted read access: {})",
+                read_root.to_string_lossy()
             )
         );
     }

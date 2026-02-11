@@ -92,6 +92,7 @@ async fn run_cmd_result_with_writable_roots(
         // writing to in the sandbox.
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        read_access: Default::default(),
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));

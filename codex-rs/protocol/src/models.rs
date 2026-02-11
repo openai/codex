@@ -1216,6 +1216,7 @@ mod tests {
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
+            read_access: Default::default(),
         };
 
         let instructions = DeveloperInstructions::from_policy(

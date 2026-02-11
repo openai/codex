@@ -13,6 +13,8 @@ use crate::spawn::spawn_child_async;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_RESTRICTED_READ_BASE_POLICY: &str =
+    include_str!("seatbelt_restricted_read_base_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -48,6 +50,8 @@ pub(crate) fn create_seatbelt_command_args(
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
+    let has_full_disk_read_access = sandbox_policy.has_full_disk_read_access();
+
     let (file_write_policy, file_write_dir_params) = {
         if sandbox_policy.has_full_disk_write_access() {
             // Allegedly, this is more permissive than `(allow file-write*)`.
@@ -105,10 +109,39 @@ pub(crate) fn create_seatbelt_command_args(
         }
     };
 
-    let file_read_policy = if sandbox_policy.has_full_disk_read_access() {
-        "; allow read-only file operations\n(allow file-read*)"
+    let (file_read_policy, file_read_dir_params) = if has_full_disk_read_access {
+        (
+            "; allow read-only file operations\n(allow file-read*)".to_string(),
+            Vec::new(),
+        )
     } else {
+        let readable_roots = sandbox_policy.get_readable_roots_with_cwd(sandbox_policy_cwd);
+        let mut readable_folder_policies: Vec<String> = Vec::new();
+        let mut file_read_params = Vec::new();
+
+        for (index, root) in readable_roots.iter().enumerate() {
+            // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
+            let canonical_root = root
+                .as_path()
+                .canonicalize()
+                .unwrap_or_else(|_| root.to_path_buf());
+            let root_param = format!("READABLE_ROOT_{index}");
+            file_read_params.push((root_param.clone(), canonical_root));
+            readable_folder_policies.push(format!(
+                "(allow file-read* file-map-executable (subpath (param \"{root_param}\")))"
+            ));
+            readable_folder_policies.push(format!(
+                "(allow file-read-metadata file-test-existence (path-ancestors (param \"{root_param}\")))"
+            ));
+        }
+
+        (readable_folder_policies.join("\n"), file_read_params)
+    };
+
+    let restricted_read_base_policy = if has_full_disk_read_access {
         ""
+    } else {
+        MACOS_SEATBELT_RESTRICTED_READ_BASE_POLICY
     };
 
     // TODO(mbolin): apply_patch calls must also honor the SandboxPolicy.
@@ -118,11 +151,24 @@ pub(crate) fn create_seatbelt_command_args(
         ""
     };
 
-    let full_policy = format!(
-        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
-    );
+    let full_policy = [
+        MACOS_SEATBELT_BASE_POLICY,
+        restricted_read_base_policy,
+        file_read_policy.as_str(),
+        file_write_policy.as_str(),
+        network_policy,
+    ]
+    .into_iter()
+    .filter(|policy| !policy.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
 
-    let dir_params = [file_write_dir_params, macos_dir_params()].concat();
+    let dir_params = [
+        file_write_dir_params,
+        file_read_dir_params,
+        macos_dir_params(),
+    ]
+    .concat();
 
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
     let definition_args = dir_params
@@ -166,6 +212,7 @@ mod tests {
     use super::create_seatbelt_command_args;
     use super::macos_dir_params;
     use crate::protocol::SandboxPolicy;
+    use crate::protocol::WorkspaceReadAccess;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -210,6 +257,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         };
 
         // Create the Seatbelt command to wrap a shell command that tries to
@@ -240,8 +288,7 @@ mod tests {
 (allow file-read*)
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
-)
-"#,
+)"#,
         );
 
         let mut expected_args = vec![
@@ -372,6 +419,48 @@ mod tests {
     }
 
     #[test]
+    fn create_seatbelt_args_with_restricted_read_roots() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("cwd");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        let readable_root = tmp.path().join("readable");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let readable_root_canonical = readable_root.canonicalize().expect("canonicalize root");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            read_access: WorkspaceReadAccess::RestrictedReadAccess {
+                readable_roots: vec![readable_root.try_into().expect("absolute path")],
+            },
+        };
+
+        let args = create_seatbelt_command_args(vec!["/usr/bin/true".to_string()], &policy, &cwd);
+        let policy_text = args
+            .get(1)
+            .expect("seatbelt policy arg should be present")
+            .to_string();
+
+        assert!(
+            policy_text.contains("(allow file-map-executable"),
+            "restricted read baseline should include file-map-executable rules"
+        );
+        assert!(
+            policy_text.contains("(param \"READABLE_ROOT_0\")"),
+            "restricted read policy should include parameterized readable roots"
+        );
+        assert!(
+            args.contains(&format!(
+                "-DREADABLE_ROOT_0={}",
+                readable_root_canonical.to_string_lossy()
+            )),
+            "expected readable root parameter in args: {args:?}"
+        );
+    }
+
+    #[test]
     fn create_seatbelt_args_with_read_only_git_pointer_file() {
         let tmp = TempDir::new().expect("tempdir");
         let worktree_root = tmp.path().join("worktree_root");
@@ -394,6 +483,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         };
 
         let shell_command: Vec<String> = [
@@ -477,6 +567,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
+            read_access: Default::default(),
         };
 
         let shell_command: Vec<String> = [
@@ -518,8 +609,7 @@ mod tests {
 (allow file-read*)
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
-)
-"#,
+)"#,
         );
 
         let mut expected_args = vec![

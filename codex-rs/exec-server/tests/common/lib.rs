@@ -116,6 +116,7 @@ where
             // strict about what is writable.
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         },
         codex_linux_sandbox_exe,
         sandbox_cwd: writable_folder.as_ref().to_path_buf(),

@@ -198,6 +198,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         };
 
         assert!(is_write_patch_constrained_to_writable_paths(
@@ -219,6 +220,7 @@ mod tests {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            read_access: Default::default(),
         };
         assert!(is_write_patch_constrained_to_writable_paths(
             &add_outside,

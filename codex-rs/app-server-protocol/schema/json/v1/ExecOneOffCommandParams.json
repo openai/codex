@@ -94,6 +94,14 @@
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
             },
+            "read_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/WorkspaceReadAccess"
+                }
+              ],
+              "description": "Controls whether the workspace-write policy has full read access or an explicit read allowlist."
+            },
             "type": {
               "enum": [
                 "workspace-write"
@@ -113,6 +121,52 @@
             "type"
           ],
           "title": "WorkspaceWriteSandboxPolicy",
+          "type": "object"
+        }
+      ]
+    },
+    "WorkspaceReadAccess": {
+      "description": "Controls read access semantics for `workspace-write` sandbox policies.",
+      "oneOf": [
+        {
+          "description": "Preserve current behavior where all file-system paths are readable.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-read-access"
+              ],
+              "title": "FullReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullReadAccessWorkspaceReadAccess",
+          "type": "object"
+        },
+        {
+          "description": "Restrict reads to an explicit allowlist plus implicitly readable paths.",
+          "properties": {
+            "readable_roots": {
+              "description": "Additional folders that should be readable from inside the sandbox.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted-read-access"
+              ],
+              "title": "RestrictedReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadAccessWorkspaceReadAccess",
           "type": "object"
         }
       ]

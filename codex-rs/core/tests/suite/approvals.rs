@@ -631,6 +631,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
         network_access,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        read_access: Default::default(),
     };
 
     vec![
@@ -1576,6 +1577,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
+        read_access: Default::default(),
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
 

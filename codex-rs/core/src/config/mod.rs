@@ -1175,6 +1175,7 @@ impl ConfigToml {
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
+                    read_access: Default::default(),
                 },
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
@@ -2092,6 +2093,7 @@ exclude_slash_tmp = true
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
+                        read_access: Default::default(),
                     },
                     forced_auto_mode_downgraded_on_windows: false,
                 }
@@ -2142,6 +2144,7 @@ trust_level = "trusted"
                         network_access: false,
                         exclude_tmpdir_env_var: true,
                         exclude_slash_tmp: true,
+                        read_access: Default::default(),
                     },
                     forced_auto_mode_downgraded_on_windows: false,
                 }

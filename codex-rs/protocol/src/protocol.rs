@@ -376,6 +376,29 @@ impl NetworkAccess {
     }
 }
 
+/// Controls read access semantics for `workspace-write` sandbox policies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, Default, JsonSchema, TS)]
+#[strum(serialize_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum WorkspaceReadAccess {
+    /// Preserve current behavior where all file-system paths are readable.
+    #[default]
+    FullReadAccess,
+
+    /// Restrict reads to an explicit allowlist plus implicitly readable paths.
+    RestrictedReadAccess {
+        /// Additional folders that should be readable from inside the sandbox.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        readable_roots: Vec<AbsolutePathBuf>,
+    },
+}
+
+impl WorkspaceReadAccess {
+    pub fn is_full(&self) -> bool {
+        matches!(self, WorkspaceReadAccess::FullReadAccess)
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
@@ -422,6 +445,11 @@ pub enum SandboxPolicy {
         /// writable roots on UNIX. Defaults to `false`.
         #[serde(default)]
         exclude_slash_tmp: bool,
+
+        /// Controls whether the workspace-write policy has full read access or
+        /// an explicit read allowlist.
+        #[serde(default, skip_serializing_if = "WorkspaceReadAccess::is_full")]
+        read_access: WorkspaceReadAccess,
     },
 }
 
@@ -479,12 +507,48 @@ impl SandboxPolicy {
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
+            read_access: WorkspaceReadAccess::FullReadAccess,
         }
     }
 
-    /// Always returns `true`; restricting read access is not supported.
     pub fn has_full_disk_read_access(&self) -> bool {
-        true
+        match self {
+            SandboxPolicy::DangerFullAccess => true,
+            SandboxPolicy::ExternalSandbox { .. } => true,
+            SandboxPolicy::ReadOnly => true,
+            SandboxPolicy::WorkspaceWrite { read_access, .. } => {
+                matches!(read_access, WorkspaceReadAccess::FullReadAccess)
+            }
+        }
+    }
+
+    /// Returns readable roots tailored to cwd when read access is restricted.
+    /// Returns an empty list when the policy has full disk read access.
+    pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        match self {
+            SandboxPolicy::DangerFullAccess => Vec::new(),
+            SandboxPolicy::ExternalSandbox { .. } => Vec::new(),
+            SandboxPolicy::ReadOnly => Vec::new(),
+            SandboxPolicy::WorkspaceWrite { read_access, .. } => match read_access {
+                WorkspaceReadAccess::FullReadAccess => Vec::new(),
+                WorkspaceReadAccess::RestrictedReadAccess { readable_roots } => {
+                    let mut roots = readable_roots.clone();
+                    roots.extend(
+                        self.get_writable_roots_with_cwd(cwd)
+                            .into_iter()
+                            .map(|root| root.root),
+                    );
+
+                    let mut deduped = Vec::new();
+                    for root in roots {
+                        if !deduped.iter().any(|existing| existing == &root) {
+                            deduped.push(root);
+                        }
+                    }
+                    deduped
+                }
+            },
+        }
     }
 
     pub fn has_full_disk_write_access(&self) -> bool {
@@ -517,6 +581,7 @@ impl SandboxPolicy {
                 writable_roots,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                read_access: _,
                 network_access: _,
             } => {
                 // Start from explicitly configured writable roots.
@@ -2482,6 +2547,7 @@ mod tests {
     use crate::items::UserMessageItem;
     use crate::items::WebSearchItem;
     use anyhow::Result;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -2499,6 +2565,52 @@ mod tests {
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
+    }
+
+    #[test]
+    fn workspace_write_restricted_read_reports_not_full_read_access() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            read_access: WorkspaceReadAccess::RestrictedReadAccess {
+                readable_roots: vec![],
+            },
+        };
+
+        assert!(!policy.has_full_disk_read_access());
+    }
+
+    #[test]
+    fn workspace_write_restricted_readable_roots_include_writable_roots() -> Result<()> {
+        let (cwd, writable_root, readable_root) = if cfg!(windows) {
+            (
+                AbsolutePathBuf::from_absolute_path("C:\\repo\\cwd")?,
+                AbsolutePathBuf::from_absolute_path("C:\\repo\\writable")?,
+                AbsolutePathBuf::from_absolute_path("C:\\repo\\readable")?,
+            )
+        } else {
+            (
+                AbsolutePathBuf::from_absolute_path("/repo/cwd")?,
+                AbsolutePathBuf::from_absolute_path("/repo/writable")?,
+                AbsolutePathBuf::from_absolute_path("/repo/readable")?,
+            )
+        };
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![writable_root.clone()],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            read_access: WorkspaceReadAccess::RestrictedReadAccess {
+                readable_roots: vec![readable_root.clone()],
+            },
+        };
+
+        let readable_roots = policy.get_readable_roots_with_cwd(cwd.as_path());
+        assert_eq!(readable_roots, vec![readable_root, writable_root, cwd]);
+        Ok(())
     }
 
     #[test]

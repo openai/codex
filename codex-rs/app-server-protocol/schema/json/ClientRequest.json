@@ -1933,6 +1933,9 @@
               "default": false,
               "type": "boolean"
             },
+            "readAccess": {
+              "$ref": "#/definitions/WorkspaceReadAccess"
+            },
             "type": {
               "enum": [
                 "workspaceWrite"
@@ -2036,6 +2039,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/WorkspaceReadAccess2"
+                }
+              ],
+              "description": "Controls whether the workspace-write policy has full read access or an explicit read allowlist."
             },
             "type": {
               "enum": [
@@ -3094,6 +3105,95 @@
             "type"
           ],
           "title": "OtherWebSearchAction",
+          "type": "object"
+        }
+      ]
+    },
+    "WorkspaceReadAccess": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "fullReadAccess"
+              ],
+              "title": "FullReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullReadAccessWorkspaceReadAccess",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "readableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restrictedReadAccess"
+              ],
+              "title": "RestrictedReadAccessWorkspaceReadAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadAccessWorkspaceReadAccess",
+          "type": "object"
+        }
+      ]
+    },
+    "WorkspaceReadAccess2": {
+      "description": "Controls read access semantics for `workspace-write` sandbox policies.",
+      "oneOf": [
+        {
+          "description": "Preserve current behavior where all file-system paths are readable.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-read-access"
+              ],
+              "title": "FullReadAccessWorkspaceReadAccess2Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullReadAccessWorkspaceReadAccess2",
+          "type": "object"
+        },
+        {
+          "description": "Restrict reads to an explicit allowlist plus implicitly readable paths.",
+          "properties": {
+            "readable_roots": {
+              "description": "Additional folders that should be readable from inside the sandbox.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted-read-access"
+              ],
+              "title": "RestrictedReadAccessWorkspaceReadAccess2Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadAccessWorkspaceReadAccess2",
           "type": "object"
         }
       ]
