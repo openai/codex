@@ -2475,10 +2475,7 @@ impl App {
             return;
         }
 
-        let auto_theme_name = match crate::terminal_palette::default_bg() {
-            Some(bg) if crate::color::is_light(bg) => "catppuccin-latte",
-            _ => "catppuccin-mocha",
-        };
+        let auto_theme_name = crate::render::highlight::adaptive_default_theme_name();
         if let Some(theme) = crate::render::highlight::resolve_theme_by_name(
             auto_theme_name,
             Some(&self.config.codex_home),

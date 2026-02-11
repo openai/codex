@@ -590,40 +590,26 @@ fn push_wrapped_diff_line_inner(
         return lines;
     }
 
-    // Fallback: no syntax spans — use the original wrapping behavior.
-    let mut remaining_text: &str = text;
-    let mut first = true;
+    let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
+    let styled = vec![RtSpan::styled(text.to_string(), line_style)];
+    let wrapped_chunks = wrap_styled_spans(&styled, available_content_cols);
+
     let mut lines: Vec<RtLine<'static>> = Vec::new();
-
-    loop {
-        let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
-        let split_at_byte_index = remaining_text
-            .char_indices()
-            .nth(available_content_cols)
-            .map(|(i, _)| i)
-            .unwrap_or_else(|| remaining_text.len());
-        let (chunk, rest) = remaining_text.split_at(split_at_byte_index);
-        remaining_text = rest;
-
-        if first {
+    for (i, chunk) in wrapped_chunks.into_iter().enumerate() {
+        let mut row_spans: Vec<RtSpan<'static>> = Vec::new();
+        if i == 0 {
             let gutter = format!("{ln_str:>gutter_width$} ");
-            let content = format!("{sign_char}{chunk}");
-            lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
-                RtSpan::styled(content, line_style),
-            ]));
-            first = false;
+            let sign = format!("{sign_char}");
+            row_spans.push(RtSpan::styled(gutter, style_gutter()));
+            row_spans.push(RtSpan::styled(sign, line_style));
         } else {
-            let gutter = format!("{:gutter_width$}  ", "");
-            lines.push(RtLine::from(vec![
-                RtSpan::styled(gutter, style_gutter()),
-                RtSpan::styled(chunk.to_string(), line_style),
-            ]));
+            let cont_gutter = format!("{:gutter_width$}  ", "");
+            row_spans.push(RtSpan::styled(cont_gutter, style_gutter()));
         }
-        if remaining_text.is_empty() {
-            break;
-        }
+        row_spans.extend(chunk);
+        lines.push(RtLine::from(row_spans));
     }
+
     lines
 }
 
@@ -756,6 +742,19 @@ mod tests {
             })
             .expect("draw");
         assert_snapshot!(name, terminal.backend());
+    }
+
+    fn display_width(text: &str) -> usize {
+        text.chars()
+            .map(|ch| ch.width().unwrap_or(if ch == '\t' { TAB_WIDTH } else { 0 }))
+            .sum()
+    }
+
+    fn line_display_width(line: &RtLine<'static>) -> usize {
+        line.spans
+            .iter()
+            .map(|span| display_width(span.content.as_ref()))
+            .sum()
     }
 
     fn snapshot_lines_text(name: &str, lines: &[RtLine<'static>]) {
@@ -1281,6 +1280,26 @@ mod tests {
             assert!(
                 line_width(line) <= 5,
                 "wrapped line exceeded width 5: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_wrapping_uses_display_width_for_tabs_and_wide_chars() {
+        let width = 8;
+        let lines = push_wrapped_diff_line(
+            1,
+            DiffLineType::Insert,
+            "abcd\t界🙂",
+            width,
+            line_number_width(1),
+        );
+
+        assert!(lines.len() >= 2, "expected wrapped output, got {lines:?}");
+        for line in &lines {
+            assert!(
+                line_display_width(line) <= width,
+                "fallback wrapped line exceeded width {width}: {line:?}"
             );
         }
     }
