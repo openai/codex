@@ -508,7 +508,10 @@ impl App {
             // Ignore rollbacks targeting a prior thread.
             return;
         }
-        if self.trim_transcript_for_backtrack(pending.selection.nth_user_message) {
+        if trim_transcript_cells_to_nth_user(
+            &mut self.transcript_cells,
+            pending.selection.nth_user_message,
+        ) {
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
@@ -541,13 +544,6 @@ impl App {
         })
     }
 
-    /// Trim `transcript_cells` to preserve only content before the selected user message.
-    ///
-    /// Returns `true` when local transcript state changed.
-    fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) -> bool {
-        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message)
-    }
-
     /// Keep transcript-related UI state aligned after `transcript_cells` was trimmed.
     ///
     /// This does three things:
@@ -563,8 +559,6 @@ impl App {
             let total_users = user_count(&self.transcript_cells);
             let next_selection = if total_users == 0 {
                 usize::MAX
-            } else if self.backtrack.nth_user_message == usize::MAX {
-                total_users.saturating_sub(1)
             } else {
                 self.backtrack
                     .nth_user_message

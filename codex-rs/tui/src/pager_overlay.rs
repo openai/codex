@@ -546,7 +546,6 @@ impl TranscriptOverlay {
     /// transcript overlay immediately reflects the same committed cells as the main transcript.
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        let tail_renderable = self.take_live_tail_renderable();
         self.cells = cells;
         if self
             .highlight_cell
@@ -554,10 +553,7 @@ impl TranscriptOverlay {
         {
             self.highlight_cell = None;
         }
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
-        if let Some(tail) = tail_renderable {
-            self.view.renderables.push(tail);
-        }
+        self.rebuild_renderables();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
