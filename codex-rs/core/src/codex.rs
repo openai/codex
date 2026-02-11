@@ -4131,9 +4131,10 @@ async fn run_pre_sampling_compact(
             total_usage_tokens,
             &previous_turn_context,
             turn_context.as_ref(),
-        ) {
-            run_auto_compact(sess, &previous_turn_context).await?;
-        }
+        )
+    {
+        run_auto_compact(sess, &previous_turn_context).await?;
+    }
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(sess, turn_context).await?;
