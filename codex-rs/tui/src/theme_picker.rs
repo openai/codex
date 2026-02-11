@@ -5,33 +5,102 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::diff_render::DiffLineType;
+use crate::diff_render::line_number_width;
+use crate::diff_render::push_wrapped_diff_line;
+use crate::diff_render::push_wrapped_diff_line_with_syntax;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
 use crate::status::format_directory_display;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
-/// Rust snippet for the theme preview — compact enough to fit in the picker,
-/// varied enough to exercise keywords, types, strings, and macros.
-const PREVIEW_CODE: &str = "\
-fn greet(name: &str) -> String {
-    let msg = format!(\"Hello, {name}!\");
-    println!(\"{msg}\");
-    msg
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreviewDiffKind {
+    Context,
+    Added,
+    Removed,
 }
 
-/// Count words in the given text.
-fn word_count(text: &str) -> usize {
-    text.split_whitespace().count()
-}";
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreviewRow {
+    line_no: usize,
+    kind: PreviewDiffKind,
+    code: &'static str,
+}
 
 /// Compact fallback preview used in stacked (narrow) mode.
-const NARROW_PREVIEW_LINES: usize = 3;
+/// Keep exactly one removed and one added line visible at all times.
+const NARROW_PREVIEW_ROWS: [PreviewRow; 4] = [
+    PreviewRow {
+        line_no: 12,
+        kind: PreviewDiffKind::Context,
+        code: "fn greet(name: &str) -> String {",
+    },
+    PreviewRow {
+        line_no: 13,
+        kind: PreviewDiffKind::Removed,
+        code: "    format!(\"Hello, {}!\", name)",
+    },
+    PreviewRow {
+        line_no: 13,
+        kind: PreviewDiffKind::Added,
+        code: "    format!(\"Hello, {name}!\")",
+    },
+    PreviewRow {
+        line_no: 14,
+        kind: PreviewDiffKind::Context,
+        code: "}",
+    },
+];
+
+/// Wider diff preview used in side-by-side mode.
+/// This sample intentionally mixes context, additions, and removals.
+const WIDE_PREVIEW_ROWS: [PreviewRow; 8] = [
+    PreviewRow {
+        line_no: 31,
+        kind: PreviewDiffKind::Context,
+        code: "fn summarize(users: &[User]) -> String {",
+    },
+    PreviewRow {
+        line_no: 32,
+        kind: PreviewDiffKind::Removed,
+        code: "    let active = users.iter().filter(|u| u.is_active).count();",
+    },
+    PreviewRow {
+        line_no: 32,
+        kind: PreviewDiffKind::Added,
+        code: "    let active = users.iter().filter(|u| u.is_active()).count();",
+    },
+    PreviewRow {
+        line_no: 33,
+        kind: PreviewDiffKind::Context,
+        code: "    let names: Vec<&str> = users.iter().map(User::name).take(3).collect();",
+    },
+    PreviewRow {
+        line_no: 34,
+        kind: PreviewDiffKind::Removed,
+        code: "    format!(\"{} active: {}\", active, names.join(\", \"))",
+    },
+    PreviewRow {
+        line_no: 34,
+        kind: PreviewDiffKind::Added,
+        code: "    format!(\"{active} active users: {}\", names.join(\", \"))",
+    },
+    PreviewRow {
+        line_no: 35,
+        kind: PreviewDiffKind::Added,
+        code: "        .trim()",
+    },
+    PreviewRow {
+        line_no: 36,
+        kind: PreviewDiffKind::Context,
+        code: "}",
+    },
+];
 
 /// Minimum side-panel width for side-by-side theme preview.
 const WIDE_PREVIEW_MIN_WIDTH: u16 = 44;
@@ -58,6 +127,14 @@ const MIN_LIST_WIDTH_FOR_SIDE: u16 = 40;
 struct ThemePreviewWideRenderable;
 struct ThemePreviewNarrowRenderable;
 
+fn preview_diff_line_type(kind: PreviewDiffKind) -> DiffLineType {
+    match kind {
+        PreviewDiffKind::Context => DiffLineType::Context,
+        PreviewDiffKind::Added => DiffLineType::Insert,
+        PreviewDiffKind::Removed => DiffLineType::Delete,
+    }
+}
+
 fn centered_offset(available: u16, content: u16, min_frame: u16) -> u16 {
     let free = available.saturating_sub(content);
     let frame = if free >= min_frame.saturating_mul(2) {
@@ -71,32 +148,31 @@ fn centered_offset(available: u16, content: u16, min_frame: u16) -> u16 {
 fn render_preview(
     area: Rect,
     buf: &mut Buffer,
-    max_lines: usize,
+    preview_rows: &[PreviewRow],
     center_vertically: bool,
     left_inset: u16,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-
-    let syntax_lines = highlight::highlight_code_to_styled_spans(PREVIEW_CODE, "rust");
-
-    let preview_lines: Vec<(usize, &str)> = PREVIEW_CODE
-        .lines()
-        .enumerate()
-        .take(max_lines)
-        .map(|(idx, line)| (idx + 1, line))
-        .collect();
-    if preview_lines.is_empty() {
+    if preview_rows.is_empty() {
         return;
     }
-    let max_line_no = preview_lines
-        .last()
-        .map(|(line_no, _)| *line_no)
-        .unwrap_or(1);
-    let ln_width = max_line_no.to_string().len();
+    let preview_code = preview_rows
+        .iter()
+        .map(|row| row.code)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let syntax_lines = highlight::highlight_code_to_styled_spans(&preview_code, "rust");
 
-    let content_height = (preview_lines.len() as u16).min(area.height);
+    let max_line_no = preview_rows
+        .iter()
+        .map(|row| row.line_no)
+        .max()
+        .unwrap_or(1);
+    let ln_width = line_number_width(max_line_no);
+
+    let content_height = (preview_rows.len() as u16).min(area.height);
 
     let left_pad = left_inset.min(area.width.saturating_sub(1));
     let top_pad = if center_vertically {
@@ -107,18 +183,31 @@ fn render_preview(
 
     let mut y = area.y.saturating_add(top_pad);
     let render_width = area.width.saturating_sub(left_pad);
-    for (line_idx, raw_line) in preview_lines {
+    for (idx, row) in preview_rows.iter().enumerate() {
         if y >= area.y + area.height {
             break;
         }
-        let gutter = format!("{line_idx:>ln_width$} ");
-        let mut spans: Vec<Span<'static>> = vec![Span::from(gutter).dim()];
-        if let Some(syn) = syntax_lines.as_ref().and_then(|sl| sl.get(line_idx - 1)) {
-            spans.extend(syn.iter().cloned());
+        let diff_type = preview_diff_line_type(row.kind);
+        let wrapped = if let Some(syn) = syntax_lines.as_ref().and_then(|sl| sl.get(idx)) {
+            push_wrapped_diff_line_with_syntax(
+                row.line_no,
+                diff_type,
+                row.code,
+                render_width as usize,
+                ln_width,
+                syn,
+            )
         } else {
-            spans.push(Span::raw(raw_line.to_string()));
-        }
-        Line::from(spans).render(
+            push_wrapped_diff_line(
+                row.line_no,
+                diff_type,
+                row.code,
+                render_width as usize,
+                ln_width,
+            )
+        };
+        let first_line = wrapped.into_iter().next().unwrap_or_else(|| Line::from(""));
+        first_line.render(
             Rect::new(area.x.saturating_add(left_pad), y, render_width, 1),
             buf,
         );
@@ -132,17 +221,17 @@ impl Renderable for ThemePreviewWideRenderable {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, usize::MAX, true, WIDE_PREVIEW_LEFT_INSET);
+        render_preview(area, buf, &WIDE_PREVIEW_ROWS, true, WIDE_PREVIEW_LEFT_INSET);
     }
 }
 
 impl Renderable for ThemePreviewNarrowRenderable {
     fn desired_height(&self, _width: u16) -> u16 {
-        NARROW_PREVIEW_LINES as u16
+        NARROW_PREVIEW_ROWS.len() as u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, NARROW_PREVIEW_LINES, false, 0);
+        render_preview(area, buf, &NARROW_PREVIEW_ROWS, false, 0);
     }
 }
 
@@ -280,11 +369,17 @@ pub(crate) fn build_theme_picker_params(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Modifier;
 
-    fn render_lines(renderable: &dyn Renderable, width: u16, height: u16) -> Vec<String> {
+    fn render_buffer(renderable: &dyn Renderable, width: u16, height: u16) -> Buffer {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         renderable.render(area, &mut buf);
+        buf
+    }
+
+    fn render_lines(renderable: &dyn Renderable, width: u16, height: u16) -> Vec<String> {
+        let buf = render_buffer(renderable, width, height);
         (0..height)
             .map(|row| {
                 let mut line = String::new();
@@ -301,6 +396,17 @@ mod tests {
             .collect()
     }
 
+    fn first_non_space_style_after_marker(buf: &Buffer, row: u16, width: u16) -> Option<Modifier> {
+        let marker_col = (0..width)
+            .find(|&col| buf[(col, row)].symbol() == "-" || buf[(col, row)].symbol() == "+")?;
+        for col in marker_col + 1..width {
+            if buf[(col, row)].symbol() != " " {
+                return Some(buf[(col, row)].style().add_modifier);
+            }
+        }
+        None
+    }
+
     fn preview_line_number(line: &str) -> Option<usize> {
         let trimmed = line.trim_start();
         let digits_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
@@ -312,6 +418,19 @@ mod tests {
             return None;
         }
         digits.parse::<usize>().ok()
+    }
+
+    fn preview_line_marker(line: &str) -> Option<char> {
+        let trimmed = line.trim_start();
+        let digits_len = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
+        if digits_len == 0 {
+            return None;
+        }
+        let mut chars = trimmed[digits_len..].chars();
+        if chars.next()? != ' ' {
+            return None;
+        }
+        chars.next()
     }
 
     #[test]
@@ -330,7 +449,7 @@ mod tests {
             .enumerate()
             .filter_map(|(idx, line)| preview_line_number(line).map(|_| idx))
             .collect();
-        let total_preview_lines = PREVIEW_CODE.lines().count();
+        let total_preview_lines = WIDE_PREVIEW_ROWS.len();
 
         assert_eq!(numbered_rows.len(), total_preview_lines);
         let first_row = *numbered_rows
@@ -350,27 +469,66 @@ mod tests {
 
         let first_line = &lines[first_row];
         assert!(
-            first_line.starts_with("   1 fn greet"),
+            first_line.starts_with("  31  fn summarize"),
             "expected wide preview to start after a 2-char inset"
+        );
+
+        let markers: Vec<char> = lines
+            .iter()
+            .filter_map(|line| preview_line_marker(line))
+            .collect();
+        assert!(
+            markers.contains(&'+'),
+            "expected wide preview to include at least one addition line"
+        );
+        assert!(
+            markers.contains(&'-'),
+            "expected wide preview to include at least one removal line"
         );
     }
 
     #[test]
-    fn narrow_preview_renders_three_lines() {
+    fn narrow_preview_renders_single_add_and_single_remove_in_four_lines() {
         let lines = render_lines(&ThemePreviewNarrowRenderable, 80, 6);
         let numbered_lines: Vec<usize> = lines
             .iter()
             .filter_map(|line| preview_line_number(line))
             .collect();
+        let markers: Vec<char> = lines
+            .iter()
+            .filter_map(|line| preview_line_marker(line))
+            .collect();
 
-        assert_eq!(numbered_lines, vec![1, 2, 3]);
+        assert_eq!(numbered_lines, vec![12, 13, 13, 14]);
+        assert_eq!(markers.len(), 4);
+        assert_eq!(markers.iter().filter(|&&m| m == '+').count(), 1);
+        assert_eq!(markers.iter().filter(|&&m| m == '-').count(), 1);
         let first_numbered = lines
             .iter()
             .find(|line| preview_line_number(line).is_some())
             .expect("expected at least one rendered preview row");
         assert!(
-            first_numbered.starts_with("1 fn greet"),
+            first_numbered.starts_with("12  fn greet"),
             "expected narrow preview line numbers to start at the left edge"
+        );
+    }
+
+    #[test]
+    fn deleted_preview_code_uses_dim_overlay_like_real_diff_renderer() {
+        let width = 80;
+        let height = 6;
+        let buf = render_buffer(&ThemePreviewNarrowRenderable, width, height);
+        let lines = render_lines(&ThemePreviewNarrowRenderable, width, height);
+        let deleted_row = lines
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| (preview_line_marker(line) == Some('-')).then_some(row as u16))
+            .expect("expected a deleted preview row");
+        let modifiers = first_non_space_style_after_marker(&buf, deleted_row, width)
+            .expect("expected code text after diff marker");
+        assert!(
+            modifiers.contains(Modifier::DIM),
+            "expected deleted preview code to be dimmed"
         );
     }
 
