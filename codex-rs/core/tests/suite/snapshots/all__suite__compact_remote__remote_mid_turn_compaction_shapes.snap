@@ -5,16 +5,16 @@ expression: "sectioned_request_shapes(\"Remote mid-turn continuation compaction 
 Scenario: Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
 
 ## Remote Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
 03:message/user:USER_ONE
 04:function_call/<TOOL_CALL>
 05:function_call_output:<TOOL_ERROR_OUTPUT>
 
 ## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
-01:message/developer:<PERMISSIONS_INSTRUCTIONS>
-02:message/user:<AGENTS_MD>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=USER_ONE;next_user=<none>]
+02:message/user:<AGENTS_MD> [prev_user=USER_ONE;next_user=<none>]
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=USER_ONE;next_user=<none>]
 04:message/user:<SUMMARY:REMOTE_MID_TURN_SUMMARY>

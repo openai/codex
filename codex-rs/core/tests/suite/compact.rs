@@ -254,10 +254,72 @@ fn message_text_for_shape(item: &Value) -> String {
         .unwrap_or_else(|| "<NO_TEXT>".to_string())
 }
 
+fn is_non_real_user_text(text: &str) -> bool {
+    text == "<AGENTS_MD>"
+        || text == "<PERMISSIONS_INSTRUCTIONS>"
+        || text == "<SUMMARIZATION_PROMPT>"
+        || text.starts_with("<ENVIRONMENT_CONTEXT")
+        || text.starts_with("<SUMMARY:")
+}
+
+fn is_shape_context_item_text(text: &str) -> bool {
+    text == "<AGENTS_MD>"
+        || text == "<PERMISSIONS_INSTRUCTIONS>"
+        || text.starts_with("<ENVIRONMENT_CONTEXT")
+}
+
+fn user_message_label_for_shape(item: &Value) -> Option<String> {
+    if item.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    if item.get("role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+
+    item.get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content
+                .iter()
+                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+                .map(normalize_shape_text)
+                .find(|text| !is_non_real_user_text(text))
+        })
+}
+
+fn previous_user_label_for_shape(items: &[Value], idx: usize) -> Option<String> {
+    items[..idx]
+        .iter()
+        .rev()
+        .find_map(user_message_label_for_shape)
+}
+
+fn next_user_label_for_shape(items: &[Value], idx: usize) -> Option<String> {
+    items
+        .iter()
+        .skip(idx.saturating_add(1))
+        .find_map(user_message_label_for_shape)
+}
+
+fn context_anchor_suffix(items: &[Value], idx: usize, role: &str, text: &str) -> Option<String> {
+    let is_context_message = if role == "developer" {
+        true
+    } else {
+        role == "user" && is_shape_context_item_text(text)
+    };
+    if !is_context_message {
+        return None;
+    }
+
+    let prev = previous_user_label_for_shape(items, idx).unwrap_or_else(|| "<none>".to_string());
+    let next = next_user_label_for_shape(items, idx).unwrap_or_else(|| "<none>".to_string());
+    Some(format!(" [prev_user={prev};next_user={next}]"))
+}
+
 fn request_input_shape(request: &ResponsesRequest) -> String {
-    request
-        .input()
-        .into_iter()
+    let input = request.input();
+    input
+        .iter()
         .enumerate()
         .map(|(idx, item)| {
             let Some(item_type) = item.get("type").and_then(Value::as_str) else {
@@ -266,8 +328,9 @@ fn request_input_shape(request: &ResponsesRequest) -> String {
             match item_type {
                 "message" => {
                     let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    let text = message_text_for_shape(&item);
-                    format!("{idx:02}:message/{role}:{text}")
+                    let text = message_text_for_shape(item);
+                    let suffix = context_anchor_suffix(&input, idx, role, &text).unwrap_or_default();
+                    format!("{idx:02}:message/{role}:{text}{suffix}")
                 }
                 "function_call" => {
                     let name = item.get("name").and_then(Value::as_str).unwrap_or("unknown");

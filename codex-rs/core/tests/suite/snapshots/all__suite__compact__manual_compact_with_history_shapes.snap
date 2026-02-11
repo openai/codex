@@ -5,17 +5,17 @@ expression: "sectioned_request_shapes(\"Manual /compact with prior user history 
 Scenario: Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.
 
 ## Local Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
 03:message/user:USER_ONE
 04:message/assistant:FIRST_REPLY
 05:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
 03:message/user:USER_ONE
 04:message/user:<SUMMARY:MANUAL_SUMMARY>
 05:message/user:USER_TWO

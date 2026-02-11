@@ -5,8 +5,8 @@ expression: "sectioned_request_shapes(\"Remote pre-turn auto-compaction parse fa
 Scenario: Remote pre-turn auto-compaction parse failure on main: compaction request excludes the incoming user message and the turn stops.
 
 ## Remote Compaction Request (Incoming User Excluded on main)
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS> [prev_user=<none>;next_user=USER_ONE]
+01:message/user:<AGENTS_MD> [prev_user=<none>;next_user=USER_ONE]
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>> [prev_user=<none>;next_user=USER_ONE]
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_FIRST_REPLY
