@@ -44,11 +44,13 @@ Precedence for model metadata is:
 
 This means top-level overrides still win for their specific fields after per-model patching.
 
+If a model slug contains dots, quote it.
+
 Example:
 
 ```toml
-[model_info_overrides.gpt-fake]
-display_name = "gpt-fake-dev"
+[model_info_overrides."gpt-5.1"]
+display_name = "gpt-5.1-local"
 context_window = 400000
 supports_parallel_tool_calls = true
 base_instructions = "Custom model instructions"

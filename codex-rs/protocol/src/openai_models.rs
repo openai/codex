@@ -259,7 +259,7 @@ pub struct ModelInfo {
 /// Every field is optional so users can override only the parts of [`ModelInfo`] they need.
 /// The target model slug is provided by the surrounding map key.
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, TS, JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ModelInfoPatch {
     pub display_name: Option<String>,
     pub description: Option<String>,
