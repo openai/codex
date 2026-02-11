@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
+assertion_line: 3086
 expression: "sectioned_request_shapes(&[(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
 ---
 ## Local Compaction Request
@@ -11,9 +12,9 @@ expression: "sectioned_request_shapes(&[(\"Local Compaction Request\", &requests
 05:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/user:USER_ONE
-01:message/user:<SUMMARY:MANUAL_SUMMARY>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<AGENTS_MD>
-04:message/user:<ENVIRONMENT_CONTEXT>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT>
+03:message/user:USER_ONE
+04:message/user:<SUMMARY:MANUAL_SUMMARY>
 05:message/user:USER_TWO
