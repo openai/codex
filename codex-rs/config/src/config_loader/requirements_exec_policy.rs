@@ -10,7 +10,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
-pub(crate) struct RequirementsExecPolicy {
+pub struct RequirementsExecPolicy {
     policy: Policy,
 }
 
