@@ -5,6 +5,8 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_core::features::Feature;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -1634,7 +1636,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     let previous_model = "gpt-5.2-codex";
     let next_model = "gpt-5.1-codex-max";
 
-    mount_models_once(
+    let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![
@@ -1664,18 +1666,37 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     )
     .await;
 
+    let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
-        .with_config(set_test_compact_prompt);
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
     let test = builder.build(&server).await.expect("build test codex");
+    let _ = test
+        .thread_manager
+        .list_models(&test.config, RefreshStrategy::Online)
+        .await;
+    assert_eq!(models_mock.requests().len(), 1);
 
     test.codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "before switch".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await
         .expect("submit first user turn");
@@ -1685,27 +1706,20 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     .await;
 
     test.codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: Some(next_model.to_string()),
-            effort: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await
-        .expect("override model");
-
-    test.codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "after switch".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await
         .expect("submit second user turn");
@@ -1734,7 +1748,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     let previous_model = "gpt-5.2-codex";
     let next_model = "gpt-5.1-codex-max";
 
-    mount_models_once(
+    let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![
@@ -1764,13 +1778,24 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     )
     .await;
 
+    let model_provider = non_openai_model_provider(&server);
     let mut initial_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
-        .with_config(set_test_compact_prompt);
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
     let initial = initial_builder
         .build(&server)
         .await
         .expect("build initial test codex");
+    let _ = initial
+        .thread_manager
+        .list_models(&initial.config, RefreshStrategy::Online)
+        .await;
+    assert_eq!(models_mock.requests().len(), 1);
     let home = initial.home.clone();
     let rollout_path = initial
         .session_configured
@@ -1780,12 +1805,20 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
 
     initial
         .codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "before resume".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: initial.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await
         .expect("submit pre-resume turn");
@@ -1804,9 +1837,15 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     })
     .await;
 
+    let model_provider = non_openai_model_provider(&server);
     let mut resumed_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model(previous_model)
-        .with_config(set_test_compact_prompt);
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
     let resumed = resumed_builder
         .resume(&server, home, rollout_path)
         .await
@@ -1814,28 +1853,20 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
 
     resumed
         .codex
-        .submit(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            windows_sandbox_level: None,
-            model: Some(next_model.to_string()),
-            effort: None,
-            summary: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-        .await
-        .expect("override model after resume");
-
-    resumed
-        .codex
-        .submit(Op::UserInput {
+        .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            cwd: resumed.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await
         .expect("submit resumed user turn");
