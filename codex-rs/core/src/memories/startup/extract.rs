@@ -177,10 +177,11 @@ fn serialize_filtered_rollout_response_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn serialize_filtered_rollout_response_items_keeps_response_items_only() {
-        let input = vec![RolloutItem::ResponseItem(ResponseItem::Message {
+    fn serialize_filtered_rollout_response_items_filters_developer_messages() {
+        let user_message = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -188,12 +189,23 @@ mod tests {
             }],
             end_turn: None,
             phase: None,
-        })];
+        };
+        let input = vec![
+            RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "developer instruction".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }),
+            RolloutItem::ResponseItem(user_message.clone()),
+        ];
 
         let serialized = serialize_filtered_rollout_response_items(&input).expect("serialize");
         let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
 
-        pretty_assertions::assert_eq!(parsed.len(), 1);
-        assert!(matches!(parsed[0], ResponseItem::Message { .. }));
+        assert_eq!(parsed, vec![user_message]);
     }
 }
