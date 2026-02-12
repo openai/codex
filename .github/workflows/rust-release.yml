@@ -424,6 +424,11 @@ jobs:
         run: |
           rm -rf dist/shell-tool-mcp*
           rm -rf dist/windows-binaries*
+          # cargo-timing.html appears under multiple target-specific directories.
+          # If included in files: dist/**, release upload races on duplicate
+          # asset names and can fail with 404s.
+          find dist -type f -name 'cargo-timing.html' -delete
+          find dist -type d -empty -delete
 
           ls -R dist/
 
