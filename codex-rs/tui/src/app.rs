@@ -628,7 +628,7 @@ impl App {
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.approval_policy.set(*policy)
+            && let Err(err) = config.permissions.approval_policy.set(*policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
@@ -636,7 +636,7 @@ impl App {
             ));
         }
         if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.sandbox_policy.set(policy.clone())
+            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
             self.chat_widget.add_error_message(format!(
@@ -1156,7 +1156,7 @@ impl App {
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && matches!(
-                    app.config.sandbox_policy.get(),
+                    app.config.permissions.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
@@ -1170,7 +1170,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.get().clone();
+                let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
@@ -1835,7 +1835,7 @@ impl App {
                             None,
                         ));
 
-                    let policy = self.config.sandbox_policy.get().clone();
+                    let policy = self.config.permissions.sandbox_policy.get().clone();
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
@@ -1913,8 +1913,9 @@ impl App {
                                 self.config.set_windows_sandbox_enabled(true);
                                 self.config.set_windows_elevated_sandbox_enabled(false);
                             }
-                            self.chat_widget
-                                .set_windows_sandbox_mode(self.config.windows_sandbox_mode);
+                            self.chat_widget.set_windows_sandbox_mode(
+                                self.config.permissions.windows_sandbox_mode,
+                            );
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -2060,7 +2061,7 @@ impl App {
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
-                if let Err(err) = self.config.approval_policy.set(policy) {
+                if let Err(err) = self.config.permissions.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set approval policy: {err}"));
@@ -2077,7 +2078,7 @@ impl App {
                 );
                 let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy) {
+                if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
@@ -2090,7 +2091,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
-                    Some(self.config.sandbox_policy.get().clone());
+                    Some(self.config.permissions.sandbox_policy.get().clone());
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -2111,7 +2112,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.get().clone();
+                        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
