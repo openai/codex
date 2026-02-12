@@ -4675,7 +4675,11 @@ async fn maybe_run_previous_model_inline_compact(
             sess,
             &previous_turn_context,
             AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-            TurnContextReinjection::Skip,
+            // Even though incoming turn items are excluded here, this pass can be the only
+            // compaction run before submission. Reinject canonical context so unchanged
+            // model-visible instructions remain present if no follow-up pre-turn compaction
+            // is needed.
+            TurnContextReinjection::ReinjectAboveLastRealUser,
             None,
         )
         .await?;
