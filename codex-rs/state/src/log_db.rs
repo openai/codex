@@ -21,11 +21,14 @@
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use std::fmt;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Field;
@@ -49,11 +52,13 @@ const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 64;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const LOG_RETENTION_DAYS: i64 = 90;
+const LOG_DB_TARGET: &str = "codex_state::log_db";
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
     fmt_fields: DefaultFields,
     fmt_timer: FmtSystemTime,
+    dropped_log_entries: AtomicUsize,
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
@@ -65,6 +70,47 @@ pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
         sender,
         fmt_fields: DefaultFields::new(),
         fmt_timer: FmtSystemTime,
+        dropped_log_entries: AtomicUsize::new(0),
+    }
+}
+
+impl LogDbLayer {
+    fn enqueue_entry(&self, entry: LogEntry) {
+        let resume_thread_id = entry.thread_id.clone();
+        match self.sender.try_send(entry) {
+            Ok(()) => {
+                let dropped = self.dropped_log_entries.swap(0, Ordering::Relaxed);
+                if dropped == 0 {
+                    return;
+                }
+
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_else(|_| Duration::from_secs(0));
+                let summary = LogEntry {
+                    ts: now.as_secs() as i64,
+                    ts_nanos: now.subsec_nanos() as i64,
+                    level: Level::WARN.as_str().to_string(),
+                    target: LOG_DB_TARGET.to_string(),
+                    message: Some(format!(
+                        "Dropped {dropped} log entries because sqlite log queue was full; logging resumed."
+                    )),
+                    thread_id: resume_thread_id,
+                    module_path: None,
+                    file: None,
+                    line: None,
+                };
+
+                if let Err(TrySendError::Full(_)) = self.sender.try_send(summary) {
+                    self.dropped_log_entries
+                        .fetch_add(dropped, Ordering::Relaxed);
+                }
+            }
+            Err(TrySendError::Full(_)) => {
+                self.dropped_log_entries.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Closed(_)) => {}
+        }
     }
 }
 
@@ -165,7 +211,7 @@ where
             line: metadata.line().map(|line| line as i64),
         };
 
-        let _ = self.sender.try_send(entry);
+        self.enqueue_entry(entry);
     }
 }
 
@@ -380,5 +426,81 @@ impl Visit for MessageVisitor {
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         self.record_field(field, format!("{value:?}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn log_entry(message: &str) -> LogEntry {
+        LogEntry {
+            ts: 0,
+            ts_nanos: 0,
+            level: Level::INFO.as_str().to_string(),
+            target: "test".to_string(),
+            message: Some(message.to_string()),
+            thread_id: None,
+            module_path: None,
+            file: None,
+            line: None,
+        }
+    }
+
+    #[test]
+    fn emits_drop_summary_after_queue_recovers() {
+        let (sender, mut receiver) = mpsc::channel(2);
+        let layer = LogDbLayer {
+            sender,
+            fmt_fields: DefaultFields::new(),
+            fmt_timer: FmtSystemTime,
+            dropped_log_entries: AtomicUsize::new(0),
+        };
+
+        layer.enqueue_entry(log_entry("first"));
+        layer.enqueue_entry(log_entry("second"));
+        layer.enqueue_entry(log_entry("third"));
+        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
+
+        let _ = receiver.try_recv().expect("first log should be queued");
+        let _ = receiver.try_recv().expect("second log should be queued");
+
+        layer.enqueue_entry(log_entry("fourth"));
+
+        let resumed = receiver.try_recv().expect("recovery log should be queued");
+        assert_eq!(resumed.message.as_deref(), Some("fourth"));
+
+        let summary = receiver.try_recv().expect("drop summary should be queued");
+        assert_eq!(summary.level, Level::WARN.as_str());
+        assert_eq!(summary.target, LOG_DB_TARGET);
+        assert_eq!(
+            summary.message.as_deref(),
+            Some("Dropped 1 log entries because sqlite log queue was full; logging resumed.")
+        );
+        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn preserves_drop_count_when_summary_send_is_still_full() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let layer = LogDbLayer {
+            sender,
+            fmt_fields: DefaultFields::new(),
+            fmt_timer: FmtSystemTime,
+            dropped_log_entries: AtomicUsize::new(0),
+        };
+
+        layer.enqueue_entry(log_entry("first"));
+        layer.enqueue_entry(log_entry("second"));
+        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
+
+        let _ = receiver.try_recv().expect("first log should be queued");
+        layer.enqueue_entry(log_entry("third"));
+
+        // Queue is full with "third", so summary cannot be queued yet and count is retained.
+        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
+        let third = receiver.try_recv().expect("third log should be queued");
+        assert_eq!(third.message.as_deref(), Some("third"));
     }
 }
