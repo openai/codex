@@ -1,0 +1,14 @@
+---
+source: core/tests/suite/compact_remote.rs
+assertion_line: 1503
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&include_attempt_request),])"
+---
+Scenario: Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.
+
+## Remote Compaction Request (Incoming User Excluded)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:USER_ONE
+04:message/assistant:REMOTE_FIRST_REPLY
+05:message/user:USER_TWO
