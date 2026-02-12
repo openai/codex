@@ -24,7 +24,6 @@ use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
-use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthStatusChangeNotification;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -415,6 +414,56 @@ impl CodexMessageProcessor {
         }
 
         collaboration_mode
+    }
+
+    fn merge_turn_start_with_config(
+        &self,
+        turn_start_params: TurnStartParams,
+        config_snapshot: ThreadConfigSnapshot,
+    ) -> Op {
+        let TurnStartParams {
+            thread_id: _,
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            collaboration_mode,
+            personality,
+            input,
+            output_schema,
+        } = turn_start_params;
+
+        // Map v2 input items to core input items.
+        let items: Vec<CoreInputItem> = input.into_iter().map(V2UserInput::into_core).collect();
+
+        let collaboration_mode = collaboration_mode
+            .map(|mode| self.normalize_turn_start_collaboration_mode(mode))
+            .or_else(|| {
+                Some(config_snapshot.collaboration_mode.with_updates(
+                    model.clone(),
+                    effort.map(Some),
+                    None,
+                ))
+            });
+
+        Op::UserTurn {
+            items,
+            cwd: cwd.unwrap_or(config_snapshot.cwd),
+            approval_policy: approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core)
+                .unwrap_or(config_snapshot.approval_policy),
+            sandbox_policy: sandbox_policy
+                .map(|p| p.to_core())
+                .unwrap_or(config_snapshot.sandbox_policy),
+            model: model.unwrap_or(config_snapshot.model),
+            effort: effort.or(config_snapshot.reasoning_effort),
+            summary: summary.unwrap_or(config_snapshot.reasoning_summary),
+            final_output_json_schema: output_schema,
+            collaboration_mode,
+            personality,
+        }
     }
 
     fn review_request_from_target(
@@ -4924,51 +4973,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-
-        let collaboration_mode = params
-            .collaboration_mode
-            .map(|mode| self.normalize_turn_start_collaboration_mode(mode));
-
-        // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
-
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
-
-        // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
-            let _ = thread
-                .submit(Op::OverrideTurnContext {
-                    cwd: params.cwd,
-                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                    windows_sandbox_level: None,
-                    model: params.model,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                    collaboration_mode,
-                    personality: params.personality,
-                })
-                .await;
-        }
-
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_id = thread
-            .submit(Op::UserInput {
-                items: mapped_items,
-                final_output_json_schema: params.output_schema,
-            })
-            .await;
+        let thread_id = params.thread_id.clone();
+        let config_snapshot = thread.config_snapshot().await;
+        let op_user_turn = self.merge_turn_start_with_config(params, config_snapshot);
+        let turn_id = thread.submit(op_user_turn).await;
 
         match turn_id {
             Ok(turn_id) => {
@@ -4983,10 +4991,7 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
 
                 // Emit v2 turn/started notification.
-                let notif = TurnStartedNotification {
-                    thread_id: params.thread_id,
-                    turn,
-                };
+                let notif = TurnStartedNotification { thread_id, turn };
                 self.outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notif))
                     .await;
