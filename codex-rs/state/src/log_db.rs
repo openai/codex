@@ -20,18 +20,26 @@
 
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
+use std::fmt;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use tokio::sync::mpsc;
 use tracing::Event;
+use tracing::Level;
 use tracing::field::Field;
 use tracing::field::Visit;
 use tracing::span::Attributes;
 use tracing::span::Id;
 use tracing::span::Record;
 use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::FormattedFields;
+use tracing_subscriber::fmt::format::DefaultFields;
+use tracing_subscriber::fmt::format::FormatFields;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::fmt::time::SystemTime as FmtSystemTime;
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::LogEntry;
@@ -44,6 +52,8 @@ const LOG_RETENTION_DAYS: i64 = 90;
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
+    fmt_fields: DefaultFields,
+    fmt_timer: FmtSystemTime,
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
@@ -51,7 +61,11 @@ pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     tokio::spawn(run_inserter(std::sync::Arc::clone(&state_db), receiver));
     tokio::spawn(run_retention_cleanup(state_db));
 
-    LogDbLayer { sender }
+    LogDbLayer {
+        sender,
+        fmt_fields: DefaultFields::new(),
+        fmt_timer: FmtSystemTime,
+    }
 }
 
 impl<S> Layer<S> for LogDbLayer
@@ -68,9 +82,23 @@ where
         attrs.record(&mut visitor);
 
         if let Some(span) = ctx.span(id) {
-            span.extensions_mut().insert(SpanLogContext {
+            let mut extensions = span.extensions_mut();
+            extensions.insert(SpanLogContext {
                 thread_id: visitor.thread_id,
             });
+            if extensions
+                .get_mut::<FormattedFields<DefaultFields>>()
+                .is_none()
+            {
+                let mut fields = FormattedFields::<DefaultFields>::new(String::new());
+                if self
+                    .fmt_fields
+                    .format_fields(fields.as_writer(), attrs)
+                    .is_ok()
+                {
+                    extensions.insert(fields);
+                }
+            }
         }
     }
 
@@ -83,18 +111,29 @@ where
         let mut visitor = SpanFieldVisitor::default();
         values.record(&mut visitor);
 
-        if visitor.thread_id.is_none() {
-            return;
-        }
-
         if let Some(span) = ctx.span(id) {
             let mut extensions = span.extensions_mut();
-            if let Some(log_context) = extensions.get_mut::<SpanLogContext>() {
-                log_context.thread_id = visitor.thread_id;
+            if visitor.thread_id.is_some() {
+                if let Some(log_context) = extensions.get_mut::<SpanLogContext>() {
+                    log_context.thread_id = visitor.thread_id;
+                } else {
+                    extensions.insert(SpanLogContext {
+                        thread_id: visitor.thread_id,
+                    });
+                }
+            }
+
+            if let Some(fields) = extensions.get_mut::<FormattedFields<DefaultFields>>() {
+                let _ = self.fmt_fields.add_fields(fields, values);
             } else {
-                extensions.insert(SpanLogContext {
-                    thread_id: visitor.thread_id,
-                });
+                let mut fields = FormattedFields::<DefaultFields>::new(String::new());
+                if self
+                    .fmt_fields
+                    .format_fields(fields.as_writer(), values)
+                    .is_ok()
+                {
+                    extensions.insert(fields);
+                }
             }
         }
     }
@@ -107,6 +146,9 @@ where
             .thread_id
             .clone()
             .or_else(|| event_thread_id(event, &ctx));
+        let message = format_feedback_line(&self.fmt_fields, &self.fmt_timer, event, &ctx)
+            .ok()
+            .or(visitor.message);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -116,7 +158,7 @@ where
             ts_nanos: now.subsec_nanos() as i64,
             level: metadata.level().as_str().to_string(),
             target: metadata.target().to_string(),
-            message: visitor.message,
+            message,
             thread_id,
             module_path: metadata.module_path().map(ToString::to_string),
             file: metadata.file().map(ToString::to_string),
@@ -194,6 +236,59 @@ where
         }
     }
     thread_id
+}
+
+fn format_feedback_line<S>(
+    fmt_fields: &DefaultFields,
+    fmt_timer: &FmtSystemTime,
+    event: &Event<'_>,
+    ctx: &tracing_subscriber::layer::Context<'_, S>,
+) -> Result<String, fmt::Error>
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    let mut line = String::new();
+    let mut writer = Writer::new(&mut line);
+    if fmt_timer.format_time(&mut writer).is_err() {
+        writer.write_str("<unknown time>")?;
+    }
+    writer.write_char(' ')?;
+    writer.write_str(feedback_level(event.metadata().level()))?;
+    writer.write_char(' ')?;
+
+    let mut saw_spans = false;
+    if let Some(scope) = ctx.event_scope(event) {
+        for span in scope.from_root() {
+            writer.write_str(span.metadata().name())?;
+            saw_spans = true;
+
+            let extensions = span.extensions();
+            if let Some(fields) = extensions.get::<FormattedFields<DefaultFields>>()
+                && !fields.is_empty()
+            {
+                writer.write_char('{')?;
+                writer.write_str(fields)?;
+                writer.write_char('}')?;
+            }
+            writer.write_char(':')?;
+        }
+    }
+    if saw_spans {
+        writer.write_char(' ')?;
+    }
+
+    fmt_fields.format_fields(writer.by_ref(), event)?;
+    Ok(line)
+}
+
+fn feedback_level(level: &Level) -> &'static str {
+    match *level {
+        Level::TRACE => "TRACE",
+        Level::DEBUG => "DEBUG",
+        Level::INFO => " INFO",
+        Level::WARN => " WARN",
+        Level::ERROR => "ERROR",
+    }
 }
 
 async fn run_inserter(

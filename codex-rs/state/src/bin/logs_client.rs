@@ -266,7 +266,7 @@ fn heuristic_formatting(message: &str) -> String {
 
 mod matcher {
     pub(super) fn apply_patch(message: &str) -> bool {
-        message.starts_with("ToolCall: apply_patch")
+        message.contains("ToolCall: apply_patch")
     }
 }
 

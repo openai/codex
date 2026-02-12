@@ -39,7 +39,9 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
+use codex_core::features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
@@ -340,15 +342,30 @@ pub async fn run_main_with_transport(
         )
     })?;
 
+    let env_filter = || EnvFilter::from_default_env();
+
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
     let stderr_fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-        .with_filter(EnvFilter::from_default_env());
+        .with_filter(env_filter());
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
+
+    let log_db_layer = if config.features.enabled(Feature::Sqlite) {
+        codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .ok()
+        .map(|db| log_db::start(db).with_filter(env_filter()))
+    } else {
+        None
+    };
 
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
@@ -358,6 +375,7 @@ pub async fn run_main_with_transport(
         .with(stderr_fmt)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
+        .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();

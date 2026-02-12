@@ -227,6 +227,27 @@ impl CodexLogSnapshot {
         rollout_path: Option<&std::path::Path>,
         session_source: Option<SessionSource>,
     ) -> Result<()> {
+        self.upload_feedback_with_logs(
+            classification,
+            reason,
+            include_logs,
+            rollout_path,
+            session_source,
+            None,
+        )
+    }
+
+    /// Upload feedback to Sentry with optional attachments and an optional
+    /// override for the `codex-logs.log` attachment bytes.
+    pub fn upload_feedback_with_logs(
+        &self,
+        classification: &str,
+        reason: Option<&str>,
+        include_logs: bool,
+        rollout_path: Option<&std::path::Path>,
+        session_source: Option<SessionSource>,
+        logs_override: Option<Vec<u8>>,
+    ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
         use std::str::FromStr;
@@ -309,8 +330,9 @@ impl CodexLogSnapshot {
         envelope.add_item(EnvelopeItem::Event(event));
 
         if include_logs {
+            let logs = logs_override.unwrap_or_else(|| self.bytes.clone());
             envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
+                buffer: logs,
                 filename: String::from("codex-logs.log"),
                 content_type: Some("text/plain".to_string()),
                 ty: None,

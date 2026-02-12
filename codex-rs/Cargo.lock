@@ -1361,6 +1361,7 @@ dependencies = [
  "codex-login",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
