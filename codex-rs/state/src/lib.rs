@@ -15,6 +15,7 @@ pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2JobClaimOutcome;
+pub use model::current_process_log_id;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 

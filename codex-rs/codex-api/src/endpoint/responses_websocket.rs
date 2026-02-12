@@ -33,6 +33,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -63,7 +64,7 @@ impl WsStream {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
 
-        let pump_task = tokio::spawn(async move {
+        let pump = async move {
             let mut inner = inner;
             loop {
                 tokio::select! {
@@ -119,7 +120,8 @@ impl WsStream {
                     }
                 }
             }
-        });
+        };
+        let pump_task = tokio::spawn(pump.in_current_span());
 
         Self {
             tx_command,
@@ -209,7 +211,7 @@ impl ResponsesWebsocketConnection {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
 
-        tokio::spawn(async move {
+        let stream_task = async move {
             if let Some(etag) = models_etag {
                 let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
             }
@@ -241,7 +243,8 @@ impl ResponsesWebsocketConnection {
                 *guard = None;
                 let _ = tx_event.send(Err(err)).await;
             }
-        });
+        };
+        tokio::spawn(stream_task.in_current_span());
 
         Ok(ResponseStream { rx_event })
     }

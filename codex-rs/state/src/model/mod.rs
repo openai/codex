@@ -8,6 +8,7 @@ pub use backfill_state::BackfillStatus;
 pub use log::LogEntry;
 pub use log::LogQuery;
 pub use log::LogRow;
+pub use log::current_process_log_id;
 pub use memories::Phase2JobClaimOutcome;
 pub use memories::Stage1JobClaim;
 pub use memories::Stage1JobClaimOutcome;

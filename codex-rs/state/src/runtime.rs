@@ -360,7 +360,7 @@ FROM threads
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_id, module_path, file, line) ",
         );
         builder.push_values(entries, |mut row, entry| {
             row.push_bind(entry.ts)
@@ -369,6 +369,7 @@ FROM threads
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
                 .push_bind(&entry.thread_id)
+                .push_bind(&entry.process_id)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
                 .push_bind(entry.line);
@@ -388,7 +389,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_id, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -405,6 +406,231 @@ FROM threads
             .fetch_all(self.pool.as_ref())
             .await?;
         Ok(rows)
+    }
+
+    /// Query `/feedback` logs for a session with a DB-enforced byte cap.
+    ///
+    /// Includes:
+    /// - rows matching the given thread id
+    /// - threadless rows from the given process id
+    ///
+    /// Rows are returned newest-first and bounded by cumulative attachment bytes.
+    pub async fn query_feedback_logs(
+        &self,
+        thread_id: &str,
+        process_id: &str,
+        max_bytes: usize,
+    ) -> anyhow::Result<Vec<LogRow>> {
+        let max_bytes = i64::try_from(max_bytes).unwrap_or(i64::MAX);
+        let rows = sqlx::query_as::<_, LogRow>(
+            r#"
+WITH filtered AS (
+    SELECT
+        id,
+        ts,
+        ts_nanos,
+        level,
+        target,
+        message,
+        thread_id,
+        process_id,
+        file,
+        line,
+        CASE
+            WHEN substr(message, -1, 1) = char(10)
+                THEN length(CAST(message AS BLOB))
+            ELSE length(CAST(message AS BLOB)) + 1
+        END AS line_bytes
+    FROM logs
+    WHERE thread_id = ?
+      AND message IS NOT NULL
+    UNION ALL
+    SELECT
+        id,
+        ts,
+        ts_nanos,
+        level,
+        target,
+        message,
+        thread_id,
+        process_id,
+        file,
+        line,
+        CASE
+            WHEN substr(message, -1, 1) = char(10)
+                THEN length(CAST(message AS BLOB))
+            ELSE length(CAST(message AS BLOB)) + 1
+        END AS line_bytes
+    FROM logs
+    WHERE thread_id IS NULL
+      AND process_id = ?
+      AND message IS NOT NULL
+),
+ranked AS (
+    SELECT
+        id,
+        ts,
+        ts_nanos,
+        level,
+        target,
+        message,
+        thread_id,
+        process_id,
+        file,
+        line,
+        line_bytes,
+        SUM(line_bytes) OVER (ORDER BY id DESC) AS cumulative_bytes
+    FROM filtered
+)
+SELECT id, ts, ts_nanos, level, target, message, thread_id, process_id, file, line
+FROM ranked
+WHERE cumulative_bytes - line_bytes < ?
+ORDER BY id DESC
+            "#,
+        )
+        .bind(thread_id)
+        .bind(process_id)
+        .bind(max_bytes)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        Ok(rows)
+    }
+
+    pub(crate) async fn process_threadless_log_bytes(
+        &self,
+        process_id: &str,
+    ) -> anyhow::Result<usize> {
+        let total_bytes = sqlx::query_scalar::<_, i64>(
+            r#"
+SELECT COALESCE(
+    SUM(
+        CASE
+            WHEN substr(message, -1, 1) = char(10)
+                THEN length(CAST(message AS BLOB))
+            ELSE length(CAST(message AS BLOB)) + 1
+        END
+    ),
+    0
+)
+FROM logs
+WHERE process_id = ?
+  AND thread_id IS NULL
+  AND message IS NOT NULL
+            "#,
+        )
+        .bind(process_id)
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        Ok(usize::try_from(total_bytes).unwrap_or(0))
+    }
+
+    pub(crate) async fn thread_log_bytes(&self, thread_id: &str) -> anyhow::Result<usize> {
+        let total_bytes = sqlx::query_scalar::<_, i64>(
+            r#"
+SELECT COALESCE(
+    SUM(
+        CASE
+            WHEN substr(message, -1, 1) = char(10)
+                THEN length(CAST(message AS BLOB))
+            ELSE length(CAST(message AS BLOB)) + 1
+        END
+    ),
+    0
+)
+FROM logs
+WHERE thread_id = ?
+  AND message IS NOT NULL
+            "#,
+        )
+        .bind(thread_id)
+        .fetch_one(self.pool.as_ref())
+        .await?;
+        Ok(usize::try_from(total_bytes).unwrap_or(0))
+    }
+
+    pub(crate) async fn trim_process_threadless_logs_to_target(
+        &self,
+        process_id: &str,
+        target_bytes: usize,
+    ) -> anyhow::Result<usize> {
+        let target_bytes = i64::try_from(target_bytes).unwrap_or(i64::MAX);
+        sqlx::query(
+            r#"
+DELETE FROM logs
+WHERE id IN (
+    WITH ranked AS (
+        SELECT
+            id,
+            CASE
+                WHEN substr(message, -1, 1) = char(10)
+                    THEN length(CAST(message AS BLOB))
+                ELSE length(CAST(message AS BLOB)) + 1
+            END AS line_bytes,
+            SUM(
+                CASE
+                    WHEN substr(message, -1, 1) = char(10)
+                        THEN length(CAST(message AS BLOB))
+                    ELSE length(CAST(message AS BLOB)) + 1
+                END
+            ) OVER (ORDER BY id DESC) AS cumulative_bytes
+        FROM logs
+        WHERE process_id = ?
+          AND thread_id IS NULL
+          AND message IS NOT NULL
+    )
+    SELECT id
+    FROM ranked
+    WHERE cumulative_bytes - line_bytes >= ?
+)
+            "#,
+        )
+        .bind(process_id)
+        .bind(target_bytes)
+        .execute(self.pool.as_ref())
+        .await?;
+        self.process_threadless_log_bytes(process_id).await
+    }
+
+    pub(crate) async fn trim_thread_logs_to_target(
+        &self,
+        thread_id: &str,
+        target_bytes: usize,
+    ) -> anyhow::Result<usize> {
+        let target_bytes = i64::try_from(target_bytes).unwrap_or(i64::MAX);
+        sqlx::query(
+            r#"
+DELETE FROM logs
+WHERE id IN (
+    WITH ranked AS (
+        SELECT
+            id,
+            CASE
+                WHEN substr(message, -1, 1) = char(10)
+                    THEN length(CAST(message AS BLOB))
+                ELSE length(CAST(message AS BLOB)) + 1
+            END AS line_bytes,
+            SUM(
+                CASE
+                    WHEN substr(message, -1, 1) = char(10)
+                        THEN length(CAST(message AS BLOB))
+                    ELSE length(CAST(message AS BLOB)) + 1
+                END
+            ) OVER (ORDER BY id DESC) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id = ?
+          AND message IS NOT NULL
+    )
+    SELECT id
+    FROM ranked
+    WHERE cumulative_bytes - line_bytes >= ?
+)
+            "#,
+        )
+        .bind(thread_id)
+        .bind(target_bytes)
+        .execute(self.pool.as_ref())
+        .await?;
+        self.thread_log_bytes(thread_id).await
     }
 
     /// Return the max log id matching optional filters.
@@ -709,6 +935,16 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     }
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
+    }
+    if !query.process_ids.is_empty() {
+        builder.push(" AND (");
+        for (idx, process_id) in query.process_ids.iter().enumerate() {
+            if idx > 0 {
+                builder.push(" OR ");
+            }
+            builder.push("process_id = ").push_bind(process_id.as_str());
+        }
+        builder.push(")");
     }
 }
 

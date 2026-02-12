@@ -15,7 +15,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
-use codex_state::LogQuery;
 use codex_state::STATE_DB_VERSION;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
@@ -108,39 +107,31 @@ pub async fn read_feedback_logs_from_state_db(
 ) -> Option<Vec<u8>> {
     let state_db_ctx = state_db_ctx?;
     let thread_id = thread_id?.to_string();
+    let process_log_id = codex_state::current_process_log_id().to_string();
     let rows = state_db_ctx
-        .query_logs(&LogQuery {
-            thread_ids: vec![thread_id],
-            descending: true,
-            ..Default::default()
-        })
+        .query_feedback_logs(
+            thread_id.as_str(),
+            process_log_id.as_str(),
+            MAX_FEEDBACK_LOG_BYTES,
+        )
         .await
         .ok()?;
     if rows.is_empty() {
         return None;
     }
-
-    let mut bytes = 0usize;
-    let mut lines = Vec::new();
-    for row in rows {
-        let mut line = match row.message {
-            Some(message) => message,
-            None => continue,
-        };
-        if !line.ends_with('\n') {
-            line.push('\n');
-        }
-        let line_bytes = line.len();
-        if bytes + line_bytes > MAX_FEEDBACK_LOG_BYTES {
-            break;
-        }
-        bytes += line_bytes;
-        lines.push(line);
-    }
+    let mut lines = rows
+        .into_iter()
+        .filter_map(|row| row.message)
+        .map(|mut line| {
+            if !line.ends_with('\n') {
+                line.push('\n');
+            }
+            line
+        })
+        .collect::<Vec<_>>();
     if lines.is_empty() {
         return None;
     }
-
     lines.reverse();
     Some(lines.concat().into_bytes())
 }

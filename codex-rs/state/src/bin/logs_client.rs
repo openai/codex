@@ -235,6 +235,7 @@ fn to_log_query(
         module_like: filter.module_like.clone(),
         file_like: filter.file_like.clone(),
         thread_ids: filter.thread_ids.clone(),
+        process_ids: Vec::new(),
         include_threadless: filter.include_threadless,
         after_id,
         limit,
