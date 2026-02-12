@@ -16,6 +16,8 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -25,7 +27,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use wiremock::ResponseTemplate;
 
 fn approx_token_count(text: &str) -> i64 {
@@ -63,154 +64,22 @@ fn user_message_item(text: &str) -> ResponseItem {
     }
 }
 
-fn normalize_shape_text(text: &str) -> String {
-    if let Some(summary) = text.strip_prefix(format!("{SUMMARY_PREFIX}\n").as_str()) {
-        return format!("<SUMMARY:{summary}>");
-    }
-    if text.starts_with("# AGENTS.md instructions for ") {
-        return "<AGENTS_MD>".to_string();
-    }
-    if let Some(env_context) = normalize_environment_context_for_shape(text) {
-        return env_context;
-    }
-    if text.contains("<permissions instructions>") {
-        return "<PERMISSIONS_INSTRUCTIONS>".to_string();
-    }
-
-    text.replace('\n', "\\n")
-}
-
-fn normalize_environment_context_for_shape(text: &str) -> Option<String> {
-    if !text.starts_with("<environment_context>") {
-        return None;
-    }
-    let cwd = text.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let cwd = trimmed.strip_prefix("<cwd>")?.strip_suffix("</cwd>")?;
-        Some(if cwd.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER) {
-            PRETURN_CONTEXT_DIFF_CWD_MARKER.to_string()
-        } else {
-            "<CWD>".to_string()
-        })
-    });
-    Some(match cwd {
-        Some(cwd) => format!("<ENVIRONMENT_CONTEXT:cwd={cwd}>"),
-        None => "<ENVIRONMENT_CONTEXT:cwd=<NONE>>".to_string(),
-    })
-}
-
-fn message_text_for_shape(item: &Value) -> String {
-    item.get("content")
-        .and_then(Value::as_array)
-        .map(|content| {
-            content
-                .iter()
-                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-                .map(normalize_shape_text)
-                .collect::<Vec<String>>()
-                .join(" | ")
-        })
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| "<NO_TEXT>".to_string())
+fn context_snapshot_options() -> ContextSnapshotOptions {
+    ContextSnapshotOptions::default()
+        .summary_prefix(SUMMARY_PREFIX)
+        .cwd_marker(PRETURN_CONTEXT_DIFF_CWD_MARKER)
+        .tool_call_name(DUMMY_FUNCTION_NAME)
 }
 
 fn request_input_shape(request: &responses::ResponsesRequest) -> String {
-    request
-        .input()
-        .into_iter()
-        .enumerate()
-        .map(|(idx, item)| {
-            let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-                return format!("{idx:02}:<MISSING_TYPE>");
-            };
-            match item_type {
-                "message" => {
-                    let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                    let text = message_text_for_shape(&item);
-                    format!("{idx:02}:message/{role}:{text}")
-                }
-                "function_call" => {
-                    let name = item.get("name").and_then(Value::as_str).unwrap_or("unknown");
-                    let normalized_name = if name == DUMMY_FUNCTION_NAME {
-                        "<TOOL_CALL>"
-                    } else {
-                        name
-                    };
-                    format!("{idx:02}:function_call/{normalized_name}")
-                }
-                "function_call_output" => {
-                    let output = item
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .map(|output| {
-                            if output.starts_with("unsupported call: ")
-                                || output.starts_with("unsupported custom tool call: ")
-                            {
-                                "<TOOL_ERROR_OUTPUT>".to_string()
-                            } else {
-                                normalize_shape_text(output)
-                            }
-                        })
-                        .unwrap_or_else(|| "<NON_STRING_OUTPUT>".to_string());
-                    format!("{idx:02}:function_call_output:{output}")
-                }
-                "local_shell_call" => {
-                    let command = item
-                        .get("action")
-                        .and_then(|action| action.get("command"))
-                        .and_then(Value::as_array)
-                        .map(|parts| {
-                            parts
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<&str>>()
-                                .join(" ")
-                        })
-                        .filter(|cmd| !cmd.is_empty())
-                        .unwrap_or_else(|| "<NO_COMMAND>".to_string());
-                    format!("{idx:02}:local_shell_call:{command}")
-                }
-                "reasoning" => {
-                    let summary_text = item
-                        .get("summary")
-                        .and_then(Value::as_array)
-                        .and_then(|summary| summary.first())
-                        .and_then(|entry| entry.get("text"))
-                        .and_then(Value::as_str)
-                        .map(normalize_shape_text)
-                        .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
-                    let has_encrypted_content = item
-                        .get("encrypted_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty());
-                    format!(
-                        "{idx:02}:reasoning:summary={summary_text}:encrypted={has_encrypted_content}"
-                    )
-                }
-                "compaction" => {
-                    let has_encrypted_content = item
-                        .get("encrypted_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty());
-                    format!("{idx:02}:compaction:encrypted={has_encrypted_content}")
-                }
-                other => format!("{idx:02}:{other}"),
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("\n")
+    context_snapshot::request_input_shape(request, &context_snapshot_options())
 }
 
 fn sectioned_request_shapes(
     scenario: &str,
     sections: &[(&str, &responses::ResponsesRequest)],
 ) -> String {
-    let sections = sections
-        .iter()
-        .map(|(title, request)| format!("## {title}\n{}", request_input_shape(request)))
-        .collect::<Vec<String>>()
-        .join("\n\n");
-    format!("Scenario: {scenario}\n\n{sections}")
+    context_snapshot::sectioned_request_shapes(scenario, sections, &context_snapshot_options())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
