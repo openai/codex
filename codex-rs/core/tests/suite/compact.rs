@@ -502,10 +502,6 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let server = start_mock_server().await;
 
-    let sse_first_turn = sse(vec![
-        ev_assistant_message("m0", FIRST_REPLY),
-        ev_completed_with_tokens("r0", 80),
-    ]);
     // Compact run where the API reports zero tokens in usage. Our local
     // estimator should still compute a non-zero context size for the compacted
     // history.
@@ -513,7 +509,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
         ev_assistant_message("m1", SUMMARY_TEXT),
         ev_completed_with_tokens("r1", 0),
     ]);
-    mount_sse_sequence(&server, vec![sse_first_turn, sse_compact]).await;
+    mount_sse_once(&server, sse_compact).await;
 
     let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex().with_config(move |config| {
@@ -522,41 +518,39 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     });
     let codex = builder.build(&server).await.unwrap().codex;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "USER_ONE".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
-    let mut token_totals = Vec::new();
-    loop {
-        let event = wait_for_event(&codex, |_| true).await;
-        match event {
-            EventMsg::TokenCount(tc) => {
-                if let Some(info) = tc.info {
-                    token_totals.push(info.last_token_usage.total_tokens);
-                }
-            }
-            EventMsg::TurnComplete(_) => break,
-            _ => {}
-        }
-    }
 
-    assert!(
-        token_totals.contains(&0),
-        "expected compact turn to emit TokenCount usage.total_tokens = 0"
+    // First TokenCount: from the compact API call (usage.total_tokens = 0).
+    let first = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
+
+    // Second TokenCount: from the local post-compaction estimate.
+    let last = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
+
+    // Ensure the compact task itself completes.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        first, 0,
+        "expected first TokenCount from compact API usage to be zero"
     );
     assert!(
-        token_totals.iter().any(|total| *total > 0),
-        "expected compact turn to emit non-zero estimated local context size after compaction"
+        last > 0,
+        "second TokenCount should reflect a non-zero estimated context size after compaction"
     );
 }
 
