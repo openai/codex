@@ -33,8 +33,8 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
-    pub(crate) whitelisted_skill_md_paths: HashSet<PathBuf>,
-    pub(crate) whitelisted_skill_dirs: HashSet<PathBuf>,
+    pub(crate) explicitly_mentioned_skill_md_paths: HashSet<PathBuf>,
+    pub(crate) explicitly_mentioned_skill_dirs: HashSet<PathBuf>,
 }
 
 impl SessionState {
@@ -53,8 +53,8 @@ impl SessionState {
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
-            whitelisted_skill_md_paths: HashSet::new(),
-            whitelisted_skill_dirs: HashSet::new(),
+            explicitly_mentioned_skill_md_paths: HashSet::new(),
+            explicitly_mentioned_skill_dirs: HashSet::new(),
         }
     }
 
@@ -200,27 +200,32 @@ impl SessionState {
         self.active_connector_selection.clear();
     }
 
-    pub(crate) fn record_whitelisted_skill_md_path(&mut self, path: &Path) {
+    pub(crate) fn record_explicitly_mentioned_skill_md_path(&mut self, path: &Path) {
         let normalized = normalize_path(path);
-        self.whitelisted_skill_md_paths.insert(normalized.clone());
+        self.explicitly_mentioned_skill_md_paths
+            .insert(normalized.clone());
         if let Some(parent) = normalized.parent() {
-            self.whitelisted_skill_dirs.insert(parent.to_path_buf());
+            self.explicitly_mentioned_skill_dirs
+                .insert(parent.to_path_buf());
         }
     }
 
-    pub(crate) fn is_whitelisted_skill_md_path(&self, path: &Path) -> bool {
+    pub(crate) fn is_explicitly_mentioned_skill_md_path(&self, path: &Path) -> bool {
         if !is_skill_md_path(path) {
             return false;
         }
 
         let normalized = normalize_path(path);
-        if self.whitelisted_skill_md_paths.contains(&normalized) {
+        if self
+            .explicitly_mentioned_skill_md_paths
+            .contains(&normalized)
+        {
             return true;
         }
 
         normalized
             .parent()
-            .is_some_and(|parent| self.whitelisted_skill_dirs.contains(parent))
+            .is_some_and(|parent| self.explicitly_mentioned_skill_dirs.contains(parent))
     }
 }
 
@@ -364,25 +369,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whitelisted_skill_paths_match_by_file_and_directory() {
+    async fn explicitly_mentioned_skill_paths_match_by_file_and_directory() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);
-        state.record_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md"));
+        state.record_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md"));
 
         assert_eq!(
-            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md")),
+            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md")),
             true
         );
         assert_eq!(
-            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/skill.md")),
+            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/skill.md")),
             true
         );
         assert_eq!(
-            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/alpha/README.md")),
+            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/README.md")),
             false
         );
         assert_eq!(
-            state.is_whitelisted_skill_md_path(Path::new("/tmp/skills/beta/SKILL.md")),
+            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/beta/SKILL.md")),
             false
         );
     }

@@ -1429,16 +1429,16 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    pub(crate) async fn record_whitelisted_skill_sources(&self, skills: &[SkillMetadata]) {
+    pub(crate) async fn record_explicitly_mentioned_skill_sources(&self, skills: &[SkillMetadata]) {
         let mut state = self.state.lock().await;
         for skill in skills {
-            state.record_whitelisted_skill_md_path(&skill.path);
+            state.record_explicitly_mentioned_skill_md_path(&skill.path);
         }
     }
 
-    pub(crate) async fn is_whitelisted_skill_md_path(&self, path: &Path) -> bool {
+    pub(crate) async fn is_explicitly_mentioned_skill_md_path(&self, path: &Path) -> bool {
         let state = self.state.lock().await;
-        state.is_whitelisted_skill_md_path(path)
+        state.is_explicitly_mentioned_skill_md_path(path)
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -4044,7 +4044,7 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    sess.record_whitelisted_skill_sources(&mentioned_skills)
+    sess.record_explicitly_mentioned_skill_sources(&mentioned_skills)
         .await;
     let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())

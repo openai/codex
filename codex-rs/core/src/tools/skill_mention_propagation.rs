@@ -6,7 +6,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 
 use crate::codex::Session;
@@ -18,7 +17,6 @@ use crate::parse_command::parse_command;
 use crate::shell::Shell;
 use crate::shell::empty_shell_snapshot_receiver;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::extract_tool_mentions;
@@ -62,7 +60,10 @@ pub(crate) async fn maybe_update_tool_selections_from_skill_read(
     }
 
     for path in &read_paths {
-        if !session.is_whitelisted_skill_md_path(path.as_path()).await {
+        if !session
+            .is_explicitly_mentioned_skill_md_path(path.as_path())
+            .await
+        {
             return;
         }
     }
@@ -119,21 +120,6 @@ pub(crate) async fn maybe_update_tool_selections_from_skill_read(
         if connector_count == 1 && skill_count == 0 && mention_plain_names_lower.contains(&slug) {
             connector_ids.insert(connector.id.clone());
         }
-    }
-
-    let nested_skills = collect_explicit_skill_mentions(
-        &[UserInput::Text {
-            text: output_text.to_string(),
-            text_elements: Vec::new(),
-        }],
-        &skills_outcome.skills,
-        &skills_outcome.disabled_paths,
-        &connector_slug_counts,
-    );
-    if !nested_skills.is_empty() {
-        session
-            .record_whitelisted_skill_sources(&nested_skills)
-            .await;
     }
 
     maybe_merge_connector_selection(session, connector_ids).await;
@@ -306,10 +292,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whitelisted_read_file_output_updates_connector_selection() {
+    async fn explicitly_mentioned_read_file_output_updates_connector_selection() {
         let (session, turn) = make_session_and_context().await;
         session
-            .record_whitelisted_skill_sources(&[skill("/tmp/skills/alpha/SKILL.md")])
+            .record_explicitly_mentioned_skill_sources(&[skill("/tmp/skills/alpha/SKILL.md")])
             .await;
 
         let payload = ToolPayload::Function {
@@ -337,7 +323,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_whitelisted_read_file_output_is_ignored() {
+    async fn non_explicitly_mentioned_read_file_output_is_ignored() {
         let (session, turn) = make_session_and_context().await;
         let payload = ToolPayload::Function {
             arguments: json!({
@@ -353,6 +339,50 @@ mod tests {
             &turn,
             "read_file",
             &payload,
+            &output("L1: use [$calendar](app://calendar)"),
+        )
+        .await;
+
+        assert_eq!(session.get_connector_selection().await, HashSet::new());
+    }
+
+    #[tokio::test]
+    async fn nested_skill_read_output_is_ignored_without_explicit_user_mention() {
+        let (session, turn) = make_session_and_context().await;
+        session
+            .record_explicitly_mentioned_skill_sources(&[skill("/tmp/skills/alpha/SKILL.md")])
+            .await;
+
+        let alpha_payload = ToolPayload::Function {
+            arguments: json!({
+                "file_path": "/tmp/skills/alpha/SKILL.md",
+                "offset": 1,
+                "limit": 200
+            })
+            .to_string(),
+        };
+        maybe_update_tool_selections_from_skill_read(
+            &session,
+            &turn,
+            "read_file",
+            &alpha_payload,
+            &output("L1: use [$beta](skill:///tmp/skills/beta/SKILL.md)"),
+        )
+        .await;
+
+        let beta_payload = ToolPayload::Function {
+            arguments: json!({
+                "file_path": "/tmp/skills/beta/SKILL.md",
+                "offset": 1,
+                "limit": 200
+            })
+            .to_string(),
+        };
+        maybe_update_tool_selections_from_skill_read(
+            &session,
+            &turn,
+            "read_file",
+            &beta_payload,
             &output("L1: use [$calendar](app://calendar)"),
         )
         .await;
