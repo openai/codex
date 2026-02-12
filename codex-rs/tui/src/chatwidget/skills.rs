@@ -24,7 +24,7 @@ use codex_core::skills::model::SkillToolDependency;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
-        self.insert_str("$");
+        self.bottom_pane.open_skills_list();
     }
 
     pub(crate) fn open_skills_menu(&mut self) {

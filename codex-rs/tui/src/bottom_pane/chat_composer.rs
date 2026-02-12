@@ -296,6 +296,7 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
+    mention_popup_mode: MentionPopupMode,
     dismissed_mention_popup_token: Option<String>,
     mention_bindings: HashMap<u64, ComposerMentionBinding>,
     recent_submission_mention_bindings: Vec<MentionBinding>,
@@ -329,6 +330,13 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum MentionPopupMode {
+    #[default]
+    All,
+    SkillsOnly,
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -395,6 +403,7 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             connectors_snapshot: None,
+            mention_popup_mode: MentionPopupMode::All,
             dismissed_mention_popup_token: None,
             mention_bindings: HashMap::new(),
             recent_submission_mention_bindings: Vec::new(),
@@ -464,6 +473,11 @@ impl ChatComposer {
 
     pub fn set_connectors_enabled(&mut self, enabled: bool) {
         self.connectors_enabled = enabled;
+    }
+
+    pub(crate) fn open_skills_list(&mut self) {
+        self.mention_popup_mode = MentionPopupMode::SkillsOnly;
+        self.insert_str("$");
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -1531,6 +1545,7 @@ impl ChatComposer {
                     self.dismissed_mention_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
+                self.mention_popup_mode = MentionPopupMode::All;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -1555,6 +1570,7 @@ impl ChatComposer {
                 self.insert_selected_mention(&insert_text, path.as_deref());
             }
             self.active_popup = ActivePopup::None;
+            self.mention_popup_mode = MentionPopupMode::All;
         }
 
         result
@@ -1683,6 +1699,9 @@ impl ChatComposer {
             .skills
             .as_ref()
             .is_some_and(|skills| !skills.is_empty());
+        if self.mention_popup_mode == MentionPopupMode::SkillsOnly {
+            return skills_ready;
+        }
         let connectors_ready = self.connectors_enabled
             && self
                 .connectors_snapshot
@@ -1805,9 +1824,11 @@ impl ChatComposer {
     }
 
     fn current_mention_token(&self) -> Option<String> {
-        if !self.mentions_enabled() {
-            return None;
-        }
+        let token = self.raw_current_mention_token()?;
+        self.mentions_enabled().then_some(token)
+    }
+
+    fn raw_current_mention_token(&self) -> Option<String> {
         Self::current_prefixed_token(&self.textarea, '$', true)
     }
 
@@ -2741,6 +2762,9 @@ impl ChatComposer {
             return;
         }
         let file_token = Self::current_at_token(&self.textarea);
+        if self.raw_current_mention_token().is_none() {
+            self.mention_popup_mode = MentionPopupMode::All;
+        }
         let browsing_history = self
             .history
             .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
@@ -3095,7 +3119,8 @@ impl ChatComposer {
             }
         }
 
-        if self.connectors_enabled
+        if self.mention_popup_mode == MentionPopupMode::All
+            && self.connectors_enabled
             && let Some(snapshot) = self.connectors_snapshot.as_ref()
         {
             for connector in &snapshot.connectors {
@@ -3630,6 +3655,19 @@ mod tests {
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn accessible_app(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some(format!("https://example.test/{id}")),
+            is_accessible: true,
+        }
+    }
 
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
@@ -4333,16 +4371,7 @@ mod tests {
         composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
         assert!(matches!(composer.active_popup, ActivePopup::None));
 
-        let connectors = vec![AppInfo {
-            id: "connector_1".to_string(),
-            name: "Notion".to_string(),
-            description: Some("Workspace docs".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            install_url: Some("https://example.test/notion".to_string()),
-            is_accessible: true,
-        }];
+        let connectors = vec![accessible_app("connector_1", "Notion")];
         composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
 
         let ActivePopup::Skill(popup) = &composer.active_popup else {
@@ -4353,6 +4382,85 @@ mod tests {
             .expect("expected connector mention to be selected");
         assert_eq!(mention.insert_text, "$notion".to_string());
         assert_eq!(mention.path, Some("app://connector_1".to_string()));
+    }
+
+    #[test]
+    fn open_skills_list_omits_app_mentions() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "repo-helper".to_string(),
+            description: "repo-helper skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path: PathBuf::from("/tmp/repo-helper/SKILL.md"),
+            scope: codex_core::protocol::SkillScope::User,
+        }]));
+        composer.set_connectors_enabled(true);
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![accessible_app("connector_1", "Notion")],
+        }));
+
+        composer.open_skills_list();
+
+        let ActivePopup::Skill(popup) = &mut composer.active_popup else {
+            panic!("expected mention popup to open");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected a selected skill mention");
+        assert_eq!(mention.insert_text, "$repo-helper".to_string());
+
+        popup.set_query("notion");
+        assert!(
+            popup.selected_mention().is_none(),
+            "expected apps to be excluded from the list skills popup",
+        );
+    }
+
+    #[test]
+    fn list_skills_mode_resets_after_clearing_mention_token() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_connectors_enabled(true);
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![accessible_app("connector_1", "Notion")],
+        }));
+
+        composer.open_skills_list();
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "expected skills list mode to suppress app-only mentions",
+        );
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected mention popup to reopen after mode reset");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected connector mention to be selected");
+        assert_eq!(mention.insert_text, "$notion".to_string());
     }
 
     #[test]
