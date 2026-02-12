@@ -67,6 +67,7 @@ const LOG_RETENTION_DAYS: i64 = 90;
 const LOG_SCOPE_TRIM_TRIGGER_BYTES: usize = 20 * 1024 * 1024;
 const LOG_SCOPE_TRIM_TARGET_BYTES: usize = 10 * 1024 * 1024;
 const LOG_DB_TARGET: &str = "codex_state::log_db";
+const CONVERSATION_ID_FIELD: &str = "conversation.id";
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
@@ -257,7 +258,9 @@ struct SpanFieldVisitor {
 
 impl SpanFieldVisitor {
     fn record_field(&mut self, field: &Field, value: String) {
-        if field.name() == "thread_id" && self.thread_id.is_none() {
+        if (field.name() == "thread_id" || field.name() == CONVERSATION_ID_FIELD)
+            && self.thread_id.is_none()
+        {
             self.thread_id = Some(value);
         }
     }
@@ -565,7 +568,9 @@ impl MessageVisitor {
         if field.name() == "message" && self.message.is_none() {
             self.message = Some(value.clone());
         }
-        if field.name() == "thread_id" && self.thread_id.is_none() {
+        if (field.name() == "thread_id" || field.name() == CONVERSATION_ID_FIELD)
+            && self.thread_id.is_none()
+        {
             self.thread_id = Some(value);
         }
     }
