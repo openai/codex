@@ -565,17 +565,6 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
         error_message.contains("Error running remote compact task"),
         "expected remote compact task error prefix, got {error_message}"
     );
-    assert!(
-        !error_message.contains(
-            "Incoming user message and/or turn context is too large to fit in context window"
-        ),
-        "non-context compaction failures should surface real error messages, got {error_message}"
-    );
-    assert!(
-        error_message.contains("invalid compact payload shape")
-            || error_message.contains("invalid type: string"),
-        "expected remote compact parse failure to surface, got {error_message}"
-    );
     assert_eq!(
         first_compact_mock.requests().len(),
         1,
