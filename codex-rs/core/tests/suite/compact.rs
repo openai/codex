@@ -3331,6 +3331,139 @@ async fn pre_turn_local_compaction_trim_retries_keep_incoming_items() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_turn_compaction_failure_persists_context_updates_for_next_turn() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_failed = sse_failed(
+        "compact-failed",
+        "context_length_exceeded",
+        CONTEXT_LIMIT_MESSAGE,
+    );
+    let third_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 80),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            compact_failed.clone(),
+            compact_failed.clone(),
+            compact_failed.clone(),
+            compact_failed,
+            third_turn,
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(0);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(300);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    // Seed `previous_context` without adding a user turn to history.
+    codex
+        .submit(Op::UserTurn {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            cwd: PathBuf::from("."),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: "gpt-5.2-codex".to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit empty settings-only turn");
+
+    let oversized_input = "X".repeat(2_000);
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: oversized_input,
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: PathBuf::from("."),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-5.2-codex".to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit oversized turn that triggers pre-turn compaction failure");
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert!(
+        error_message.contains(
+            "Incoming user message and/or turn context is too large to fit in context window"
+        ),
+        "expected oversized incoming-items error, got {error_message}"
+    );
+
+    let follow_up_text = "after failed pre-turn compact";
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: follow_up_text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: PathBuf::from("."),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "gpt-5.2-codex".to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit follow-up turn");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "expected four failed pre-turn compaction attempts and one follow-up model request"
+    );
+
+    let follow_up_request = requests.last().expect("missing follow-up request");
+    let follow_up_developer_texts = follow_up_request.message_input_texts("developer");
+    assert!(
+        follow_up_developer_texts
+            .iter()
+            .any(|text| text.contains("sandbox_mode` is `danger-full-access`")),
+        "expected danger-full-access permissions update in follow-up turn after failed pre-turn compaction: {follow_up_developer_texts:?}"
+    );
+    assert!(
+        follow_up_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == follow_up_text),
+        "expected follow-up request to include follow-up user message"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
     skip_if_no_network!();
 

@@ -4287,21 +4287,26 @@ pub(crate) async fn run_turn(
     .await
     {
         Ok(outcome) => outcome,
-        Err(CodexErr::ContextWindowExceeded) => {
-            let incoming_items_tokens_estimate = incoming_turn_items
-                .iter()
-                .map(estimate_item_token_count)
-                .fold(0_i64, i64::saturating_add);
-            let message = format!(
-                "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
-            );
-            let event =
-                EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)));
-            sess.send_event(&turn_context, event).await;
-            return None;
-        }
         Err(err) => {
-            let event = EventMsg::Error(err.to_error_event(None));
+            if !pre_turn_context_items.is_empty() {
+                // Preserve model-visible settings updates even when pre-turn compaction fails
+                // before we can persist turn input.
+                sess.record_conversation_items(&turn_context, &pre_turn_context_items)
+                    .await;
+            }
+            let event = match err {
+                CodexErr::ContextWindowExceeded => {
+                    let incoming_items_tokens_estimate = incoming_turn_items
+                        .iter()
+                        .map(estimate_item_token_count)
+                        .fold(0_i64, i64::saturating_add);
+                    let message = format!(
+                        "Incoming user message and/or turn context is too large to fit in context window. Please reduce the size of your message and try again. (incoming_items_tokens_estimate={incoming_items_tokens_estimate})"
+                    );
+                    EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)))
+                }
+                other => EventMsg::Error(other.to_error_event(None)),
+            };
             sess.send_event(&turn_context, event).await;
             return None;
         }
