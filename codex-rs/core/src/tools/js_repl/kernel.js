@@ -2,32 +2,70 @@
 // Communicates over JSON lines on stdin/stdout.
 // Requires Node started with --experimental-vm-modules.
 
+const { Buffer } = require("node:buffer");
+const crypto = require("node:crypto");
 const { builtinModules } = require("node:module");
 const { createInterface } = require("node:readline");
+const { performance } = require("node:perf_hooks");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
-const { inspect } = require("node:util");
+const { URL, URLSearchParams, pathToFileURL } = require("node:url");
+const { inspect, TextDecoder, TextEncoder } = require("node:util");
 const vm = require("node:vm");
 
 const { SourceTextModule, SyntheticModule } = vm;
 const meriyahPromise = import("./meriyah.umd.min.js").then((m) => m.default ?? m);
 
+// vm contexts start with very few globals. Populate common Node/web globals
+// so snippets and dependencies behave like a normal modern JS runtime.
 const context = vm.createContext({});
 context.globalThis = context;
 context.global = context;
+context.Buffer = Buffer;
 context.console = console;
+context.URL = URL;
+context.URLSearchParams = URLSearchParams;
+if (typeof TextEncoder !== "undefined") {
+  context.TextEncoder = TextEncoder;
+}
+if (typeof TextDecoder !== "undefined") {
+  context.TextDecoder = TextDecoder;
+}
+if (typeof AbortController !== "undefined") {
+  context.AbortController = AbortController;
+}
+if (typeof AbortSignal !== "undefined") {
+  context.AbortSignal = AbortSignal;
+}
+if (typeof structuredClone !== "undefined") {
+  context.structuredClone = structuredClone;
+}
+if (typeof fetch !== "undefined") {
+  context.fetch = fetch;
+}
+if (typeof Headers !== "undefined") {
+  context.Headers = Headers;
+}
+if (typeof Request !== "undefined") {
+  context.Request = Request;
+}
+if (typeof Response !== "undefined") {
+  context.Response = Response;
+}
+if (typeof performance !== "undefined") {
+  context.performance = performance;
+}
+context.crypto = crypto.webcrypto ?? crypto;
 context.setTimeout = setTimeout;
 context.clearTimeout = clearTimeout;
 context.setInterval = setInterval;
 context.clearInterval = clearInterval;
 context.queueMicrotask = queueMicrotask;
-// Explicit long-lived mutable store exposed as `codex.state`. This is useful
-// when callers want shared state without relying on lexical binding carry-over.
-const codexState = {};
-context.codex = {
-  state: codexState,
-  tmpDir: process.env.CODEX_JS_TMP_DIR || process.cwd(),
-};
+if (typeof setImmediate !== "undefined") {
+  context.setImmediate = setImmediate;
+  context.clearImmediate = clearImmediate;
+}
+context.atob = (data) => Buffer.from(data, "base64").toString("binary");
+context.btoa = (data) => Buffer.from(data, "binary").toString("base64");
 
 /**
  * @typedef {{ name: string, kind: "const"|"let"|"var"|"function"|"class" }} Binding
@@ -65,6 +103,14 @@ function isDeniedBuiltin(specifier) {
   const normalized = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
   return deniedBuiltinModules.has(specifier) || deniedBuiltinModules.has(normalized);
 }
+
+/** @type {Map<string, (msg: any) => void>} */
+const pendingTool = new Map();
+let toolCounter = 0;
+const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
+// Explicit long-lived mutable store exposed as `codex.state`. This is useful
+// when callers want shared state without relying on lexical binding carry-over.
+const state = {};
 
 function resolveSpecifier(specifier) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
@@ -245,10 +291,45 @@ function withCapturedConsole(ctx, fn) {
 }
 
 async function handleExec(message) {
+  const tool = (toolName, args) => {
+    if (typeof toolName !== "string" || !toolName) {
+      return Promise.reject(new Error("codex.tool expects a tool name string"));
+    }
+    const id = `${message.id}-tool-${toolCounter++}`;
+    let argumentsJson = "{}";
+    if (typeof args === "string") {
+      argumentsJson = args;
+    } else if (typeof args !== "undefined") {
+      argumentsJson = JSON.stringify(args);
+    }
+
+    return new Promise((resolve, reject) => {
+      const payload = {
+        type: "run_tool",
+        id,
+        exec_id: message.id,
+        tool_name: toolName,
+        arguments: argumentsJson,
+      };
+      send(payload);
+      pendingTool.set(id, (res) => {
+        if (!res.ok) {
+          reject(new Error(res.error || "tool failed"));
+          return;
+        }
+        resolve(res.response);
+      });
+    });
+  };
+
   try {
     const code = typeof message.code === "string" ? message.code : "";
     const { source, nextBindings } = await buildModuleSource(code);
     let output = "";
+
+    context.state = state;
+    context.codex = { state, tmpDir, tool };
+    context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {
       const module = new SourceTextModule(source, {
@@ -307,10 +388,22 @@ async function handleExec(message) {
   }
 }
 
+function handleToolResult(message) {
+  const resolver = pendingTool.get(message.id);
+  if (resolver) {
+    pendingTool.delete(message.id);
+    resolver(message);
+  }
+}
+
 let queue = Promise.resolve();
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line) => {
+  if (!line.trim()) {
+    return;
+  }
+
   let message;
   try {
     message = JSON.parse(line);
@@ -320,5 +413,9 @@ input.on("line", (line) => {
 
   if (message.type === "exec") {
     queue = queue.then(() => handleExec(message));
+    return;
+  }
+  if (message.type === "run_tool_result") {
+    handleToolResult(message);
   }
 });

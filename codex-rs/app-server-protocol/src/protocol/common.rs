@@ -1323,17 +1323,4 @@ mod tests {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
     }
-
-    #[test]
-    fn thread_start_mock_field_is_marked_experimental() {
-        let request = ClientRequest::ThreadStart {
-            request_id: RequestId::Integer(1),
-            params: v2::ThreadStartParams {
-                mock_experimental_field: Some("mock".to_string()),
-                ..Default::default()
-            },
-        };
-        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
-        assert_eq!(reason, Some("thread/start.mockExperimentalField"));
-    }
 }

@@ -246,7 +246,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -1970,6 +1970,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -1998,6 +2006,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -2426,6 +2435,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PatchApplyStatus2"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -2453,6 +2470,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -3494,6 +3512,14 @@
       ],
       "type": "string"
     },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "ExecOutputStream": {
       "enum": [
         "stdout",
@@ -4284,6 +4310,14 @@
     "PatchApplyStatus": {
       "enum": [
         "inProgress",
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
+    "PatchApplyStatus2": {
+      "enum": [
         "completed",
         "failed",
         "declined"
