@@ -5319,7 +5319,7 @@ impl ChatWidget {
                     .hide_full_access_warning
                     .unwrap_or(false);
             let mut actions: Vec<SelectionAction> = Vec::new();
-            if !is_current && !(preset.id == "full-access" && requires_confirmation) {
+            if !(is_current || preset.id == "full-access" && requires_confirmation) {
                 let selected_name = name.clone();
                 actions.push(Box::new(move |tx| {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
