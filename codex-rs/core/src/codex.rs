@@ -5393,6 +5393,7 @@ mod tests {
                 input_schema: Arc::new(JsonObject::default()),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             },
