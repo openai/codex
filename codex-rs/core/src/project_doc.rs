@@ -543,9 +543,16 @@ mod tests {
         );
 
         let skills = load_skills(&cfg);
+        let local_skills_root = dunce::canonicalize(cfg.codex_home.join("skills").as_path())
+            .unwrap_or_else(|_| cfg.codex_home.join("skills"));
+        let local_skills = skills
+            .skills
+            .into_iter()
+            .filter(|skill| skill.path.starts_with(&local_skills_root))
+            .collect::<Vec<_>>();
         let res = get_user_instructions(
             &cfg,
-            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+            skills.errors.is_empty().then_some(local_skills.as_slice()),
         )
         .await
         .expect("instructions expected");
@@ -570,9 +577,16 @@ mod tests {
         create_skill(cfg.codex_home.clone(), "linting", "run clippy");
 
         let skills = load_skills(&cfg);
+        let local_skills_root = dunce::canonicalize(cfg.codex_home.join("skills").as_path())
+            .unwrap_or_else(|_| cfg.codex_home.join("skills"));
+        let local_skills = skills
+            .skills
+            .into_iter()
+            .filter(|skill| skill.path.starts_with(&local_skills_root))
+            .collect::<Vec<_>>();
         let res = get_user_instructions(
             &cfg,
-            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+            skills.errors.is_empty().then_some(local_skills.as_slice()),
         )
         .await
         .expect("instructions expected");
