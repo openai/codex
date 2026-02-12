@@ -441,23 +441,14 @@ enum ConnectorsCacheState {
 
 #[derive(Debug)]
 enum RateLimitErrorKind {
-    ModelCap {
-        model: String,
-        reset_after_seconds: Option<u64>,
-    },
+    ServerOverloaded,
     UsageLimit,
     Generic,
 }
 
 fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
-        CodexErrorInfo::ModelCap {
-            model,
-            reset_after_seconds,
-        } => Some(RateLimitErrorKind::ModelCap {
-            model: model.clone(),
-            reset_after_seconds: *reset_after_seconds,
-        }),
+        CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
         CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
         CodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(429),
@@ -1605,18 +1596,14 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
-    fn on_model_cap_error(&mut self, model: String, reset_after_seconds: Option<u64>) {
+    fn on_server_overloaded_error(&mut self, message: String) {
         self.finalize_turn();
 
-        let mut message = format!("Model {model} is at capacity. Please try a different model.");
-        if let Some(seconds) = reset_after_seconds {
-            message.push_str(&format!(
-                " Try again in {}.",
-                format_duration_short(seconds)
-            ));
+        let message = if message.trim().is_empty() {
+            "Codex is currently experiencing high load.".to_string()
         } else {
-            message.push_str(" Try again later.");
-        }
+            message
+        };
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
@@ -3964,10 +3951,9 @@ impl ChatWidget {
                     && let Some(kind) = rate_limit_error_kind(&info)
                 {
                     match kind {
-                        RateLimitErrorKind::ModelCap {
-                            model,
-                            reset_after_seconds,
-                        } => self.on_model_cap_error(model, reset_after_seconds),
+                        RateLimitErrorKind::ServerOverloaded => {
+                            self.on_server_overloaded_error(message)
+                        }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
                             self.on_error(message)
                         }
@@ -7160,18 +7146,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
-}
-
-fn format_duration_short(seconds: u64) -> String {
-    if seconds < 60 {
-        "less than a minute".to_string()
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86_400 {
-        format!("{}h", seconds / 3600)
-    } else {
-        format!("{}d", seconds / 86_400)
-    }
 }
 
 #[cfg(test)]

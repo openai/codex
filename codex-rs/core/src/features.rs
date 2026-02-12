@@ -89,7 +89,7 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Allow the model to search MCP tools via BM25 before exposing them.
+    /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
@@ -445,7 +445,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SearchTool,
         key: "search_tool",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
