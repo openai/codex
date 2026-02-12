@@ -167,6 +167,12 @@ async fn run_compact_task_inner(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
     );
+    // Keep incoming turn items and the compaction prompt pinned at the tail while trimming.
+    // Pre-turn compaction should fail with ContextWindowExceeded rather than dropping incoming
+    // items to force compaction to succeed.
+    let protected_tail_items = incoming_items
+        .as_ref()
+        .map_or(1_usize, |items| items.len().saturating_add(1));
 
     let mut truncated_count = 0usize;
 
@@ -224,7 +230,7 @@ async fn run_compact_task_inner(
                 return Err(CodexErr::Interrupted);
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input_len > 1 {
+                if turn_input_len > 1 && history.raw_items().len() > protected_tail_items {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent
                     // messages intact.
                     error!(
