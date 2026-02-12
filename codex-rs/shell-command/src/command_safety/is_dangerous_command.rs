@@ -104,25 +104,6 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
     let cmd0 = command.first().map(String::as_str);
 
     match cmd0 {
-        Some(cmd) if cmd.ends_with("git") => {
-            let Some((subcommand_idx, subcommand)) =
-                find_git_subcommand(command, &["reset", "rm", "branch", "push", "clean"])
-            else {
-                return false;
-            };
-
-            match subcommand {
-                "reset" | "rm" => true,
-                "branch" => git_branch_is_delete(&command[subcommand_idx + 1..]),
-                "push" => git_push_is_dangerous(&command[subcommand_idx + 1..]),
-                "clean" => git_clean_is_force(&command[subcommand_idx + 1..]),
-                other => {
-                    debug_assert!(false, "unexpected git subcommand from matcher: {other}");
-                    false
-                }
-            }
-        }
-
         Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf")),
 
         // for sudo <cmd> simply do the check for <cmd>
@@ -131,48 +112,6 @@ fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
-}
-
-fn git_branch_is_delete(branch_args: &[String]) -> bool {
-    // Git allows stacking short flags (for example, `-dv` or `-vd`). Treat any
-    // short-flag group containing `d`/`D` as a delete flag.
-    branch_args.iter().map(String::as_str).any(|arg| {
-        matches!(arg, "-d" | "-D" | "--delete")
-            || arg.starts_with("--delete=")
-            || short_flag_group_contains(arg, 'd')
-            || short_flag_group_contains(arg, 'D')
-    })
-}
-
-fn short_flag_group_contains(arg: &str, target: char) -> bool {
-    arg.starts_with('-') && !arg.starts_with("--") && arg.chars().skip(1).any(|c| c == target)
-}
-
-fn git_push_is_dangerous(push_args: &[String]) -> bool {
-    push_args.iter().map(String::as_str).any(|arg| {
-        matches!(
-            arg,
-            "--force" | "--force-with-lease" | "--force-if-includes" | "--delete" | "-f" | "-d"
-        ) || arg.starts_with("--force-with-lease=")
-            || arg.starts_with("--force-if-includes=")
-            || arg.starts_with("--delete=")
-            || short_flag_group_contains(arg, 'f')
-            || short_flag_group_contains(arg, 'd')
-            || git_push_refspec_is_dangerous(arg)
-    })
-}
-
-fn git_push_refspec_is_dangerous(arg: &str) -> bool {
-    // `+<refspec>` forces updates and `:<dst>` deletes remote refs.
-    (arg.starts_with('+') || arg.starts_with(':')) && arg.len() > 1
-}
-
-fn git_clean_is_force(clean_args: &[String]) -> bool {
-    clean_args.iter().map(String::as_str).any(|arg| {
-        matches!(arg, "--force" | "-f")
-            || arg.starts_with("--force=")
-            || short_flag_group_contains(arg, 'f')
-    })
 }
 
 #[cfg(test)]
@@ -184,13 +123,13 @@ mod tests {
     }
 
     #[test]
-    fn git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["git", "reset"])));
+    fn git_reset_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&["git", "reset"])));
     }
 
     #[test]
-    fn bash_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn bash_git_reset_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "bash",
             "-lc",
             "git reset --hard",
@@ -198,8 +137,8 @@ mod tests {
     }
 
     #[test]
-    fn zsh_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn zsh_git_reset_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "zsh",
             "-lc",
             "git reset --hard",
@@ -221,15 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn sudo_git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn sudo_git_reset_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "sudo", "git", "reset", "--hard",
         ])));
     }
 
     #[test]
-    fn usr_bin_git_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn usr_bin_git_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "/usr/bin/git",
             "reset",
             "--hard",
@@ -237,14 +176,14 @@ mod tests {
     }
 
     #[test]
-    fn git_branch_delete_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_branch_delete_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-d", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-D", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "bash",
             "-lc",
             "git branch --delete feature",
@@ -252,27 +191,27 @@ mod tests {
     }
 
     #[test]
-    fn git_branch_delete_with_stacked_short_flags_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_branch_delete_with_stacked_short_flags_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-dv", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-vd", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-vD", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "branch", "-Dvv", "feature",
         ])));
     }
 
     #[test]
-    fn git_branch_delete_with_global_options_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_branch_delete_with_global_options_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "-C", ".", "branch", "-d", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git",
             "-c",
             "color.ui=false",
@@ -280,7 +219,7 @@ mod tests {
             "-D",
             "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "bash",
             "-lc",
             "git -C . branch -d feature",
@@ -297,14 +236,14 @@ mod tests {
     }
 
     #[test]
-    fn git_push_force_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_push_force_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "--force", "origin", "main",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "-f", "origin", "main",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git",
             "-C",
             ".",
@@ -316,11 +255,11 @@ mod tests {
     }
 
     #[test]
-    fn git_push_plus_refspec_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_push_plus_refspec_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "origin", "+main",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git",
             "push",
             "origin",
@@ -329,21 +268,21 @@ mod tests {
     }
 
     #[test]
-    fn git_push_delete_flag_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_push_delete_flag_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "--delete", "origin", "feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "-d", "origin", "feature",
         ])));
     }
 
     #[test]
-    fn git_push_delete_refspec_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_push_delete_refspec_is_not_dangerous() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "push", "origin", ":feature",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "bash",
             "-lc",
             "git push origin :feature",
@@ -358,14 +297,14 @@ mod tests {
     }
 
     #[test]
-    fn git_clean_force_is_dangerous_even_when_f_is_not_first_flag() {
-        assert!(command_might_be_dangerous(&vec_str(&[
+    fn git_clean_force_is_not_dangerous_even_when_f_is_not_first_flag() {
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "clean", "-fdx",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "clean", "-xdf",
         ])));
-        assert!(command_might_be_dangerous(&vec_str(&[
+        assert!(!command_might_be_dangerous(&vec_str(&[
             "git", "clean", "--force",
         ])));
     }
