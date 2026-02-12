@@ -628,7 +628,7 @@ impl App {
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.approval_policy.set(*policy)
+            && let Err(err) = config.permissions.approval_policy.set(*policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
@@ -636,7 +636,7 @@ impl App {
             ));
         }
         if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.sandbox_policy.set(policy.clone())
+            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
             self.chat_widget.add_error_message(format!(
@@ -1078,7 +1078,7 @@ impl App {
             SessionSelection::Fork(path) => {
                 otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -1156,9 +1156,9 @@ impl App {
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && matches!(
-                    app.config.sandbox_policy.get(),
+                    app.config.permissions.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1170,7 +1170,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.get().clone();
+                let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
@@ -1463,7 +1463,7 @@ impl App {
                     if path.exists() {
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
                             .await
                         {
                             Ok(forked) => {
@@ -1826,6 +1826,63 @@ impl App {
                     let _ = preset;
                 }
             }
+            AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Granting sandbox read access to {path} ..."),
+                            None,
+                        ));
+
+                    let policy = self.config.permissions.sandbox_policy.get().clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = self.config.cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    tokio::task::spawn_blocking(move || {
+                        let requested_path = PathBuf::from(path);
+                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                            requested_path.as_path(),
+                        ) {
+                            Ok(canonical_path) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: canonical_path,
+                                error: None,
+                            },
+                            Err(err) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: requested_path,
+                                error: Some(err.to_string()),
+                            },
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = path;
+                }
+            }
+            AppEvent::WindowsSandboxGrantReadRootCompleted { path, error } => match error {
+                Some(err) => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(format!("Error: {err}")));
+                }
+                None => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Sandbox read access granted for {}", path.display()),
+                            None,
+                        ));
+                }
+            },
             AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
                 #[cfg(target_os = "windows")]
                 {
@@ -1856,8 +1913,9 @@ impl App {
                                 self.config.set_windows_sandbox_enabled(true);
                                 self.config.set_windows_elevated_sandbox_enabled(false);
                             }
-                            self.chat_widget
-                                .set_windows_sandbox_mode(self.config.windows_sandbox_mode);
+                            self.chat_widget.set_windows_sandbox_mode(
+                                self.config.permissions.windows_sandbox_mode,
+                            );
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -2072,7 +2130,7 @@ impl App {
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
-                if let Err(err) = self.config.approval_policy.set(policy) {
+                if let Err(err) = self.config.permissions.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set approval policy: {err}"));
@@ -2085,18 +2143,16 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
-                #[cfg(target_os = "windows")]
                 let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy) {
+                if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                #[cfg(target_os = "windows")]
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
@@ -2104,7 +2160,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
-                    Some(self.config.sandbox_policy.get().clone());
+                    Some(self.config.permissions.sandbox_policy.get().clone());
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -2125,7 +2181,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.get().clone();
+                        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -3150,7 +3206,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3205,7 +3261,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3254,7 +3310,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3333,7 +3389,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3457,7 +3513,7 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,

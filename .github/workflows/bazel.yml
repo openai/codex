@@ -100,12 +100,12 @@ jobs:
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-          CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
         shell: bash
         run: |
           bazel_args=(
             test
             //...
+            --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI

@@ -240,7 +240,9 @@ async fn returns_empty_when_all_layers_missing() {
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
+        // Force managed preferences to resolve as empty so this test does not
+        // inherit non-empty machine-specific managed state.
+        managed_preferences_base64: Some(String::new()),
         macos_managed_config_requirements_base64: None,
     };
 
@@ -410,7 +412,7 @@ allowed_sandbox_modes = ["read-only"]
     );
     assert_eq!(
         *state.requirements().sandbox_policy.get(),
-        SandboxPolicy::ReadOnly
+        SandboxPolicy::new_read_only_policy()
     );
     assert!(
         state
@@ -425,6 +427,7 @@ allowed_sandbox_modes = ["read-only"]
             .sandbox_policy
             .can_set(&SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
+                read_only_access: Default::default(),
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,

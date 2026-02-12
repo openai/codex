@@ -3323,7 +3323,12 @@ impl ChatWidget {
                         return;
                     };
 
-                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                    if let Err(err) = self
+                        .config
+                        .permissions
+                        .approval_policy
+                        .can_set(&preset.approval)
+                    {
                         self.add_error_message(err.to_string());
                         return;
                     }
@@ -3341,6 +3346,11 @@ impl ChatWidget {
                     let _ = &self.otel_manager;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
+            }
+            SlashCommand::SandboxReadRoot => {
+                self.add_error_message(
+                    "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
+                );
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
@@ -3400,6 +3410,12 @@ impl ChatWidget {
             }
             SlashCommand::Clean => {
                 self.clean_background_terminals();
+            }
+            SlashCommand::MemoryDrop => {
+                self.submit_op(Op::DropMemories);
+            }
+            SlashCommand::MemoryUpdate => {
+                self.submit_op(Op::UpdateMemories);
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -3548,6 +3564,18 @@ impl ChatWidget {
                     return;
                 };
                 self.apply_index_command_args(&prepared_args);
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
+                        path: prepared_args,
+                    });
                 self.bottom_pane.drain_pending_submission_state();
             }
             _ => self.dispatch_command(cmd),
@@ -3815,8 +3843,8 @@ impl ChatWidget {
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
-            approval_policy: self.config.approval_policy.value(),
-            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            approval_policy: self.config.permissions.approval_policy.value(),
+            sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
@@ -4785,8 +4813,8 @@ impl ChatWidget {
     }
 
     fn open_rate_limit_switch_prompt(&mut self, preset: ModelPreset) {
-        let switch_model = preset.model.to_string();
-        let display_name = preset.display_name.to_string();
+        let switch_model = preset.model;
+        let switch_model_for_events = switch_model.clone();
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
 
         let switch_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -4795,13 +4823,13 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
-                model: Some(switch_model.clone()),
+                model: Some(switch_model_for_events.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
                 collaboration_mode: None,
                 personality: None,
             }));
-            tx.send(AppEvent::UpdateModel(switch_model.clone()));
+            tx.send(AppEvent::UpdateModel(switch_model_for_events.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
         })];
 
@@ -4818,7 +4846,7 @@ impl ChatWidget {
 
         let items = vec![
             SelectionItem {
-                name: format!("Switch to {display_name}"),
+                name: format!("Switch to {switch_model}"),
                 description,
                 selected_description: None,
                 is_current: false,
@@ -4850,7 +4878,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Approaching rate limits".to_string()),
-            subtitle: Some(format!("Switch to {display_name} for lower credit usage?")),
+            subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -4997,7 +5025,7 @@ impl ChatWidget {
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.display_name.to_string())
+            .map(|preset| preset.model.to_string())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
@@ -5022,7 +5050,7 @@ impl ChatWidget {
                     Some(preset.default_reasoning_effort),
                 );
                 SelectionItem {
-                    name: preset.display_name.clone(),
+                    name: model.clone(),
                     description,
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
@@ -5104,7 +5132,7 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.display_name.clone(),
+                name: preset.model.clone(),
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -5388,8 +5416,8 @@ impl ChatWidget {
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.permissions.approval_policy.value();
+        let current_sandbox = self.config.permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -5417,7 +5445,12 @@ impl ChatWidget {
                 preset.label.to_string()
             };
             let description = Some(preset.description.replace(" (Identical to Agent mode)", ""));
-            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+            let disabled_reason = match self
+                .config
+                .permissions
+                .approval_policy
+                .can_set(&preset.approval)
+            {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
             };
@@ -5578,7 +5611,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            self.config.sandbox_policy.get(),
+            self.config.permissions.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -5679,13 +5712,13 @@ impl ChatWidget {
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
-            SandboxPolicy::ReadOnly => "Read-Only mode",
+            SandboxPolicy::ReadOnly { .. } => "Read-Only mode",
             _ => "Agent mode",
         };
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
+            .unwrap_or_else(|| describe_policy(self.config.permissions.sandbox_policy.get()));
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -6028,7 +6061,7 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        if let Err(err) = self.config.approval_policy.set(policy) {
+        if let Err(err) = self.config.permissions.approval_policy.set(policy) {
             tracing::warn!(%err, "failed to set approval_policy on chat config");
         }
     }
@@ -6036,13 +6069,13 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config.sandbox_policy.set(policy)?;
+        self.config.permissions.sandbox_policy.set(policy)?;
         Ok(())
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
-        self.config.windows_sandbox_mode = mode;
+        self.config.permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
         self.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED

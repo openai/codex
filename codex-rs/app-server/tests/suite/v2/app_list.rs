@@ -120,6 +120,7 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         format!(
             r#"
 chatgpt_base_url = "{server_url}"
+mcp_oauth_credentials_store = "file"
 
 [features]
 connectors = false
@@ -791,6 +792,7 @@ fn write_connectors_config(codex_home: &std::path::Path, base_url: &str) -> std:
         format!(
             r#"
 chatgpt_base_url = "{base_url}"
+mcp_oauth_credentials_store = "file"
 
 [features]
 connectors = true

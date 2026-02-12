@@ -302,7 +302,6 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
@@ -311,7 +310,6 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    // TODO: Support Apps SDK connectors.
     connectors
         .into_iter()
         .filter(is_connector_allowed)
@@ -324,9 +322,6 @@ fn is_connector_allowed(connector: &AppInfo) -> bool {
         || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
     {
         return false;
-    }
-    if connector_id.starts_with("asdk_app_") {
-        return ALLOWED_APPS_SDK_APPS.contains(&connector_id);
     }
     true
 }
@@ -350,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn filters_internal_asdk_connectors() {
+    fn allows_asdk_connectors() {
         let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
-        assert_eq!(filtered, vec![app("alpha")]);
+        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
     }
 
     #[test]

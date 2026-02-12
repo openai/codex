@@ -2,6 +2,12 @@ use crate::codex::Session;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::memories::memory_root;
+use crate::memories::metrics;
+use crate::memories::phase_two;
+use crate::memories::phase2::spawn_phase2_completion_task;
+use crate::memories::prompts::build_consolidation_prompt;
+use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -13,14 +19,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::super::MAX_RAW_MEMORIES_FOR_GLOBAL;
-use super::super::MEMORY_CONSOLIDATION_SUBAGENT_LABEL;
-use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
-use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
-use super::super::prompts::build_consolidation_prompt;
-use super::super::storage::rebuild_raw_memories_file_from_memories;
-use super::super::storage::sync_rollout_summaries_from_memories;
-use super::phase2::spawn_phase2_completion_task;
+//TODO(jif) clean.
 
 fn completion_watermark(
     claimed_watermark: i64,
@@ -34,22 +33,33 @@ fn completion_watermark(
         .max(claimed_watermark)
 }
 
-pub(super) async fn run_global_memory_consolidation(
+pub(in crate::memories) async fn run_global_memory_consolidation(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> bool {
+    let otel_manager = &session.services.otel_manager;
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable; skipping global memory consolidation");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "skipped_state_db_unavailable")],
+        );
         return false;
     };
 
     let claim = match state_db
-        .try_claim_global_phase2_job(session.conversation_id, PHASE_TWO_JOB_LEASE_SECONDS)
+        .try_claim_global_phase2_job(session.conversation_id, phase_two::JOB_LEASE_SECONDS)
         .await
     {
         Ok(claim) => claim,
         Err(err) => {
             warn!("state db try_claim_global_phase2_job failed during memories startup: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_claim")],
+            );
             return false;
         }
     };
@@ -57,13 +67,26 @@ pub(super) async fn run_global_memory_consolidation(
         codex_state::Phase2JobClaimOutcome::Claimed {
             ownership_token,
             input_watermark,
-        } => (ownership_token, input_watermark),
+        } => {
+            otel_manager.counter(metrics::MEMORY_PHASE_TWO_JOBS, 1, &[("status", "claimed")]);
+            (ownership_token, input_watermark)
+        }
         codex_state::Phase2JobClaimOutcome::SkippedNotDirty => {
             debug!("memory phase-2 global lock is up-to-date; skipping consolidation");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "skipped_not_dirty")],
+            );
             return false;
         }
         codex_state::Phase2JobClaimOutcome::SkippedRunning => {
             debug!("memory phase-2 global consolidation already running; skipping");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "skipped_running")],
+            );
             return false;
         }
     };
@@ -72,7 +95,8 @@ pub(super) async fn run_global_memory_consolidation(
     let consolidation_config = {
         let mut consolidation_config = config.as_ref().clone();
         consolidation_config.cwd = root.clone();
-        consolidation_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        consolidation_config.permissions.approval_policy =
+            Constrained::allow_only(AskForApproval::Never);
         let mut writable_roots = Vec::new();
         match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
             Ok(codex_home) => writable_roots.push(codex_home),
@@ -83,20 +107,27 @@ pub(super) async fn run_global_memory_consolidation(
         }
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
         if let Err(err) = consolidation_config
+            .permissions
             .sandbox_policy
             .set(consolidation_sandbox_policy)
         {
             warn!("memory phase-2 consolidation sandbox policy was rejected by constraints: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_sandbox_policy")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "consolidation sandbox policy was rejected by constraints",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             return false;
@@ -105,30 +136,47 @@ pub(super) async fn run_global_memory_consolidation(
     };
 
     let latest_memories = match state_db
-        .list_stage1_outputs_for_global(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .list_stage1_outputs_for_global(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .await
     {
         Ok(memories) => memories,
         Err(err) => {
             warn!("state db list_stage1_outputs_for_global failed during consolidation: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_load_stage1_outputs")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "failed to read stage-1 outputs before global consolidation",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             return false;
         }
     };
+    if !latest_memories.is_empty() {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_INPUT,
+            latest_memories.len() as i64,
+            &[],
+        );
+    }
     let completion_watermark = completion_watermark(claimed_watermark, &latest_memories);
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
         warn!("failed syncing local memory artifacts for global consolidation: {err}");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "failed_sync_artifacts")],
+        );
         let _ = state_db
             .mark_global_phase2_job_failed(
                 &ownership_token,
                 "failed syncing local memory artifacts",
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
             )
             .await;
         return false;
@@ -136,11 +184,16 @@ pub(super) async fn run_global_memory_consolidation(
 
     if let Err(err) = rebuild_raw_memories_file_from_memories(&root, &latest_memories).await {
         warn!("failed rebuilding raw memories aggregate for global consolidation: {err}");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "failed_rebuild_raw_memories")],
+        );
         let _ = state_db
             .mark_global_phase2_job_failed(
                 &ownership_token,
                 "failed rebuilding raw memories aggregate",
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
             )
             .await;
         return false;
@@ -150,6 +203,11 @@ pub(super) async fn run_global_memory_consolidation(
         let _ = state_db
             .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await;
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "succeeded_no_input")],
+        );
         return false;
     }
 
@@ -159,7 +217,7 @@ pub(super) async fn run_global_memory_consolidation(
         text_elements: vec![],
     }];
     let source = SessionSource::SubAgent(SubAgentSource::Other(
-        MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
+        phase_two::MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
     ));
 
     match session
@@ -172,6 +230,11 @@ pub(super) async fn run_global_memory_consolidation(
             info!(
                 "memory phase-2 global consolidation agent started: agent_id={consolidation_agent_id}"
             );
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "agent_spawned")],
+            );
             spawn_phase2_completion_task(
                 session.as_ref(),
                 ownership_token,
@@ -182,11 +245,16 @@ pub(super) async fn run_global_memory_consolidation(
         }
         Err(err) => {
             warn!("failed to spawn global memory consolidation agent: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_spawn_agent")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "failed to spawn consolidation agent",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             false
@@ -197,7 +265,6 @@ pub(super) async fn run_global_memory_consolidation(
 #[cfg(test)]
 mod tests {
     use super::completion_watermark;
-    use super::memory_root;
     use super::run_global_memory_consolidation;
     use crate::CodexAuth;
     use crate::ThreadManager;
@@ -206,6 +273,7 @@ mod tests {
     use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
+    use crate::memories::memory_root;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
     use chrono::Utc;
@@ -218,6 +286,7 @@ mod tests {
     use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -336,6 +405,7 @@ mod tests {
                 .expect("valid source_updated_at timestamp"),
             raw_memory: "raw memory".to_string(),
             rollout_summary: "rollout summary".to_string(),
+            cwd: PathBuf::from("/tmp/workspace"),
             generated_at: chrono::DateTime::<Utc>::from_timestamp(124, 0)
                 .expect("valid generated_at timestamp"),
         };

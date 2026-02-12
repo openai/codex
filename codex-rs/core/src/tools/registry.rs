@@ -275,7 +275,7 @@ fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &str) -> Stri
 
 fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
     match policy {
-        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::ReadOnly { .. } => "read-only",
         SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",

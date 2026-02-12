@@ -18,6 +18,7 @@ use rmcp::model::ClientCapabilities;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonRpcMessage;
@@ -116,9 +117,13 @@ impl McpProcess {
             meta: None,
             capabilities: ClientCapabilities {
                 elicitation: Some(ElicitationCapability {
-                    schema_validation: None,
+                    form: Some(FormElicitationCapability {
+                        schema_validation: None,
+                    }),
+                    url: None,
                 }),
                 experimental: None,
+                extensions: None,
                 roots: None,
                 sampling: None,
                 tasks: None,
@@ -127,6 +132,7 @@ impl McpProcess {
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
+                description: None,
                 icons: None,
                 website_url: None,
             },

@@ -112,8 +112,91 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 
     let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
 
-    assert_eq!(model_info.slug, specific.slug);
+    assert_eq!(model_info.slug, "gpt-5.3-codex-test");
     assert_eq!(model_info.base_instructions, specific.base_instructions);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.3-codex-test";
+    let prefix_model = "gpt-5.3-codex";
+    let mut remote_model = test_remote_model_with_policy(
+        prefix_model,
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    remote_model.default_reasoning_level = Some(ReasoningEffort::High);
+    remote_model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: ReasoningEffort::High.to_string(),
+        },
+    ];
+    remote_model.supports_reasoning_summaries = true;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some(requested_model.to_string());
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check model slug".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: config.model_reasoning_summary,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = response_mock.single_request();
+    let body = request.body_json();
+    let reasoning_effort = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(body["model"].as_str(), Some(requested_model));
+    assert_eq!(reasoning_effort, Some("high"));
 
     Ok(())
 }
