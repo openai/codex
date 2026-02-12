@@ -11,12 +11,12 @@ use codex_protocol::models::ResponseItem;
 use futures::StreamExt;
 use tracing::warn;
 
-use super::StageOneRequestContext;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::memories::stage_one::RAW_MEMORY_PROMPT;
 use crate::memories::stage_one::StageOneOutput;
 use crate::memories::stage_one::parse_stage_one_output;
 use crate::memories::stage_one::stage_one_output_schema;
+use crate::memories::startup::StageOneRequestContext;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_protocol::protocol::RolloutItem;
 use std::path::Path;

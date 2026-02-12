@@ -7,6 +7,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::memories::phase_one;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -93,11 +94,11 @@ pub(super) async fn run_memories_startup_pipeline(
             session.conversation_id,
             codex_state::Stage1StartupClaimParams {
                 scan_limit: PHASE_ONE_THREAD_SCAN_LIMIT,
-                max_claimed: super::MAX_ROLLOUTS_PER_STARTUP,
-                max_age_days: super::PHASE_ONE_MAX_ROLLOUT_AGE_DAYS,
-                min_rollout_idle_hours: super::PHASE_ONE_MIN_ROLLOUT_IDLE_HOURS,
+                max_claimed: phase_one::MAX_ROLLOUTS_PER_STARTUP,
+                max_age_days: phase_one::MAX_ROLLOUT_AGE_DAYS,
+                min_rollout_idle_hours: phase_one::MIN_ROLLOUT_IDLE_HOURS,
                 allowed_sources: allowed_sources.as_slice(),
-                lease_seconds: super::PHASE_ONE_JOB_LEASE_SECONDS,
+                lease_seconds: phase_one::JOB_LEASE_SECONDS,
             },
         )
         .await
@@ -140,7 +141,7 @@ pub(super) async fn run_memories_startup_pipeline(
                                         thread.id,
                                         &claim.ownership_token,
                                         reason,
-                                        super::PHASE_ONE_JOB_RETRY_DELAY_SECONDS,
+                                        phase_one::JOB_RETRY_DELAY_SECONDS,
                                     )
                                     .await;
                             }
@@ -173,7 +174,7 @@ pub(super) async fn run_memories_startup_pipeline(
                         .unwrap_or(false)
                 }
             })
-            .buffer_unordered(super::PHASE_ONE_CONCURRENCY_LIMIT)
+            .buffer_unordered(phase_one::CONCURRENCY_LIMIT)
             .collect::<Vec<bool>>()
             .await
             .into_iter()

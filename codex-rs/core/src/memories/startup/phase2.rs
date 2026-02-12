@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
+use crate::memories::phase_two;
 use codex_protocol::ThreadId;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,10 +9,6 @@ use tokio::sync::watch;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
-
-use super::super::PHASE_TWO_JOB_HEARTBEAT_SECONDS;
-use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
-use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
 
 pub(super) fn spawn_phase2_completion_task(
     session: &Session,
@@ -74,7 +71,7 @@ async fn run_phase2_completion_task(
 ) -> AgentStatus {
     let final_status = {
         let mut heartbeat_interval =
-            tokio::time::interval(Duration::from_secs(PHASE_TWO_JOB_HEARTBEAT_SECONDS));
+            tokio::time::interval(Duration::from_secs(phase_two::JOB_HEARTBEAT_SECONDS));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
@@ -94,7 +91,10 @@ async fn run_phase2_completion_task(
                 }
                 _ = heartbeat_interval.tick() => {
                     match state_db
-                        .heartbeat_global_phase2_job(&ownership_token, PHASE_TWO_JOB_LEASE_SECONDS)
+                        .heartbeat_global_phase2_job(
+                            &ownership_token,
+                            phase_two::JOB_LEASE_SECONDS,
+                        )
                         .await
                     {
                         Ok(true) => {}
@@ -162,7 +162,7 @@ async fn mark_phase2_failed_with_recovery(
         .mark_global_phase2_job_failed(
             ownership_token,
             failure_reason,
-            PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+            phase_two::JOB_RETRY_DELAY_SECONDS,
         )
         .await
     {
@@ -171,7 +171,7 @@ async fn mark_phase2_failed_with_recovery(
             .mark_global_phase2_job_failed_if_unowned(
                 ownership_token,
                 failure_reason,
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
             )
             .await
         {

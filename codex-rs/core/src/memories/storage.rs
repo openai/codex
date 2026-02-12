@@ -4,10 +4,10 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tracing::warn;
 
-use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
-use super::ensure_layout;
-use super::raw_memories_file;
-use super::rollout_summaries_dir;
+use crate::memories::ensure_layout;
+use crate::memories::phase_two;
+use crate::memories::raw_memories_file;
+use crate::memories::rollout_summaries_dir;
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
@@ -27,7 +27,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
@@ -63,7 +63,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 

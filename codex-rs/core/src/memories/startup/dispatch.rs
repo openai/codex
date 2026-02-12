@@ -2,6 +2,11 @@ use crate::codex::Session;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::memories::memory_root;
+use crate::memories::phase_two;
+use crate::memories::prompts::build_consolidation_prompt;
+use crate::memories::startup::phase2::spawn_phase2_completion_task;
+use crate::memories::storage::rebuild_raw_memories_file_from_memories;
+use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -12,15 +17,6 @@ use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
-
-use super::super::MAX_RAW_MEMORIES_FOR_GLOBAL;
-use super::super::MEMORY_CONSOLIDATION_SUBAGENT_LABEL;
-use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
-use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
-use super::super::prompts::build_consolidation_prompt;
-use super::super::storage::rebuild_raw_memories_file_from_memories;
-use super::super::storage::sync_rollout_summaries_from_memories;
-use super::phase2::spawn_phase2_completion_task;
 
 fn completion_watermark(
     claimed_watermark: i64,
@@ -44,7 +40,7 @@ pub(super) async fn run_global_memory_consolidation(
     };
 
     let claim = match state_db
-        .try_claim_global_phase2_job(session.conversation_id, PHASE_TWO_JOB_LEASE_SECONDS)
+        .try_claim_global_phase2_job(session.conversation_id, phase_two::JOB_LEASE_SECONDS)
         .await
     {
         Ok(claim) => claim,
@@ -97,7 +93,7 @@ pub(super) async fn run_global_memory_consolidation(
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "consolidation sandbox policy was rejected by constraints",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             return false;
@@ -106,7 +102,7 @@ pub(super) async fn run_global_memory_consolidation(
     };
 
     let latest_memories = match state_db
-        .list_stage1_outputs_for_global(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .list_stage1_outputs_for_global(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .await
     {
         Ok(memories) => memories,
@@ -116,7 +112,7 @@ pub(super) async fn run_global_memory_consolidation(
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "failed to read stage-1 outputs before global consolidation",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             return false;
@@ -129,7 +125,7 @@ pub(super) async fn run_global_memory_consolidation(
             .mark_global_phase2_job_failed(
                 &ownership_token,
                 "failed syncing local memory artifacts",
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
             )
             .await;
         return false;
@@ -141,7 +137,7 @@ pub(super) async fn run_global_memory_consolidation(
             .mark_global_phase2_job_failed(
                 &ownership_token,
                 "failed rebuilding raw memories aggregate",
-                PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
             )
             .await;
         return false;
@@ -160,7 +156,7 @@ pub(super) async fn run_global_memory_consolidation(
         text_elements: vec![],
     }];
     let source = SessionSource::SubAgent(SubAgentSource::Other(
-        MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
+        phase_two::MEMORY_CONSOLIDATION_SUBAGENT_LABEL.to_string(),
     ));
 
     match session
@@ -187,7 +183,7 @@ pub(super) async fn run_global_memory_consolidation(
                 .mark_global_phase2_job_failed(
                     &ownership_token,
                     "failed to spawn consolidation agent",
-                    PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
             false
