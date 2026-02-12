@@ -132,10 +132,19 @@ fn assert_pre_sampling_switch_compaction_requests(
         !compact_body.contains("<model_switch>"),
         "pre-sampling compact request should strip trailing model-switch update item"
     );
+    let first_body = first.to_string();
+    assert!(
+        body_contains_text(&first_body, "<environment_context>"),
+        "first request should include canonical environment context"
+    );
     let follow_up_body = follow_up.to_string();
     assert!(
         follow_up_body.contains("<model_switch>"),
         "follow-up request after successful model-switch compaction should include model-switch update item"
+    );
+    assert!(
+        body_contains_text(&follow_up_body, "<environment_context>"),
+        "follow-up request should preserve canonical environment context after pre-sampling compaction"
     );
 }
 
