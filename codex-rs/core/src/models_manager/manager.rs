@@ -86,7 +86,7 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models(config).await;
-        self.build_available_models(remote_models)
+        self.build_available_models(remote_models, config)
     }
 
     /// List collaboration mode presets.
@@ -101,7 +101,7 @@ impl ModelsManager {
     /// Returns an error if the internal lock cannot be acquired.
     pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models(config)?;
-        Ok(self.build_available_models(remote_models))
+        Ok(self.build_available_models(remote_models, config))
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -125,7 +125,7 @@ impl ModelsManager {
             error!("failed to refresh available models: {err}");
         }
         let remote_models = self.get_remote_models(config).await;
-        let available = self.build_available_models(remote_models);
+        let available = self.build_available_models(remote_models, config);
         available
             .iter()
             .find(|model| model.is_default)
@@ -135,17 +135,19 @@ impl ModelsManager {
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
-    /// Look up model metadata, applying remote overrides and config adjustments.
+    /// Look up model metadata, applying remote overrides and config adjustments, as well as client overrides.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote = self
             .find_remote_model_by_longest_prefix(model, config)
             .await;
-        let model = if let Some(remote) = remote {
+        let model_info = if let Some(remote) = remote {
             remote
         } else {
             model_info::model_info_from_slug(model)
         };
-        model_info::with_config_overrides(model, config)
+
+        let model_info = model_info::with_model_info_patches(model_info, model, config);
+        model_info::with_config_overrides(model_info, config)
     }
 
     async fn find_remote_model_by_longest_prefix(
@@ -308,7 +310,18 @@ impl ModelsManager {
     }
 
     /// Merge remote model metadata into picker-ready presets, preserving existing entries.
-    fn build_available_models(&self, mut remote_models: Vec<ModelInfo>) -> Vec<ModelPreset> {
+    fn build_available_models(
+        &self,
+        mut remote_models: Vec<ModelInfo>,
+        config: &Config,
+    ) -> Vec<ModelPreset> {
+        remote_models = remote_models
+            .into_iter()
+            .map(|remote_model| {
+                let remote_slug = remote_model.slug.clone();
+                model_info::with_model_info_patch(remote_model, &remote_slug, config)
+            })
+            .collect();
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let remote_presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
@@ -381,11 +394,16 @@ impl ModelsManager {
     }
 
     /// Build `ModelInfo` without consulting remote state or cache.
+    ///
+    /// This follows the same override precedence as `get_model_info`:
+    /// per-model `model_info_overrides` are applied first, then top-level config overrides.
     pub(crate) fn construct_model_info_offline_for_tests(
         model: &str,
         config: &Config,
     ) -> ModelInfo {
-        model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
+        let model_info = model_info::model_info_from_slug(model);
+        let model_info = model_info::with_model_info_patches(model_info, model, config);
+        model_info::with_config_overrides(model_info, config)
     }
 }
 
@@ -398,6 +416,8 @@ mod tests {
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
+    use codex_protocol::openai_models::ModelInfoPatch;
+    use codex_protocol::openai_models::ModelVisibility;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
@@ -835,8 +855,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_available_models_picks_default_after_hiding_hidden_models() {
+    #[tokio::test]
+    async fn build_available_models_respects_visibility_defaults_and_overrides() {
         let codex_home = tempdir().expect("temp dir");
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -855,9 +875,42 @@ mod tests {
         let mut expected_visible = ModelPreset::from(visible_model.clone());
         expected_visible.is_default = true;
 
-        let available = manager.build_available_models(vec![hidden_model, visible_model]);
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        let available_default = manager
+            .build_available_models(vec![hidden_model.clone(), visible_model.clone()], &config);
+        assert_eq!(
+            available_default,
+            vec![expected_hidden.clone(), expected_visible]
+        );
 
-        assert_eq!(available, vec![expected_hidden, expected_visible]);
+        let mut override_config = config;
+        override_config.model_info_overrides.insert(
+            "visible".to_string(),
+            ModelInfoPatch {
+                display_name: Some("Visible Local Override".to_string()),
+                visibility: Some(ModelVisibility::Hide),
+                ..Default::default()
+            },
+        );
+        let available_overridden =
+            manager.build_available_models(vec![hidden_model, visible_model], &override_config);
+        let visible = available_overridden
+            .iter()
+            .find(|preset| preset.model == "visible")
+            .expect("visible model should exist");
+        assert_eq!(visible.display_name, "Visible Local Override");
+        assert!(!visible.show_in_picker);
+        assert!(
+            available_overridden
+                .iter()
+                .find(|preset| preset.model == "hidden")
+                .is_some_and(|preset| preset.is_default),
+            "when no model is shown in picker, first model should be marked default"
+        );
     }
 
     #[test]
