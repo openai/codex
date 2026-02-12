@@ -12,9 +12,14 @@ use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::BackgroundEventEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tracing::info;
 use tracing::warn;
 
@@ -49,6 +54,7 @@ pub(crate) fn start_memories_startup_task(
     session: &Arc<Session>,
     config: Arc<Config>,
     source: &SessionSource,
+    progress_sub_id: Option<String>,
 ) {
     if config.ephemeral
         || !config.features.enabled(Feature::MemoryTool)
@@ -62,7 +68,7 @@ pub(crate) fn start_memories_startup_task(
         let Some(session) = weak_session.upgrade() else {
             return;
         };
-        if let Err(err) = run_memories_startup_pipeline(&session, config).await {
+        if let Err(err) = run_memories_startup_pipeline(&session, config, progress_sub_id).await {
             warn!("memories startup pipeline failed: {err}");
         }
     });
@@ -77,11 +83,25 @@ pub(crate) fn start_memories_startup_task(
 pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
+    progress_sub_id: Option<String>,
 ) -> CodexResult<()> {
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable for memories startup pipeline; skipping");
+        emit_memory_progress(
+            session.as_ref(),
+            &progress_sub_id,
+            "phase 1 skipped (state db unavailable)",
+        )
+        .await;
         return Ok(());
     };
+
+    emit_memory_progress(
+        session.as_ref(),
+        &progress_sub_id,
+        "phase 1 scanning candidates",
+    )
+    .await;
 
     let allowed_sources = INTERACTIVE_SESSION_SOURCES
         .iter()
@@ -110,6 +130,12 @@ pub(super) async fn run_memories_startup_pipeline(
     };
 
     let claimed_count = claimed_candidates.len();
+    emit_memory_progress(
+        session.as_ref(),
+        &progress_sub_id,
+        format!("phase 1 running (0/{claimed_count} done)"),
+    )
+    .await;
     let mut succeeded_count = 0;
     if claimed_count > 0 {
         let turn_context = session.new_default_turn().await;
@@ -117,14 +143,17 @@ pub(super) async fn run_memories_startup_pipeline(
             turn_context.as_ref(),
             turn_context.resolve_turn_metadata_header().await,
         );
+        let completed_count = Arc::new(AtomicUsize::new(0));
 
         succeeded_count = futures::stream::iter(claimed_candidates.into_iter())
             .map(|claim| {
                 let session = Arc::clone(session);
                 let stage_one_context = stage_one_context.clone();
+                let progress_sub_id = progress_sub_id.clone();
+                let completed_count = Arc::clone(&completed_count);
                 async move {
                     let thread = claim.thread;
-                    let stage_one_output = match extract::extract_stage_one_output(
+                    let job_succeeded = match extract::extract_stage_one_output(
                         session.as_ref(),
                         &thread.rollout_path,
                         &thread.cwd,
@@ -132,7 +161,6 @@ pub(super) async fn run_memories_startup_pipeline(
                     )
                     .await
                     {
-                        Ok(output) => output,
                         Err(reason) => {
                             if let Some(state_db) = session.services.state_db.as_deref() {
                                 let _ = state_db
@@ -144,33 +172,46 @@ pub(super) async fn run_memories_startup_pipeline(
                                     )
                                     .await;
                             }
-                            return false;
+                            false
+                        }
+                        Ok(stage_one_output) => {
+                            if let Some(state_db) = session.services.state_db.as_deref() {
+                                if stage_one_output.raw_memory.is_empty()
+                                    && stage_one_output.rollout_summary.is_empty()
+                                {
+                                    state_db
+                                        .mark_stage1_job_succeeded_no_output(
+                                            thread.id,
+                                            &claim.ownership_token,
+                                        )
+                                        .await
+                                        .unwrap_or(false)
+                                } else {
+                                    state_db
+                                        .mark_stage1_job_succeeded(
+                                            thread.id,
+                                            &claim.ownership_token,
+                                            thread.updated_at.timestamp(),
+                                            &stage_one_output.raw_memory,
+                                            &stage_one_output.rollout_summary,
+                                        )
+                                        .await
+                                        .unwrap_or(false)
+                                }
+                            } else {
+                                false
+                            }
                         }
                     };
 
-                    let Some(state_db) = session.services.state_db.as_deref() else {
-                        return false;
-                    };
-
-                    if stage_one_output.raw_memory.is_empty()
-                        && stage_one_output.rollout_summary.is_empty()
-                    {
-                        return state_db
-                            .mark_stage1_job_succeeded_no_output(thread.id, &claim.ownership_token)
-                            .await
-                            .unwrap_or(false);
-                    }
-
-                    state_db
-                        .mark_stage1_job_succeeded(
-                            thread.id,
-                            &claim.ownership_token,
-                            thread.updated_at.timestamp(),
-                            &stage_one_output.raw_memory,
-                            &stage_one_output.rollout_summary,
-                        )
-                        .await
-                        .unwrap_or(false)
+                    let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    emit_memory_progress(
+                        session.as_ref(),
+                        &progress_sub_id,
+                        format!("phase 1 running ({done}/{claimed_count} done)"),
+                    )
+                    .await;
+                    job_succeeded
                 }
             })
             .buffer_unordered(super::PHASE_ONE_CONCURRENCY_LIMIT)
@@ -185,15 +226,40 @@ pub(super) async fn run_memories_startup_pipeline(
         "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded",
         claimed_count, succeeded_count
     );
+    emit_memory_progress(
+        session.as_ref(),
+        &progress_sub_id,
+        format!("phase 1 complete ({succeeded_count}/{claimed_count} succeeded)"),
+    )
+    .await;
 
-    let consolidation_job_count =
-        usize::from(dispatch::run_global_memory_consolidation(session, config).await);
+    let consolidation_job_count = usize::from(
+        dispatch::run_global_memory_consolidation(session, config, &progress_sub_id).await,
+    );
     info!(
         "memory consolidation dispatch complete: {} job(s) scheduled",
         consolidation_job_count
     );
 
     Ok(())
+}
+
+pub(super) async fn emit_memory_progress(
+    session: &Session,
+    progress_sub_id: &Option<String>,
+    message: impl Into<String>,
+) {
+    let Some(sub_id) = progress_sub_id.as_ref() else {
+        return;
+    };
+    session
+        .send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("memory startup: {}", message.into()),
+            }),
+        })
+        .await;
 }
 
 #[cfg(test)]
@@ -208,7 +274,7 @@ mod tests {
         let (session, _turn_context) = make_session_and_context().await;
         let session = Arc::new(session);
         let config = Arc::new(test_config());
-        run_memories_startup_pipeline(&session, config)
+        run_memories_startup_pipeline(&session, config, None)
             .await
             .expect("startup pipeline should skip cleanly without state db");
     }
