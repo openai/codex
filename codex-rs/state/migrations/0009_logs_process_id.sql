@@ -1,3 +1,3 @@
-ALTER TABLE logs ADD COLUMN process_id TEXT;
+ALTER TABLE logs ADD COLUMN process_uuid TEXT;
 
-CREATE INDEX idx_logs_process_id ON logs(process_id);
+CREATE INDEX idx_logs_process_uuid ON logs(process_uuid);

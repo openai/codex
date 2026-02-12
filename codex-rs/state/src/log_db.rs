@@ -58,7 +58,7 @@ const LOG_RETENTION_DAYS: i64 = 90;
 // Per-scope sqlite feedback log retention policy:
 // - We track bytes separately for each session scope (`thread_id`) and for
 //   process-scoped threadless logs (`thread_id IS NULL` + `process_uuid`,
-//   persisted in sqlite column `process_id`).
+//   persisted in sqlite column `process_uuid`).
 // - On insert, we lazily initialize a scope's byte count once from sqlite and
 //   then update it incrementally from appended lines.
 // - If a scope exceeds the trigger, we delete oldest rows in that same scope

@@ -360,7 +360,7 @@ FROM threads
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_id, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line) ",
         );
         builder.push_values(entries, |mut row, entry| {
             row.push_bind(entry.ts)
@@ -389,7 +389,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_id AS process_uuid, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid AS process_uuid, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -433,7 +433,7 @@ WITH filtered AS (
         target,
         message,
         thread_id,
-        process_id AS process_uuid,
+        process_uuid AS process_uuid,
         file,
         line,
         CASE
@@ -453,7 +453,7 @@ WITH filtered AS (
         target,
         message,
         thread_id,
-        process_id AS process_uuid,
+        process_uuid AS process_uuid,
         file,
         line,
         CASE
@@ -463,7 +463,7 @@ WITH filtered AS (
         END AS line_bytes
     FROM logs
     WHERE thread_id IS NULL
-      AND process_id = ?
+      AND process_uuid = ?
       AND message IS NOT NULL
 ),
 ranked AS (
@@ -513,7 +513,7 @@ SELECT COALESCE(
     0
 )
 FROM logs
-WHERE process_id = ?
+WHERE process_uuid = ?
   AND thread_id IS NULL
   AND message IS NOT NULL
             "#,
@@ -574,7 +574,7 @@ WHERE id IN (
                 END
             ) OVER (ORDER BY id DESC) AS cumulative_bytes
         FROM logs
-        WHERE process_id = ?
+        WHERE process_uuid = ?
           AND thread_id IS NULL
           AND message IS NOT NULL
     )
@@ -943,7 +943,7 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
                 builder.push(" OR ");
             }
             builder
-                .push("process_id = ")
+                .push("process_uuid = ")
                 .push_bind(process_uuid.as_str());
         }
         builder.push(")");

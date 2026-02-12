@@ -21,7 +21,7 @@ pub struct LogEntry {
     pub message: Option<String>,
     pub thread_id: Option<String>,
     // Process-unique identifier used to scope threadless feedback logs.
-    // Stored in sqlite column `logs.process_id`.
+    // Stored in sqlite column `logs.process_uuid`.
     pub process_uuid: Option<String>,
     pub module_path: Option<String>,
     pub file: Option<String>,
@@ -38,7 +38,7 @@ pub struct LogRow {
     pub message: Option<String>,
     pub thread_id: Option<String>,
     // Process-unique identifier used to scope threadless feedback logs.
-    // Loaded from sqlite column `logs.process_id`.
+    // Loaded from sqlite column `logs.process_uuid`.
     pub process_uuid: Option<String>,
     pub file: Option<String>,
     pub line: Option<i64>,
@@ -52,7 +52,7 @@ pub struct LogQuery {
     pub module_like: Vec<String>,
     pub file_like: Vec<String>,
     pub thread_ids: Vec<String>,
-    // Filter by process-unique IDs in the sqlite `logs.process_id` column.
+    // Filter by process-unique IDs in the sqlite `logs.process_uuid` column.
     pub process_uuids: Vec<String>,
     pub include_threadless: bool,
     pub after_id: Option<i64>,
