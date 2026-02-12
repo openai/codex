@@ -24,6 +24,7 @@ fn resume_history(
         cwd: config.cwd.clone(),
         approval_policy: config.permissions.approval_policy.value(),
         sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+        network: None,
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
