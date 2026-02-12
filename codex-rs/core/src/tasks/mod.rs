@@ -149,18 +149,16 @@ impl Session {
                             task_cancellation_token.child_token(),
                         )
                         .await;
-                    session_ctx.clone_session().flush_rollout().await;
+                    let sess = session_ctx.clone_session();
+                    sess.flush_rollout().await;
+                    // Update previous model before TurnComplete is emitted so
+                    // immediately following turns observe the correct switch state.
+                    sess.set_previous_model(Some(model_slug)).await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        let sess = session_ctx.clone_session();
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
-                    // Set previous model regardless of completion or interruption for model-switch handling.
-                    session_ctx
-                        .clone_session()
-                        .set_previous_model(Some(model_slug))
-                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
