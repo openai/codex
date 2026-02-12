@@ -1,16 +1,5 @@
 use serde::Serialize;
 use sqlx::FromRow;
-use std::sync::OnceLock;
-use uuid::Uuid;
-
-pub fn current_process_log_uuid() -> &'static str {
-    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
-    PROCESS_LOG_UUID.get_or_init(|| {
-        let pid = std::process::id();
-        let process_uuid = Uuid::new_v4();
-        format!("pid:{pid}:{process_uuid}")
-    })
-}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
