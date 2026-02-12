@@ -8,6 +8,7 @@ use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::prompts::build_stage_one_input_message;
+use crate::memories::start::emit_memory_progress;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
@@ -27,6 +28,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use tracing::info;
 use tracing::warn;
 
@@ -79,17 +82,42 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
+pub(in crate::memories) async fn run(
+    session: &Arc<Session>,
+    config: &Config,
+    progress_sub_id: &Option<String>,
+) {
+    emit_memory_progress(
+        session.as_ref(),
+        progress_sub_id,
+        "phase 1 scanning candidates",
+    )
+    .await;
+
     // 1. Claim startup job.
     let Some(claimed_candidates) = claim_startup_jobs(session, &config.memories).await else {
         return;
     };
+    let claimed_count = claimed_candidates.len();
+    emit_memory_progress(
+        session.as_ref(),
+        progress_sub_id,
+        format!("phase 1 running (0/{claimed_count} done)"),
+    )
+    .await;
+
     if claimed_candidates.is_empty() {
         session.services.otel_manager.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             1,
             &[("status", "skipped_no_candidates")],
         );
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 1 complete (0/0 succeeded)",
+        )
+        .await;
         return;
     }
 
@@ -97,7 +125,14 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     let stage_one_context = build_request_context(session, config).await;
 
     // 3. Run the parallel sampling.
-    let outcomes = run_jobs(session, claimed_candidates, stage_one_context).await;
+    let outcomes = run_jobs(
+        session,
+        claimed_candidates,
+        stage_one_context,
+        progress_sub_id,
+        claimed_count,
+    )
+    .await;
 
     // 4. Metrics and logs.
     let counts = aggregate_stats(outcomes);
@@ -110,6 +145,13 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         counts.succeeded_no_output,
         counts.failed
     );
+    let succeeded_count = counts.succeeded_with_output + counts.succeeded_no_output;
+    emit_memory_progress(
+        session.as_ref(),
+        progress_sub_id,
+        format!("phase 1 complete ({succeeded_count}/{claimed_count} succeeded)"),
+    )
+    .await;
 }
 
 /// JSON schema used to constrain phase-1 model output.
@@ -207,12 +249,27 @@ async fn run_jobs(
     session: &Arc<Session>,
     claimed_candidates: Vec<codex_state::Stage1JobClaim>,
     stage_one_context: RequestContext,
+    progress_sub_id: &Option<String>,
+    claimed_count: usize,
 ) -> Vec<JobResult> {
+    let completed_count = Arc::new(AtomicUsize::new(0));
     futures::stream::iter(claimed_candidates.into_iter())
         .map(|claim| {
             let session = Arc::clone(session);
             let stage_one_context = stage_one_context.clone();
-            async move { job::run(session.as_ref(), claim, &stage_one_context).await }
+            let progress_sub_id = progress_sub_id.clone();
+            let completed_count = Arc::clone(&completed_count);
+            async move {
+                let result = job::run(session.as_ref(), claim, &stage_one_context).await;
+                let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                emit_memory_progress(
+                    session.as_ref(),
+                    &progress_sub_id,
+                    format!("phase 1 running ({done}/{claimed_count} done)"),
+                )
+                .await;
+                result
+            }
         })
         .buffer_unordered(phase_one::CONCURRENCY_LIMIT)
         .collect::<Vec<_>>()
