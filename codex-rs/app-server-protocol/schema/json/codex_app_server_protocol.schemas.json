@@ -8067,6 +8067,46 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/archived"
+              ],
+              "title": "Thread/archivedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadArchivedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/archivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/unarchived"
+              ],
+              "title": "Thread/unarchivedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnarchivedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/unarchivedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -15107,6 +15147,19 @@
         "title": "ThreadArchiveResponse",
         "type": "object"
       },
+      "ThreadArchivedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadArchivedNotification",
+        "type": "object"
+      },
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -16313,6 +16366,19 @@
           "thread"
         ],
         "title": "ThreadUnarchiveResponse",
+        "type": "object"
+      },
+      "ThreadUnarchivedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadUnarchivedNotification",
         "type": "object"
       },
       "TokenUsageBreakdown": {
