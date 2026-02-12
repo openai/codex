@@ -196,6 +196,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
+use crate::rollout::policy::EventPersistenceMode;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -284,6 +285,7 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
+        persist_extended_history: bool,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -396,6 +398,7 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             session_source,
             dynamic_tools,
+            persist_extended_history,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -733,6 +736,7 @@ pub(crate) struct SessionConfiguration {
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
+    persist_extended_history: bool,
 }
 
 impl SessionConfiguration {
@@ -984,12 +988,24 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
+                        if session_configuration.persist_extended_history {
+                            EventPersistenceMode::Extended
+                        } else {
+                            EventPersistenceMode::Limited
+                        },
                     ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
                 resumed_history.conversation_id,
-                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+                RolloutRecorderParams::resume(
+                    resumed_history.rollout_path.clone(),
+                    if session_configuration.persist_extended_history {
+                        EventPersistenceMode::Extended
+                    } else {
+                        EventPersistenceMode::Limited
+                    },
+                ),
             ),
         };
         let state_builder = match &initial_history {
@@ -1083,6 +1099,14 @@ impl Session {
             });
         }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
+        if config.approval_policy.value() == AskForApproval::OnFailure {
+            post_session_configured_events.push(Event {
+                id: "".to_owned(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
+                }),
+            });
+        }
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
@@ -1409,6 +1433,27 @@ impl Session {
     pub(crate) async fn clear_mcp_tool_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_mcp_tool_selection();
+    }
+
+    // Merges connector IDs into the session-level explicit connector selection.
+    pub(crate) async fn merge_connector_selection(
+        &self,
+        connector_ids: HashSet<String>,
+    ) -> HashSet<String> {
+        let mut state = self.state.lock().await;
+        state.merge_connector_selection(connector_ids)
+    }
+
+    // Returns the connector IDs currently selected for this session.
+    pub(crate) async fn get_connector_selection(&self) -> HashSet<String> {
+        let state = self.state.lock().await;
+        state.get_connector_selection()
+    }
+
+    // Clears connector IDs that were accumulated for explicit selection.
+    pub(crate) async fn clear_connector_selection(&self) {
+        let mut state = self.state.lock().await;
+        state.clear_connector_selection();
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -4056,7 +4101,7 @@ pub(crate) async fn run_turn(
             .await,
     );
 
-    let connector_slug_counts = if turn_context.config.features.enabled(Feature::Apps) {
+    let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let mcp_tools = match sess
             .services
             .mcp_connection_manager
@@ -4069,11 +4114,16 @@ pub(crate) async fn run_turn(
             Ok(mcp_tools) => mcp_tools,
             Err(_) => return None,
         };
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        build_connector_slug_counts(&connectors)
+        connectors::accessible_connectors_from_mcp_tools(&mcp_tools)
     } else {
-        HashMap::new()
+        Vec::new()
     };
+    let connector_slug_counts = build_connector_slug_counts(&available_connectors);
+    let skill_name_counts_lower = skills_outcome
+        .as_ref()
+        .map_or_else(HashMap::new, |outcome| {
+            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+        });
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
         collect_explicit_skill_mentions(
             &input,
@@ -4082,7 +4132,6 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
-    let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     let config = turn_context.config.clone();
     if config
         .features
@@ -4118,6 +4167,15 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+
+    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
+    explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
+        &skill_items,
+        &available_connectors,
+        &skill_name_counts_lower,
+    ));
+    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
+        .await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -4347,6 +4405,57 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
         run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
     }
     Ok(())
+}
+
+fn collect_explicit_app_ids_from_skill_items(
+    skill_items: &[ResponseItem],
+    connectors: &[connectors::AppInfo],
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> HashSet<String> {
+    if skill_items.is_empty() || connectors.is_empty() {
+        return HashSet::new();
+    }
+
+    let skill_messages = skill_items
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                content.iter().find_map(|content_item| match content_item {
+                    ContentItem::InputText { text } => Some(text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    if skill_messages.is_empty() {
+        return HashSet::new();
+    }
+
+    let mentions = collect_tool_mentions_from_messages(&skill_messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<String>>();
+    let mut connector_ids = mentions
+        .paths
+        .iter()
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+        .filter_map(|path| app_id_from_path(path).map(str::to_string))
+        .collect::<HashSet<String>>();
+
+    let connector_slug_counts = build_connector_slug_counts(connectors);
+    for connector in connectors {
+        let slug = connectors::connector_mention_slug(connector);
+        let connector_count = connector_slug_counts.get(&slug).copied().unwrap_or(0);
+        let skill_count = skill_name_counts_lower.get(&slug).copied().unwrap_or(0);
+        if connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&slug) {
+            connector_ids.insert(connector.id.clone());
+        }
+    }
+
+    connector_ids
 }
 
 fn filter_connectors_for_input(
@@ -4594,6 +4703,9 @@ async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
 
+    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
+    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
+
     let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
@@ -4602,7 +4714,7 @@ async fn built_tools(
         Some(filter_connectors_for_input(
             connectors,
             input,
-            explicitly_enabled_connectors,
+            &effective_explicitly_enabled_connectors,
             &skill_name_counts_lower,
         ))
     } else {
@@ -5442,6 +5554,18 @@ mod tests {
         }
     }
 
+    fn skill_message(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
     fn make_connector(id: &str, name: &str) -> AppInfo {
         AppInfo {
             id: id.to_string(),
@@ -5572,6 +5696,49 @@ mod tests {
         );
 
         assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_from_skill_items_includes_linked_mentions() {
+        let connectors = vec![make_connector("calendar", "Calendar")];
+        let skill_items = vec![skill_message(
+            "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse [$calendar](app://calendar)\n</skill>",
+        )];
+
+        let connector_ids =
+            collect_explicit_app_ids_from_skill_items(&skill_items, &connectors, &HashMap::new());
+
+        assert_eq!(connector_ids, HashSet::from(["calendar".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_from_skill_items_resolves_unambiguous_plain_mentions() {
+        let connectors = vec![make_connector("calendar", "Calendar")];
+        let skill_items = vec![skill_message(
+            "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse $calendar\n</skill>",
+        )];
+
+        let connector_ids =
+            collect_explicit_app_ids_from_skill_items(&skill_items, &connectors, &HashMap::new());
+
+        assert_eq!(connector_ids, HashSet::from(["calendar".to_string()]));
+    }
+
+    #[test]
+    fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_conflicts() {
+        let connectors = vec![make_connector("calendar", "Calendar")];
+        let skill_items = vec![skill_message(
+            "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nuse $calendar\n</skill>",
+        )];
+        let skill_name_counts_lower = HashMap::from([("calendar".to_string(), 1)]);
+
+        let connector_ids = collect_explicit_app_ids_from_skill_items(
+            &skill_items,
+            &connectors,
+            &skill_name_counts_lower,
+        );
+
+        assert_eq!(connector_ids, HashSet::<String>::new());
     }
 
     #[test]
@@ -6154,6 +6321,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_extended_history: false,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -6244,6 +6412,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_extended_history: false,
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -6553,6 +6722,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_extended_history: false,
         }
     }
 
@@ -6605,6 +6775,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_extended_history: false,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -6750,6 +6921,7 @@ mod tests {
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
+            persist_extended_history: false,
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline_for_tests(

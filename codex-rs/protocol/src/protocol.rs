@@ -356,10 +356,12 @@ pub enum AskForApproval {
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
 
-    /// *All* commands are auto‑approved, but they are expected to run inside a
-    /// sandbox where network access is disabled and writes are confined to a
-    /// specific set of paths. If the command fails, it will be escalated to
-    /// the user to approve execution without a sandbox.
+    /// DEPRECATED: *All* commands are auto‑approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
+    /// runs.
     OnFailure,
 
     /// The model decides when to ask the user for approval.
@@ -1160,6 +1162,27 @@ pub enum CodexErrorInfo {
     Other,
 }
 
+impl CodexErrorInfo {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        match self {
+            Self::ThreadRollbackFailed => false,
+            Self::ContextWindowExceeded
+            | Self::UsageLimitExceeded
+            | Self::ServerOverloaded
+            | Self::HttpConnectionFailed { .. }
+            | Self::ResponseStreamConnectionFailed { .. }
+            | Self::InternalServerError
+            | Self::Unauthorized
+            | Self::BadRequest
+            | Self::SandboxError
+            | Self::ResponseStreamDisconnected { .. }
+            | Self::ResponseTooManyFailedAttempts { .. }
+            | Self::Other => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
@@ -1295,6 +1318,15 @@ pub struct ErrorEvent {
     pub message: String,
     #[serde(default)]
     pub codex_error_info: Option<CodexErrorInfo>,
+}
+
+impl ErrorEvent {
+    /// Whether this error should mark the current turn as failed when replaying history.
+    pub fn affects_turn_status(&self) -> bool {
+        self.codex_error_info
+            .as_ref()
+            .is_none_or(CodexErrorInfo::affects_turn_status)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2051,6 +2083,14 @@ pub enum ExecCommandSource {
     UnifiedExecInteraction,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandStatus {
+    Completed,
+    Failed,
+    Declined,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -2112,6 +2152,8 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+    /// Completion status for this command execution.
+    pub status: ExecCommandStatus,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2235,6 +2277,16 @@ pub struct PatchApplyEndEvent {
     /// The changes that were applied (mirrors PatchApplyBeginEvent::changes).
     #[serde(default)]
     pub changes: HashMap<PathBuf, FileChange>,
+    /// Completion status for this patch application.
+    pub status: PatchApplyStatus,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchApplyStatus {
+    Completed,
+    Failed,
+    Declined,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2787,6 +2839,24 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
+    }
+
+    #[test]
+    fn rollback_failed_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "rollback failed".into(),
+            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn generic_error_affects_turn_status() {
+        let event = ErrorEvent {
+            message: "generic".into(),
+            codex_error_info: Some(CodexErrorInfo::Other),
+        };
+        assert!(event.affects_turn_status());
     }
 
     #[test]

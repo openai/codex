@@ -34,7 +34,18 @@ js_repl_node_path = "/absolute/path/to/node"
   - `// codex-js-repl: timeout_ms=15000`
 - Top-level bindings persist across calls.
 - Top-level static import declarations (for example `import x from "pkg"`) are currently unsupported; use dynamic imports with `await import("pkg")`.
-- Use `js_repl_reset` to clear kernel state.
+- Use `js_repl_reset` to clear the kernel state.
+
+## Helper APIs inside the kernel
+
+`js_repl` exposes these globals:
+
+- `codex.state`: mutable object persisted for the current kernel session.
+- `codex.tmpDir`: per-session scratch directory path.
+- `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
+- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool("view_image", { path: "/absolute/path" })`, then delete the file.
+
+Avoid writing directly to `process.stdout` / `process.stderr` / `process.stdin`; the kernel uses a JSON-line transport over stdio.
 
 ## Vendored parser asset (`meriyah.umd.min.js`)
 
