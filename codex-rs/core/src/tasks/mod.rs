@@ -140,6 +140,7 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
+                    let model_slug = ctx_for_finish.model_info.slug.clone();
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
@@ -152,9 +153,14 @@ impl Session {
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         let sess = session_ctx.clone_session();
-                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
+                    // Set previous model regardless of completion or interruption for model-switch handling.
+                    session_ctx
+                        .clone_session()
+                        .set_previous_model(Some(model_slug))
+                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
@@ -214,7 +220,10 @@ impl Session {
             self.record_conversation_items(turn_context.as_ref(), &pending_response_items)
                 .await;
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_context.sub_id.clone(),
+            last_agent_message,
+        });
         self.send_event(turn_context.as_ref(), event).await;
     }
 
@@ -264,6 +273,10 @@ impl Session {
 
         task.handle.abort();
 
+        // Set previous model even when interrupted so model-switch handling stays correct.
+        self.set_previous_model(Some(task.turn_context.model_info.slug.clone()))
+            .await;
+
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
@@ -290,7 +303,10 @@ impl Session {
             self.flush_rollout().await;
         }
 
-        let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(task.turn_context.sub_id.clone()),
+            reason,
+        });
         self.send_event(task.turn_context.as_ref(), event).await;
     }
 }

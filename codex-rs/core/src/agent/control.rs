@@ -215,7 +215,7 @@ mod tests {
     impl AgentControlHarness {
         async fn new() -> Self {
             let (home, config) = test_config().await;
-            let manager = ThreadManager::with_models_provider_and_home(
+            let manager = ThreadManager::with_models_provider_and_home_for_tests(
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
                 config.codex_home.clone(),
@@ -268,6 +268,7 @@ mod tests {
     #[tokio::test]
     async fn on_event_updates_status_from_task_started() {
         let status = agent_status_from_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: None,
             collaboration_mode_kind: ModeKind::Default,
         }));
@@ -277,6 +278,7 @@ mod tests {
     #[tokio::test]
     async fn on_event_updates_status_from_task_complete() {
         let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("done".to_string()),
         }));
         let expected = AgentStatus::Completed(Some("done".to_string()));
@@ -297,6 +299,7 @@ mod tests {
     #[tokio::test]
     async fn on_event_updates_status_from_turn_aborted() {
         let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
             reason: TurnAbortReason::Interrupted,
         }));
 
@@ -481,7 +484,7 @@ mod tests {
             TomlValue::Integer(max_threads as i64),
         )])
         .await;
-        let manager = ThreadManager::with_models_provider_and_home(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -524,7 +527,7 @@ mod tests {
             TomlValue::Integer(max_threads as i64),
         )])
         .await;
-        let manager = ThreadManager::with_models_provider_and_home(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -558,7 +561,7 @@ mod tests {
             TomlValue::Integer(max_threads as i64),
         )])
         .await;
-        let manager = ThreadManager::with_models_provider_and_home(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -594,7 +597,7 @@ mod tests {
             TomlValue::Integer(max_threads as i64),
         )])
         .await;
-        let manager = ThreadManager::with_models_provider_and_home(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone(),
@@ -647,7 +650,7 @@ mod tests {
             TomlValue::Integer(max_threads as i64),
         )])
         .await;
-        let manager = ThreadManager::with_models_provider_and_home(
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
             config.codex_home.clone(),

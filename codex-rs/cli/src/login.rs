@@ -1,4 +1,3 @@
-use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthMode;
@@ -10,6 +9,7 @@ use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_utils_cli::CliConfigOverrides;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;

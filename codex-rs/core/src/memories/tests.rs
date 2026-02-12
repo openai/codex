@@ -1,10 +1,6 @@
-use super::rollout::StageOneResponseItemKinds;
-use super::rollout::StageOneRolloutFilter;
-use super::rollout::serialize_filtered_rollout_response_items;
 use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use super::storage::wipe_consolidation_outputs;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -12,12 +8,9 @@ use crate::memories::rollout_summaries_dir;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::CompactedItem;
-use codex_protocol::protocol::RolloutItem;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
@@ -42,103 +35,44 @@ fn parse_stage_one_output_rejects_legacy_keys() {
 }
 
 #[test]
-fn serialize_filtered_rollout_response_items_keeps_response_and_compacted() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::Compacted(CompactedItem {
-            message: "compacted summary".to_string(),
-            replacement_history: None,
-        }),
-    ];
-
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter::response_and_compacted_items(),
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
-
-    assert_eq!(parsed.len(), 2);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
-    assert!(matches!(parsed[1], ResponseItem::Message { .. }));
+fn parse_stage_one_output_accepts_empty_pair_for_skip() {
+    let raw = r#"{"raw_memory":"","rollout_summary":""}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert_eq!(parsed.raw_memory, "");
+    assert_eq!(parsed.rollout_summary, "");
 }
 
 #[test]
-fn serialize_filtered_rollout_response_items_supports_response_only_filter() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::Compacted(CompactedItem {
-            message: "compacted summary".to_string(),
-            replacement_history: None,
-        }),
-    ];
-
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter {
-            keep_response_items: true,
-            keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::all(),
-            max_items: None,
-        },
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
-
-    assert_eq!(parsed.len(), 1);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
+fn parse_stage_one_output_accepts_optional_rollout_slug() {
+    let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
+    let parsed = parse_stage_one_output(raw).expect("parsed");
+    assert!(parsed.raw_memory.contains("abc"));
+    assert_eq!(parsed.rollout_summary, "short");
+    assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
 }
 
 #[test]
-fn serialize_filtered_rollout_response_items_filters_by_response_item_kind() {
-    let input = vec![
-        RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "user input".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
-        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            arguments: "{\"cmd\":\"pwd\"}".to_string(),
-            call_id: "call-1".to_string(),
-        }),
-    ];
+fn stage_one_output_schema_requires_all_declared_properties() {
+    let schema = super::stage_one::stage_one_output_schema();
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("properties object");
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("required array");
 
-    let serialized = serialize_filtered_rollout_response_items(
-        &input,
-        StageOneRolloutFilter {
-            keep_response_items: true,
-            keep_compacted_items: false,
-            response_item_kinds: StageOneResponseItemKinds::messages_only(),
-            max_items: None,
-        },
-    )
-    .expect("serialize");
-    let parsed: Vec<ResponseItem> = serde_json::from_str(&serialized).expect("deserialize");
+    let mut property_keys = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    property_keys.sort_unstable();
 
-    assert_eq!(parsed.len(), 1);
-    assert!(matches!(parsed[0], ResponseItem::Message { .. }));
+    let mut required_keys = required
+        .iter()
+        .map(|key| key.as_str().expect("required key string"))
+        .collect::<Vec<_>>();
+    required_keys.sort_unstable();
+
+    assert_eq!(required_keys, property_keys);
 }
 
 #[tokio::test]
@@ -181,28 +115,4 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
-}
-
-#[tokio::test]
-async fn wipe_consolidation_outputs_removes_registry_and_skills() {
-    let dir = tempdir().expect("tempdir");
-    let root = dir.path().join("memory");
-    ensure_layout(&root).await.expect("ensure layout");
-
-    let memory_registry = root.join("MEMORY.md");
-    let skills_dir = root.join("skills").join("example");
-
-    tokio::fs::create_dir_all(&skills_dir)
-        .await
-        .expect("create skills dir");
-    tokio::fs::write(&memory_registry, "memory")
-        .await
-        .expect("write memory registry");
-
-    wipe_consolidation_outputs(&root)
-        .await
-        .expect("wipe consolidation outputs");
-
-    assert!(!memory_registry.exists());
-    assert!(!root.join("skills").exists());
 }

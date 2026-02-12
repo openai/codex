@@ -78,6 +78,8 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable JavaScript REPL tools backed by a persistent Node kernel.
+    JsRepl,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -87,7 +89,7 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Allow the model to search MCP tools via BM25 before exposing them.
+    /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
@@ -423,6 +425,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -437,7 +445,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SearchTool,
         key: "search_tool",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
@@ -474,6 +482,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
+        #[cfg(target_os = "linux")]
+        stage: Stage::Experimental {
+            name: "Bubblewrap sandbox",
+            menu_description: "Try the new linux sandbox based on bubblewrap.",
+            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .codex read-only inside writable workspaces. Enable it in /experimental and restart Codex to try it.",
+        },
+        #[cfg(not(target_os = "linux"))]
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -486,13 +501,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -651,5 +666,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
+        assert!(matches!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_under_development_off_linux() {
+        assert_eq!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
     }
 }

@@ -1,9 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::NewThread;
-use codex_core::ThreadManager;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InitialHistory;
 use codex_core::protocol::ResumedHistory;
@@ -22,6 +20,7 @@ fn resume_history(
     rollout_path: &std::path::Path,
 ) -> InitialHistory {
     let turn_ctx = TurnContextItem {
+        turn_id: None,
         cwd: config.cwd.clone(),
         approval_policy: config.approval_policy.value(),
         sandbox_policy: config.sandbox_policy.get().clone(),
@@ -57,11 +56,12 @@ async fn emits_warning_when_resumed_model_differs() {
 
     let initial_history = resume_history(&config, "previous-model", &rollout_path);
 
-    let thread_manager = ThreadManager::with_models_provider(
+    let thread_manager = codex_core::test_support::thread_manager_with_models_provider(
         CodexAuth::from_api_key("test"),
         config.model_provider.clone(),
     );
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
 
     // Act: resume the conversation.
     let NewThread {

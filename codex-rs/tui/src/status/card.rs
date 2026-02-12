@@ -5,9 +5,9 @@ use crate::history_cell::with_border_with_inner_width;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
-use codex_common::summarize_sandbox_policy;
 use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
@@ -15,6 +15,7 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_sandbox_summary::summarize_sandbox_policy;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
 use std::collections::BTreeSet;
@@ -36,6 +37,7 @@ use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::StatusRateLimitRow;
 use super::rate_limits::StatusRateLimitValue;
 use super::rate_limits::compose_rate_limit_data;
+use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
@@ -62,8 +64,7 @@ struct StatusHistoryCell {
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
-    approval: String,
-    sandbox: String,
+    permissions: String,
     agents_summary: String,
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
@@ -75,6 +76,7 @@ struct StatusHistoryCell {
     rate_limits: StatusRateLimitData,
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
@@ -85,6 +87,40 @@ pub(crate) fn new_status_output(
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
+    plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    model_name: &str,
+    collaboration_mode: Option<&str>,
+    reasoning_effort_override: Option<Option<ReasoningEffort>>,
+) -> CompositeHistoryCell {
+    let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
+    new_status_output_with_rate_limits(
+        config,
+        auth_manager,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        snapshots,
+        plan_type,
+        now,
+        model_name,
+        collaboration_mode,
+        reasoning_effort_override,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_rate_limits(
+    config: &Config,
+    auth_manager: &AuthManager,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
     model_name: &str,
@@ -121,7 +157,7 @@ impl StatusHistoryCell {
         session_id: &Option<ThreadId>,
         thread_name: Option<String>,
         forked_from: Option<ThreadId>,
-        rate_limits: Option<&RateLimitSnapshotDisplay>,
+        rate_limits: &[RateLimitSnapshotDisplay],
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
         model_name: &str,
@@ -157,7 +193,11 @@ impl StatusHistoryCell {
             .unwrap_or_else(|| "<unknown>".to_string());
         let sandbox = match config.sandbox_policy.get() {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
-            SandboxPolicy::ReadOnly => "read-only".to_string(),
+            SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+            SandboxPolicy::WorkspaceWrite {
+                network_access: true,
+                ..
+            } => "workspace-write with network access".to_string(),
             SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
             SandboxPolicy::ExternalSandbox { network_access } => {
                 if matches!(network_access, NetworkAccess::Enabled) {
@@ -166,6 +206,17 @@ impl StatusHistoryCell {
                     "external-sandbox".to_string()
                 }
             }
+        };
+        let permissions = if config.approval_policy.value() == AskForApproval::OnRequest
+            && *config.sandbox_policy.get() == SandboxPolicy::new_workspace_write_policy()
+        {
+            "Default".to_string()
+        } else if config.approval_policy.value() == AskForApproval::Never
+            && *config.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+        {
+            "Full Access".to_string()
+        } else {
+            format!("Custom ({sandbox}, {approval})")
         };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
@@ -189,14 +240,17 @@ impl StatusHistoryCell {
             output: total_usage.output_tokens,
             context_window,
         };
-        let rate_limits = compose_rate_limit_data(rate_limits, now);
+        let rate_limits = if rate_limits.len() <= 1 {
+            compose_rate_limit_data(rate_limits.first(), now)
+        } else {
+            compose_rate_limit_data_many(rate_limits, now)
+        };
 
         Self {
             model_name,
             model_details,
             directory: config.cwd.clone(),
-            approval,
-            sandbox,
+            permissions,
             agents_summary,
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
@@ -376,11 +430,10 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> =
-            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
 
@@ -443,8 +496,7 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
-        lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
-        lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));
+        lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(self.agents_summary.clone())]));
 
         if let Some(account_value) = account_value {

@@ -4,17 +4,14 @@
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
-mod prompts;
-mod rollout;
+pub(crate) mod prompts;
 mod stage_one;
 mod startup;
 mod storage;
-mod text;
 
 #[cfg(test)]
 mod tests;
 
-use serde::Deserialize;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -22,14 +19,12 @@ use std::path::PathBuf;
 const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
 const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
 const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
-const MEMORY_REGISTRY_FILENAME: &str = "MEMORY.md";
-const SKILLS_SUBDIR: &str = "skills";
 /// Maximum number of rollout candidates processed per startup pass.
 const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 /// Concurrency cap for startup memory extraction and consolidation scheduling.
 const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
 /// Maximum number of recent raw memories retained for global consolidation.
-const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 64;
+const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
 /// Maximum rollout age considered for phase-1 extraction.
 const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 /// Minimum rollout idle time required before phase-1 extraction.
@@ -45,19 +40,7 @@ const PHASE_TWO_JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
 /// Heartbeat interval (seconds) for phase-2 running jobs.
 const PHASE_TWO_JOB_HEARTBEAT_SECONDS: u64 = 30;
 
-/// Parsed stage-1 model output payload.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StageOneOutput {
-    /// Detailed markdown raw memory for a single rollout.
-    #[serde(rename = "raw_memory")]
-    raw_memory: String,
-    /// Compact summary line used for routing and indexing.
-    #[serde(rename = "rollout_summary")]
-    rollout_summary: String,
-}
-
-fn memory_root(codex_home: &Path) -> PathBuf {
+pub fn memory_root(codex_home: &Path) -> PathBuf {
     codex_home.join("memories")
 }
 
