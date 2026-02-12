@@ -33,6 +33,24 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     }
 }
 
+/// Whether a `ResponseItem` should be persisted for the memories.
+#[inline]
+pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
 /// Whether an `EventMsg` should be persisted in rollout files.
 #[inline]
 pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {

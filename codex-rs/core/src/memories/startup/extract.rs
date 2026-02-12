@@ -17,7 +17,7 @@ use crate::memories::stage_one::RAW_MEMORY_PROMPT;
 use crate::memories::stage_one::StageOneOutput;
 use crate::memories::stage_one::parse_stage_one_output;
 use crate::memories::stage_one::stage_one_output_schema;
-use crate::rollout::policy::should_persist_response_item;
+use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_protocol::protocol::RolloutItem;
 use std::path::Path;
 
@@ -156,7 +156,7 @@ fn serialize_filtered_rollout_response_items(
         .iter()
         .filter_map(|item| {
             if let RolloutItem::ResponseItem(item) = item
-                && should_persist_response_item(item)
+                && should_persist_response_item_for_memories(item)
             {
                 Some(item.clone())
             } else {
