@@ -203,12 +203,15 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .replace_exact_text(SUMMARIZATION_PROMPT, "<SUMMARIZATION_PROMPT>")
-        .capture_text_suffix_after_prefix(format!("{SUMMARY_PREFIX}\n"), "<SUMMARY:", ">")
         .replace_cwd_when_contains(
             PRETURN_CONTEXT_DIFF_CWD_MARKER,
             PRETURN_CONTEXT_DIFF_CWD_MARKER,
         )
         .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
+}
+
+fn summary_snapshot_text(summary: &str) -> String {
+    summary_with_prefix(summary).replace('\n', "\\n")
 }
 
 fn request_input_shape(request: &core_test_support::responses::ResponsesRequest) -> String {
@@ -3107,8 +3110,8 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         "expected post-compaction follow-up request to keep incoming user image content"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:PRE_TURN_SUMMARY>"),
-        "expected post-compaction request to include prefixed summary"
+        follow_up_shape.contains(&summary_snapshot_text("PRE_TURN_SUMMARY")),
+        "expected post-compaction request to include summary text"
     );
 }
 
@@ -3278,8 +3281,8 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         "mid-turn compaction request should include summarization prompt"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:MID_TURN_SUMMARY>"),
-        "post-mid-turn compaction request should include summary"
+        follow_up_shape.contains(&summary_snapshot_text("MID_TURN_SUMMARY")),
+        "post-mid-turn compaction request should include summary text"
     );
 }
 
@@ -3437,8 +3440,8 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
         "manual compact request should include summarization prompt"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:MANUAL_SUMMARY>"),
-        "post-compact request should include compact summary"
+        follow_up_shape.contains(&summary_snapshot_text("MANUAL_SUMMARY")),
+        "post-compact request should include compact summary text"
     );
     assert!(
         follow_up_shape.contains("USER_TWO"),

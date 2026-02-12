@@ -66,12 +66,15 @@ fn user_message_item(text: &str) -> ResponseItem {
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
-        .capture_text_suffix_after_prefix(format!("{SUMMARY_PREFIX}\n"), "<SUMMARY:", ">")
         .replace_cwd_when_contains(
             PRETURN_CONTEXT_DIFF_CWD_MARKER,
             PRETURN_CONTEXT_DIFF_CWD_MARKER,
         )
         .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
+}
+
+fn summary_snapshot_text(summary: &str) -> String {
+    summary_with_prefix(summary).replace('\n', "\\n")
 }
 
 fn request_input_shape(request: &responses::ResponsesRequest) -> String {
@@ -1470,8 +1473,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
         "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:REMOTE_PRE_TURN_SUMMARY>"),
-        "post-compaction request should include remote summary"
+        follow_up_shape.contains(&summary_snapshot_text("REMOTE_PRE_TURN_SUMMARY")),
+        "post-compaction request should include remote summary text"
     );
     assert_eq!(
         follow_up_shape.matches("USER_THREE").count(),
@@ -1769,8 +1772,8 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
         "remote mid-turn compaction request should include function call output"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:REMOTE_MID_TURN_SUMMARY>"),
-        "post-mid-turn request should include remote compaction summary"
+        follow_up_shape.contains(&summary_snapshot_text("REMOTE_MID_TURN_SUMMARY")),
+        "post-mid-turn request should include remote compaction summary text"
     );
 
     Ok(())
@@ -1834,7 +1837,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
         )
     );
     assert!(
-        !follow_up_shape.contains("<SUMMARY:REMOTE_MANUAL_EMPTY_SUMMARY>"),
+        !follow_up_shape.contains(&summary_snapshot_text("REMOTE_MANUAL_EMPTY_SUMMARY")),
         "post-compact request should not include compact summary when remote compaction is skipped"
     );
     assert!(
@@ -1931,8 +1934,8 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
         "post-compact request should include latest user message"
     );
     assert!(
-        follow_up_shape.contains("<SUMMARY:REMOTE_MANUAL_WITH_HISTORY_SUMMARY>"),
-        "post-compact request should include remote compact summary"
+        follow_up_shape.contains(&summary_snapshot_text("REMOTE_MANUAL_WITH_HISTORY_SUMMARY")),
+        "post-compact request should include remote compact summary text"
     );
 
     Ok(())
