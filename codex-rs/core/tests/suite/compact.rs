@@ -30,7 +30,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
-use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use core_test_support::responses::ev_assistant_message;
@@ -69,7 +68,6 @@ const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 const POST_AUTO_USER_MSG: &str = "post auto follow-up";
-const PRETURN_CONTEXT_DIFF_CWD_MARKER: &str = "PRETURN_CONTEXT_DIFF_CWD";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 
 pub(super) const COMPACT_WARNING_MESSAGE: &str = "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.";
@@ -80,23 +78,6 @@ fn auto_summary(summary: &str) -> String {
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
-}
-
-fn drop_call_id(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(obj) => {
-            obj.retain(|k, _| k != "call_id");
-            for v in obj.values_mut() {
-                drop_call_id(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                drop_call_id(v);
-            }
-        }
-        _ => {}
-    }
 }
 
 fn set_test_compact_prompt(config: &mut Config) {
@@ -202,7 +183,8 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
     );
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindOnly)
+    ContextSnapshotOptions::default()
+        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
 }
 
 fn format_labeled_requests_snapshot(
@@ -214,13 +196,6 @@ fn format_labeled_requests_snapshot(
         sections,
         &context_snapshot_options(),
     )
-}
-
-fn request_contains_text(
-    request: &core_test_support::responses::ResponsesRequest,
-    text: &str,
-) -> bool {
-    body_contains_text(&request.body_json().to_string(), text)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2372,124 +2347,78 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         5,
         "expected exactly 5 requests (user turn, compact, user turn, compact, final turn)"
     );
-    let contains_user_text = |input: &[serde_json::Value], expected: &str| -> bool {
-        input.iter().any(|item| {
-            item.get("type").and_then(|v| v.as_str()) == Some("message")
-                && item.get("role").and_then(|v| v.as_str()) == Some("user")
-                && item
-                    .get("content")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|arr| {
-                        arr.iter().any(|entry| {
-                            entry.get("text").and_then(|v| v.as_str()) == Some(expected)
-                        })
-                    })
-        })
+    let contains_user_text = |request: &core_test_support::responses::ResponsesRequest,
+                              expected: &str| {
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == expected)
     };
 
-    let first_turn_input = requests[0].input();
     assert!(
-        contains_user_text(&first_turn_input, first_user_message),
+        contains_user_text(&requests[0], first_user_message),
         "first turn request missing first user message"
     );
     assert!(
-        !contains_user_text(&first_turn_input, SUMMARIZATION_PROMPT),
+        !contains_user_text(&requests[0], SUMMARIZATION_PROMPT),
         "first turn request should not include summarization prompt"
     );
 
-    let first_compact_input = requests[1].input();
     assert!(
-        contains_user_text(&first_compact_input, first_user_message),
+        contains_user_text(&requests[1], first_user_message),
         "first compact request should include history before compaction"
     );
 
-    let second_turn_input = requests[2].input();
     assert!(
-        contains_user_text(&second_turn_input, second_user_message),
+        contains_user_text(&requests[2], second_user_message),
         "second turn request missing second user message"
     );
     assert!(
-        contains_user_text(&second_turn_input, first_user_message),
+        contains_user_text(&requests[2], first_user_message),
         "second turn request should include the compacted user history"
     );
 
-    let second_compact_input = requests[3].input();
     assert!(
-        contains_user_text(&second_compact_input, second_user_message),
+        contains_user_text(&requests[3], second_user_message),
         "second compact request should include latest history"
     );
 
-    let first_compact_has_prompt = contains_user_text(&first_compact_input, SUMMARIZATION_PROMPT);
-    let second_compact_has_prompt = contains_user_text(&second_compact_input, SUMMARIZATION_PROMPT);
+    let first_compact_has_prompt = contains_user_text(&requests[1], SUMMARIZATION_PROMPT);
+    let second_compact_has_prompt = contains_user_text(&requests[3], SUMMARIZATION_PROMPT);
     assert_eq!(
         first_compact_has_prompt, second_compact_has_prompt,
         "compact requests should consistently include or omit the summarization prompt"
     );
 
-    let mut final_output = requests
+    let first_request_user_texts = requests[0].message_input_texts("user");
+    let (first_turn_user_text, seeded_user_prefix) = first_request_user_texts
+        .as_slice()
+        .split_last()
+        .unwrap_or_else(|| panic!("first turn request missing user messages"));
+    assert_eq!(
+        first_turn_user_text, first_user_message,
+        "first turn request should end with the submitted user message"
+    );
+
+    let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
-        .input()
-        .into_iter()
-        .filter(|item| {
-            let role = item
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            let text = item
-                .get("content")
-                .and_then(|v| v.as_array())
-                .and_then(|v| v.first())
-                .and_then(|v| v.get("text"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            if role == "developer" {
-                return false;
-            }
-            !(text.starts_with("# AGENTS.md instructions for ")
-                || text.starts_with("<environment_context>")
-                || text.starts_with("<turn_aborted>"))
+        .message_input_texts("user");
+    let final_output = final_request_user_texts
+        .as_slice()
+        .strip_prefix(seeded_user_prefix)
+        .unwrap_or_else(|| {
+            panic!(
+                "final request should start with seeded user prefix from first request: {:?}",
+                seeded_user_prefix
+            )
         })
-        .collect::<VecDeque<_>>();
-
-    let _ = final_output
-        .iter_mut()
-        .map(drop_call_id)
-        .collect::<Vec<_>>();
-
+        .to_vec();
     let expected = vec![
-        json!({
-            "content": vec![json!({
-                "text": first_user_message,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
-        json!({
-            "content": vec![json!({
-                "text": second_user_message,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
-        json!({
-            "content": vec![json!({
-                "text": expected_second_summary,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
-        json!({
-            "content": vec![json!({
-                "text": final_user_message,
-                "type": "input_text",
-            })],
-            "role": "user",
-            "type": "message",
-        }),
+        first_user_message.to_string(),
+        second_user_message.to_string(),
+        expected_second_summary,
+        final_user_message.to_string(),
     ];
     assert_eq!(final_output, expected);
 }
@@ -2979,8 +2908,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {
-    skip_if_no_network!();
-
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
@@ -3072,18 +2999,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             ]
         )
     );
-    assert!(
-        request_contains_text(&requests[2], SUMMARIZATION_PROMPT),
-        "expected compact request to include summarization prompt"
-    );
-    assert!(
-        request_contains_text(&requests[2], PRETURN_CONTEXT_DIFF_CWD_MARKER),
-        "expected compact request to include pre-turn context diff"
-    );
-    assert!(
-        !request_contains_text(&requests[2], "USER_THREE"),
-        "current behavior excludes incoming user message from pre-turn compaction input"
-    );
     let follow_up_has_incoming_image = requests[3].inputs_of_type("message").iter().any(|item| {
         if item.get("role").and_then(Value::as_str) != Some("user") {
             return false;
@@ -3105,18 +3020,12 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         follow_up_has_incoming_image,
         "expected post-compaction follow-up request to keep incoming user image content"
     );
-    assert!(
-        request_contains_text(&requests[3], &summary_with_prefix("PRE_TURN_SUMMARY")),
-        "expected post-compaction request to include summary text"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
 // user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
-    skip_if_no_network!();
-
     let server = start_mock_server().await;
 
     let first_turn = sse(vec![
@@ -3195,10 +3104,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     );
 
     assert!(
-        !request_contains_text(&requests[1], "USER_TWO"),
-        "current behavior excludes incoming user message from pre-turn compaction input"
-    );
-    assert!(
         error_message.contains("ran out of room in the model's context window"),
         "expected context window exceeded message, got {error_message}"
     );
@@ -3206,8 +3111,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_mid_turn_continuation_compaction() {
-    skip_if_no_network!();
-
     let server = start_mock_server().await;
 
     let first_turn = sse(vec![
@@ -3265,26 +3168,10 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
             ]
         )
     );
-    assert!(
-        !requests[1]
-            .inputs_of_type("function_call_output")
-            .is_empty(),
-        "mid-turn compaction request should include function call output"
-    );
-    assert!(
-        request_contains_text(&requests[1], SUMMARIZATION_PROMPT),
-        "mid-turn compaction request should include summarization prompt"
-    );
-    assert!(
-        request_contains_text(&requests[2], &summary_with_prefix("MID_TURN_SUMMARY")),
-        "post-mid-turn compaction request should include summary text"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
-    skip_if_no_network!();
-
     let server = start_mock_server().await;
 
     let compact_turn = sse(vec![
@@ -3340,20 +3227,10 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             ]
         )
     );
-    assert!(
-        request_contains_text(&requests[0], SUMMARIZATION_PROMPT),
-        "manual /compact request should include summarization prompt"
-    );
-    assert!(
-        request_contains_text(&requests[1], "AFTER_MANUAL_EMPTY_COMPACT"),
-        "follow-up request should include the submitted user message"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
-    skip_if_no_network!();
-
     let server = start_mock_server().await;
 
     let first_turn = sse(vec![
@@ -3421,21 +3298,5 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
                 ("Local Post-Compaction History Layout", &requests[2]),
             ]
         )
-    );
-    assert!(
-        request_contains_text(&requests[1], "USER_ONE"),
-        "manual compact request should include existing user history"
-    );
-    assert!(
-        request_contains_text(&requests[1], SUMMARIZATION_PROMPT),
-        "manual compact request should include summarization prompt"
-    );
-    assert!(
-        request_contains_text(&requests[2], &summary_with_prefix("MANUAL_SUMMARY")),
-        "post-compact request should include compact summary text"
-    );
-    assert!(
-        request_contains_text(&requests[2], "USER_TWO"),
-        "post-compact request should include the latest user message"
     );
 }

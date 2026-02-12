@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -110,6 +112,14 @@ impl ResponsesRequest {
 
     pub fn body_bytes(&self) -> Vec<u8> {
         self.0.body.clone()
+    }
+
+    pub fn body_contains_text(&self, text: &str) -> bool {
+        let json_fragment = serde_json::to_string(text)
+            .expect("serialize text to JSON")
+            .trim_matches('"')
+            .to_string();
+        self.body_json().to_string().contains(&json_fragment)
     }
 
     pub fn instructions_text(&self) -> String {
@@ -478,6 +488,18 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
             "content": [{"type": "output_text", "text": text}]
         }
     })
+}
+
+pub fn user_message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 pub fn ev_message_item_added(id: &str, text: &str) -> Value {

@@ -16,5 +16,5 @@ Scenario: Remote manual /compact with prior user history compacts existing histo
 01:message/developer:<PERMISSIONS_INSTRUCTIONS>
 02:message/user:<AGENTS_MD>
 03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/user:Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\nREMOTE_MANUAL_WITH_HISTORY_SUMMARY
+04:message/user:<COMPACTION_SUMMARY>\nREMOTE_MANUAL_WITH_HISTORY_SUMMARY
 05:message/user:USER_TWO

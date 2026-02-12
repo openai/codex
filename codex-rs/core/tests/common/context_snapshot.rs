@@ -8,6 +8,9 @@ pub enum ContextSnapshotRenderMode {
     RedactedText,
     FullText,
     KindOnly,
+    KindWithTextPrefix {
+        max_chars: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +85,7 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                     let output = item
                         .get("output")
                         .and_then(Value::as_str)
-                        .map(|output| output.replace('\n', "\\n"))
+                        .map(|output| format_snapshot_text(output, options))
                         .unwrap_or_else(|| "<NON_STRING_OUTPUT>".to_string());
                     format!("{idx:02}:function_call_output:{output}")
                 }
@@ -98,6 +101,7 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                 .collect::<Vec<&str>>()
                                 .join(" ")
                         })
+                        .map(|command| format_snapshot_text(&command, options))
                         .filter(|cmd| !cmd.is_empty())
                         .unwrap_or_else(|| "<NO_COMMAND>".to_string());
                     format!("{idx:02}:local_shell_call:{command}")
@@ -170,10 +174,47 @@ pub fn format_labeled_items_snapshot(
 }
 
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
+    let canonical = canonicalize_snapshot_text(text);
+    let normalized = canonical.replace('\n', "\\n");
     match options.render_mode {
-        ContextSnapshotRenderMode::RedactedText | ContextSnapshotRenderMode::FullText => {
-            text.replace('\n', "\\n")
+        ContextSnapshotRenderMode::RedactedText | ContextSnapshotRenderMode::FullText => normalized,
+        ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
+            if normalized.chars().count() <= max_chars {
+                normalized
+            } else {
+                let prefix = normalized.chars().take(max_chars).collect::<String>();
+                format!("{prefix}...")
+            }
         }
         ContextSnapshotRenderMode::KindOnly => unreachable!(),
     }
+}
+
+fn canonicalize_snapshot_text(text: &str) -> String {
+    if text.starts_with("<permissions instructions>") {
+        return "<PERMISSIONS_INSTRUCTIONS>".to_string();
+    }
+    if text.starts_with("# AGENTS.md instructions for ") {
+        return "<AGENTS_MD>".to_string();
+    }
+    if text.starts_with("<environment_context>") {
+        if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
+            let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
+            return if cwd.ends_with("PRETURN_CONTEXT_DIFF_CWD") {
+                "<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>".to_string()
+            } else {
+                "<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string()
+            };
+        }
+        return "<ENVIRONMENT_CONTEXT>".to_string();
+    }
+    if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
+        return "<SUMMARIZATION_PROMPT>".to_string();
+    }
+    if text.starts_with("Another language model started to solve this problem")
+        && let Some((_, summary)) = text.split_once('\n')
+    {
+        return format!("<COMPACTION_SUMMARY>\n{summary}");
+    }
+    text.to_string()
 }
