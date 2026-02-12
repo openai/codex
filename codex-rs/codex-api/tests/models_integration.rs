@@ -2,17 +2,15 @@ use codex_api::AuthProvider;
 use codex_api::ModelsClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
-use codex_api::provider::WireApi;
 use codex_client::ReqwestTransport;
-use codex_protocol::openai_models::ClientVersion;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
 use wiremock::Mock;
@@ -35,7 +33,6 @@ fn provider(base_url: &str) -> Provider {
         name: "test".to_string(),
         base_url: base_url.to_string(),
         query_params: None,
-        wire: WireApi::Responses,
         headers: HeaderMap::new(),
         retry: RetryConfig {
             max_attempts: 1,
@@ -58,7 +55,7 @@ async fn models_client_hits_models_endpoint() {
             slug: "gpt-test".to_string(),
             display_name: "gpt-test".to_string(),
             description: Some("desc".to_string()),
-            default_reasoning_level: ReasoningEffort::Medium,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             supported_reasoning_levels: vec![
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
@@ -75,22 +72,24 @@ async fn models_client_hits_models_endpoint() {
             ],
             shell_type: ConfigShellToolType::ShellCommand,
             visibility: ModelVisibility::List,
-            minimal_client_version: ClientVersion(0, 1, 0),
             supported_in_api: true,
             priority: 1,
             upgrade: None,
-            base_instructions: None,
+            base_instructions: "base instructions".to_string(),
+            model_messages: None,
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
-            context_window: None,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
+            context_window: Some(272_000),
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
             experimental_supported_tools: Vec::new(),
+            input_modalities: default_input_modalities(),
+            prefer_websockets: false,
         }],
-        etag: String::new(),
     };
 
     Mock::given(method("GET"))
@@ -106,13 +105,13 @@ async fn models_client_hits_models_endpoint() {
     let transport = ReqwestTransport::new(reqwest::Client::new());
     let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
 
-    let result = client
+    let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())
         .await
         .expect("models request should succeed");
 
-    assert_eq!(result.models.len(), 1);
-    assert_eq!(result.models[0].slug, "gpt-test");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].slug, "gpt-test");
 
     let received = server
         .received_requests()

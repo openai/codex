@@ -3,6 +3,10 @@
 // Currently export only the types referenced by the workspace
 // The process for this will change
 
+// Config
+pub mod config_file_response;
+pub use self::config_file_response::ConfigFileResponse;
+
 // Cloud Tasks
 pub mod code_task_details_response;
 pub use self::code_task_details_response::CodeTaskDetailsResponse;
@@ -23,6 +27,9 @@ pub mod paginated_list_task_list_item_;
 pub use self::paginated_list_task_list_item_::PaginatedListTaskListItem;
 
 // Rate Limits
+pub mod additional_rate_limit_details;
+pub use self::additional_rate_limit_details::AdditionalRateLimitDetails;
+
 pub mod rate_limit_status_payload;
 pub use self::rate_limit_status_payload::PlanType;
 pub use self::rate_limit_status_payload::RateLimitStatusPayload;

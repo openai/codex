@@ -18,11 +18,11 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
-mcp-types = { workspace = true }
+rmcp = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -38,7 +38,6 @@ tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-assert_cmd = { workspace = true }
 core_test_support = { workspace = true }
 mcp_test_support = { workspace = true }
 os_info = { workspace = true }

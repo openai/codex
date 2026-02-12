@@ -11,6 +11,7 @@ pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
 pub use crate::request::Request;
+pub use crate::request::RequestCompression;
 pub use crate::request::Response;
 pub use crate::retry::RetryOn;
 pub use crate::retry::RetryPolicy;

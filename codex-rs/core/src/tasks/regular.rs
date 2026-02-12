@@ -1,24 +1,93 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
+use crate::client::ModelClient;
+use crate::client::ModelClientSession;
 use crate::codex::TurnContext;
-use crate::codex::run_task;
+use crate::codex::run_turn;
 use crate::state::TaskKind;
 use async_trait::async_trait;
+use codex_otel::OtelManager;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::user_input::UserInput;
+use futures::future::BoxFuture;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::trace_span;
+use tracing::warn;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct RegularTask;
+type PrewarmedSessionTask = JoinHandle<Option<ModelClientSession>>;
+
+pub(crate) struct RegularTask {
+    prewarmed_session_task: Mutex<Option<PrewarmedSessionTask>>,
+}
+
+impl Default for RegularTask {
+    fn default() -> Self {
+        Self {
+            prewarmed_session_task: Mutex::new(None),
+        }
+    }
+}
+
+impl RegularTask {
+    pub(crate) fn with_startup_prewarm(
+        model_client: ModelClient,
+        otel_manager: OtelManager,
+        model_info: ModelInfo,
+        turn_metadata_header: BoxFuture<'static, Option<String>>,
+    ) -> Self {
+        let prewarmed_session_task = tokio::spawn(async move {
+            let mut client_session = model_client.new_session();
+            let turn_metadata_header = turn_metadata_header.await;
+            match client_session
+                .prewarm_websocket(&otel_manager, &model_info, turn_metadata_header.as_deref())
+                .await
+            {
+                Ok(()) => Some(client_session),
+                Err(err) => {
+                    warn!("startup websocket prewarm task failed: {err}");
+                    None
+                }
+            }
+        });
+
+        Self {
+            prewarmed_session_task: Mutex::new(Some(prewarmed_session_task)),
+        }
+    }
+
+    async fn take_prewarmed_session(&self) -> Option<ModelClientSession> {
+        let prewarmed_session_task = self
+            .prewarmed_session_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        match prewarmed_session_task {
+            Some(task) => match task.await {
+                Ok(client_session) => client_session,
+                Err(err) => {
+                    warn!("startup websocket prewarm task join failed: {err}");
+                    None
+                }
+            },
+            None => None,
+        }
+    }
+}
 
 #[async_trait]
 impl SessionTask for RegularTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
+    }
+
+    fn supports_auto_continue(&self) -> bool {
+        true
     }
 
     async fn run(
@@ -29,10 +98,20 @@ impl SessionTask for RegularTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        let run_task_span =
-            trace_span!(parent: sess.services.otel_manager.current_span(), "run_task");
-        run_task(sess, ctx, input, cancellation_token)
-            .instrument(run_task_span)
-            .await
+        let run_turn_span = trace_span!("run_turn");
+        sess.set_server_reasoning_included(false).await;
+        sess.services
+            .otel_manager
+            .apply_traceparent_parent(&run_turn_span);
+        let prewarmed_client_session = self.take_prewarmed_session().await;
+        run_turn(
+            sess,
+            ctx,
+            input,
+            prewarmed_client_session,
+            cancellation_token,
+        )
+        .instrument(run_turn_span)
+        .await
     }
 }

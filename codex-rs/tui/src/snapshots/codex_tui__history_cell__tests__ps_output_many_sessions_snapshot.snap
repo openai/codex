@@ -1,0 +1,25 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+/ps
+
+Background terminals
+
+  • command 0
+  • command 1
+  • command 2
+  • command 3
+  • command 4
+  • command 5
+  • command 6
+  • command 7
+  • command 8
+  • command 9
+  • command 10
+  • command 11
+  • command 12
+  • command 13
+  • command 14
+  • command 15
+  • ... and 4 more running

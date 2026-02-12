@@ -3,7 +3,7 @@ source: tui/src/model_migration.rs
 expression: terminal.backend()
 ---
 
-> Try gpt-5.1
+> Codex just got an upgrade. Introducing gpt-5.1.
 
   We recommend switching from gpt-5 to gpt-5.1.
 

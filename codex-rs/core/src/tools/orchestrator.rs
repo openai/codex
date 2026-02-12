@@ -3,11 +3,13 @@ Module: orchestrator
 
 Central place for approvals + sandbox selection + retry semantics. Drives a
 simple sequence for any ToolRuntime: approval → select sandbox → attempt →
-retry without sandbox on denial (no re‑approval thanks to caching).
+retry with an escalated sandbox strategy on denial (no re‑approval thanks to
+caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
+use crate::features::Feature;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -17,6 +19,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -42,11 +45,11 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        let otel = turn_ctx.client.get_otel_manager();
+        let otel = turn_ctx.otel_manager.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
-        let otel_user = codex_otel::otel_manager::ToolDecisionSource::User;
-        let otel_cfg = codex_otel::otel_manager::ToolDecisionSource::Config;
+        let otel_user = ToolDecisionSource::User;
+        let otel_cfg = ToolDecisionSource::Config;
 
         // 1) Approval
         let mut already_approved = false;
@@ -85,21 +88,34 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
+        let has_managed_network_requirements = turn_ctx
+            .config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
-            SandboxOverride::NoOverride => self
-                .sandbox
-                .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference()),
+            SandboxOverride::NoOverride => self.sandbox.select_initial(
+                &turn_ctx.sandbox_policy,
+                tool.sandbox_preference(),
+                turn_ctx.windows_sandbox_level,
+                has_managed_network_requirements,
+            ),
         };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox().
+        // via crate::safety::get_platform_sandbox(..).
+        let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
+            enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            use_linux_sandbox_bwrap,
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
         match tool.run(req, &initial_attempt, tool_ctx).await {
@@ -121,7 +137,7 @@ impl ToolOrchestrator {
                     })));
                 }
 
-                // Ask for approval before retrying without sandbox.
+                // Ask for approval before retrying with the escalated sandbox.
                 if !tool.should_bypass_approval(approval_policy, already_approved) {
                     let reason_msg = build_denial_reason_from_output(output.as_ref());
                     let approval_ctx = ApprovalCtx {
@@ -147,9 +163,12 @@ impl ToolOrchestrator {
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
+                    enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
+                    use_linux_sandbox_bwrap,
+                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
                 };
 
                 // Second attempt.

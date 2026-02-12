@@ -13,8 +13,10 @@ pub fn add_dir_warning_message(
     }
 
     match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::DangerFullAccess => None,
-        SandboxPolicy::ReadOnly => Some(format_warning(additional_dirs)),
+        SandboxPolicy::WorkspaceWrite { .. }
+        | SandboxPolicy::DangerFullAccess
+        | SandboxPolicy::ExternalSandbox { .. } => None,
+        SandboxPolicy::ReadOnly { .. } => Some(format_warning(additional_dirs)),
     }
 }
 
@@ -32,6 +34,7 @@ fn format_warning(additional_dirs: &[PathBuf]) -> String {
 #[cfg(test)]
 mod tests {
     use super::add_dir_warning_message;
+    use codex_core::protocol::NetworkAccess;
     use codex_core::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -51,8 +54,17 @@ mod tests {
     }
 
     #[test]
+    fn returns_none_for_external_sandbox() {
+        let sandbox = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Enabled,
+        };
+        let dirs = vec![PathBuf::from("/tmp/example")];
+        assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
+    }
+
+    #[test]
     fn warns_for_read_only() {
-        let sandbox = SandboxPolicy::ReadOnly;
+        let sandbox = SandboxPolicy::new_read_only_policy();
         let dirs = vec![PathBuf::from("relative"), PathBuf::from("/abs")];
         let message = add_dir_warning_message(&dirs, &sandbox)
             .expect("expected warning for read-only sandbox");
@@ -64,7 +76,7 @@ mod tests {
 
     #[test]
     fn returns_none_when_no_additional_dirs() {
-        let sandbox = SandboxPolicy::ReadOnly;
+        let sandbox = SandboxPolicy::new_read_only_policy();
         let dirs: Vec<PathBuf> = Vec::new();
         assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
     }

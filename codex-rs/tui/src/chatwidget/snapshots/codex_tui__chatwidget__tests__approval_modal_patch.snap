@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend().vt100().screen().contents()
 ---
+
+
   Would you like to make the following edits?
 
   Reason: The model wants to apply changes
@@ -12,6 +14,7 @@ expression: terminal.backend().vt100().screen().contents()
     2 +world
 
 › 1. Yes, proceed (y)
-  2. No, and tell Codex what to do differently (esc)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
 
   Press enter to confirm or esc to cancel

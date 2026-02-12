@@ -14,6 +14,8 @@ permissions:
 
 jobs:
   prepare:
+    # Prevent scheduled runs on forks (no secrets, wastes Actions minutes)
+    if: github.repository == 'openai/codex'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,7 +43,7 @@ jobs:
           curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
 
       - name: Open pull request (if changed)
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "Update models.json"
           title: "Update models.json"

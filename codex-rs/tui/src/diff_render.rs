@@ -299,7 +299,18 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
     }
 }
 
+/// Format a path for display relative to the current working directory when
+/// possible, keeping output stable in jj/no-`.git` workspaces (e.g. image
+/// tool calls should show `example.png` instead of an absolute path).
 pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
+    if path.is_relative() {
+        return path.display().to_string();
+    }
+
+    if let Ok(stripped) = path.strip_prefix(cwd) {
+        return stripped.display().to_string();
+    }
+
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,
@@ -314,7 +325,7 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     chosen.display().to_string()
 }
 
-fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
+pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     if let Ok(patch) = diffy::Patch::from_str(diff) {
         patch
             .hunks()
@@ -420,6 +431,7 @@ fn style_del() -> Style {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
@@ -457,6 +469,26 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_snapshot!(name, text);
+    }
+
+    #[test]
+    fn display_path_prefers_cwd_without_git_repo() {
+        let cwd = if cfg!(windows) {
+            PathBuf::from(r"C:\workspace\codex")
+        } else {
+            PathBuf::from("/workspace/codex")
+        };
+        let path = cwd.join("tui").join("example.png");
+
+        let rendered = display_path_for(&path, &cwd);
+
+        assert_eq!(
+            rendered,
+            PathBuf::from("tui")
+                .join("example.png")
+                .display()
+                .to_string()
+        );
     }
 
     #[test]
@@ -557,23 +589,15 @@ mod tests {
 
     #[test]
     fn ui_snapshot_apply_delete_block() {
-        // Write a temporary file so the delete renderer can read original content
-        let tmp_path = PathBuf::from("tmp_delete_example.txt");
-        std::fs::write(&tmp_path, "first\nsecond\nthird\n").expect("write tmp file");
-
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
-            tmp_path.clone(),
+            PathBuf::from("tmp_delete_example.txt"),
             FileChange::Delete {
                 content: "first\nsecond\nthird\n".to_string(),
             },
         );
 
         let lines = diff_summary_for_tests(&changes);
-
-        // Cleanup best-effort; rendering has already read the file
-        let _ = std::fs::remove_file(&tmp_path);
-
         snapshot_lines("apply_delete_block", lines, 80, 12);
     }
 

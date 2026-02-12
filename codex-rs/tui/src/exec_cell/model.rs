@@ -125,6 +125,18 @@ impl ExecCell {
         self.calls.iter()
     }
 
+    pub(crate) fn append_output(&mut self, call_id: &str, chunk: &str) -> bool {
+        if chunk.is_empty() {
+            return false;
+        }
+        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+            return false;
+        };
+        let output = call.output.get_or_insert_with(CommandOutput::default);
+        output.aggregated_output.push_str(chunk);
+        true
+    }
+
     pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
         !matches!(call.source, ExecCommandSource::UserShell)
             && !call.parsed.is_empty()

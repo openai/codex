@@ -20,6 +20,7 @@ At a glance:
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
+  - `collaborationMode/list` → enumerate collaboration mode presets (experimental)
 - Auth
   - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
   - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
@@ -59,7 +60,7 @@ Request `newConversation` params (subset):
 - `profile`: optional named profile
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
-- `sandbox`: `read-only` | `workspace-write` | `danger-full-access`
+- `sandbox`: `read-only` | `workspace-write` | `external-sandbox` (honors `networkAccess` restricted/enabled) | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
 - `compactPrompt`: optional replacement for the default compaction prompt
@@ -70,11 +71,19 @@ Response: `{ conversationId, model, reasoningEffort?, rolloutPath }`
 Send input to the active turn:
 
 - `sendUserMessage` → enqueue items to the conversation
-- `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, and `summary`
+- `sendUserTurn` → structured turn with explicit `cwd`, `approvalPolicy`, `sandboxPolicy`, `model`, optional `effort`, `summary`, optional `personality`, and optional `outputSchema` (JSON Schema for the final assistant message)
+
+Valid `personality` values are `friendly`, `pragmatic`, and `none`. When `none` is selected, the personality placeholder is replaced with an empty string.
+
+For v2 threads, `turn/start` also accepts `outputSchema` to constrain the final assistant message for that turn.
 
 Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
+
+For v2 threads, use `thread/list` with `archived: true` to list archived rollouts and
+`thread/unarchive` to restore them to the active sessions directory (it returns the restored
+thread summary).
 
 ## Models
 
@@ -91,8 +100,19 @@ Each response yields:
     - `reasoningEffort` – one of `minimal|low|medium|high`
     - `description` – human-friendly label for the effort
   - `defaultReasoningEffort` – suggested effort for the UI
+  - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
+  - `upgrade` – optional recommended upgrade model id
 - `nextCursor` – pass into the next request to continue paging (optional)
+
+## Collaboration modes (experimental)
+
+Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
+
+- `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
+  - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
+
+When sending `turn/start` with `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
 
 ## Event stream
 
@@ -102,6 +122,24 @@ While a conversation runs, the server sends notifications:
 - Auth notifications via method names `loginChatGptComplete` and `authStatusChange`.
 
 Clients should render events and, when present, surface approval requests (see next section).
+
+## Tool responses
+
+The `codex` and `codex-reply` tools return standard MCP `CallToolResult` payloads. For
+compatibility with MCP clients that prefer `structuredContent`, Codex mirrors the
+content blocks inside `structuredContent` alongside the `threadId`.
+
+Example:
+
+```json
+{
+  "content": [{ "type": "text", "text": "Hello from Codex" }],
+  "structuredContent": {
+    "threadId": "019bbed6-1e9e-7f31-984c-a05b65045719",
+    "content": "Hello from Codex"
+  }
+}
+```
 
 ## Approvals (server → client)
 

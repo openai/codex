@@ -4,11 +4,13 @@ mod pull;
 mod url;
 
 pub use client::OllamaClient;
+use codex_core::ModelProviderInfo;
 use codex_core::config::Config;
 pub use pull::CliProgressReporter;
 pub use pull::PullEvent;
 pub use pull::PullProgressReporter;
 pub use pull::TuiProgressReporter;
+use semver::Version;
 
 /// Default OSS model to use when `--oss` is passed without an explicit `-m`.
 pub const DEFAULT_OSS_MODEL: &str = "gpt-oss:20b";
@@ -44,4 +46,52 @@ pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn min_responses_version() -> Version {
+    Version::new(0, 13, 4)
+}
+
+fn supports_responses(version: &Version) -> bool {
+    *version == Version::new(0, 0, 0) || *version >= min_responses_version()
+}
+
+/// Ensure the running Ollama server is new enough to support the Responses API.
+///
+/// Returns `Ok(())` when the version endpoint is missing or unparsable.
+pub async fn ensure_responses_supported(provider: &ModelProviderInfo) -> std::io::Result<()> {
+    let client = crate::OllamaClient::try_from_provider(provider).await?;
+    let Some(version) = client.fetch_version().await? else {
+        return Ok(());
+    };
+
+    if supports_responses(&version) {
+        return Ok(());
+    }
+
+    let min = min_responses_version();
+    Err(std::io::Error::other(format!(
+        "Ollama {version} is too old. Codex requires Ollama {min} or newer."
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supports_responses_for_dev_zero() {
+        assert!(supports_responses(&Version::new(0, 0, 0)));
+    }
+
+    #[test]
+    fn does_not_support_responses_before_cutoff() {
+        assert!(!supports_responses(&Version::new(0, 13, 3)));
+    }
+
+    #[test]
+    fn supports_responses_at_or_after_cutoff() {
+        assert!(supports_responses(&Version::new(0, 13, 4)));
+        assert!(supports_responses(&Version::new(0, 14, 0)));
+    }
 }

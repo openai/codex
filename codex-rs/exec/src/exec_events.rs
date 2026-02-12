@@ -1,7 +1,8 @@
-use mcp_types::ContentBlock as McpContentBlock;
+use codex_protocol::models::WebSearchAction;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use ts_rs::TS;
 
 /// Top-level JSONL events emitted by codex exec
@@ -113,6 +114,9 @@ pub enum ThreadItemDetails {
     /// Represents a call to an MCP tool. The item starts when the invocation is
     /// dispatched and completes when the MCP server reports success or failure.
     McpToolCall(McpToolCallItem),
+    /// Represents a call to a collab tool. The item starts when the collab tool is
+    /// invoked and completes when the collab tool reports success or failure.
+    CollabToolCall(CollabToolCallItem),
     /// Captures a web search request. It starts when the search is kicked off
     /// and completes when results are returned to the agent.
     WebSearch(WebSearchItem),
@@ -198,10 +202,67 @@ pub enum McpToolCallStatus {
     Failed,
 }
 
+/// The status of a collab tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CollabToolCallStatus {
+    #[default]
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// Supported collab tools.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CollabTool {
+    SpawnAgent,
+    SendInput,
+    Wait,
+    CloseAgent,
+}
+
+/// The status of a collab agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CollabAgentStatus {
+    PendingInit,
+    Running,
+    Completed,
+    Errored,
+    Shutdown,
+    NotFound,
+}
+
+/// Last known state of a collab agent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct CollabAgentState {
+    pub status: CollabAgentStatus,
+    pub message: Option<String>,
+}
+
+/// A call to a collab tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct CollabToolCallItem {
+    pub tool: CollabTool,
+    pub sender_thread_id: String,
+    pub receiver_thread_ids: Vec<String>,
+    pub prompt: Option<String>,
+    pub agents_states: HashMap<String, CollabAgentState>,
+    pub status: CollabToolCallStatus,
+}
+
 /// Result payload produced by an MCP tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct McpToolCallItemResult {
-    pub content: Vec<McpContentBlock>,
+    // NOTE: `rmcp::model::Content` (and its `RawContent` variants) would be a
+    // more precise Rust representation of MCP content blocks. We intentionally
+    // use `serde_json::Value` here because this crate exports JSON schema + TS
+    // types (`schemars`/`ts-rs`), and the rmcp model types aren't set up to be
+    // schema/TS friendly (and would introduce heavier coupling to rmcp's Rust
+    // representations). Using `JsonValue` keeps the payload wire-shaped and
+    // easy to export.
+    pub content: Vec<JsonValue>,
     pub structured_content: Option<JsonValue>,
 }
 
@@ -226,7 +287,9 @@ pub struct McpToolCallItem {
 /// A web search request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct WebSearchItem {
+    pub id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 /// An error notification.

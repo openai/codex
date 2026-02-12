@@ -3,6 +3,7 @@ use crate::acl::path_mask_allows;
 use crate::cap::cap_sid_file;
 use crate::cap::load_or_create_cap_sids;
 use crate::logging::{debug_log, log_note};
+use crate::path_normalization::canonical_path_key;
 use crate::policy::SandboxPolicy;
 use crate::token::convert_string_sid_to_sid;
 use crate::token::world_sid;
@@ -10,6 +11,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -29,11 +31,6 @@ const SKIP_DIR_SUFFIXES: &[&str] = &[
     "/windows/registration",
     "/programdata",
 ];
-
-fn normalize_path_key(p: &Path) -> String {
-    let n = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    n.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
-}
 
 fn unique_push(set: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, p: PathBuf) {
     if let Ok(abs) = p.canonicalize() {
@@ -67,9 +64,9 @@ fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>
         .cloned()
         .or_else(|| std::env::var("PATH").ok())
     {
-        for part in path.split(std::path::MAIN_SEPARATOR) {
-            if !part.is_empty() {
-                unique_push(&mut set, &mut out, PathBuf::from(part));
+        for part in std::env::split_paths(OsStr::new(&path)) {
+            if !part.as_os_str().is_empty() {
+                unique_push(&mut set, &mut out, part);
             }
         }
     }
@@ -130,7 +127,7 @@ pub fn audit_everyone_writable(
             checked += 1;
             let has = check_world_writable(&p);
             if has {
-                let key = normalize_path_key(&p);
+                let key = canonical_path_key(&p);
                 if seen.insert(key) {
                     flagged.push(p);
                 }
@@ -148,7 +145,7 @@ pub fn audit_everyone_writable(
         checked += 1;
         let has_root = check_world_writable(&root);
         if has_root {
-            let key = normalize_path_key(&root);
+            let key = canonical_path_key(&root);
             if seen.insert(key) {
                 flagged.push(root.clone());
             }
@@ -180,7 +177,7 @@ pub fn audit_everyone_writable(
                     checked += 1;
                     let has_child = check_world_writable(&p);
                     if has_child {
-                        let key = normalize_path_key(&p);
+                        let key = canonical_path_key(&p);
                         if seen.insert(key) {
                             flagged.push(p);
                         }
@@ -265,13 +262,13 @@ pub fn apply_capability_denies_for_world_writable(
             }
             (sid, roots)
         }
-        SandboxPolicy::ReadOnly => (
+        SandboxPolicy::ReadOnly { .. } => (
             unsafe { convert_string_sid_to_sid(&caps.readonly) }.ok_or_else(|| {
                 anyhow!("ConvertStringSidToSidW failed for readonly capability")
             })?,
             Vec::new(),
         ),
-        SandboxPolicy::DangerFullAccess => {
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             return Ok(());
         }
     };
@@ -297,4 +294,42 @@ pub fn apply_capability_denies_for_world_writable(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gather_candidates;
+    use std::collections::HashMap;
+    use std::fs;
+
+    #[test]
+    fn gathers_path_entries_by_list_separator() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir_a = tmp.path().join("Tools");
+        let dir_b = tmp.path().join("Bin");
+        let dir_space = tmp.path().join("Program Files");
+        fs::create_dir_all(&dir_a).expect("dir a");
+        fs::create_dir_all(&dir_b).expect("dir b");
+        fs::create_dir_all(&dir_space).expect("dir space");
+
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "PATH".to_string(),
+            format!(
+                "{};{};{}",
+                dir_a.display(),
+                dir_b.display(),
+                dir_space.display()
+            ),
+        );
+
+        let candidates = gather_candidates(tmp.path(), &env_map);
+        let canon_a = dir_a.canonicalize().expect("canon a");
+        let canon_b = dir_b.canonicalize().expect("canon b");
+        let canon_space = dir_space.canonicalize().expect("canon space");
+
+        assert!(candidates.contains(&canon_a));
+        assert!(candidates.contains(&canon_b));
+        assert!(candidates.contains(&canon_space));
+    }
 }

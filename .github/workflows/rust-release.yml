@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
+      - uses: dtolnay/rust-toolchain@1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -48,14 +48,16 @@ jobs:
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
     defaults:
       run:
         working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -73,41 +75,144 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.90
+      - name: Print runner specs (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          total_ram="$(awk '/MemTotal/ {printf "%.1f GiB\n", $2 / 1024 / 1024}' /proc/meminfo)"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(uname -a)"
+          echo "CPU model: ${cpu_model}"
+          echo "Logical CPUs: $(nproc)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - name: Print runner specs (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - name: Install Linux bwrap build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v5
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Use hermetic Cargo home (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
+          echo "${cargo_home}/bin" >> "$GITHUB_PATH"
+          : > "${cargo_home}/config.toml"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+          version: 0.14.0
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Configure rustc UBSan wrapper (musl host)
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+          set -euo pipefail
+          ubsan=""
+          if command -v ldconfig >/dev/null 2>&1; then
+            ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
+          fi
+          wrapper_root="${RUNNER_TEMP:-/tmp}"
+          wrapper="${wrapper_root}/rustc-ubsan-wrapper"
+          cat > "${wrapper}" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ -n "${ubsan}" ]]; then
+            export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
+          fi
+          exec "\$1" "\${@:2}"
+          EOF
+          chmod +x "${wrapper}"
+          echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
+          echo "RUSTC_WORKSPACE_WRAPPER=" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Clear sanitizer flags (musl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Clear global Rust flags so host/proc-macro builds don't pull in UBSan.
+          echo "RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - name: Cargo build
         shell: bash
         run: |
-          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
-          else
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
-          fi
+          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-${{ matrix.target }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -116,23 +221,72 @@ jobs:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-      - if: ${{ contains(matrix.target, 'windows') }}
-        name: Sign Windows binaries with Azure Trusted Signing
-        uses: ./.github/actions/windows-code-sign
-        with:
-          target: ${{ matrix.target }}
-          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-
-      - if: ${{ matrix.runner == 'macos-15-xlarge' }}
-        name: MacOS code signing
+      - if: ${{ runner.os == 'macOS' }}
+        name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
           target: ${{ matrix.target }}
+          sign-binaries: "true"
+          sign-dmg: "false"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: Build macOS dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
+          volname="Codex (${target})"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          # The previous "MacOS code signing (binaries)" step signs + notarizes the
+          # built artifacts in `${release_dir}`. This step packages *those same*
+          # signed binaries into a dmg.
+          codex_binary_path="${release_dir}/codex"
+          proxy_binary_path="${release_dir}/codex-responses-api-proxy"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          if [[ ! -f "$codex_binary_path" ]]; then
+            echo "Binary $codex_binary_path not found"
+            exit 1
+          fi
+          if [[ ! -f "$proxy_binary_path" ]]; then
+            echo "Binary $proxy_binary_path not found"
+            exit 1
+          fi
+
+          ditto "$codex_binary_path" "${dmg_root}/codex"
+          ditto "$proxy_binary_path" "${dmg_root}/codex-responses-api-proxy"
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "dmg $dmg_path not found after build"
+            exit 1
+          fi
+
+      - if: ${{ runner.os == 'macOS' }}
+        name: MacOS code signing (dmg)
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          sign-binaries: "false"
+          sign-dmg: "true"
           apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
@@ -145,25 +299,17 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
-          else
-            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
-          fi
+          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.sigstore "$dest/codex-responses-api-proxy-${{ matrix.target }}.sigstore"
           fi
 
-      - if: ${{ matrix.runner == 'windows-11-arm' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
+          fi
 
       - name: Compress artifacts
         shell: bash
@@ -172,21 +318,11 @@ jobs:
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
 
-          # We want to ship the raw Windows executables in the GitHub Release
-          # in addition to the compressed archives. Keep the originals for
-          # Windows targets; remove them elsewhere to limit the number of
-          # artifacts that end up in the GitHub Release.
-          keep_originals=false
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            keep_originals=true
-          fi
-
           # For compatibility with environments that lack the `zstd` tool we
-          # additionally create a `.tar.gz` for all platforms and `.zip` for
-          # Windows alongside every single binary that we publish. The end result is:
+          # additionally create a `.tar.gz` alongside every binary we publish.
+          # The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   codex-<target>.zip          (only for Windows)
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -194,7 +330,7 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
               continue
             fi
 
@@ -206,20 +342,9 @@ jobs:
             # Create per-binary tar.gz
             tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
 
-            # Create zip archive for Windows binaries
-            # Must run from inside the dest dir so 7z won't
-            # embed the directory path inside the zip.
-            if [[ "${{ matrix.runner }}" == windows* ]]; then
-              (cd "$dest" && 7z a "${base}.zip" "$base")
-            fi
-
-            # Also create .zst (existing behaviour) *and* remove the original
-            # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
+            # Also create .zst and remove the uncompressed binaries to keep
+            # non-Windows artifact directories small.
+            zstd -T0 -19 --rm "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
@@ -229,6 +354,13 @@ jobs:
           # equivalents we generated in the previous step.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-windows:
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+    secrets: inherit
 
   shell-tool-mcp:
     name: shell-tool-mcp
@@ -242,6 +374,7 @@ jobs:
   release:
     needs:
       - build
+      - build-windows
       - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
@@ -258,6 +391,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Generate release notes from tag commit message
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # On tag pushes, GITHUB_SHA may be a tag object for annotated tags;
+          # peel it to the underlying commit.
+          commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+
+          # Use the commit message for the commit the tag points at (not the
+          # annotated tag message).
+          git log -1 --format=%B "${commit}" > "${notes_path}"
+          # Ensure trailing newline so GitHub's markdown renderer doesn't
+          # occasionally run the last line into subsequent content.
+          echo >> "${notes_path}"
+
+          echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
+
       - uses: actions/download-artifact@v7
         with:
           path: dist
@@ -270,8 +423,18 @@ jobs:
       - name: Delete entries from dist/ that should not go in the release
         run: |
           rm -rf dist/shell-tool-mcp*
+          rm -rf dist/windows-binaries*
+          # cargo-timing.html appears under multiple target-specific directories.
+          # If included in files: dist/**, release upload races on duplicate
+          # asset names and can fail with 404s.
+          find dist -type f -name 'cargo-timing.html' -delete
+          find dist -type d -empty -delete
 
           ls -R dist/
+
+      - name: Add config schema release asset
+        run: |
+          cp codex-rs/core/config.schema.json dist/config-schema.json
 
       - name: Define release name
         id: release_name
@@ -330,6 +493,7 @@ jobs:
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
+          body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
@@ -341,6 +505,19 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - name: Trigger developers.openai.com deploy
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
@@ -375,18 +552,20 @@ jobs:
           version="${{ needs.release.outputs.version }}"
           tag="${{ needs.release.outputs.tag }}"
           mkdir -p dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-sdk-npm-${version}.tgz" \
-            --dir dist/npm
+          patterns=(
+            "codex-npm-${version}.tgz"
+            "codex-npm-linux-*-${version}.tgz"
+            "codex-npm-darwin-*-${version}.tgz"
+            "codex-npm-win32-*-${version}.tgz"
+            "codex-responses-api-proxy-npm-${version}.tgz"
+            "codex-sdk-npm-${version}.tgz"
+          )
+          for pattern in "${patterns[@]}"; do
+            gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$pattern" \
+              --dir dist/npm
+          done
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
       - name: Publish to npm
@@ -395,19 +574,44 @@ jobs:
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
         run: |
           set -euo pipefail
-          tag_args=()
+          prefix=""
           if [[ -n "${NPM_TAG}" ]]; then
-            tag_args+=(--tag "${NPM_TAG}")
+            prefix="${NPM_TAG}-"
           fi
 
-          tarballs=(
-            "codex-npm-${VERSION}.tgz"
-            "codex-responses-api-proxy-npm-${VERSION}.tgz"
-            "codex-sdk-npm-${VERSION}.tgz"
-          )
+          shopt -s nullglob
+          tarballs=(dist/npm/*-"${VERSION}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found in dist/npm for version ${VERSION}"
+            exit 1
+          fi
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
           done
 
   update-branch:

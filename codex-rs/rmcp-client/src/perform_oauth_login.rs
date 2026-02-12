@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::bail;
 use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
@@ -44,6 +45,7 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    callback_port: Option<u16>,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -56,6 +58,7 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         true,
+        callback_port,
         None,
     )
     .await?
@@ -63,6 +66,7 @@ pub async fn perform_oauth_login(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login_return_url(
     server_name: &str,
     server_url: &str,
@@ -71,6 +75,7 @@ pub async fn perform_oauth_login_return_url(
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
     timeout_secs: Option<i64>,
+    callback_port: Option<u16>,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -83,6 +88,7 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         false,
+        callback_port,
         timeout_secs,
     )
     .await?;
@@ -97,21 +103,32 @@ fn spawn_callback_server(server: Arc<Server>, tx: oneshot::Sender<(String, Strin
     tokio::task::spawn_blocking(move || {
         while let Ok(request) = server.recv() {
             let path = request.url().to_string();
-            if let Some(OauthCallbackResult { code, state }) = parse_oauth_callback(&path) {
-                let response =
-                    Response::from_string("Authentication complete. You may close this window.");
-                if let Err(err) = request.respond(response) {
-                    eprintln!("Failed to respond to OAuth callback: {err}");
+            match parse_oauth_callback(&path) {
+                CallbackOutcome::Success(OauthCallbackResult { code, state }) => {
+                    let response = Response::from_string(
+                        "Authentication complete. You may close this window.",
+                    );
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
+                    if let Err(err) = tx.send((code, state)) {
+                        eprintln!("Failed to send OAuth callback: {err:?}");
+                    }
+                    break;
                 }
-                if let Err(err) = tx.send((code, state)) {
-                    eprintln!("Failed to send OAuth callback: {err:?}");
+                CallbackOutcome::Error(description) => {
+                    let response = Response::from_string(format!("OAuth error: {description}"))
+                        .with_status_code(400);
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
                 }
-                break;
-            } else {
-                let response =
-                    Response::from_string("Invalid OAuth callback").with_status_code(400);
-                if let Err(err) = request.respond(response) {
-                    eprintln!("Failed to respond to OAuth callback: {err}");
+                CallbackOutcome::Invalid => {
+                    let response =
+                        Response::from_string("Invalid OAuth callback").with_status_code(400);
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
                 }
             }
         }
@@ -123,29 +140,49 @@ struct OauthCallbackResult {
     state: String,
 }
 
-fn parse_oauth_callback(path: &str) -> Option<OauthCallbackResult> {
-    let (route, query) = path.split_once('?')?;
+enum CallbackOutcome {
+    Success(OauthCallbackResult),
+    Error(String),
+    Invalid,
+}
+
+fn parse_oauth_callback(path: &str) -> CallbackOutcome {
+    let Some((route, query)) = path.split_once('?') else {
+        return CallbackOutcome::Invalid;
+    };
     if route != "/callback" {
-        return None;
+        return CallbackOutcome::Invalid;
     }
 
     let mut code = None;
     let mut state = None;
+    let mut error_description = None;
 
     for pair in query.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        let decoded = decode(value).ok()?.into_owned();
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let Ok(decoded) = decode(value) else {
+            continue;
+        };
+        let decoded = decoded.into_owned();
         match key {
             "code" => code = Some(decoded),
             "state" => state = Some(decoded),
+            "error_description" => error_description = Some(decoded),
             _ => {}
         }
     }
 
-    Some(OauthCallbackResult {
-        code: code?,
-        state: state?,
-    })
+    if let (Some(code), Some(state)) = (code, state) {
+        return CallbackOutcome::Success(OauthCallbackResult { code, state });
+    }
+
+    if let Some(description) = error_description {
+        return CallbackOutcome::Error(description);
+    }
+
+    CallbackOutcome::Invalid
 }
 
 pub struct OauthLoginHandle {
@@ -188,7 +225,21 @@ struct OauthLoginFlow {
     timeout: Duration,
 }
 
+fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
+    if let Some(config_port) = callback_port {
+        if config_port == 0 {
+            bail!(
+                "invalid MCP OAuth callback port `{config_port}`: port must be between 1 and 65535"
+            );
+        }
+        return Ok(Some(config_port));
+    }
+
+    Ok(None)
+}
+
 impl OauthLoginFlow {
+    #[allow(clippy::too_many_arguments)]
     async fn new(
         server_name: &str,
         server_url: &str,
@@ -196,11 +247,18 @@ impl OauthLoginFlow {
         headers: OauthHeaders,
         scopes: &[String],
         launch_browser: bool,
+        callback_port: Option<u16>,
         timeout_secs: Option<i64>,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
-        let server = Arc::new(Server::http("127.0.0.1:0").map_err(|err| anyhow!(err))?);
+        let callback_port = resolve_callback_port(callback_port)?;
+        let bind_addr = match callback_port {
+            Some(port) => format!("127.0.0.1:{port}"),
+            None => "127.0.0.1:0".to_string(),
+        };
+
+        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
         let guard = CallbackServerGuard {
             server: Arc::clone(&server),
         };

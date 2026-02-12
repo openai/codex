@@ -6,11 +6,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::Bytes;
 use codex_api::AuthProvider;
-use codex_api::ChatClient;
 use codex_api::Provider;
+use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
-use codex_api::WireApi;
+use codex_api::requests::responses::Compression;
 use codex_client::HttpTransport;
 use codex_client::Request;
 use codex_client::Response;
@@ -18,10 +18,12 @@ use codex_client::StreamResponse;
 use codex_client::TransportError;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use http::HeaderMap;
+use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 
 fn assert_path_ends_with(requests: &[Request], suffix: &str) {
     assert_eq!(requests.len(), 1);
@@ -118,12 +120,11 @@ impl AuthProvider for StaticAuth {
     }
 }
 
-fn provider(name: &str, wire: WireApi) -> Provider {
+fn provider(name: &str) -> Provider {
     Provider {
         name: name.to_string(),
         base_url: "https://example.com/v1".to_string(),
         query_params: None,
-        wire,
         headers: HeaderMap::new(),
         retry: codex_api::provider::RetryConfig {
             max_attempts: 1,
@@ -195,58 +196,18 @@ data: {"id":"resp-1","output":[{"type":"message","role":"assistant","content":[{
 }
 
 #[tokio::test]
-async fn chat_client_uses_chat_completions_path_for_chat_wire() -> Result<()> {
+async fn responses_client_uses_responses_path() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
-    let client = ChatClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
+    let client = ResponsesClient::new(transport, provider("openai"), NoAuth);
 
     let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/chat/completions");
-    Ok(())
-}
-
-#[tokio::test]
-async fn chat_client_uses_responses_path_for_responses_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ChatClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
+    let _stream = client
+        .stream(body, HeaderMap::new(), Compression::None, None)
+        .await?;
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/responses");
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/responses");
-    Ok(())
-}
-
-#[tokio::test]
-async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
-    let state = RecordingState::default();
-    let transport = RecordingTransport::new(state.clone());
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
-
-    let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
-
-    let requests = state.take_stream_requests();
-    assert_path_ends_with(&requests, "/chat/completions");
     Ok(())
 }
 
@@ -255,10 +216,12 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
     let state = RecordingState::default();
     let transport = RecordingTransport::new(state.clone());
     let auth = StaticAuth::new("secret-token", "acct-1");
-    let client = ResponsesClient::new(transport, provider("openai", WireApi::Responses), auth);
+    let client = ResponsesClient::new(transport, provider("openai"), auth);
 
     let body = serde_json::json!({ "model": "gpt-test" });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
+    let _stream = client
+        .stream(body, HeaderMap::new(), Compression::None, None)
+        .await?;
 
     let requests = state.take_stream_requests();
     assert_eq!(requests.len(), 1);
@@ -288,28 +251,109 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
 async fn streaming_client_retries_on_transport_error() -> Result<()> {
     let transport = FlakyTransport::new();
 
-    let mut provider = provider("openai", WireApi::Responses);
+    let mut provider = provider("openai");
     provider.retry.max_attempts = 2;
 
+    let request = ResponsesApiRequest {
+        model: "gpt-test".into(),
+        instructions: "Say hi".into(),
+        input: Vec::new(),
+        tools: Vec::new(),
+        tool_choice: "auto".into(),
+        parallel_tool_calls: false,
+        reasoning: None,
+        store: false,
+        stream: true,
+        include: Vec::new(),
+        prompt_cache_key: None,
+        text: None,
+    };
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
-    let prompt = codex_api::Prompt {
-        instructions: "Say hi".to_string(),
+    let _stream = client
+        .stream_request(
+            request,
+            ResponsesOptions {
+                compression: Compression::None,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(transport.attempts(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
+    let state = RecordingState::default();
+    let transport = RecordingTransport::new(state.clone());
+    let client = ResponsesClient::new(transport, provider("azure"), NoAuth);
+
+    let request = ResponsesApiRequest {
+        model: "gpt-test".into(),
+        instructions: "Say hi".into(),
         input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hi".to_string(),
-            }],
+            id: Some("msg_1".into()),
+            role: "user".into(),
+            content: vec![ContentItem::InputText { text: "hi".into() }],
+            end_turn: None,
+            phase: None,
         }],
-        tools: Vec::<Value>::new(),
+        tools: Vec::new(),
+        tool_choice: "auto".into(),
         parallel_tool_calls: false,
-        output_schema: None,
+        reasoning: None,
+        store: true,
+        stream: true,
+        include: Vec::new(),
+        prompt_cache_key: None,
+        text: None,
     };
 
-    let options = ResponsesOptions::default();
+    let mut extra_headers = HeaderMap::new();
+    extra_headers.insert("x-test-header", HeaderValue::from_static("present"));
+    let _stream = client
+        .stream_request(
+            request,
+            ResponsesOptions {
+                conversation_id: Some("sess_123".into()),
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
+                extra_headers,
+                compression: Compression::None,
+                turn_state: None,
+            },
+        )
+        .await?;
 
-    let _stream = client.stream_prompt("gpt-test", &prompt, options).await?;
-    assert_eq!(transport.attempts(), 2);
+    let requests = state.take_stream_requests();
+    assert_eq!(requests.len(), 1);
+    let req = &requests[0];
+
+    assert_eq!(
+        req.headers.get("session_id").and_then(|v| v.to_str().ok()),
+        Some("sess_123")
+    );
+    assert_eq!(
+        req.headers
+            .get("x-openai-subagent")
+            .and_then(|v| v.to_str().ok()),
+        Some("review")
+    );
+    assert_eq!(
+        req.headers
+            .get("x-test-header")
+            .and_then(|v| v.to_str().ok()),
+        Some("present")
+    );
+
+    let input_id = req
+        .body
+        .as_ref()
+        .and_then(|body| body.get("input"))
+        .and_then(|input| input.get(0))
+        .and_then(|item| item.get("id"))
+        .and_then(|id| id.as_str());
+    assert_eq!(input_id, Some("msg_1"));
+
     Ok(())
 }

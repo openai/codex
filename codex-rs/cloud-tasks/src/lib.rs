@@ -10,7 +10,6 @@ pub use cli::Cli;
 use anyhow::anyhow;
 use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
-use codex_login::AuthManager;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -65,7 +64,11 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
     let auth_manager = util::load_auth_manager().await;
-    let auth = match auth_manager.as_ref().and_then(AuthManager::auth) {
+    let auth = match auth_manager.as_ref() {
+        Some(manager) => manager.auth().await,
+        None => None,
+    };
+    let auth = match auth {
         Some(auth) => auth,
         None => {
             eprintln!(
@@ -79,7 +82,7 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         append_error_log(format!("auth: mode=ChatGPT account_id={acc}"));
     }
 
-    let token = match auth.get_token().await {
+    let token = match auth.get_token() {
         Ok(t) if !t.is_empty() => t,
         _ => {
             eprintln!(
@@ -104,6 +107,54 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     })
 }
 
+#[async_trait::async_trait]
+trait GitInfoProvider {
+    async fn default_branch_name(&self, path: &std::path::Path) -> Option<String>;
+
+    async fn current_branch_name(&self, path: &std::path::Path) -> Option<String>;
+}
+
+struct RealGitInfo;
+
+#[async_trait::async_trait]
+impl GitInfoProvider for RealGitInfo {
+    async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
+        codex_core::git_info::default_branch_name(path).await
+    }
+
+    async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
+        codex_core::git_info::current_branch_name(path).await
+    }
+}
+
+async fn resolve_git_ref(branch_override: Option<&String>) -> String {
+    resolve_git_ref_with_git_info(branch_override, &RealGitInfo).await
+}
+
+async fn resolve_git_ref_with_git_info(
+    branch_override: Option<&String>,
+    git_info: &impl GitInfoProvider,
+) -> String {
+    if let Some(branch) = branch_override {
+        let branch = branch.trim();
+        if !branch.is_empty() {
+            return branch.to_string();
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(branch) = git_info.current_branch_name(&cwd).await {
+            branch
+        } else if let Some(branch) = git_info.default_branch_name(&cwd).await {
+            branch
+        } else {
+            "main".to_string()
+        }
+    } else {
+        "main".to_string()
+    }
+}
+
 async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let crate::cli::ExecCommand {
         query,
@@ -114,11 +165,12 @@ async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
     let prompt = resolve_query_input(query)?;
     let env_id = resolve_environment_id(&ctx, &environment).await?;
+    let git_ref = resolve_git_ref(branch.as_ref()).await;
     let created = codex_cloud_tasks_client::CloudBackend::create_task(
         &*ctx.backend,
         &env_id,
         &prompt,
-        &branch,
+        &git_ref,
         false,
         attempts,
     )
@@ -341,11 +393,10 @@ fn summary_line(summary: &codex_cloud_tasks_client::DiffSummary, colorize: bool)
         let bullet = "•"
             .if_supports_color(Stream::Stdout, |t| t.dimmed())
             .to_string();
-        let file_label = "file"
+        let file_label = format!("file{}", if files == 1 { "" } else { "s" })
             .if_supports_color(Stream::Stdout, |t| t.dimmed())
             .to_string();
-        let plural = if files == 1 { "" } else { "s" };
-        format!("{adds_str}/{dels_str}  {bullet}  {files} {file_label}{plural}")
+        format!("{adds_str}/{dels_str}  {bullet}  {files} {file_label}")
     } else {
         format!(
             "+{adds}/-{dels} • {files} file{}",
@@ -421,6 +472,25 @@ fn format_task_status_lines(
     lines
 }
 
+fn format_task_list_lines(
+    tasks: &[codex_cloud_tasks_client::TaskSummary],
+    base_url: &str,
+    now: chrono::DateTime<Utc>,
+    colorize: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        lines.push(util::task_url(base_url, &task.id.0));
+        for line in format_task_status_lines(task, now, colorize) {
+            lines.push(format!("  {line}"));
+        }
+        if idx + 1 < tasks.len() {
+            lines.push(String::new());
+        }
+    }
+    lines
+}
+
 async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<()> {
     let ctx = init_backend("codex_cloud_tasks_status").await?;
     let task_id = parse_task_id(&args.task_id)?;
@@ -433,6 +503,73 @@ async fn run_status_command(args: crate::cli::StatusCommand) -> anyhow::Result<(
     }
     if !matches!(summary.status, TaskStatus::Ready) {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn run_list_command(args: crate::cli::ListCommand) -> anyhow::Result<()> {
+    let ctx = init_backend("codex_cloud_tasks_list").await?;
+    let env_filter = if let Some(env) = args.environment {
+        Some(resolve_environment_id(&ctx, &env).await?)
+    } else {
+        None
+    };
+    let page = codex_cloud_tasks_client::CloudBackend::list_tasks(
+        &*ctx.backend,
+        env_filter.as_deref(),
+        Some(args.limit),
+        args.cursor.as_deref(),
+    )
+    .await?;
+    if args.json {
+        let tasks: Vec<_> = page
+            .tasks
+            .iter()
+            .map(|task| {
+                serde_json::json!({
+                    "id": task.id.0,
+                    "url": util::task_url(&ctx.base_url, &task.id.0),
+                    "title": task.title,
+                    "status": task.status,
+                    "updated_at": task.updated_at,
+                    "environment_id": task.environment_id,
+                    "environment_label": task.environment_label,
+                    "summary": {
+                        "files_changed": task.summary.files_changed,
+                        "lines_added": task.summary.lines_added,
+                        "lines_removed": task.summary.lines_removed,
+                    },
+                    "is_review": task.is_review,
+                    "attempt_total": task.attempt_total,
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "tasks": tasks,
+            "cursor": page.cursor,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+    if page.tasks.is_empty() {
+        println!("No tasks found.");
+        return Ok(());
+    }
+    let now = Utc::now();
+    let colorize = supports_color::on(SupportStream::Stdout).is_some();
+    for line in format_task_list_lines(&page.tasks, &ctx.base_url, now, colorize) {
+        println!("{line}");
+    }
+    if let Some(cursor) = page.cursor {
+        let command = format!("codex cloud list --cursor='{cursor}'");
+        if colorize {
+            println!(
+                "\nTo fetch the next page, run {}",
+                command.if_supports_color(Stream::Stdout, |text| text.cyan())
+            );
+        } else {
+            println!("\nTo fetch the next page, run {command}");
+        }
     }
     Ok(())
 }
@@ -597,6 +734,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
         return match command {
             crate::cli::Command::Exec(args) => run_exec_command(args).await,
             crate::cli::Command::Status(args) => run_status_command(args).await,
+            crate::cli::Command::List(args) => run_list_command(args).await,
             crate::cli::Command::Apply(args) => run_apply_command(args).await,
             crate::cli::Command::Diff(args) => run_diff_command(args).await,
         };
@@ -1362,17 +1500,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                                 let backend = Arc::clone(&backend);
                                                 let best_of_n = page.best_of_n;
                                                 tokio::spawn(async move {
-                                                    let git_ref = if let Ok(cwd) = std::env::current_dir() {
-                                                        if let Some(branch) = codex_core::git_info::default_branch_name(&cwd).await {
-                                                            branch
-                                                        } else if let Some(branch) = codex_core::git_info::current_branch_name(&cwd).await {
-                                                            branch
-                                                        } else {
-                                                            "main".to_string()
-                                                        }
-                                                    } else {
-                                                        "main".to_string()
-                                                    };
+                                                    let git_ref = resolve_git_ref(None).await;
 
                                                     let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, &git_ref, false, best_of_n).await;
                                                     let evt = match result {
@@ -1991,6 +2119,7 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve_git_ref_with_git_info;
     use codex_cloud_tasks_client::DiffSummary;
     use codex_cloud_tasks_client::MockClient;
     use codex_cloud_tasks_client::TaskId;
@@ -2004,6 +2133,85 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+
+    struct StubGitInfo {
+        default_branch: Option<String>,
+        current_branch: Option<String>,
+    }
+
+    impl StubGitInfo {
+        fn new(default_branch: Option<String>, current_branch: Option<String>) -> Self {
+            Self {
+                default_branch,
+                current_branch,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl super::GitInfoProvider for StubGitInfo {
+        async fn default_branch_name(&self, _path: &std::path::Path) -> Option<String> {
+            self.default_branch.clone()
+        }
+
+        async fn current_branch_name(&self, _path: &std::path::Path) -> Option<String> {
+            self.current_branch.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn branch_override_is_used_when_provided() {
+        let git_ref = resolve_git_ref_with_git_info(
+            Some(&"feature/override".to_string()),
+            &StubGitInfo::new(None, None),
+        )
+        .await;
+
+        assert_eq!(git_ref, "feature/override");
+    }
+
+    #[tokio::test]
+    async fn trims_override_whitespace() {
+        let git_ref = resolve_git_ref_with_git_info(
+            Some(&"  feature/spaces  ".to_string()),
+            &StubGitInfo::new(None, None),
+        )
+        .await;
+
+        assert_eq!(git_ref, "feature/spaces");
+    }
+
+    #[tokio::test]
+    async fn prefers_current_branch_when_available() {
+        let git_ref = resolve_git_ref_with_git_info(
+            None,
+            &StubGitInfo::new(
+                Some("default-main".to_string()),
+                Some("feature/current".to_string()),
+            ),
+        )
+        .await;
+
+        assert_eq!(git_ref, "feature/current");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_current_branch_when_default_is_missing() {
+        let git_ref = resolve_git_ref_with_git_info(
+            None,
+            &StubGitInfo::new(None, Some("develop".to_string())),
+        )
+        .await;
+
+        assert_eq!(git_ref, "develop");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_main_when_no_git_info_is_available() {
+        let git_ref = resolve_git_ref_with_git_info(None, &StubGitInfo::new(None, None)).await;
+
+        assert_eq!(git_ref, "main");
+    }
 
     #[test]
     fn format_task_status_lines_with_diff_and_label() {
@@ -2055,6 +2263,54 @@ mod tests {
                 "[PENDING] No diff task".to_string(),
                 "env-2  •  0s ago".to_string(),
                 "no diff".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_task_list_lines_formats_urls() {
+        let now = Utc::now();
+        let tasks = vec![
+            TaskSummary {
+                id: TaskId("task_1".to_string()),
+                title: "Example task".to_string(),
+                status: TaskStatus::Ready,
+                updated_at: now,
+                environment_id: Some("env-1".to_string()),
+                environment_label: Some("Env".to_string()),
+                summary: DiffSummary {
+                    files_changed: 3,
+                    lines_added: 5,
+                    lines_removed: 2,
+                },
+                is_review: false,
+                attempt_total: None,
+            },
+            TaskSummary {
+                id: TaskId("task_2".to_string()),
+                title: "No diff task".to_string(),
+                status: TaskStatus::Pending,
+                updated_at: now,
+                environment_id: Some("env-2".to_string()),
+                environment_label: None,
+                summary: DiffSummary::default(),
+                is_review: false,
+                attempt_total: Some(1),
+            },
+        ];
+        let lines = format_task_list_lines(&tasks, "https://chatgpt.com/backend-api", now, false);
+        assert_eq!(
+            lines,
+            vec![
+                "https://chatgpt.com/codex/tasks/task_1".to_string(),
+                "  [READY] Example task".to_string(),
+                "  Env  •  0s ago".to_string(),
+                "  +5/-2 • 3 files".to_string(),
+                String::new(),
+                "https://chatgpt.com/codex/tasks/task_2".to_string(),
+                "  [PENDING] No diff task".to_string(),
+                "  env-2  •  0s ago".to_string(),
+                "  no diff".to_string(),
             ]
         );
     }

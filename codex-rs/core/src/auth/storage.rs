@@ -1,9 +1,11 @@
 use chrono::DateTime;
 use chrono::Utc;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -14,14 +16,17 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tracing::warn;
 
 use crate::token_data::TokenData;
+use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use once_cell::sync::Lazy;
 
 /// Determine where Codex should store CLI auth credentials.
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
     #[default]
@@ -31,11 +36,16 @@ pub enum AuthCredentialsStoreMode {
     Keyring,
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
     Auto,
+    /// Store credentials in memory only for the current process.
+    Ephemeral,
 }
 
 /// Expected structure for $CODEX_HOME/auth.json.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct AuthDotJson {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<AuthMode>,
+
     #[serde(rename = "OPENAI_API_KEY")]
     pub openai_api_key: Option<String>,
 
@@ -75,8 +85,8 @@ impl FileAuthStorage {
         Self { codex_home }
     }
 
-    /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
-    /// Returns the full AuthDotJson structure after refreshing if necessary.
+    /// Attempt to read and parse the `auth.json` file in the given `CODEX_HOME` directory.
+    /// Returns the full AuthDotJson structure.
     pub(super) fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
         let mut file = File::open(auth_file)?;
         let mut contents = String::new();
@@ -255,6 +265,49 @@ impl AuthStorageBackend for AutoAuthStorage {
     }
 }
 
+// A global in-memory store for mapping codex_home -> AuthDotJson.
+static EPHEMERAL_AUTH_STORE: Lazy<Mutex<HashMap<String, AuthDotJson>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone, Debug)]
+struct EphemeralAuthStorage {
+    codex_home: PathBuf,
+}
+
+impl EphemeralAuthStorage {
+    fn new(codex_home: PathBuf) -> Self {
+        Self { codex_home }
+    }
+
+    fn with_store<F, T>(&self, action: F) -> std::io::Result<T>
+    where
+        F: FnOnce(&mut HashMap<String, AuthDotJson>, String) -> std::io::Result<T>,
+    {
+        let key = compute_store_key(&self.codex_home)?;
+        let mut store = EPHEMERAL_AUTH_STORE
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock ephemeral auth storage"))?;
+        action(&mut store, key)
+    }
+}
+
+impl AuthStorageBackend for EphemeralAuthStorage {
+    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        self.with_store(|store, key| Ok(store.get(&key).cloned()))
+    }
+
+    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        self.with_store(|store, key| {
+            store.insert(key, auth.clone());
+            Ok(())
+        })
+    }
+
+    fn delete(&self) -> std::io::Result<bool> {
+        self.with_store(|store, key| Ok(store.remove(&key).is_some()))
+    }
+}
+
 pub(super) fn create_auth_storage(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
@@ -274,6 +327,7 @@ fn create_auth_storage_with_keyring_store(
             Arc::new(KeyringAuthStorage::new(codex_home, keyring_store))
         }
         AuthCredentialsStoreMode::Auto => Arc::new(AutoAuthStorage::new(codex_home, keyring_store)),
+        AuthCredentialsStoreMode::Ephemeral => Arc::new(EphemeralAuthStorage::new(codex_home)),
     }
 }
 
@@ -295,6 +349,7 @@ mod tests {
         let codex_home = tempdir()?;
         let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
         let auth_dot_json = AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
@@ -314,6 +369,7 @@ mod tests {
         let codex_home = tempdir()?;
         let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
         let auth_dot_json = AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("test-key".to_string()),
             tokens: None,
             last_refresh: Some(Utc::now()),
@@ -335,6 +391,7 @@ mod tests {
     fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let auth_dot_json = AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("sk-test-key".to_string()),
             tokens: None,
             last_refresh: None,
@@ -346,6 +403,32 @@ mod tests {
         let removed = storage.delete()?;
         assert!(removed);
         assert!(!dir.path().join("auth.json").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let storage = create_auth_storage(
+            dir.path().to_path_buf(),
+            AuthCredentialsStoreMode::Ephemeral,
+        );
+        let auth_dot_json = AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
+            openai_api_key: Some("sk-ephemeral".to_string()),
+            tokens: None,
+            last_refresh: Some(Utc::now()),
+        };
+
+        storage.save(&auth_dot_json)?;
+        let loaded = storage.load()?;
+        assert_eq!(Some(auth_dot_json), loaded);
+
+        let removed = storage.delete()?;
+        assert!(removed);
+        let loaded = storage.load()?;
+        assert_eq!(None, loaded);
+        assert!(!get_auth_file(dir.path()).exists());
         Ok(())
     }
 
@@ -419,11 +502,12 @@ mod tests {
         let signature_b64 = encode(b"sig");
         let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
 
-        crate::token_data::parse_id_token(&fake_jwt).expect("fake JWT should parse")
+        crate::token_data::parse_chatgpt_jwt_claims(&fake_jwt).expect("fake JWT should parse")
     }
 
     fn auth_with_prefix(prefix: &str) -> AuthDotJson {
         AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some(format!("{prefix}-api-key")),
             tokens: Some(TokenData {
                 id_token: id_token_with_prefix(prefix),
@@ -444,6 +528,7 @@ mod tests {
             Arc::new(mock_keyring.clone()),
         );
         let expected = AuthDotJson {
+            auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("sk-test".to_string()),
             tokens: None,
             last_refresh: None,
@@ -480,6 +565,7 @@ mod tests {
         let auth_file = get_auth_file(codex_home.path());
         std::fs::write(&auth_file, "stale")?;
         let auth = AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),

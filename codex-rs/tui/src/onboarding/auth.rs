@@ -5,6 +5,7 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_login::DeviceCode;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -29,7 +30,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use codex_app_server_protocol::AuthMode;
+use codex_core::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use std::sync::RwLock;
 
@@ -40,17 +41,28 @@ use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Notify;
 
 use super::onboarding_screen::StepState;
+
+mod headless_chatgpt_login;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
     PickMode,
     ChatGptContinueInBrowser(ContinueInBrowserState),
+    ChatGptDeviceCode(ContinueWithDeviceCodeState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignInOption {
+    ChatGpt,
+    DeviceCode,
+    ApiKey,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
@@ -66,6 +78,12 @@ pub(crate) struct ApiKeyInputState {
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
     shutdown_flag: Option<ShutdownHandle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ContinueWithDeviceCodeState {
+    device_code: Option<DeviceCode>,
+    cancel: Option<Arc<Notify>>,
 }
 
 impl Drop for ContinueInBrowserState {
@@ -84,42 +102,26 @@ impl KeyboardHandler for AuthModeWidget {
 
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.is_chatgpt_login_allowed() {
-                    self.highlighted_mode = AuthMode::ChatGPT;
-                }
+                self.move_highlight(-1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.is_api_login_allowed() {
-                    self.highlighted_mode = AuthMode::ApiKey;
-                }
+                self.move_highlight(1);
             }
             KeyCode::Char('1') => {
-                if self.is_chatgpt_login_allowed() {
-                    self.start_chatgpt_login();
-                }
+                self.select_option_by_index(0);
             }
             KeyCode::Char('2') => {
-                if self.is_api_login_allowed() {
-                    self.start_api_key_entry();
-                } else {
-                    self.disallow_api_login();
-                }
+                self.select_option_by_index(1);
+            }
+            KeyCode::Char('3') => {
+                self.select_option_by_index(2);
             }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
                 match sign_in_state {
-                    SignInState::PickMode => match self.highlighted_mode {
-                        AuthMode::ChatGPT if self.is_chatgpt_login_allowed() => {
-                            self.start_chatgpt_login();
-                        }
-                        AuthMode::ApiKey if self.is_api_login_allowed() => {
-                            self.start_api_key_entry();
-                        }
-                        AuthMode::ChatGPT => {}
-                        AuthMode::ApiKey => {
-                            self.disallow_api_login();
-                        }
-                    },
+                    SignInState::PickMode => {
+                        self.handle_sign_in_option(self.highlighted_mode);
+                    }
                     SignInState::ChatGptSuccessMessage => {
                         *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
                     }
@@ -128,10 +130,22 @@ impl KeyboardHandler for AuthModeWidget {
             }
             KeyCode::Esc => {
                 tracing::info!("Esc pressed");
-                let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
-                if matches!(sign_in_state, SignInState::ChatGptContinueInBrowser(_)) {
-                    *self.sign_in_state.write().unwrap() = SignInState::PickMode;
-                    self.request_frame.schedule_frame();
+                let mut sign_in_state = self.sign_in_state.write().unwrap();
+                match &*sign_in_state {
+                    SignInState::ChatGptContinueInBrowser(_) => {
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    SignInState::ChatGptDeviceCode(state) => {
+                        if let Some(cancel) = &state.cancel {
+                            cancel.notify_one();
+                        }
+                        *sign_in_state = SignInState::PickMode;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -146,7 +160,7 @@ impl KeyboardHandler for AuthModeWidget {
 #[derive(Clone)]
 pub(crate) struct AuthModeWidget {
     pub request_frame: FrameRequester,
-    pub highlighted_mode: AuthMode,
+    pub highlighted_mode: SignInOption,
     pub error: Option<String>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub codex_home: PathBuf,
@@ -167,8 +181,75 @@ impl AuthModeWidget {
         !matches!(self.forced_login_method, Some(ForcedLoginMethod::Api))
     }
 
+    fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
+        let mut options = vec![SignInOption::ChatGpt];
+        if self.is_chatgpt_login_allowed() {
+            options.push(SignInOption::DeviceCode);
+        }
+        if self.is_api_login_allowed() {
+            options.push(SignInOption::ApiKey);
+        }
+        options
+    }
+
+    fn selectable_sign_in_options(&self) -> Vec<SignInOption> {
+        let mut options = Vec::new();
+        if self.is_chatgpt_login_allowed() {
+            options.push(SignInOption::ChatGpt);
+            options.push(SignInOption::DeviceCode);
+        }
+        if self.is_api_login_allowed() {
+            options.push(SignInOption::ApiKey);
+        }
+        options
+    }
+
+    fn move_highlight(&mut self, delta: isize) {
+        let options = self.selectable_sign_in_options();
+        if options.is_empty() {
+            return;
+        }
+
+        let current_index = options
+            .iter()
+            .position(|option| *option == self.highlighted_mode)
+            .unwrap_or(0);
+        let next_index =
+            (current_index as isize + delta).rem_euclid(options.len() as isize) as usize;
+        self.highlighted_mode = options[next_index];
+    }
+
+    fn select_option_by_index(&mut self, index: usize) {
+        let options = self.displayed_sign_in_options();
+        if let Some(option) = options.get(index).copied() {
+            self.handle_sign_in_option(option);
+        }
+    }
+
+    fn handle_sign_in_option(&mut self, option: SignInOption) {
+        match option {
+            SignInOption::ChatGpt => {
+                if self.is_chatgpt_login_allowed() {
+                    self.start_chatgpt_login();
+                }
+            }
+            SignInOption::DeviceCode => {
+                if self.is_chatgpt_login_allowed() {
+                    self.start_device_code_login();
+                }
+            }
+            SignInOption::ApiKey => {
+                if self.is_api_login_allowed() {
+                    self.start_api_key_entry();
+                } else {
+                    self.disallow_api_login();
+                }
+            }
+        }
+    }
+
     fn disallow_api_login(&mut self) {
-        self.highlighted_mode = AuthMode::ChatGPT;
+        self.highlighted_mode = SignInOption::ChatGpt;
         self.error = Some(API_KEY_DISABLED_MESSAGE.to_string());
         *self.sign_in_state.write().unwrap() = SignInState::PickMode;
         self.request_frame.schedule_frame();
@@ -188,7 +269,7 @@ impl AuthModeWidget {
         ];
 
         let create_mode_item = |idx: usize,
-                                selected_mode: AuthMode,
+                                selected_mode: SignInOption,
                                 text: &str,
                                 description: &str|
          -> Vec<Line<'static>> {
@@ -197,11 +278,11 @@ impl AuthModeWidget {
 
             let line1 = if is_selected {
                 Line::from(vec![
-                    format!("{} {}. ", caret, idx + 1).cyan().dim(),
+                    format!("{caret} {index}. ", index = idx + 1).cyan().dim(),
                     text.to_string().cyan(),
                 ])
             } else {
-                format!("  {}. {text}", idx + 1).into()
+                format!("  {index}. {text}", index = idx + 1).into()
             };
 
             let line2 = if is_selected {
@@ -216,27 +297,44 @@ impl AuthModeWidget {
             vec![line1, line2]
         };
 
-        let chatgpt_description = if self.is_chatgpt_login_allowed() {
-            "Usage included with Plus, Pro, Business, Education, and Enterprise plans"
-        } else {
+        let chatgpt_description = if !self.is_chatgpt_login_allowed() {
             "ChatGPT login is disabled"
-        };
-        lines.extend(create_mode_item(
-            0,
-            AuthMode::ChatGPT,
-            "Sign in with ChatGPT",
-            chatgpt_description,
-        ));
-        lines.push("".into());
-        if self.is_api_login_allowed() {
-            lines.extend(create_mode_item(
-                1,
-                AuthMode::ApiKey,
-                "Provide your own API key",
-                "Pay for what you use",
-            ));
-            lines.push("".into());
         } else {
+            "Usage included with Plus, Pro, Team, and Enterprise plans"
+        };
+        let device_code_description = "Sign in from another device with a one-time code";
+
+        for (idx, option) in self.displayed_sign_in_options().into_iter().enumerate() {
+            match option {
+                SignInOption::ChatGpt => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with ChatGPT",
+                        chatgpt_description,
+                    ));
+                }
+                SignInOption::DeviceCode => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with Device Code",
+                        device_code_description,
+                    ));
+                }
+                SignInOption::ApiKey => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Provide your own API key",
+                        "Pay for what you use",
+                    ));
+                }
+            }
+            lines.push("".into());
+        }
+
+        if !self.is_api_login_allowed() {
             lines.push(
                 "  API key login is disabled by this workspace. Sign in with ChatGPT to continue."
                     .dim()
@@ -277,7 +375,16 @@ impl AuthModeWidget {
         {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
             lines.push("".into());
-            lines.push(Line::from(state.auth_url.as_str().cyan().underlined()));
+            lines.push(Line::from(vec![
+                "  ".into(),
+                state.auth_url.as_str().cyan().underlined(),
+            ]));
+            lines.push("".into());
+            lines.push(Line::from(vec![
+                "  On a remote or headless machine? Press Esc and choose ".into(),
+                "Sign in with Device Code".cyan(),
+                ".".into(),
+            ]));
             lines.push("".into());
         }
 
@@ -553,12 +660,21 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
+    fn handle_existing_chatgpt_login(&mut self) -> bool {
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::Chatgpt)) {
+            *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
+            self.request_frame.schedule_frame();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Kicks off the ChatGPT auth flow and keeps the UI state consistent with the attempt.
     fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
-        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
-            *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
-            self.request_frame.schedule_frame();
+        if self.handle_existing_chatgpt_login() {
             return;
         }
 
@@ -569,6 +685,7 @@ impl AuthModeWidget {
             self.forced_chatgpt_workspace_id.clone(),
             self.cli_auth_credentials_store_mode,
         );
+
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();
@@ -608,6 +725,21 @@ impl AuthModeWidget {
             }
         }
     }
+
+    fn start_device_code_login(&mut self) {
+        if self.handle_existing_chatgpt_login() {
+            return;
+        }
+
+        self.error = None;
+        let opts = ServerOptions::new(
+            self.codex_home.clone(),
+            CLIENT_ID.to_string(),
+            self.forced_chatgpt_workspace_id.clone(),
+            self.cli_auth_credentials_store_mode,
+        );
+        headless_chatgpt_login::start_headless_chatgpt_login(self, opts);
+    }
 }
 
 impl StepStateProvider for AuthModeWidget {
@@ -617,6 +749,7 @@ impl StepStateProvider for AuthModeWidget {
             SignInState::PickMode
             | SignInState::ApiKeyEntry(_)
             | SignInState::ChatGptContinueInBrowser(_)
+            | SignInState::ChatGptDeviceCode(_)
             | SignInState::ChatGptSuccessMessage => StepState::InProgress,
             SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
         }
@@ -632,6 +765,9 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ChatGptContinueInBrowser(_) => {
                 self.render_continue_in_browser(area, buf);
+            }
+            SignInState::ChatGptDeviceCode(state) => {
+                headless_chatgpt_login::render_device_code_login(self, area, buf, state);
             }
             SignInState::ChatGptSuccessMessage => {
                 self.render_chatgpt_success_message(area, buf);
@@ -662,7 +798,7 @@ mod tests {
         let codex_home_path = codex_home.path().to_path_buf();
         let widget = AuthModeWidget {
             request_frame: FrameRequester::test_dummy(),
-            highlighted_mode: AuthMode::ChatGPT,
+            highlighted_mode: SignInOption::ChatGpt,
             error: None,
             sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
             codex_home: codex_home_path.clone(),

@@ -25,6 +25,10 @@ pub enum ApiError {
     },
     #[error("rate limit: {0}")]
     RateLimit(String),
+    #[error("invalid request: {message}")]
+    InvalidRequest { message: String },
+    #[error("server overloaded")]
+    ServerOverloaded,
 }
 
 impl From<RateLimitError> for ApiError {

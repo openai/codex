@@ -1,6 +1,9 @@
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::git_info::get_git_repo_root;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+#[cfg(target_os = "windows")]
+use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -11,11 +14,11 @@ use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
+use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
@@ -82,7 +85,7 @@ impl OnboardingScreen {
         let cwd = config.cwd.clone();
         let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
         let forced_login_method = config.forced_login_method;
-        let codex_home = config.codex_home;
+        let codex_home = config.codex_home.clone();
         let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
@@ -92,8 +95,8 @@ impl OnboardingScreen {
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => AuthMode::ApiKey,
-                _ => AuthMode::ChatGPT,
+                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                _ => SignInOption::ChatGpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
@@ -109,18 +112,18 @@ impl OnboardingScreen {
                 animations_enabled: config.animations,
             }))
         }
-        let is_git_repo = get_git_repo_root(&cwd).is_some();
-        let highlighted = if is_git_repo {
-            TrustDirectorySelection::Trust
-        } else {
-            // Default to not trusting the directory if it's not a git repo.
-            TrustDirectorySelection::DontTrust
-        };
+        #[cfg(target_os = "windows")]
+        let show_windows_create_sandbox_hint =
+            WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+        #[cfg(not(target_os = "windows"))]
+        let show_windows_create_sandbox_hint = false;
+        let highlighted = TrustDirectorySelection::Trust;
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 codex_home,
-                is_git_repo,
+                show_windows_create_sandbox_hint,
+                should_quit: false,
                 selection: None,
                 highlighted,
                 error: None,
@@ -211,6 +214,9 @@ impl OnboardingScreen {
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
         let is_api_key_entry_active = self.is_api_key_entry_active();
         let should_quit = match key_event {
             KeyEvent {
@@ -249,6 +255,16 @@ impl KeyboardHandler for OnboardingScreen {
             }
             if let Some(active_step) = self.current_steps_mut().into_iter().last() {
                 active_step.handle_key_event(key_event);
+            }
+            if self.steps.iter().any(|step| {
+                if let Step::TrustDirectory(widget) = step {
+                    widget.should_quit()
+                } else {
+                    false
+                }
+            }) {
+                self.should_exit = true;
+                self.is_done = true;
             }
         }
         self.request_frame.schedule_frame();
@@ -311,6 +327,9 @@ impl WidgetRef for &OnboardingScreen {
             }
             let scratch_area = Rect::new(0, 0, width, max_h);
             let mut scratch = Buffer::empty(scratch_area);
+            if let Step::Welcome(widget) = step {
+                widget.update_layout_area(scratch_area);
+            }
             step.render_ref(scratch_area, &mut scratch);
             let h = used_rows(&scratch, width, max_h).min(max_h);
             if h > 0 {

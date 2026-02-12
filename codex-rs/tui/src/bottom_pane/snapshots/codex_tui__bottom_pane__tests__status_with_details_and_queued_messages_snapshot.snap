@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/mod.rs
+expression: "render_snapshot(&pane, area)"
+---
+• Working (0s • esc to interrupt)               
+  └ First detail line                           
+    Second detail line                          
+                                                
+  ↳ Queued follow-up question                   
+    ⌥ + ↑ edit                                  
+                                                
+› Ask Codex to do anything                      
+                                                
+  ? for shortcuts            100% context left

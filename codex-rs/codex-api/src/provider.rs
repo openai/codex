@@ -1,18 +1,12 @@
 use codex_client::Request;
+use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
 use std::collections::HashMap;
 use std::time::Duration;
-
-/// Wire-level APIs supported by a `Provider`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WireApi {
-    Responses,
-    Chat,
-    Compact,
-}
+use url::Url;
 
 /// High-level retry configuration for a provider.
 ///
@@ -50,7 +44,6 @@ pub struct Provider {
     pub name: String,
     pub base_url: String,
     pub query_params: Option<HashMap<String, String>>,
-    pub wire: WireApi,
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
@@ -87,22 +80,40 @@ impl Provider {
             url: self.url_for_path(path),
             headers: self.headers.clone(),
             body: None,
+            compression: RequestCompression::None,
             timeout: None,
         }
     }
 
     pub fn is_azure_responses_endpoint(&self) -> bool {
-        if self.wire != WireApi::Responses {
-            return false;
-        }
-
-        if self.name.eq_ignore_ascii_case("azure") {
-            return true;
-        }
-
-        self.base_url.to_ascii_lowercase().contains("openai.azure.")
-            || matches_azure_responses_base_url(&self.base_url)
+        is_azure_responses_wire_base_url(&self.name, Some(&self.base_url))
     }
+
+    pub fn websocket_url_for_path(&self, path: &str) -> Result<Url, url::ParseError> {
+        let mut url = Url::parse(&self.url_for_path(path))?;
+
+        let scheme = match url.scheme() {
+            "http" => "ws",
+            "https" => "wss",
+            "ws" | "wss" => return Ok(url),
+            _ => return Ok(url),
+        };
+        let _ = url.set_scheme(scheme);
+        Ok(url)
+    }
+}
+
+pub fn is_azure_responses_wire_base_url(name: &str, base_url: Option<&str>) -> bool {
+    if name.eq_ignore_ascii_case("azure") {
+        return true;
+    }
+
+    let Some(base_url) = base_url else {
+        return false;
+    };
+
+    let base = base_url.to_ascii_lowercase();
+    base.contains("openai.azure.") || matches_azure_responses_base_url(&base)
 }
 
 fn matches_azure_responses_base_url(base_url: &str) -> bool {
@@ -113,6 +124,47 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
         "azurefd.",
         "windows.net/openai",
     ];
-    let base = base_url.to_ascii_lowercase();
-    AZURE_MARKERS.iter().any(|marker| base.contains(marker))
+    AZURE_MARKERS.iter().any(|marker| base_url.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_azure_responses_base_urls() {
+        let positive_cases = [
+            "https://foo.openai.azure.com/openai",
+            "https://foo.openai.azure.us/openai/deployments/bar",
+            "https://foo.cognitiveservices.azure.cn/openai",
+            "https://foo.aoai.azure.com/openai",
+            "https://foo.openai.azure-api.net/openai",
+            "https://foo.z01.azurefd.net/",
+        ];
+
+        for base_url in positive_cases {
+            assert!(
+                is_azure_responses_wire_base_url("test", Some(base_url)),
+                "expected {base_url} to be detected as Azure"
+            );
+        }
+
+        assert!(is_azure_responses_wire_base_url(
+            "Azure",
+            Some("https://example.com")
+        ));
+
+        let negative_cases = [
+            "https://api.openai.com/v1",
+            "https://example.com/openai",
+            "https://myproxy.azurewebsites.net/openai",
+        ];
+
+        for base_url in negative_cases {
+            assert!(
+                !is_azure_responses_wire_base_url("test", Some(base_url)),
+                "expected {base_url} not to be detected as Azure"
+            );
+        }
+    }
 }

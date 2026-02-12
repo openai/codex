@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use semver::Version;
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use std::io;
@@ -12,7 +13,6 @@ use crate::url::base_url_to_host_root;
 use crate::url::is_openai_compatible_base_url;
 use codex_core::ModelProviderInfo;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::WireApi;
 use codex_core::config::Config;
 
 const OLLAMA_CONNECTION_ERROR: &str = "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama";
@@ -48,20 +48,18 @@ impl OllamaClient {
     #[cfg(test)]
     async fn try_from_provider_with_base_url(base_url: &str) -> io::Result<Self> {
         let provider =
-            codex_core::create_oss_provider_with_base_url(base_url, codex_core::WireApi::Chat);
+            codex_core::create_oss_provider_with_base_url(base_url, codex_core::WireApi::Responses);
         Self::try_from_provider(&provider).await
     }
 
     /// Build a client from a provider definition and verify the server is reachable.
-    async fn try_from_provider(provider: &ModelProviderInfo) -> io::Result<Self> {
+    pub(crate) async fn try_from_provider(provider: &ModelProviderInfo) -> io::Result<Self> {
         #![expect(clippy::expect_used)]
         let base_url = provider
             .base_url
             .as_ref()
             .expect("oss provider must have a base_url");
-        let uses_openai_compat = is_openai_compatible_base_url(base_url)
-            || matches!(provider.wire_api, WireApi::Chat)
-                && is_openai_compatible_base_url(base_url);
+        let uses_openai_compat = is_openai_compatible_base_url(base_url);
         let host_root = base_url_to_host_root(base_url);
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
@@ -123,6 +121,32 @@ impl OllamaClient {
             })
             .unwrap_or_default();
         Ok(names)
+    }
+
+    /// Query the server for its version string, returning `None` when unavailable.
+    pub async fn fetch_version(&self) -> io::Result<Option<Version>> {
+        let version_url = format!("{}/api/version", self.host_root.trim_end_matches('/'));
+        let resp = self
+            .client
+            .get(version_url)
+            .send()
+            .await
+            .map_err(io::Error::other)?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let val = resp.json::<JsonValue>().await.map_err(io::Error::other)?;
+        let Some(version_str) = val.get("version").and_then(|v| v.as_str()).map(str::trim) else {
+            return Ok(None);
+        };
+        let normalized = version_str.trim_start_matches('v');
+        match Version::parse(normalized) {
+            Ok(version) => Ok(Some(version)),
+            Err(err) => {
+                tracing::warn!("Failed to parse Ollama version `{version_str}`: {err}");
+                Ok(None)
+            }
+        }
     }
 
     /// Start a model pull and emit streaming events. The returned stream ends when
@@ -236,6 +260,7 @@ impl OllamaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     // Happy-path tests using a mock HTTP server; skip if sandbox network is disabled.
     #[tokio::test]
@@ -267,6 +292,42 @@ mod tests {
         let models = client.fetch_models().await.expect("fetch models");
         assert!(models.contains(&"llama3.2:3b".to_string()));
         assert!(models.contains(&"mistral".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_version() {
+        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            tracing::info!(
+                "{} is set; skipping test_fetch_version",
+                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/tags"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+                serde_json::json!({ "models": [] }).to_string(),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/version"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+                serde_json::json!({ "version": "0.14.1" }).to_string(),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let client = OllamaClient::try_from_provider_with_base_url(server.uri().as_str())
+            .await
+            .expect("client");
+
+        let version = client.fetch_version().await.expect("version fetch");
+        assert_eq!(version, Some(Version::new(0, 14, 1)));
     }
 
     #[tokio::test]

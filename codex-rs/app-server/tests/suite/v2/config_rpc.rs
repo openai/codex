@@ -3,6 +3,9 @@ use app_test_support::McpProcess;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
+use codex_app_server_protocol::AppConfig;
+use codex_app_server_protocol::AppDisabledReason;
+use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
@@ -18,6 +21,9 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
+use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::TrustLevel;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -52,6 +58,7 @@ sandbox_mode = "workspace-write"
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -73,9 +80,7 @@ sandbox_mode = "workspace-write"
         }
     );
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
+    assert_layers_user_then_optional_system(&layers, user_file)?;
 
     Ok(())
 }
@@ -102,6 +107,7 @@ view_image = false
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -137,9 +143,121 @@ view_image = false
     );
 
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
+    assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_apps() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[apps.app1]
+enabled = false
+disabled_reason = "user"
+"#,
+    )?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(
+        config.apps,
+        Some(AppsConfig {
+            apps: std::collections::HashMap::from([(
+                "app1".to_string(),
+                AppConfig {
+                    enabled: false,
+                    disabled_reason: Some(AppDisabledReason::User),
+                },
+            )]),
+        })
+    );
+    assert_eq!(
+        origins.get("apps.app1.enabled").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.disabled_reason")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+
+    let layers = layers.expect("layers present");
+    assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(&codex_home, r#"model = "gpt-user""#)?;
+
+    let workspace = TempDir::new()?;
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir_all(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        r#"
+model_reasoning_effort = "high"
+"#,
+    )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
+    let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config, origins, ..
+    } = to_response(resp)?;
+
+    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        origins.get("model_reasoning_effort").expect("origin").name,
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_config
+        }
+    );
 
     Ok(())
 }
@@ -187,7 +305,10 @@ writable_roots = [{}]
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
-        &[("CODEX_MANAGED_CONFIG_PATH", Some(&managed_path_str))],
+        &[(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            Some(&managed_path_str),
+        )],
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -195,6 +316,7 @@ writable_roots = [{}]
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -211,7 +333,7 @@ writable_roots = [{}]
     assert_eq!(config.model.as_deref(), Some("gpt-system"));
     assert_eq!(
         origins.get("model").expect("origin").name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -219,7 +341,7 @@ writable_roots = [{}]
     assert_eq!(config.approval_policy, Some(AskForApproval::Never));
     assert_eq!(
         origins.get("approval_policy").expect("origin").name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -242,7 +364,7 @@ writable_roots = [{}]
             .get("sandbox_workspace_write.writable_roots.0")
             .expect("origin")
             .name,
-        ConfigLayerSource::System {
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile {
             file: managed_file.clone(),
         }
     );
@@ -259,33 +381,29 @@ writable_roots = [{}]
     );
 
     let layers = layers.expect("layers present");
-    assert_eq!(layers.len(), 3);
-    assert_eq!(
-        layers[0].name,
-        ConfigLayerSource::System { file: managed_file }
-    );
-    assert_eq!(layers[1].name, ConfigLayerSource::SessionFlags);
-    assert_eq!(layers[2].name, ConfigLayerSource::User { file: user_file });
+    assert_layers_managed_user_then_optional_system(&layers, managed_file, user_file)?;
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_value_write_replaces_value() -> Result<()> {
-    let codex_home = TempDir::new()?;
+    let temp_dir = TempDir::new()?;
+    let codex_home = temp_dir.path().canonicalize()?;
     write_config(
-        &codex_home,
+        &temp_dir,
         r#"
 model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -311,13 +429,7 @@ model = "gpt-old"
     )
     .await??;
     let write: ConfigWriteResponse = to_response(write_resp)?;
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
 
     assert_eq!(write.status, WriteStatus::Ok);
     assert_eq!(write.file_path, expected_file_path);
@@ -326,6 +438,7 @@ model = "gpt-old"
     let verify_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let verify_resp: JSONRPCResponse = timeout(
@@ -380,16 +493,17 @@ model = "gpt-old"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_batch_write_applies_multiple_edits() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_config(&codex_home, "")?;
+    let tmp_dir = TempDir::new()?;
+    let codex_home = tmp_dir.path().canonicalize()?;
+    write_config(&tmp_dir, "")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let writable_root = test_tmp_path_buf();
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
-            file_path: Some(codex_home.path().join("config.toml").display().to_string()),
+            file_path: Some(codex_home.join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
                     key_path: "sandbox_mode".to_string(),
@@ -415,18 +529,13 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     .await??;
     let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
     assert_eq!(batch_write.status, WriteStatus::Ok);
-    let expected_file_path = codex_home
-        .path()
-        .join("config.toml")
-        .canonicalize()
-        .unwrap()
-        .display()
-        .to_string();
+    let expected_file_path = AbsolutePathBuf::resolve_path_against_base("config.toml", codex_home)?;
     assert_eq!(batch_write.file_path, expected_file_path);
 
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            cwd: None,
         })
         .await?;
     let read_resp: JSONRPCResponse = timeout(
@@ -444,5 +553,56 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     assert_eq!(sandbox.writable_roots, vec![writable_root]);
     assert!(!sandbox.network_access);
 
+    Ok(())
+}
+
+fn assert_layers_user_then_optional_system(
+    layers: &[codex_app_server_protocol::ConfigLayer],
+    user_file: AbsolutePathBuf,
+) -> Result<()> {
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
+    }
+    assert_eq!(layers.len(), first_index + 2);
+    assert_eq!(
+        layers[first_index].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::System { .. }
+    ));
+    Ok(())
+}
+
+fn assert_layers_managed_user_then_optional_system(
+    layers: &[codex_app_server_protocol::ConfigLayer],
+    managed_file: AbsolutePathBuf,
+    user_file: AbsolutePathBuf,
+) -> Result<()> {
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
+    }
+    assert_eq!(layers.len(), first_index + 3);
+    assert_eq!(
+        layers[first_index].name,
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
+    );
+    assert_eq!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 2].name,
+        ConfigLayerSource::System { .. }
+    ));
     Ok(())
 }

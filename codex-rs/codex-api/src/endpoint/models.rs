@@ -1,10 +1,10 @@
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
+use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
-use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
@@ -12,53 +12,42 @@ use http::header::ETAG;
 use std::sync::Arc;
 
 pub struct ModelsClient<T: HttpTransport, A: AuthProvider> {
-    transport: T,
-    provider: Provider,
-    auth: A,
-    request_telemetry: Option<Arc<dyn RequestTelemetry>>,
+    session: EndpointSession<T, A>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
     pub fn new(transport: T, provider: Provider, auth: A) -> Self {
         Self {
-            transport,
-            provider,
-            auth,
-            request_telemetry: None,
+            session: EndpointSession::new(transport, provider, auth),
         }
     }
 
-    pub fn with_telemetry(mut self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        self.request_telemetry = request;
-        self
+    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
+        Self {
+            session: self.session.with_request_telemetry(request),
+        }
     }
 
-    fn path(&self) -> &'static str {
+    fn path() -> &'static str {
         "models"
+    }
+
+    fn append_client_version_query(req: &mut codex_client::Request, client_version: &str) {
+        let separator = if req.url.contains('?') { '&' } else { '?' };
+        req.url = format!("{}{}client_version={client_version}", req.url, separator);
     }
 
     pub async fn list_models(
         &self,
         client_version: &str,
         extra_headers: HeaderMap,
-    ) -> Result<ModelsResponse, ApiError> {
-        let builder = || {
-            let mut req = self.provider.build_request(Method::GET, self.path());
-            req.headers.extend(extra_headers.clone());
-
-            let separator = if req.url.contains('?') { '&' } else { '?' };
-            req.url = format!("{}{}client_version={client_version}", req.url, separator);
-
-            add_auth_headers(&self.auth, req)
-        };
-
-        let resp = run_with_request_telemetry(
-            self.provider.retry.to_policy(),
-            self.request_telemetry.clone(),
-            builder,
-            |req| self.transport.execute(req),
-        )
-        .await?;
+    ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+        let resp = self
+            .session
+            .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
+                Self::append_client_version_query(req, client_version);
+            })
+            .await?;
 
         let header_etag = resp
             .headers
@@ -66,7 +55,7 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let ModelsResponse { models, etag } = serde_json::from_slice::<ModelsResponse>(&resp.body)
+        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
             .map_err(|e| {
                 ApiError::Stream(format!(
                     "failed to decode models response: {e}; body: {}",
@@ -74,9 +63,7 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
                 ))
             })?;
 
-        let etag = header_etag.unwrap_or(etag);
-
-        Ok(ModelsResponse { models, etag })
+        Ok((models, header_etag))
     }
 }
 
@@ -84,7 +71,6 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
 mod tests {
     use super::*;
     use crate::provider::RetryConfig;
-    use crate::provider::WireApi;
     use async_trait::async_trait;
     use codex_client::Request;
     use codex_client::Response;
@@ -102,16 +88,15 @@ mod tests {
     struct CapturingTransport {
         last_request: Arc<Mutex<Option<Request>>>,
         body: Arc<ModelsResponse>,
+        etag: Option<String>,
     }
 
     impl Default for CapturingTransport {
         fn default() -> Self {
             Self {
                 last_request: Arc::new(Mutex::new(None)),
-                body: Arc::new(ModelsResponse {
-                    models: Vec::new(),
-                    etag: String::new(),
-                }),
+                body: Arc::new(ModelsResponse { models: Vec::new() }),
+                etag: None,
             }
         }
     }
@@ -122,8 +107,8 @@ mod tests {
             *self.last_request.lock().unwrap() = Some(req);
             let body = serde_json::to_vec(&*self.body).unwrap();
             let mut headers = HeaderMap::new();
-            if !self.body.etag.is_empty() {
-                headers.insert(ETAG, self.body.etag.parse().unwrap());
+            if let Some(etag) = &self.etag {
+                headers.insert(ETAG, etag.parse().unwrap());
             }
             Ok(Response {
                 status: StatusCode::OK,
@@ -151,7 +136,6 @@ mod tests {
             name: "test".to_string(),
             base_url: base_url.to_string(),
             query_params: None,
-            wire: WireApi::Responses,
             headers: HeaderMap::new(),
             retry: RetryConfig {
                 max_attempts: 1,
@@ -166,14 +150,12 @@ mod tests {
 
     #[tokio::test]
     async fn appends_client_version_query() {
-        let response = ModelsResponse {
-            models: Vec::new(),
-            etag: String::new(),
-        };
+        let response = ModelsResponse { models: Vec::new() };
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
             body: Arc::new(response),
+            etag: None,
         };
 
         let client = ModelsClient::new(
@@ -182,12 +164,12 @@ mod tests {
             DummyAuth,
         );
 
-        let result = client
+        let (models, _) = client
             .list_models("0.99.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(result.models.len(), 0);
+        assert_eq!(models.len(), 0);
 
         let url = transport
             .last_request
@@ -219,25 +201,24 @@ mod tests {
                     "supported_in_api": true,
                     "priority": 1,
                     "upgrade": null,
-                    "base_instructions": null,
+                    "base_instructions": "base instructions",
                     "supports_reasoning_summaries": false,
                     "support_verbosity": false,
                     "default_verbosity": null,
                     "apply_patch_tool_type": null,
                     "truncation_policy": {"mode": "bytes", "limit": 10_000},
                     "supports_parallel_tool_calls": false,
-                    "context_window": null,
-                    "reasoning_summary_format": "none",
+                    "context_window": 272_000,
                     "experimental_supported_tools": [],
                 }))
                 .unwrap(),
             ],
-            etag: String::new(),
         };
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
             body: Arc::new(response),
+            etag: None,
         };
 
         let client = ModelsClient::new(
@@ -246,27 +227,25 @@ mod tests {
             DummyAuth,
         );
 
-        let result = client
+        let (models, _) = client
             .list_models("0.99.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(result.models.len(), 1);
-        assert_eq!(result.models[0].slug, "gpt-test");
-        assert_eq!(result.models[0].supported_in_api, true);
-        assert_eq!(result.models[0].priority, 1);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].slug, "gpt-test");
+        assert_eq!(models[0].supported_in_api, true);
+        assert_eq!(models[0].priority, 1);
     }
 
     #[tokio::test]
     async fn list_models_includes_etag() {
-        let response = ModelsResponse {
-            models: Vec::new(),
-            etag: "\"abc\"".to_string(),
-        };
+        let response = ModelsResponse { models: Vec::new() };
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
             body: Arc::new(response),
+            etag: Some("\"abc\"".to_string()),
         };
 
         let client = ModelsClient::new(
@@ -275,12 +254,12 @@ mod tests {
             DummyAuth,
         );
 
-        let result = client
+        let (models, etag) = client
             .list_models("0.1.0", HeaderMap::new())
             .await
             .expect("request should succeed");
 
-        assert_eq!(result.models.len(), 0);
-        assert_eq!(result.etag, "\"abc\"");
+        assert_eq!(models.len(), 0);
+        assert_eq!(etag, Some("\"abc\"".to_string()));
     }
 }

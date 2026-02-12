@@ -30,6 +30,13 @@ pub struct RateLimitStatusPayload {
         skip_serializing_if = "Option::is_none"
     )]
     pub credits: Option<Option<Box<models::CreditStatusDetails>>>,
+    #[serde(
+        rename = "additional_rate_limits",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_rate_limits: Option<Option<Vec<models::AdditionalRateLimitDetails>>>,
 }
 
 impl RateLimitStatusPayload {
@@ -38,13 +45,17 @@ impl RateLimitStatusPayload {
             plan_type,
             rate_limit: None,
             credits: None,
+            additional_rate_limits: None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
+)]
 pub enum PlanType {
     #[serde(rename = "guest")]
+    #[default]
     Guest,
     #[serde(rename = "free")]
     Free,
@@ -70,10 +81,4 @@ pub enum PlanType {
     Enterprise,
     #[serde(rename = "edu")]
     Edu,
-}
-
-impl Default for PlanType {
-    fn default() -> PlanType {
-        Self::Guest
-    }
 }

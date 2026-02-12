@@ -230,7 +230,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     fixture
         .submit_turn_with_policy(
             "run a command that should be denied by the read-only sandbox",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 
@@ -415,7 +415,10 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
-        config.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        config
+            .sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
 
@@ -508,7 +511,9 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        cfg.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("set sandbox policy");
     });
     let test = builder.build(&server).await?;
 

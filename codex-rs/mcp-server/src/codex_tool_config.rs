@@ -3,16 +3,18 @@
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
-use mcp_types::Tool;
-use mcp_types::ToolInputSchema;
+use rmcp::model::JsonObject;
+use rmcp::model::Tool;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -21,7 +23,7 @@ pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
-    /// Optional override for the model name (e.g. "o3", "o4-mini").
+    /// Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
@@ -113,25 +115,36 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallParam>();
 
-    #[expect(clippy::expect_used)]
-    let schema_value =
-        serde_json::to_value(&schema).expect("Codex tool schema should serialise to JSON");
-
-    let tool_input_schema =
-        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
-            panic!("failed to create Tool from schema: {e}");
-        });
+    let input_schema = create_tool_input_schema(schema, "Codex tool schema should serialize");
 
     Tool {
-        name: "codex".to_string(),
+        name: "codex".into(),
         title: Some("Codex".to_string()),
-        input_schema: tool_input_schema,
-        // TODO(mbolin): This should be defined.
-        output_schema: None,
+        input_schema,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
+            "Run a Codex session. Accepts configuration parameters matching the Codex Config struct."
+                .into(),
         ),
         annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
+    }
+}
+
+fn codex_tool_output_schema() -> Arc<JsonObject> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "threadId": { "type": "string" },
+            "content": { "type": "string" }
+        },
+        "required": ["threadId", "content"],
+    });
+    match schema {
+        serde_json::Value::Object(map) => Arc::new(map),
+        _ => unreachable!("json literal must be an object"),
     }
 }
 
@@ -185,11 +198,34 @@ impl CodexToolCallParam {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexToolCallReplyParam {
-    /// The conversation id for this Codex session.
-    pub conversation_id: String,
+    /// DEPRECATED: use threadId instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+
+    /// The thread id for this Codex session.
+    /// This field is required, but we keep it optional here for backward
+    /// compatibility for clients that still use conversationId.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
+}
+
+impl CodexToolCallReplyParam {
+    pub(crate) fn get_thread_id(&self) -> anyhow::Result<ThreadId> {
+        if let Some(thread_id) = &self.thread_id {
+            let thread_id = ThreadId::from_string(thread_id)?;
+            Ok(thread_id)
+        } else if let Some(conversation_id) = &self.conversation_id {
+            let thread_id = ThreadId::from_string(conversation_id)?;
+            Ok(thread_id)
+        } else {
+            Err(anyhow::anyhow!(
+                "either threadId or conversationId must be provided"
+            ))
+        }
+    }
 }
 
 /// Builds a `Tool` definition for the `codex-reply` tool-call.
@@ -202,26 +238,45 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         .into_generator()
         .into_root_schema_for::<CodexToolCallReplyParam>();
 
-    #[expect(clippy::expect_used)]
-    let schema_value =
-        serde_json::to_value(&schema).expect("Codex reply tool schema should serialise to JSON");
-
-    let tool_input_schema =
-        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
-            panic!("failed to create Tool from schema: {e}");
-        });
+    let input_schema = create_tool_input_schema(schema, "Codex reply tool schema should serialize");
 
     Tool {
-        name: "codex-reply".to_string(),
+        name: "codex-reply".into(),
         title: Some("Codex Reply".to_string()),
-        input_schema: tool_input_schema,
-        output_schema: None,
+        input_schema,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Continue a Codex conversation by providing the conversation id and prompt."
-                .to_string(),
+            "Continue a Codex conversation by providing the thread id and prompt.".into(),
         ),
         annotations: None,
+        execution: None,
+        icons: None,
+        meta: None,
     }
+}
+
+fn create_tool_input_schema(
+    schema: schemars::schema::RootSchema,
+    panic_message: &str,
+) -> Arc<JsonObject> {
+    #[expect(clippy::expect_used)]
+    let schema_value = serde_json::to_value(&schema).expect(panic_message);
+    let mut schema_object = match schema_value {
+        serde_json::Value::Object(object) => object,
+        _ => panic!("tool schema should serialize to a JSON object"),
+    };
+
+    // Prefer keeping the "core" JSON Schema keys while still preserving `$defs`
+    // in case any `$ref` leaks into the generated schema (even though we try
+    // to inline subschemas).
+    let mut input_schema = JsonObject::new();
+    for key in ["properties", "required", "type", "$defs", "definitions"] {
+        if let Some(value) = schema_object.remove(key) {
+            input_schema.insert(key.to_string(), value);
+        }
+    }
+
+    Arc::new(input_schema)
 }
 
 #[cfg(test)]
@@ -245,11 +300,8 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "name": "codex",
-          "title": "Codex",
           "description": "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.",
           "inputSchema": {
-            "type": "object",
             "properties": {
               "approval-policy": {
                 "description": "Approval policy for shell commands generated by the model: `untrusted`, `on-failure`, `on-request`, `never`.",
@@ -261,26 +313,29 @@ mod tests {
                 ],
                 "type": "string"
               },
-              "sandbox": {
-                "description": "Sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`.",
-                "enum": [
-                  "read-only",
-                  "workspace-write",
-                  "danger-full-access"
-                ],
+              "base-instructions": {
+                "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
+              "compact-prompt": {
+                "description": "Prompt used when compacting the conversation.",
                 "type": "string"
               },
               "config": {
-                "description": "Individual config settings that will override what is in CODEX_HOME/config.toml.",
                 "additionalProperties": true,
+                "description": "Individual config settings that will override what is in CODEX_HOME/config.toml.",
                 "type": "object"
               },
               "cwd": {
                 "description": "Working directory for the session. If relative, it is resolved against the server process's current working directory.",
                 "type": "string"
               },
+              "developer-instructions": {
+                "description": "Developer instructions that should be injected as a developer role message.",
+                "type": "string"
+              },
               "model": {
-                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
+                "description": "Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').",
                 "type": "string"
               },
               "profile": {
@@ -291,23 +346,38 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
-              "base-instructions": {
-                "description": "The set of instructions to use instead of the default ones.",
+              "sandbox": {
+                "description": "Sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`.",
+                "enum": [
+                  "read-only",
+                  "workspace-write",
+                  "danger-full-access"
+                ],
                 "type": "string"
-              },
-              "developer-instructions": {
-                "description": "Developer instructions that should be injected as a developer role message.",
-                "type": "string"
-              },
-              "compact-prompt": {
-                "description": "Prompt used when compacting the conversation.",
-                "type": "string"
-              },
+              }
             },
             "required": [
               "prompt"
-            ]
-          }
+            ],
+            "type": "object"
+          },
+          "name": "codex",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
+          "title": "Codex"
         });
         assert_eq!(expected_tool_json, tool_json);
     }
@@ -317,25 +387,43 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_reply_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Continue a Codex conversation by providing the conversation id and prompt.",
+          "description": "Continue a Codex conversation by providing the thread id and prompt.",
           "inputSchema": {
             "properties": {
               "conversationId": {
-                "description": "The conversation id for this Codex session.",
+                "description": "DEPRECATED: use threadId instead.",
                 "type": "string"
               },
               "prompt": {
                 "description": "The *next user prompt* to continue the Codex conversation.",
                 "type": "string"
               },
+              "threadId": {
+                "description": "The thread id for this Codex session. This field is required, but we keep it optional here for backward compatibility for clients that still use conversationId.",
+                "type": "string"
+              }
             },
             "required": [
-              "conversationId",
               "prompt",
             ],
             "type": "object",
           },
           "name": "codex-reply",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);

@@ -1,0 +1,592 @@
+use crate::bash::parse_shell_lc_plain_commands;
+// Find the first matching git subcommand, skipping known global options that
+// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
+// Implemented in `is_dangerous_command` and shared here.
+use crate::command_safety::is_dangerous_command::find_git_subcommand;
+use crate::command_safety::windows_safe_commands::is_safe_command_windows;
+
+pub fn is_known_safe_command(command: &[String]) -> bool {
+    let command: Vec<String> = command
+        .iter()
+        .map(|s| {
+            if s == "zsh" {
+                "bash".to_string()
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+
+    if is_safe_command_windows(&command) {
+        return true;
+    }
+
+    if is_safe_to_call_with_exec(&command) {
+        return true;
+    }
+
+    // Support `bash -lc "..."` where the script consists solely of one or
+    // more "plain" commands (only bare words / quoted strings) combined with
+    // a conservative allow‑list of shell operators that themselves do not
+    // introduce side effects ( "&&", "||", ";", and "|" ). If every
+    // individual command in the script is itself a known‑safe command, then
+    // the composite expression is considered safe.
+    if let Some(all_commands) = parse_shell_lc_plain_commands(&command)
+        && !all_commands.is_empty()
+        && all_commands
+            .iter()
+            .all(|cmd| is_safe_to_call_with_exec(cmd))
+    {
+        return true;
+    }
+    false
+}
+
+fn is_safe_to_call_with_exec(command: &[String]) -> bool {
+    let Some(cmd0) = command.first().map(String::as_str) else {
+        return false;
+    };
+
+    match std::path::Path::new(&cmd0)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+    {
+        Some(cmd) if cfg!(target_os = "linux") && matches!(cmd, "numfmt" | "tac") => true,
+
+        #[rustfmt::skip]
+        Some(
+            "cat" |
+            "cd" |
+            "cut" |
+            "echo" |
+            "expr" |
+            "false" |
+            "grep" |
+            "head" |
+            "id" |
+            "ls" |
+            "nl" |
+            "paste" |
+            "pwd" |
+            "rev" |
+            "seq" |
+            "stat" |
+            "tail" |
+            "tr" |
+            "true" |
+            "uname" |
+            "uniq" |
+            "wc" |
+            "which" |
+            "whoami") => {
+            true
+        },
+
+        Some("base64") => {
+            const UNSAFE_BASE64_OPTIONS: &[&str] = &["-o", "--output"];
+
+            !command.iter().skip(1).any(|arg| {
+                UNSAFE_BASE64_OPTIONS.contains(&arg.as_str())
+                    || arg.starts_with("--output=")
+                    || (arg.starts_with("-o") && arg != "-o")
+            })
+        }
+
+        Some("find") => {
+            // Certain options to `find` can delete files, write to files, or
+            // execute arbitrary commands, so we cannot auto-approve the
+            // invocation of `find` in such cases.
+            #[rustfmt::skip]
+            const UNSAFE_FIND_OPTIONS: &[&str] = &[
+                // Options that can execute arbitrary commands.
+                "-exec", "-execdir", "-ok", "-okdir",
+                // Option that deletes matching files.
+                "-delete",
+                // Options that write pathnames to a file.
+                "-fls", "-fprint", "-fprint0", "-fprintf",
+            ];
+
+            !command
+                .iter()
+                .any(|arg| UNSAFE_FIND_OPTIONS.contains(&arg.as_str()))
+        }
+
+        // Ripgrep
+        Some("rg") => {
+            const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &[
+                // Takes an arbitrary command that is executed for each match.
+                "--pre",
+                // Takes a command that can be used to obtain the local hostname.
+                "--hostname-bin",
+            ];
+            const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &[
+                // Calls out to other decompression tools, so do not auto-approve
+                // out of an abundance of caution.
+                "--search-zip",
+                "-z",
+            ];
+
+            !command.iter().any(|arg| {
+                UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg.as_str())
+                    || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
+                        .iter()
+                        .any(|&opt| arg == opt || arg.starts_with(&format!("{opt}=")))
+            })
+        }
+
+        // Git
+        Some("git") => {
+            // Global config overrides like `-c core.pager=...` can force git
+            // to execute arbitrary external commands. With no sandboxing, we
+            // should always prompt in those cases.
+            if git_has_config_override_global_option(command) {
+                return false;
+            }
+
+            let Some((subcommand_idx, subcommand)) =
+                find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
+            else {
+                return false;
+            };
+
+            let subcommand_args = &command[subcommand_idx + 1..];
+
+            match subcommand {
+                "status" | "log" | "diff" | "show" => {
+                    git_subcommand_args_are_read_only(subcommand_args)
+                }
+                "branch" => {
+                    git_subcommand_args_are_read_only(subcommand_args)
+                        && git_branch_is_read_only(subcommand_args)
+                }
+                other => {
+                    debug_assert!(false, "unexpected git subcommand from matcher: {other}");
+                    false
+                }
+            }
+        }
+
+        // Special-case `sed -n {N|M,N}p`
+        Some("sed")
+            if {
+                command.len() <= 4
+                    && command.get(1).map(String::as_str) == Some("-n")
+                    && is_valid_sed_n_arg(command.get(2).map(String::as_str))
+            } =>
+        {
+            true
+        }
+
+        // ── anything else ─────────────────────────────────────────────────
+        _ => false,
+    }
+}
+
+// Treat `git branch` as safe only when the arguments clearly indicate
+// a read-only query, not a branch mutation (create/rename/delete).
+fn git_branch_is_read_only(branch_args: &[String]) -> bool {
+    if branch_args.is_empty() {
+        // `git branch` with no additional args lists branches.
+        return true;
+    }
+
+    let mut saw_read_only_flag = false;
+    for arg in branch_args.iter().map(String::as_str) {
+        match arg {
+            "--list" | "-l" | "--show-current" | "-a" | "--all" | "-r" | "--remotes" | "-v"
+            | "-vv" | "--verbose" => {
+                saw_read_only_flag = true;
+            }
+            _ if arg.starts_with("--format=") => {
+                saw_read_only_flag = true;
+            }
+            _ => {
+                // Any other flag or positional argument may create, rename, or delete branches.
+                return false;
+            }
+        }
+    }
+
+    saw_read_only_flag
+}
+
+fn git_has_config_override_global_option(command: &[String]) -> bool {
+    command.iter().map(String::as_str).any(|arg| {
+        matches!(arg, "-c" | "--config-env")
+            || (arg.starts_with("-c") && arg.len() > 2)
+            || arg.starts_with("--config-env=")
+    })
+}
+
+fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
+    // Flags that can write to disk or execute external tools should never be
+    // auto-approved on an unsandboxed machine.
+    const UNSAFE_GIT_FLAGS: &[&str] = &[
+        "--output",
+        "--ext-diff",
+        "--textconv",
+        "--exec",
+        "--paginate",
+    ];
+
+    !args.iter().map(String::as_str).any(|arg| {
+        UNSAFE_GIT_FLAGS.contains(&arg)
+            || arg.starts_with("--output=")
+            || arg.starts_with("--exec=")
+    })
+}
+
+// (bash parsing helpers implemented in crate::bash)
+
+/* ----------------------------------------------------------
+Example
+---------------------------------------------------------- */
+
+/// Returns true if `arg` matches /^(\d+,)?\d+p$/
+fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
+    // unwrap or bail
+    let s = match arg {
+        Some(s) => s,
+        None => return false,
+    };
+
+    // must end with 'p', strip it
+    let core = match s.strip_suffix('p') {
+        Some(rest) => rest,
+        None => return false,
+    };
+
+    // split on ',' and ensure 1 or 2 numeric parts
+    let parts: Vec<&str> = core.split(',').collect();
+    match parts.as_slice() {
+        // single number, e.g. "10"
+        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+
+        // two numbers, e.g. "1,5"
+        [a, b] => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.chars().all(|c| c.is_ascii_digit())
+                && b.chars().all(|c| c.is_ascii_digit())
+        }
+
+        // anything else (more than one comma) is invalid
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::string::ToString;
+
+    fn vec_str(args: &[&str]) -> Vec<String> {
+        args.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn known_safe_examples() {
+        assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "git",
+            "branch",
+            "--show-current"
+        ])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "sed", "-n", "1,5p", "file.txt"
+        ])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "nl",
+            "-nrz",
+            "Cargo.toml"
+        ])));
+
+        // Safe `find` command (no unsafe options).
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "find", ".", "-name", "file.txt"
+        ])));
+
+        if cfg!(target_os = "linux") {
+            assert!(is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        } else {
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        }
+    }
+
+    #[test]
+    fn git_branch_mutating_flags_are_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "branch", "-d", "feature"
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "branch",
+            "new-branch"
+        ])));
+    }
+
+    #[test]
+    fn git_branch_global_options_respect_safety_rules() {
+        use pretty_assertions::assert_eq;
+
+        assert_eq!(
+            is_known_safe_command(&vec_str(&["git", "-C", ".", "branch", "--show-current"])),
+            true
+        );
+        assert_eq!(
+            is_known_safe_command(&vec_str(&["git", "-C", ".", "branch", "-d", "feature"])),
+            false
+        );
+        assert_eq!(
+            is_known_safe_command(&vec_str(&["bash", "-lc", "git -C . branch -d feature",])),
+            false
+        );
+    }
+
+    #[test]
+    fn git_first_positional_is_the_subcommand() {
+        // In git, the first non-option token is the subcommand. Later positional
+        // args (like branch names) must not be treated as subcommands.
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git", "checkout", "status",
+        ])));
+    }
+
+    #[test]
+    fn git_output_and_config_override_flags_are_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "log",
+            "--output=/tmp/git-log-out-test",
+            "-n",
+            "1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "diff",
+            "--output",
+            "/tmp/git-diff-out-test",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "show",
+            "--output=/tmp/git-show-out-test",
+            "HEAD",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "-c",
+            "core.pager=cat",
+            "log",
+            "-n",
+            "1",
+        ])));
+        assert!(!is_known_safe_command(&vec_str(&[
+            "git",
+            "-ccore.pager=cat",
+            "status",
+        ])));
+    }
+
+    #[test]
+    fn cargo_check_is_not_safe() {
+        assert!(!is_known_safe_command(&vec_str(&["cargo", "check"])));
+    }
+
+    #[test]
+    fn zsh_lc_safe_command_sequence() {
+        assert!(is_known_safe_command(&vec_str(&["zsh", "-lc", "ls"])));
+    }
+
+    #[test]
+    fn unknown_or_partial() {
+        assert!(!is_safe_to_call_with_exec(&vec_str(&["foo"])));
+        assert!(!is_safe_to_call_with_exec(&vec_str(&["git", "fetch"])));
+        assert!(!is_safe_to_call_with_exec(&vec_str(&[
+            "sed", "-n", "xp", "file.txt"
+        ])));
+
+        // Unsafe `find` commands.
+        for args in [
+            vec_str(&["find", ".", "-name", "file.txt", "-exec", "rm", "{}", ";"]),
+            vec_str(&[
+                "find", ".", "-name", "*.py", "-execdir", "python3", "{}", ";",
+            ]),
+            vec_str(&["find", ".", "-name", "file.txt", "-ok", "rm", "{}", ";"]),
+            vec_str(&["find", ".", "-name", "*.py", "-okdir", "python3", "{}", ";"]),
+            vec_str(&["find", ".", "-delete", "-name", "file.txt"]),
+            vec_str(&["find", ".", "-fls", "/etc/passwd"]),
+            vec_str(&["find", ".", "-fprint", "/etc/passwd"]),
+            vec_str(&["find", ".", "-fprint0", "/etc/passwd"]),
+            vec_str(&["find", ".", "-fprintf", "/root/suid.txt", "%#m %u %p\n"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be unsafe"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_output_options_are_unsafe() {
+        for args in [
+            vec_str(&["base64", "-o", "out.bin"]),
+            vec_str(&["base64", "--output", "out.bin"]),
+            vec_str(&["base64", "--output=out.bin"]),
+            vec_str(&["base64", "-ob64.txt"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to output option"
+            );
+        }
+    }
+
+    #[test]
+    fn ripgrep_rules() {
+        // Safe ripgrep invocations – none of the unsafe flags are present.
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "rg",
+            "Cargo.toml",
+            "-n"
+        ])));
+
+        // Unsafe flags that do not take an argument (present verbatim).
+        for args in [
+            vec_str(&["rg", "--search-zip", "files"]),
+            vec_str(&["rg", "-z", "files"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to zip-search flag",
+            );
+        }
+
+        // Unsafe flags that expect a value, provided in both split and = forms.
+        for args in [
+            vec_str(&["rg", "--pre", "pwned", "files"]),
+            vec_str(&["rg", "--pre=pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin", "pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin=pwned", "files"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to external-command flag",
+            );
+        }
+    }
+
+    #[test]
+    fn windows_powershell_full_path_is_safe() {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
+        assert!(is_known_safe_command(&vec_str(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-Command",
+            "Get-Location",
+        ])));
+    }
+
+    #[test]
+    fn bash_lc_safe_examples() {
+        assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls"])));
+        assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls -1"])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "git status"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "grep -R \"Cargo.toml\" -n"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "sed -n 1,5p file.txt"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "sed -n '1,5p' file.txt"
+        ])));
+
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "find . -name file.txt"
+        ])));
+    }
+
+    #[test]
+    fn bash_lc_safe_examples_with_operators() {
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "grep -R \"Cargo.toml\" -n || true"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "ls && pwd"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "echo 'hi' ; ls"
+        ])));
+        assert!(is_known_safe_command(&vec_str(&[
+            "bash",
+            "-lc",
+            "ls | wc -l"
+        ])));
+    }
+
+    #[test]
+    fn bash_lc_unsafe_examples() {
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "git", "status"])),
+            "Four arg version is not known to be safe."
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "'git status'"])),
+            "The extra quoting around 'git status' makes it a program named 'git status' and is therefore unsafe."
+        );
+
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "find . -name file.txt -delete"])),
+            "Unsafe find option should not be auto-approved."
+        );
+
+        // Disallowed because of unsafe command in sequence.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls && rm -rf /"])),
+            "Sequence containing unsafe command must be rejected"
+        );
+
+        // Disallowed because of parentheses / subshell.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "(ls)"])),
+            "Parentheses (subshell) are not provably safe with the current parser"
+        );
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls || (pwd && echo hi)"])),
+            "Nested parentheses are not provably safe with the current parser"
+        );
+
+        // Disallowed redirection.
+        assert!(
+            !is_known_safe_command(&vec_str(&["bash", "-lc", "ls > out.txt"])),
+            "> redirection should be rejected"
+        );
+    }
+}

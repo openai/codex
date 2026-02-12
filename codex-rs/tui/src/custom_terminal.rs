@@ -147,7 +147,12 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = backend.get_cursor_position()?;
+        let cursor_pos = backend.get_cursor_position().unwrap_or_else(|err| {
+            // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
+            // of failing TUI startup.
+            tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
+            Position { x: 0, y: 0 }
+        });
         Ok(Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
@@ -377,6 +382,19 @@ where
             .set_cursor_position(self.viewport_area.as_position())?;
         self.backend.clear_region(ClearType::AfterCursor)?;
         // Reset the back buffer to make sure the next update will redraw everything.
+        self.previous_buffer_mut().reset();
+        Ok(())
+    }
+
+    /// Clear terminal scrollback (if supported) and force a full redraw.
+    pub fn clear_scrollback(&mut self) -> io::Result<()> {
+        if self.viewport_area.is_empty() {
+            return Ok(());
+        }
+        self.backend
+            .set_cursor_position(self.viewport_area.as_position())?;
+        queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
+        std::io::Write::flush(&mut self.backend)?;
         self.previous_buffer_mut().reset();
         Ok(())
     }

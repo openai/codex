@@ -1,6 +1,6 @@
 use codex_chatgpt::apply_command::apply_diff_from_task;
 use codex_chatgpt::get_task::GetTaskResponse;
-use std::path::Path;
+use codex_utils_cargo_bin::find_resource;
 use tempfile::TempDir;
 use tokio::process::Command;
 
@@ -68,8 +68,8 @@ async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
 }
 
 async fn mock_get_task_with_fixture() -> anyhow::Result<GetTaskResponse> {
-    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/task_turn_fixture.json");
-    let fixture_content = std::fs::read_to_string(fixture_path)?;
+    let fixture_path = find_resource!("tests/task_turn_fixture.json")?;
+    let fixture_content = tokio::fs::read_to_string(fixture_path).await?;
     let response: GetTaskResponse = serde_json::from_str(&fixture_content)?;
     Ok(response)
 }

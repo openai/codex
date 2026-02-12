@@ -3,35 +3,50 @@ edition.workspace = true
 license.workspace = true
 name = "codex-core"
 version.workspace = true
+build = "build.rs"
 
 [lib]
 doctest = false
 name = "codex_core"
 path = "src/lib.rs"
 
+[[bin]]
+name = "codex-write-config-schema"
+path = "src/bin/config_schema.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = "1.8.0"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+askama = { workspace = true }
 base64 = { workspace = true }
+bm25 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
+codex-config = { workspace = true }
+codex-shell-command = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
+codex-hooks = { workspace = true }
 codex-keyring-store = { workspace = true }
+codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-utils-string = { workspace = true }
@@ -45,23 +60,31 @@ futures = { workspace = true }
 http = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
+indoc = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
-mcp-types = { workspace = true }
+notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
-strum_macros = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
 test-log = { workspace = true }
@@ -80,20 +103,15 @@ tokio = { workspace = true, features = [
     "signal",
 ] }
 tokio-util = { workspace = true, features = ["rt"] }
+tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-tree-sitter = { workspace = true }
-tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
-
-[features]
-deterministic_process_ids = []
-test-support = []
-
+zip = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
@@ -114,6 +132,11 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
@@ -122,21 +145,27 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-core = { path = ".", features = ["deterministic_process_ids"] }
+codex-otel = { workspace = true, features = [
+    "disable-default-metrics-exporter",
+] }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
-escargot = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "experimental_metrics_custom_reader",
+    "metrics",
+] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+zstd = { workspace = true }
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]

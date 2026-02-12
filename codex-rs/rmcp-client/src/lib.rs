@@ -1,5 +1,4 @@
 mod auth_status;
-mod find_codex_home;
 mod logging_client_handler;
 mod oauth;
 mod perform_oauth_login;
@@ -22,5 +21,7 @@ pub use perform_oauth_login::perform_oauth_login_return_url;
 pub use rmcp::model::ElicitationAction;
 pub use rmcp_client::Elicitation;
 pub use rmcp_client::ElicitationResponse;
+pub use rmcp_client::ListToolsWithConnectorIdResult;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
+pub use rmcp_client::ToolWithConnectorId;

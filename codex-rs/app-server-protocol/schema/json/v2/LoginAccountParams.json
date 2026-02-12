@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "apiKey": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "apiKey"
+          ],
+          "title": "ApiKeyv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiKey",
+        "type"
+      ],
+      "title": "ApiKeyv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "chatgpt"
+          ],
+          "title": "Chatgptv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Chatgptv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
+      "properties": {
+        "accessToken": {
+          "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
+          "type": "string"
+        },
+        "chatgptAccountId": {
+          "description": "Workspace/account identifier supplied by the client.",
+          "type": "string"
+        },
+        "chatgptPlanType": {
+          "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "chatgptAuthTokens"
+          ],
+          "title": "ChatgptAuthTokensv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accessToken",
+        "chatgptAccountId",
+        "type"
+      ],
+      "title": "ChatgptAuthTokensv2::LoginAccountParams",
+      "type": "object"
+    }
+  ],
+  "title": "LoginAccountParams"
+}

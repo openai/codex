@@ -30,6 +30,18 @@ pub struct SandboxCreds {
     pub password: String,
 }
 
+/// Returns true when the on-disk setup artifacts exist and match the current
+/// setup version.
+///
+/// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
+pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
+    let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
+    if !marker_ok {
+        return false;
+    }
+    matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
+}
+
 fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
     let path = setup_marker_path(codex_home);
     let marker = match fs::read_to_string(&path) {
@@ -119,9 +131,10 @@ pub fn require_logon_sandbox_creds(
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = gather_read_roots(command_cwd, policy);
-    let mut needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
-    // Ensure the sandbox directory itself is writable by sandbox users.
-    needed_write.push(sandbox_dir.clone());
+    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
+    // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
+    // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
     let mut _existing_marker: Option<SetupMarker> = None;
 

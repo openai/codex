@@ -275,7 +275,6 @@ impl<'a> FlexRenderable<'a> {
                     };
                     let child_size = child.desired_height(area.width).min(max_child_extent);
                     child_sizes[i] = child_size;
-                    allocated_size += child_size;
                     allocated_flex_space += child_size;
                 }
             }

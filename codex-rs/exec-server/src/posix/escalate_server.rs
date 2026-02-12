@@ -10,6 +10,7 @@ use path_absolutize::Absolutize as _;
 
 use codex_core::SandboxState;
 use codex_core::exec::process_exec_tool_call;
+use codex_core::protocol_config_types::WindowsSandboxLevel;
 use codex_core::sandboxing::SandboxPermissions;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -86,13 +87,16 @@ impl EscalateServer {
                 cwd: PathBuf::from(&workdir),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
+                network: None,
                 sandbox_permissions: SandboxPermissions::UseDefault,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 justification: None,
                 arg0: None,
             },
             &sandbox_state.sandbox_policy,
             &sandbox_state.sandbox_cwd,
             &sandbox_state.codex_linux_sandbox_exe,
+            sandbox_state.use_linux_sandbox_bwrap,
             None,
         )
         .await?;

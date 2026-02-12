@@ -20,10 +20,10 @@ codex-cloud-tasks-client = { path = "../cloud-tasks-client", features = [
     "mock",
     "online",
 ] }
-codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
 codex-login = { path = "../login" }
 codex-tui = { path = "../tui" }
+codex-utils-cli = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 ratatui = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
@@ -36,6 +36,9 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unicode-width = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 supports-color = { workspace = true }
+
+[dependencies.async-trait]
+workspace = true
 
 [dev-dependencies]
 async-trait = { workspace = true }

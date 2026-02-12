@@ -16,22 +16,12 @@ use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
-use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
-use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
-use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
-use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
-use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
-use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
-use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
-#[allow(dead_code)]
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
         env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -51,7 +41,6 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     w
 }
 
-#[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
@@ -72,7 +61,6 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
 /// # Safety
 /// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
 /// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
-#[allow(dead_code)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
@@ -147,57 +135,4 @@ pub unsafe fn create_process_as_user(
         return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
     Ok((pi, si))
-}
-
-/// # Safety
-/// Caller must provide valid process information handles.
-#[allow(dead_code)]
-pub unsafe fn wait_process_and_exitcode(pi: &PROCESS_INFORMATION) -> Result<i32> {
-    let res = WaitForSingleObject(pi.hProcess, INFINITE);
-    if res != 0 {
-        return Err(anyhow!("WaitForSingleObject failed: {}", GetLastError()));
-    }
-    let mut code: u32 = 0;
-    if GetExitCodeProcess(pi.hProcess, &mut code) == 0 {
-        return Err(anyhow!("GetExitCodeProcess failed: {}", GetLastError()));
-    }
-    Ok(code as i32)
-}
-
-/// # Safety
-/// Caller must close the returned job handle.
-#[allow(dead_code)]
-pub unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
-    let h = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
-    if h == 0 {
-        return Err(anyhow!("CreateJobObjectW failed: {}", GetLastError()));
-    }
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    let ok = SetInformationJobObject(
-        h,
-        JobObjectExtendedLimitInformation,
-        &mut limits as *mut _ as *mut c_void,
-        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-    );
-    if ok == 0 {
-        return Err(anyhow!(
-            "SetInformationJobObject failed: {}",
-            GetLastError()
-        ));
-    }
-    Ok(h)
-}
-
-/// # Safety
-/// Caller must pass valid handles for a job object and a process.
-#[allow(dead_code)]
-pub unsafe fn assign_to_job(h_job: HANDLE, h_process: HANDLE) -> Result<()> {
-    if AssignProcessToJobObject(h_job, h_process) == 0 {
-        return Err(anyhow!(
-            "AssignProcessToJobObject failed: {}",
-            GetLastError()
-        ));
-    }
-    Ok(())
 }
