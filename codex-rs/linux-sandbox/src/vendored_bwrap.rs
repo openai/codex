@@ -50,12 +50,12 @@ mod imp {
     /// Panics with a clear error when the build-time bwrap path is not enabled.
     pub(crate) fn run_vendored_bwrap_main(_argv: &[String]) -> libc::c_int {
         panic!(
-            "build-time bubblewrap is not available in this build.\n\
-codex-linux-sandbox should always compile vendored bubblewrap on Linux targets.\n\
-Notes:\n\
-- ensure the target OS is Linux\n\
-- libcap headers must be available via pkg-config\n\
-- bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"
+            r#"build-time bubblewrap is not available in this build.
+codex-linux-sandbox should always compile vendored bubblewrap on Linux targets.
+Notes:
+- ensure the target OS is Linux
+- libcap headers must be available via pkg-config
+- bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"#
         );
     }
 
