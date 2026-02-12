@@ -18,6 +18,34 @@ Use `$` in the composer to insert a ChatGPT connector; the popover lists accessi
 apps. The `/apps` command lists available and installed apps. Connected apps appear first
 and are labeled as connected; others are marked as can be installed.
 
+`apps` supports layered defaults and per-tool settings:
+
+```toml
+[apps._default]
+disable_destructive = false
+disable_open_world = false
+
+[apps.connector_123]
+enabled = false
+disabled_reason = "user"
+disable_destructive = true
+disable_open_world = true
+
+[apps.connector_123.tools._default]
+enabled = true
+approval = "prompt" # "auto" | "prompt" | "approve"
+
+[apps.connector_123.tools."repos/list"]
+enabled = true
+approval = "auto"
+```
+
+Tool approval modes:
+
+- `auto`: Let the tool decide when to ask for approval.
+- `prompt`: always ask for approval.
+- `approve`: never ask for approval.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:

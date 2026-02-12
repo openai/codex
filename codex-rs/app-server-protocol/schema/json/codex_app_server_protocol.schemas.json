@@ -10071,6 +10071,18 @@
       },
       "AppConfig": {
         "properties": {
+          "disable_destructive": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "disable_open_world": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "disabled_reason": {
             "anyOf": [
               {
@@ -10082,8 +10094,19 @@
             ]
           },
           "enabled": {
-            "default": true,
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tools": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/AppToolConfig"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "type": "object"
@@ -10124,8 +10147,7 @@
             "type": "boolean"
           },
           "isEnabled": {
-            "default": true,
-            "description": "Whether this app is enabled in config.toml. Example: ```toml [app.bad_app] enabled = false ```",
+            "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
             "type": "boolean"
           },
           "logoUrl": {
@@ -10146,6 +10168,7 @@
         },
         "required": [
           "id",
+          "isEnabled",
           "name"
         ],
         "type": "object"
@@ -10166,6 +10189,53 @@
         ],
         "title": "AppListUpdatedNotification",
         "type": "object"
+      },
+      "AppToolApproval": {
+        "enum": [
+          "auto",
+          "prompt",
+          "approve"
+        ],
+        "type": "string"
+      },
+      "AppToolConfig": {
+        "properties": {
+          "approval": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppToolDisabledReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppToolDisabledReason": {
+        "enum": [
+          "unknown",
+          "user",
+          "admin_policy"
+        ],
+        "type": "string"
       },
       "AppsConfig": {
         "type": "object"

@@ -5,6 +5,7 @@ use tracing::error;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::types::AppToolApproval;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -126,6 +127,16 @@ pub(crate) async fn handle_mcp_tool_call(
                 )
                 .await
             }
+            McpToolApprovalDecision::BlockedByConfig(message) => {
+                notify_mcp_tool_call_skip(
+                    sess.as_ref(),
+                    turn_context,
+                    &call_id,
+                    invocation,
+                    message,
+                )
+                .await
+            }
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
@@ -210,12 +221,13 @@ async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, 
     sess.send_event(turn_context, event).await;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum McpToolApprovalDecision {
     Accept,
     AcceptAndRemember,
     Decline,
     Cancel,
+    BlockedByConfig(String),
 }
 
 struct McpToolApprovalMetadata {
@@ -245,25 +257,41 @@ async fn maybe_request_mcp_tool_approval(
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalDecision> {
-    if is_full_access_mode(turn_context) {
-        return None;
-    }
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return None;
     }
 
     let metadata = lookup_mcp_tool_metadata(sess, server, tool_name).await?;
-    if !requires_mcp_tool_approval(&metadata.annotations) {
-        return None;
+    let connector_id = metadata.connector_id.as_deref()?;
+    let tool_policy = crate::connectors::codex_apps_tool_policy(
+        turn_context.config.as_ref(),
+        connector_id,
+        tool_name,
+        Some(&metadata.annotations),
+    );
+    if !tool_policy.allowed {
+        return Some(McpToolApprovalDecision::BlockedByConfig(format!(
+            "MCP tool call `{tool_name}` is blocked by apps config for connector `{connector_id}`"
+        )));
     }
-    let approval_key = metadata
-        .connector_id
-        .as_deref()
-        .map(|connector_id| McpToolApprovalKey {
-            server: server.to_string(),
-            connector_id: connector_id.to_string(),
-            tool_name: tool_name.to_string(),
-        });
+
+    match tool_policy.approval {
+        Some(AppToolApproval::Approve) => return None,
+        Some(AppToolApproval::Prompt) => {}
+        Some(AppToolApproval::Auto) | None => {
+            if is_full_access_mode(turn_context)
+                || !requires_mcp_tool_approval(&metadata.annotations)
+            {
+                return None;
+            }
+        }
+    }
+
+    let approval_key = Some(McpToolApprovalKey {
+        server: server.to_string(),
+        connector_id: connector_id.to_string(),
+        tool_name: tool_name.to_string(),
+    });
     if let Some(key) = approval_key.as_ref()
         && mcp_tool_approval_is_remembered(sess, key).await
     {

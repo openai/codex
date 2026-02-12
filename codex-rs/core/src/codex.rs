@@ -4381,6 +4381,29 @@ fn filter_codex_apps_mcp_tools(
     mcp_tools
 }
 
+fn filter_disallowed_codex_apps_tools(
+    mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    config: &Config,
+) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
+    mcp_tools.retain(|_, tool| {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            return true;
+        }
+        let Some(connector_id) = codex_apps_connector_id(tool) else {
+            return false;
+        };
+        connectors::codex_apps_tool_policy(
+            config,
+            connector_id,
+            &tool.tool_name,
+            tool.tool.annotations.as_ref(),
+        )
+        .allowed
+    });
+
+    mcp_tools
+}
+
 fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
     tool.connector_id.as_deref()
 }
@@ -4558,9 +4581,11 @@ async fn built_tools(
             selected_mcp_tools.extend(apps_mcp_tools);
         }
 
-        mcp_tools = selected_mcp_tools;
+        mcp_tools =
+            filter_disallowed_codex_apps_tools(selected_mcp_tools, turn_context.config.as_ref());
     } else if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
+        mcp_tools = filter_disallowed_codex_apps_tools(mcp_tools, turn_context.config.as_ref());
     }
 
     Ok(Arc::new(ToolRouter::from_config(
@@ -5355,6 +5380,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Tool;
+    use rmcp::model::ToolAnnotations;
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
@@ -5610,6 +5636,82 @@ mod tests {
             tool_names,
             vec![
                 "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_disallowed_codex_apps_tools_respects_apps_config() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"
+[apps._default]
+disable_destructive = true
+
+[apps.connector_123.tools._default]
+enabled = true
+approval = "prompt"
+
+[apps.connector_123.tools."issues/create"]
+enabled = false
+"#,
+        )
+        .expect("write config");
+        let config = build_test_config(codex_home.path()).await;
+
+        let mut destructive_tool = make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "files/delete",
+            Some("connector_123"),
+            Some("Connector 123"),
+        );
+        destructive_tool.tool.annotations = Some(ToolAnnotations {
+            destructive_hint: Some(true),
+            idempotent_hint: None,
+            open_world_hint: None,
+            read_only_hint: Some(false),
+            title: None,
+        });
+
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__repos_list".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "repos/list",
+                    Some("connector_123"),
+                    Some("Connector 123"),
+                ),
+            ),
+            (
+                "mcp__codex_apps__issues_create".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "issues/create",
+                    Some("connector_123"),
+                    Some("Connector 123"),
+                ),
+            ),
+            (
+                "mcp__codex_apps__files_delete".to_string(),
+                destructive_tool,
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let filtered = filter_disallowed_codex_apps_tools(mcp_tools, &config);
+        let mut tool_names: Vec<String> = filtered.into_keys().collect();
+        tool_names.sort();
+
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__repos_list".to_string(),
                 "mcp__rmcp__echo".to_string(),
             ]
         );

@@ -59,6 +59,14 @@
       "additionalProperties": false,
       "description": "Config values for a single app/connector.",
       "properties": {
+        "disable_destructive": {
+          "description": "When `true`, tools marked as destructive are disabled for this app.",
+          "type": "boolean"
+        },
+        "disable_open_world": {
+          "description": "When `true`, tools marked as open-world are disabled for this app.",
+          "type": "boolean"
+        },
         "disabled_reason": {
           "allOf": [
             {
@@ -68,9 +76,15 @@
           "description": "Reason this app was disabled."
         },
         "enabled": {
-          "default": true,
           "description": "When `false`, Codex does not surface this app.",
           "type": "boolean"
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AppToolConfig"
+          },
+          "description": "Per-tool settings keyed by tool name. Supports a `_default` entry.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -79,6 +93,49 @@
       "enum": [
         "unknown",
         "user"
+      ],
+      "type": "string"
+    },
+    "AppToolApproval": {
+      "enum": [
+        "auto",
+        "prompt",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "AppToolConfig": {
+      "additionalProperties": false,
+      "description": "Config values for a single app MCP tool.",
+      "properties": {
+        "approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "description": "Tool-level MCP approval behavior."
+        },
+        "disabled_reason": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolDisabledReason"
+            }
+          ],
+          "description": "Reason this app tool was disabled."
+        },
+        "enabled": {
+          "description": "When `false`, Codex does not expose this app tool.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AppToolDisabledReason": {
+      "enum": [
+        "unknown",
+        "user",
+        "admin_policy"
       ],
       "type": "string"
     },

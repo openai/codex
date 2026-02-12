@@ -369,17 +369,71 @@ impl fmt::Display for AppDisabledReason {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppToolDisabledReason {
+    Unknown,
+    User,
+    AdminPolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AppToolApproval {
+    Auto,
+    #[default]
+    Prompt,
+    Approve,
+}
+
+impl fmt::Display for AppToolApproval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppToolApproval::Auto => write!(f, "auto"),
+            AppToolApproval::Prompt => write!(f, "prompt"),
+            AppToolApproval::Approve => write!(f, "approve"),
+        }
+    }
+}
+
+/// Config values for a single app MCP tool.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolConfig {
+    /// When `false`, Codex does not expose this app tool.
+    pub enabled: Option<bool>,
+
+    /// Reason this app tool was disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppToolDisabledReason>,
+
+    /// Tool-level MCP approval behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<AppToolApproval>,
+}
+
 /// Config values for a single app/connector.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppConfig {
     /// When `false`, Codex does not surface this app.
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
+    pub enabled: Option<bool>,
 
     /// Reason this app was disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<AppDisabledReason>,
+
+    /// When `true`, tools marked as destructive are disabled for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_destructive: Option<bool>,
+
+    /// When `true`, tools marked as open-world are disabled for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_open_world: Option<bool>,
+
+    /// Per-tool settings keyed by tool name. Supports a `_default` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<HashMap<String, AppToolConfig>>,
 }
 
 /// App/connector settings loaded from `config.toml`.
@@ -387,6 +441,7 @@ pub struct AppConfig {
 #[schemars(deny_unknown_fields)]
 pub struct AppsConfigToml {
     /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
+    /// A `_default` key may be used to configure defaults for all apps.
     #[serde(default, flatten)]
     pub apps: HashMap<String, AppConfig>,
 }
@@ -1020,5 +1075,65 @@ mod tests {
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn deserialize_apps_config_with_defaults_and_tool_overrides() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            apps: AppsConfigToml,
+        }
+
+        let cfg: Wrapper = toml::from_str(
+            r#"
+            [apps._default]
+            enabled = false
+            disable_destructive = false
+
+            [apps.connector_123]
+            enabled = true
+            disable_open_world = true
+
+            [apps.connector_123.tools._default]
+            enabled = true
+            approval = "prompt"
+
+            [apps.connector_123.tools."repos/list"]
+            approval = "auto"
+
+            [apps.connector_123.tools."issues/create"]
+            enabled = false
+            disabled_reason = "admin_policy"
+            approval = "approve"
+        "#,
+        )
+        .expect("apps config parses");
+
+        let defaults = cfg
+            .apps
+            .apps
+            .get("_default")
+            .expect("apps._default present");
+        assert_eq!(defaults.enabled, Some(false));
+        assert_eq!(defaults.disable_destructive, Some(false));
+        assert_eq!(defaults.disable_open_world, None);
+
+        let connector = cfg
+            .apps
+            .apps
+            .get("connector_123")
+            .expect("connector_123 present");
+        assert_eq!(connector.enabled, Some(true));
+        assert_eq!(connector.disable_open_world, Some(true));
+        let tools = connector.tools.as_ref().expect("connector tools present");
+        let tool_default = tools.get("_default").expect("tool _default present");
+        assert_eq!(tool_default.approval, Some(AppToolApproval::Prompt));
+        let issues_create = tools.get("issues/create").expect("issues/create present");
+        assert_eq!(issues_create.enabled, Some(false));
+        assert_eq!(
+            issues_create.disabled_reason,
+            Some(AppToolDisabledReason::AdminPolicy)
+        );
+        assert_eq!(issues_create.approval, Some(AppToolApproval::Approve));
     }
 }

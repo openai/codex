@@ -19,6 +19,18 @@
     },
     "AppConfig": {
       "properties": {
+        "disable_destructive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "disable_open_world": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "disabled_reason": {
           "anyOf": [
             {
@@ -30,8 +42,19 @@
           ]
         },
         "enabled": {
-          "default": true,
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/AppToolConfig"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -40,6 +63,53 @@
       "enum": [
         "unknown",
         "user"
+      ],
+      "type": "string"
+    },
+    "AppToolApproval": {
+      "enum": [
+        "auto",
+        "prompt",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "AppToolConfig": {
+      "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AppToolDisabledReason": {
+      "enum": [
+        "unknown",
+        "user",
+        "admin_policy"
       ],
       "type": "string"
     },

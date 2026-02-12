@@ -10,7 +10,7 @@ export type AppInfo = { id: string, name: string, description: string | null, lo
  * Whether this app is enabled in config.toml.
  * Example:
  * ```toml
- * [app.bad_app]
+ * [apps.bad_app]
  * enabled = false
  * ```
  */

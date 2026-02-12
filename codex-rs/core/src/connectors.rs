@@ -17,6 +17,7 @@ use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
+use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -25,8 +26,17 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::token_data::TokenData;
+use rmcp::model::ToolAnnotations;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const APPS_DEFAULT_KEY: &str = "_default";
+const APP_TOOLS_DEFAULT_KEY: &str = "_default";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppToolPolicy {
+    pub(crate) allowed: bool,
+    pub(crate) approval: Option<AppToolApproval>,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct AccessibleConnectorsCacheKey {
@@ -268,20 +278,132 @@ pub fn merge_connectors(
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
+    let apps_config = read_apps_config(config);
     for connector in &mut connectors {
-        connector.is_enabled = apps
-            .as_ref()
-            .and_then(|apps| apps.get(&connector.id))
-            .is_none_or(|app| app.enabled);
+        connector.is_enabled = app_enabled_for_connector(apps_config.as_ref(), &connector.id);
     }
     connectors
+}
+
+pub(crate) fn codex_apps_tool_policy(
+    config: &Config,
+    connector_id: &str,
+    tool_name: &str,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    let apps_config = read_apps_config(config);
+    codex_apps_tool_policy_from_apps_config(
+        apps_config.as_ref(),
+        connector_id,
+        tool_name,
+        annotations,
+    )
+}
+
+pub(crate) fn codex_apps_tool_policy_from_apps_config(
+    apps_config: Option<&AppsConfigToml>,
+    connector_id: &str,
+    tool_name: &str,
+    annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    let app_enabled = app_enabled_for_connector(apps_config, connector_id);
+    let disable_destructive = apps_config
+        .and_then(|apps_config| {
+            app_setting_or_default(apps_config, connector_id, |app| app.disable_destructive)
+        })
+        .unwrap_or(false);
+    let disable_open_world = apps_config
+        .and_then(|apps_config| {
+            app_setting_or_default(apps_config, connector_id, |app| app.disable_open_world)
+        })
+        .unwrap_or(false);
+    let tool_enabled = apps_config
+        .and_then(|apps_config| {
+            app_tool_setting_or_default(apps_config, connector_id, tool_name, |tool| tool.enabled)
+        })
+        .unwrap_or(true);
+    let approval = apps_config.and_then(|apps_config| {
+        app_tool_setting_or_default(apps_config, connector_id, tool_name, |tool| tool.approval)
+    });
+
+    let destructive_blocked = disable_destructive
+        && annotations.is_some_and(|annotations| annotations.destructive_hint == Some(true));
+    let open_world_blocked = disable_open_world
+        && annotations.is_some_and(|annotations| annotations.open_world_hint == Some(true));
+
+    AppToolPolicy {
+        allowed: app_enabled && tool_enabled && !destructive_blocked && !open_world_blocked,
+        approval,
+    }
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
     let apps_config = effective_config.as_table()?.get("apps")?.clone();
     AppsConfigToml::deserialize(apps_config).ok()
+}
+
+fn app_enabled_for_connector(apps_config: Option<&AppsConfigToml>, connector_id: &str) -> bool {
+    apps_config
+        .and_then(|apps_config| {
+            app_setting_or_default(apps_config, connector_id, |app| app.enabled)
+        })
+        .unwrap_or(true)
+}
+
+fn app_setting_or_default<T, F>(
+    apps_config: &AppsConfigToml,
+    connector_id: &str,
+    setting: F,
+) -> Option<T>
+where
+    T: Copy,
+    F: Fn(&crate::config::types::AppConfig) -> Option<T> + Copy,
+{
+    apps_config
+        .apps
+        .get(connector_id)
+        .and_then(setting)
+        .or_else(|| apps_config.apps.get(APPS_DEFAULT_KEY).and_then(setting))
+}
+
+fn app_tool_setting_or_default<T, F>(
+    apps_config: &AppsConfigToml,
+    connector_id: &str,
+    tool_name: &str,
+    setting: F,
+) -> Option<T>
+where
+    T: Copy,
+    F: Fn(&crate::config::types::AppToolConfig) -> Option<T> + Copy,
+{
+    let app_tools = apps_config
+        .apps
+        .get(connector_id)
+        .and_then(|app| app.tools.as_ref());
+    let default_tools = apps_config
+        .apps
+        .get(APPS_DEFAULT_KEY)
+        .and_then(|app| app.tools.as_ref());
+
+    app_tools
+        .and_then(|tools| tools.get(tool_name))
+        .and_then(setting)
+        .or_else(|| {
+            app_tools
+                .and_then(|tools| tools.get(APP_TOOLS_DEFAULT_KEY))
+                .and_then(setting)
+        })
+        .or_else(|| {
+            default_tools
+                .and_then(|tools| tools.get(tool_name))
+                .and_then(setting)
+        })
+        .or_else(|| {
+            default_tools
+                .and_then(|tools| tools.get(APP_TOOLS_DEFAULT_KEY))
+                .and_then(setting)
+        })
 }
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
@@ -354,4 +476,142 @@ pub fn connector_name_slug(name: &str) -> String {
 
 fn format_connector_label(name: &str, _id: &str) -> String {
     name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn apps_config_from_toml(toml_src: &str) -> AppsConfigToml {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            apps: AppsConfigToml,
+        }
+
+        toml::from_str::<Wrapper>(toml_src)
+            .expect("apps config parses")
+            .apps
+    }
+
+    fn annotations(destructive: Option<bool>, open_world: Option<bool>) -> ToolAnnotations {
+        ToolAnnotations {
+            destructive_hint: destructive,
+            idempotent_hint: None,
+            open_world_hint: open_world,
+            read_only_hint: Some(false),
+            title: None,
+        }
+    }
+
+    #[test]
+    fn app_enabled_inherits_and_overrides_default() {
+        let apps_config = apps_config_from_toml(
+            r#"
+            [apps._default]
+            enabled = false
+
+            [apps.calendar]
+            disable_open_world = true
+
+            [apps.gmail]
+            enabled = true
+        "#,
+        );
+
+        assert_eq!(
+            app_enabled_for_connector(Some(&apps_config), "calendar"),
+            false
+        );
+        assert_eq!(app_enabled_for_connector(Some(&apps_config), "gmail"), true);
+        assert_eq!(
+            app_enabled_for_connector(Some(&apps_config), "drive"),
+            false
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_policy_applies_nested_defaults_and_overrides() {
+        let apps_config = apps_config_from_toml(
+            r#"
+            [apps._default]
+            disable_destructive = true
+            disable_open_world = true
+
+            [apps.connector_123.tools._default]
+            enabled = true
+            approval = "prompt"
+
+            [apps.connector_123.tools."repos/list"]
+            approval = "auto"
+
+            [apps.connector_123.tools."issues/create"]
+            approval = "approve"
+        "#,
+        );
+
+        let repos_list = codex_apps_tool_policy_from_apps_config(
+            Some(&apps_config),
+            "connector_123",
+            "repos/list",
+            Some(&annotations(None, None)),
+        );
+        assert_eq!(
+            repos_list,
+            AppToolPolicy {
+                allowed: true,
+                approval: Some(AppToolApproval::Auto),
+            }
+        );
+
+        let issues_create = codex_apps_tool_policy_from_apps_config(
+            Some(&apps_config),
+            "connector_123",
+            "issues/create",
+            Some(&annotations(None, None)),
+        );
+        assert_eq!(
+            issues_create,
+            AppToolPolicy {
+                allowed: true,
+                approval: Some(AppToolApproval::Approve),
+            }
+        );
+
+        let destructive_tool = codex_apps_tool_policy_from_apps_config(
+            Some(&apps_config),
+            "connector_123",
+            "files/delete",
+            Some(&annotations(Some(true), None)),
+        );
+        assert_eq!(destructive_tool.allowed, false);
+        assert_eq!(destructive_tool.approval, Some(AppToolApproval::Prompt));
+
+        let open_world_tool = codex_apps_tool_policy_from_apps_config(
+            Some(&apps_config),
+            "connector_123",
+            "web/search",
+            Some(&annotations(None, Some(true))),
+        );
+        assert_eq!(open_world_tool.allowed, false);
+        assert_eq!(open_world_tool.approval, Some(AppToolApproval::Prompt));
+    }
+
+    #[test]
+    fn codex_apps_tool_policy_defaults_to_prompt_without_apps_config() {
+        let policy = codex_apps_tool_policy_from_apps_config(
+            None,
+            "connector_123",
+            "repos/list",
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                allowed: true,
+                approval: None,
+            }
+        );
+    }
 }

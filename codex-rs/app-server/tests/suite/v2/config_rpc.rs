@@ -188,8 +188,11 @@ disabled_reason = "user"
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
                 AppConfig {
-                    enabled: false,
+                    enabled: Some(false),
                     disabled_reason: Some(AppDisabledReason::User),
+                    disable_destructive: None,
+                    disable_open_world: None,
+                    tools: None,
                 },
             )]),
         })
