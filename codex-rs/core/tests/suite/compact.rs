@@ -2395,35 +2395,34 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     );
 
     let first_request_user_texts = requests[0].message_input_texts("user");
-    let (first_turn_user_text, seeded_user_prefix) = first_request_user_texts
-        .as_slice()
-        .split_last()
+    let first_turn_user_index = first_request_user_texts
+        .len()
+        .checked_sub(1)
         .unwrap_or_else(|| panic!("first turn request missing user messages"));
     assert_eq!(
-        first_turn_user_text, first_user_message,
+        first_request_user_texts[first_turn_user_index], first_user_message,
         "first turn request should end with the submitted user message"
     );
+    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
 
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
-    let final_output = final_request_user_texts
-        .as_slice()
-        .strip_prefix(seeded_user_prefix)
-        .unwrap_or_else(|| {
-            panic!(
-                "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
-            )
-        })
-        .to_vec();
+    assert!(
+        final_request_user_texts
+            .as_slice()
+            .starts_with(seeded_user_prefix),
+        "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
+    );
+    let final_output = &final_request_user_texts[seeded_user_prefix.len()..];
     let expected = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
         final_user_message.to_string(),
     ];
-    assert_eq!(final_output, expected);
+    assert_eq!(final_output, expected.as_slice());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
