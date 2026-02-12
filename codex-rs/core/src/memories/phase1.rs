@@ -8,6 +8,7 @@ use crate::memories::phase_one;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
+use crate::turn_metadata::TurnMetadataPoll;
 use codex_api::ResponseEvent;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -29,6 +30,7 @@ use tracing::warn;
 
 #[derive(Clone, Debug)]
 pub(in crate::memories) struct Phase1RequestContext {
+    pub(in crate::memories) turn_id: String,
     pub(in crate::memories) model_info: ModelInfo,
     pub(in crate::memories) otel_manager: OtelManager,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -124,6 +126,7 @@ impl Phase1RequestContext {
         turn_metadata_header: Option<String>,
     ) -> Self {
         Self {
+            turn_id: turn_context.sub_id.clone(),
             model_info: turn_context.model_info.clone(),
             otel_manager: turn_context.otel_manager.clone(),
             reasoning_effort: turn_context.reasoning_effort,
@@ -174,10 +177,11 @@ async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::S
 
 async fn build_request_context(session: &Arc<Session>) -> Phase1RequestContext {
     let turn_context = session.new_default_turn().await;
-    Phase1RequestContext::from_turn_context(
-        turn_context.as_ref(),
-        turn_context.resolve_turn_metadata_header().await,
-    )
+    let turn_metadata_header = match turn_context.poll_turn_metadata_header() {
+        TurnMetadataPoll::Ready(header) => header,
+        TurnMetadataPoll::Pending => None,
+    };
+    Phase1RequestContext::from_turn_context(turn_context.as_ref(), turn_metadata_header)
 }
 
 async fn run_jobs(
@@ -283,6 +287,7 @@ mod job {
                 &stage_one_context.otel_manager,
                 stage_one_context.reasoning_effort,
                 stage_one_context.reasoning_summary,
+                Some(stage_one_context.turn_id.as_str()),
                 stage_one_context.turn_metadata_header.as_deref(),
             )
             .await?;

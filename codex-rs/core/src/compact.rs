@@ -17,6 +17,7 @@ use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
+use crate::turn_metadata::TurnMetadataPoll;
 use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -85,7 +86,6 @@ async fn run_compact_task_inner(
 
     let max_retries = turn_context.provider.stream_max_retries();
     let mut retries = 0;
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
@@ -123,6 +123,10 @@ async fn run_compact_task_inner(
             base_instructions: sess.get_base_instructions().await,
             personality: turn_context.personality,
             ..Default::default()
+        };
+        let turn_metadata_header = match turn_context.poll_turn_metadata_header() {
+            TurnMetadataPoll::Ready(header) => header,
+            TurnMetadataPoll::Pending => None,
         };
         let attempt_result = drain_to_completed(
             &sess,
@@ -388,6 +392,7 @@ async fn drain_to_completed(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            Some(turn_context.sub_id.as_str()),
             turn_metadata_header,
         )
         .await?;

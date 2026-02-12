@@ -45,7 +45,12 @@ impl RegularTask {
             let mut client_session = model_client.new_session();
             let turn_metadata_header = turn_metadata_header.await;
             match client_session
-                .prewarm_websocket(&otel_manager, &model_info, turn_metadata_header.as_deref())
+                .prewarm_websocket(
+                    &otel_manager,
+                    &model_info,
+                    None,
+                    turn_metadata_header.as_deref(),
+                )
                 .await
             {
                 Ok(()) => Some(client_session),

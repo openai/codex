@@ -106,7 +106,7 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None)
+        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None, None)
         .await
         .expect("websocket prewarm failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -131,7 +131,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None)
+        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None, None)
         .await
         .expect("websocket prewarm failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -142,6 +142,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -172,7 +173,7 @@ async fn responses_websocket_prewarm_uses_model_preference_when_feature_disabled
     let harness = websocket_harness_with_options(&server, false, false, false, true).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None)
+        .prewarm_websocket(&harness.otel_manager, &harness.model_info, None, None)
         .await
         .expect("websocket prewarm failed");
 
@@ -318,6 +319,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket stream failed");
@@ -388,6 +390,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -840,6 +843,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             harness.effort,
             harness.summary,
             None,
+            None,
         )
         .await
         .expect("websocket stream failed");
@@ -1079,6 +1083,7 @@ async fn stream_until_complete(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await

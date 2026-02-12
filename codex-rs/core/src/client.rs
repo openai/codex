@@ -101,6 +101,7 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+pub const X_CODEX_TURN_ID_HEADER: &str = "x-codex-turn-id";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
@@ -393,9 +394,11 @@ impl ModelClient {
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
+        let headers =
+            self.build_websocket_headers(turn_state.as_ref(), turn_id_header, turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
             .connect(
@@ -414,12 +417,15 @@ impl ModelClient {
     fn build_websocket_headers(
         &self,
         turn_state: Option<&Arc<OnceLock<String>>>,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
+        let turn_id_header = parse_turn_id_header(turn_id_header);
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let mut headers = build_responses_headers(
             self.state.beta_features_header.as_deref(),
             turn_state,
+            turn_id_header.as_ref(),
             turn_metadata_header.as_ref(),
         );
         headers.extend(build_conversation_headers(Some(
@@ -523,9 +529,11 @@ impl ModelClientSession {
     /// regardless of transport choice.
     fn build_responses_options(
         &self,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
         compression: Compression,
     ) -> ApiResponsesOptions {
+        let turn_id_header = parse_turn_id_header(turn_id_header);
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.client.state.conversation_id.to_string();
 
@@ -535,6 +543,7 @@ impl ModelClientSession {
             extra_headers: build_responses_headers(
                 self.client.state.beta_features_header.as_deref(),
                 Some(&self.turn_state),
+                turn_id_header.as_ref(),
                 turn_metadata_header.as_ref(),
             ),
             compression,
@@ -630,6 +639,7 @@ impl ModelClientSession {
         &mut self,
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
@@ -653,6 +663,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
+                turn_id_header,
                 turn_metadata_header,
             )
             .await?;
@@ -666,6 +677,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         api_provider: codex_api::Provider,
         api_auth: CoreAuthProvider,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
@@ -688,6 +700,7 @@ impl ModelClientSession {
                     api_provider,
                     api_auth,
                     Some(turn_state),
+                    turn_id_header,
                     turn_metadata_header,
                 )
                 .await?;
@@ -722,6 +735,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
@@ -744,7 +758,8 @@ impl ModelClientSession {
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
-            let options = self.build_responses_options(turn_metadata_header, compression);
+            let options =
+                self.build_responses_options(turn_id_header, turn_metadata_header, compression);
 
             let request = self.build_responses_request(
                 &client_setup.api_provider,
@@ -786,6 +801,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
@@ -797,7 +813,8 @@ impl ModelClientSession {
             let client_setup = self.client.current_client_setup().await?;
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
-            let options = self.build_responses_options(turn_metadata_header, compression);
+            let options =
+                self.build_responses_options(turn_id_header, turn_metadata_header, compression);
             let request = self.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -812,6 +829,7 @@ impl ModelClientSession {
                     otel_manager,
                     client_setup.api_provider,
                     client_setup.api_auth,
+                    turn_id_header,
                     turn_metadata_header,
                     &options,
                 )
@@ -885,6 +903,7 @@ impl ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        turn_id_header: Option<&str>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
@@ -901,6 +920,7 @@ impl ModelClientSession {
                             otel_manager,
                             effort,
                             summary,
+                            turn_id_header,
                             turn_metadata_header,
                         )
                         .await?
@@ -918,6 +938,7 @@ impl ModelClientSession {
                     otel_manager,
                     effort,
                     summary,
+                    turn_id_header,
                     turn_metadata_header,
                 )
                 .await
@@ -954,10 +975,10 @@ impl ModelClientSession {
     }
 }
 
-/// Parses per-turn metadata into an HTTP header value.
-///
-/// Invalid values are treated as absent so callers can compare and propagate
-/// metadata with the same sanitization path used when constructing headers.
+fn parse_turn_id_header(turn_id_header: Option<&str>) -> Option<HeaderValue> {
+    turn_id_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
@@ -968,10 +989,12 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
 ///
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
+/// - `x-codex-turn-id`: current turn id (`sub_id`) when available for this request.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
+    turn_id_header: Option<&HeaderValue>,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
@@ -986,6 +1009,9 @@ fn build_responses_headers(
         && let Ok(header_value) = HeaderValue::from_str(state)
     {
         headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    }
+    if let Some(turn_id_header) = turn_id_header {
+        headers.insert(X_CODEX_TURN_ID_HEADER, turn_id_header.clone());
     }
     if let Some(header_value) = turn_metadata_header {
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
