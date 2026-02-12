@@ -17,7 +17,7 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
 fi
 
 sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" musl-tools pkg-config g++ clang libc++-dev libc++abi-dev lld
+sudo apt-get install -y "${apt_install_args[@]}" musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld
 
 case "${TARGET}" in
   x86_64-unknown-linux-musl)
@@ -59,7 +59,19 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
@@ -75,6 +87,15 @@ for arg in "\$@"; do
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
       continue
       ;;
     -Wp,-U_FORTIFY_SOURCE)
@@ -95,7 +116,19 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
@@ -111,6 +144,15 @@ for arg in "\$@"; do
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
       continue
       ;;
     -Wp,-U_FORTIFY_SOURCE)
@@ -175,3 +217,13 @@ echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
+
+# Allow pkg-config resolution during cross-compilation.
+echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+
+if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
+  echo "PKG_CONFIG_SYSROOT_DIR=${sysroot}" >> "$GITHUB_ENV"
+  pkg_config_sysroot_var="PKG_CONFIG_SYSROOT_DIR_${TARGET}"
+  pkg_config_sysroot_var="${pkg_config_sysroot_var//-/_}"
+  echo "${pkg_config_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
+fi
