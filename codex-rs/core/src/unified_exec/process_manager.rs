@@ -12,9 +12,13 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec::blocking_network_policy_decision_from_blocked_queue;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::network_policy_decision::NetworkPolicyDecisionPayload;
+use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ReviewDecision;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -48,6 +52,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::UnifiedExecProcess;
 use crate::unified_exec::resolve_max_tokens;
+use codex_protocol::approvals::NetworkApprovalContext;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -85,6 +90,16 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
         env.insert(key.to_string(), value.to_string());
     }
     env
+}
+
+fn next_network_retry_context(
+    retried_after_network_approval: bool,
+    network_policy_decision: Option<&NetworkPolicyDecisionPayload>,
+) -> Option<NetworkApprovalContext> {
+    if retried_after_network_approval {
+        return None;
+    }
+    network_policy_decision.and_then(network_approval_context_from_payload)
 }
 
 struct PreparedProcessHandles {
@@ -143,20 +158,6 @@ impl UnifiedExecProcessManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-
-        let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
-            .await;
-
-        let process = match process {
-            Ok(process) => Arc::new(process),
-            Err(err) => {
-                self.release_process_id(&request.process_id).await;
-                return Err(err);
-            }
-        };
-
-        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
             context.turn.as_ref(),
@@ -170,63 +171,180 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.clone()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
-        start_streaming_output(&process, context, Arc::clone(&transcript));
-
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
+        let mut retried_after_network_approval = false;
+        let mut retry_network_context: Option<NetworkApprovalContext> = None;
 
-        let start = Instant::now();
-        // For the initial exec_command call, we both stream output to events
-        // (via start_streaming_output above) and collect a snapshot here for
-        // the tool response body.
-        let OutputHandles {
-            output_buffer,
-            output_notify,
-            output_closed,
-            output_closed_notify,
-            cancellation_token,
-        } = process.output_handles();
-        let deadline = start + Duration::from_millis(yield_time_ms);
-        let collected = Self::collect_output_until_deadline(
-            &output_buffer,
-            &output_notify,
-            &output_closed,
-            &output_closed_notify,
-            &cancellation_token,
-            deadline,
-        )
-        .await;
-        let wall_time = Instant::now().saturating_duration_since(start);
+        loop {
+            let temporary_allowed_host = if let Some(network_context) = retry_network_context.take()
+            {
+                if let Some(network) = request.network.as_ref() {
+                    let granted_host = network
+                        .grant_temporary_allowed_host(&network_context.host)
+                        .await;
+                    if granted_host.is_none() {
+                        tracing::warn!(
+                            host = %network_context.host,
+                            "failed to grant temporary network host allowance for unified exec retry"
+                        );
+                    }
+                    granted_host.map(|host| (network.clone(), host))
+                } else {
+                    tracing::warn!(
+                        host = %network_context.host,
+                        "network approval context is present but no managed network proxy is available for unified exec retry"
+                    );
+                    None
+                }
+            } else {
+                None
+            };
 
-        let text = String::from_utf8_lossy(&collected).to_string();
-        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
-        let exit_code = process.exit_code();
-        let has_exited = process.has_exited() || exit_code.is_some();
-        let chunk_id = generate_chunk_id();
-        let process_id = request.process_id.clone();
-        if has_exited {
-            // Short‑lived command: emit ExecCommandEnd immediately using the
-            // same helper as the background watcher, so all end events share
-            // one implementation.
-            let exit = exit_code.unwrap_or(-1);
-            emit_exec_end_for_unified_exec(
-                Arc::clone(&context.session),
-                Arc::clone(&context.turn),
-                context.call_id.clone(),
-                request.command.clone(),
-                cwd,
-                Some(process_id),
-                Arc::clone(&transcript),
-                output.clone(),
-                exit,
-                wall_time,
+            let blocked_cursor = match request.network.as_ref() {
+                Some(network) => network.blocked_requests_cursor().await.ok(),
+                None => None,
+            };
+
+            let process = self
+                .open_session_with_sandbox(&request, cwd.clone(), context)
+                .await;
+
+            let process = match process {
+                Ok(process) => Arc::new(process),
+                Err(err) => {
+                    if let Some((network, host)) = temporary_allowed_host {
+                        network.revoke_temporary_allowed_host(&host).await;
+                    }
+                    self.release_process_id(&request.process_id).await;
+                    return Err(err);
+                }
+            };
+
+            let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+            start_streaming_output(&process, context, Arc::clone(&transcript));
+
+            let start = Instant::now();
+            // For the initial exec_command call, we both stream output to events
+            // (via start_streaming_output above) and collect a snapshot here for
+            // the tool response body.
+            let OutputHandles {
+                output_buffer,
+                output_notify,
+                output_closed,
+                output_closed_notify,
+                cancellation_token,
+            } = process.output_handles();
+            let deadline = start + Duration::from_millis(yield_time_ms);
+            let collected = Self::collect_output_until_deadline(
+                &output_buffer,
+                &output_notify,
+                &output_closed,
+                &output_closed_notify,
+                &cancellation_token,
+                deadline,
             )
             .await;
+            let wall_time = Instant::now().saturating_duration_since(start);
 
-            self.release_process_id(&request.process_id).await;
-            process.check_for_sandbox_denial_with_text(&text).await?;
-        } else {
+            let text = String::from_utf8_lossy(&collected).to_string();
+            let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
+            let exit_code = process.exit_code();
+            let has_exited = process.has_exited() || exit_code.is_some();
+            let chunk_id = generate_chunk_id();
+            let process_id = request.process_id.clone();
+
+            if has_exited {
+                // Short‑lived command: emit ExecCommandEnd immediately using the
+                // same helper as the background watcher, so all end events share
+                // one implementation.
+                let exit = exit_code.unwrap_or(-1);
+                emit_exec_end_for_unified_exec(
+                    Arc::clone(&context.session),
+                    Arc::clone(&context.turn),
+                    context.call_id.clone(),
+                    request.command.clone(),
+                    cwd.clone(),
+                    Some(process_id),
+                    Arc::clone(&transcript),
+                    output.clone(),
+                    exit,
+                    wall_time,
+                )
+                .await;
+
+                let network_policy_decision = match (request.network.as_ref(), blocked_cursor) {
+                    (Some(network), Some(cursor)) => {
+                        blocking_network_policy_decision_from_blocked_queue(
+                            network,
+                            cursor,
+                            &context.turn.sandbox_policy,
+                        )
+                        .await
+                    }
+                    _ => None,
+                };
+
+                if let Some((network, host)) = temporary_allowed_host {
+                    network.revoke_temporary_allowed_host(&host).await;
+                }
+
+                if let Some(network_approval_context) = next_network_retry_context(
+                    retried_after_network_approval,
+                    network_policy_decision.as_ref(),
+                ) {
+                    let approval_decision = context
+                        .session
+                        .request_command_approval(
+                            context.turn.as_ref(),
+                            context.call_id.clone(),
+                            request.command.clone(),
+                            cwd.clone(),
+                            Some(format!(
+                                "Network access to \"{}\" is blocked by policy.",
+                                network_approval_context.host
+                            )),
+                            Some(network_approval_context.clone()),
+                            None,
+                        )
+                        .await;
+
+                    match approval_decision {
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                        | ReviewDecision::ApprovedForSession => {
+                            retried_after_network_approval = true;
+                            retry_network_context = Some(network_approval_context);
+                            continue;
+                        }
+                        ReviewDecision::Denied | ReviewDecision::Abort => {
+                            self.release_process_id(&request.process_id).await;
+                            return Err(UnifiedExecError::create_process(
+                                "rejected by user".to_string(),
+                            ));
+                        }
+                    }
+                }
+
+                self.release_process_id(&request.process_id).await;
+                process.check_for_sandbox_denial_with_text(&text).await?;
+
+                let original_token_count = approx_token_count(&text);
+                let response = UnifiedExecResponse {
+                    event_call_id: context.call_id.clone(),
+                    chunk_id,
+                    wall_time,
+                    output,
+                    raw_output: collected,
+                    process_id: None,
+                    exit_code,
+                    original_token_count: Some(original_token_count),
+                    session_command: Some(request.command.clone()),
+                };
+
+                return Ok(response);
+            }
+
             // Long‑lived command: persist the process so write_stdin can reuse
             // it, and register a background watcher that will emit
             // ExecCommandEnd when the PTY eventually exits (even if no further
@@ -242,26 +360,26 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&transcript),
             )
             .await;
-        };
 
-        let original_token_count = approx_token_count(&text);
-        let response = UnifiedExecResponse {
-            event_call_id: context.call_id.clone(),
-            chunk_id,
-            wall_time,
-            output,
-            raw_output: collected,
-            process_id: if has_exited {
-                None
-            } else {
-                Some(request.process_id.clone())
-            },
-            exit_code,
-            original_token_count: Some(original_token_count),
-            session_command: Some(request.command.clone()),
-        };
+            if let Some((network, host)) = temporary_allowed_host {
+                network.revoke_temporary_allowed_host(&host).await;
+            }
 
-        Ok(response)
+            let original_token_count = approx_token_count(&text);
+            let response = UnifiedExecResponse {
+                event_call_id: context.call_id.clone(),
+                chunk_id,
+                wall_time,
+                output,
+                raw_output: collected,
+                process_id: Some(request.process_id.clone()),
+                exit_code,
+                original_token_count: Some(original_token_count),
+                session_command: Some(request.command.clone()),
+            };
+
+            return Ok(response);
+        }
     }
 
     pub(crate) async fn write_stdin(
@@ -727,6 +845,7 @@ enum ProcessStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::approvals::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -827,5 +946,43 @@ mod tests {
 
         // (10) is exited but among the last 8; we should drop the LRU outside that set.
         assert_eq!(candidate, Some(id(1)));
+    }
+
+    #[test]
+    fn next_network_retry_context_extracts_context_for_ask_decider() {
+        let payload = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("google.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
+
+        let context = next_network_retry_context(false, Some(&payload));
+
+        assert_eq!(
+            context,
+            Some(NetworkApprovalContext {
+                host: "google.com".to_string(),
+                protocol: NetworkApprovalProtocol::Http,
+            })
+        );
+    }
+
+    #[test]
+    fn next_network_retry_context_is_none_after_retry() {
+        let payload = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("google.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
+
+        let context = next_network_retry_context(true, Some(&payload));
+
+        assert_eq!(context, None);
     }
 }

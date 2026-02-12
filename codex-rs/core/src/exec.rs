@@ -656,7 +656,7 @@ pub(crate) fn is_likely_sandbox_denied(
     false
 }
 
-async fn blocking_network_policy_decision_from_blocked_queue(
+pub(crate) async fn blocking_network_policy_decision_from_blocked_queue(
     network: &NetworkProxy,
     blocked_cursor: u64,
     sandbox_policy: &SandboxPolicy,
@@ -690,7 +690,7 @@ async fn blocking_network_policy_decision_from_blocked_queue(
     selected
 }
 
-fn select_network_policy_decision_from_blocked_entries(
+pub(crate) fn select_network_policy_decision_from_blocked_entries(
     blocked: Vec<codex_network_proxy::BlockedRequest>,
     sandbox_policy: &SandboxPolicy,
 ) -> Option<NetworkPolicyDecisionPayload> {
