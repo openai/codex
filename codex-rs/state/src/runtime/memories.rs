@@ -18,6 +18,32 @@ const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
 impl StateRuntime {
+    pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+DELETE FROM jobs
+WHERE kind = ? OR kind = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn claim_stage1_jobs_for_startup(
         &self,
         current_thread_id: ThreadId,

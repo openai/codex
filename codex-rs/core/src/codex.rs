@@ -2940,6 +2940,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::DropMemories => {
+                handlers::drop_memories(&sess, &config, sub.id.clone()).await;
+            }
+            Op::UpdateMemories => {
+                handlers::update_memories(&sess, &config, sub.id.clone()).await;
+            }
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
@@ -3486,6 +3492,68 @@ mod handlers {
             }],
             CompactTask,
         )
+        .await;
+    }
+
+    pub async fn drop_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+        let mut errors = Vec::new();
+
+        if let Some(state_db) = sess.services.state_db.as_deref() {
+            if let Err(err) = state_db.clear_memory_data().await {
+                errors.push(format!("failed clearing memory rows from state db: {err}"));
+            }
+        } else {
+            errors.push("state db unavailable; memory rows were not cleared".to_string());
+        }
+
+        let memory_root = crate::memories::memory_root(&config.codex_home);
+        if let Err(err) = tokio::fs::remove_dir_all(&memory_root).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            errors.push(format!(
+                "failed removing memory directory {}: {err}",
+                memory_root.display()
+            ));
+        }
+
+        if errors.is_empty() {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Dropped memories at {} and cleared memory rows from state db.",
+                        memory_root.display()
+                    ),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                message: format!("Memory drop completed with errors: {}", errors.join("; ")),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        })
+        .await;
+    }
+
+    pub async fn update_memories(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+        let session_source = {
+            let state = sess.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+
+        crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: EventMsg::Warning(WarningEvent {
+                message: "Memory update triggered.".to_string(),
+            }),
+        })
         .await;
     }
 
