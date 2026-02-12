@@ -457,37 +457,42 @@ async fn flush(
     }
 
     // Process threadless scope:
-    // - initialize once from DB (already includes this batch because we insert
-    //   first), then
-    // - incrementally add only this flush's delta.
-    if !scope_bytes.process_threadless_initialized {
-        match state_db.process_threadless_log_bytes(process_uuid).await {
-            Ok(total) => {
-                scope_bytes.process_threadless_bytes = total;
-                scope_bytes.process_threadless_initialized = true;
+    // only touch this scope when the current batch actually contains threadless
+    // rows. This avoids a process-scope SUM query on unrelated flushes.
+    if process_threadless_added_bytes > 0 {
+        // Initialize once from DB (already includes this batch because we
+        // insert first), then increment using per-batch deltas.
+        if !scope_bytes.process_threadless_initialized {
+            match state_db.process_threadless_log_bytes(process_uuid).await {
+                Ok(total) => {
+                    scope_bytes.process_threadless_bytes = total;
+                    scope_bytes.process_threadless_initialized = true;
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to initialize process threadless log bytes ({process_uuid}): {err}"
+                    );
+                    scope_bytes.process_threadless_bytes = scope_bytes
+                        .process_threadless_bytes
+                        .saturating_add(process_threadless_added_bytes);
+                }
             }
-            Err(err) => {
-                warn!("failed to initialize process threadless log bytes ({process_uuid}): {err}");
-                scope_bytes.process_threadless_bytes = scope_bytes
-                    .process_threadless_bytes
-                    .saturating_add(process_threadless_added_bytes);
-            }
+        } else {
+            scope_bytes.process_threadless_bytes = scope_bytes
+                .process_threadless_bytes
+                .saturating_add(process_threadless_added_bytes);
         }
-    } else {
-        scope_bytes.process_threadless_bytes = scope_bytes
-            .process_threadless_bytes
-            .saturating_add(process_threadless_added_bytes);
-    }
-    if scope_bytes.process_threadless_bytes > LOG_SCOPE_TRIM_TRIGGER_BYTES {
-        match state_db
-            .trim_process_threadless_logs_to_target(process_uuid, LOG_SCOPE_TRIM_TARGET_BYTES)
-            .await
-        {
-            Ok(bytes) => {
-                scope_bytes.process_threadless_bytes = bytes;
-            }
-            Err(err) => {
-                warn!("failed to trim process threadless logs ({process_uuid}): {err}");
+        if scope_bytes.process_threadless_bytes > LOG_SCOPE_TRIM_TRIGGER_BYTES {
+            match state_db
+                .trim_process_threadless_logs_to_target(process_uuid, LOG_SCOPE_TRIM_TARGET_BYTES)
+                .await
+            {
+                Ok(bytes) => {
+                    scope_bytes.process_threadless_bytes = bytes;
+                }
+                Err(err) => {
+                    warn!("failed to trim process threadless logs ({process_uuid}): {err}");
+                }
             }
         }
     }
