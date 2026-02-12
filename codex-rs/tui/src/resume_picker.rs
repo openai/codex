@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::diff_render::display_path_for;
 use crate::key_hint;
+use crate::style::user_message_style;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -1023,7 +1024,10 @@ fn render_list(
         }
         spans.push(preview.into());
 
-        let line: Line = spans.into();
+        let mut line: Line = spans.into();
+        if is_sel {
+            line = line.style(user_message_style());
+        }
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
