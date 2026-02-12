@@ -4389,7 +4389,7 @@ async fn built_tools(
         None
     };
 
-    if turn_context.config.features.enabled(Feature::SearchTool) {
+    if turn_context.config.features.enabled(Feature::Apps) {
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
                 filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
