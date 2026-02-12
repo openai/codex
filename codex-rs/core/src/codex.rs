@@ -2499,8 +2499,8 @@ impl Session {
                 total_tokens: estimated_total_tokens.max(0),
             };
 
-            if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.model_context_window();
+            if let Some(model_context_window) = turn_context.model_context_window() {
+                info.model_context_window = Some(model_context_window);
             }
 
             state.set_token_info(Some(info));
@@ -5825,6 +5825,28 @@ mod tests {
             .last_token_usage
             .total_tokens;
         assert_eq!(actual_tokens, expected_tokens.max(0));
+    }
+
+    #[tokio::test]
+    async fn recompute_token_usage_updates_model_context_window() {
+        let (session, mut turn_context) = make_session_and_context().await;
+
+        {
+            let mut state = session.state.lock().await;
+            state.set_token_info(Some(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window: Some(258_400),
+            }));
+        }
+
+        turn_context.model_info.context_window = Some(128_000);
+        turn_context.model_info.effective_context_window_percent = 100;
+
+        session.recompute_token_usage(&turn_context).await;
+
+        let actual = session.state.lock().await.token_info().expect("token info");
+        assert_eq!(actual.model_context_window, Some(128_000));
     }
 
     #[tokio::test]

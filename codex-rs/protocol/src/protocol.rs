@@ -1358,6 +1358,9 @@ impl TokenUsageInfo {
         if let Some(last) = last {
             info.append_last_usage(last);
         }
+        if let Some(model_context_window) = model_context_window {
+            info.model_context_window = Some(model_context_window);
+        }
         Some(info)
     }
 
@@ -3003,5 +3006,47 @@ mod tests {
         assert_eq!(value["msg"]["failed"][0]["error"], "bad");
         assert_eq!(value["msg"]["cancelled"][0], "c");
         Ok(())
+    }
+
+    #[test]
+    fn token_usage_info_new_or_append_updates_context_window_when_provided() {
+        let initial = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+        let last = Some(TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+        });
+
+        let info = TokenUsageInfo::new_or_append(&initial, &last, Some(128_000))
+            .expect("new_or_append should return info");
+
+        assert_eq!(info.model_context_window, Some(128_000));
+    }
+
+    #[test]
+    fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
+        let initial = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+        let last = Some(TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+        });
+
+        let info = TokenUsageInfo::new_or_append(&initial, &last, None)
+            .expect("new_or_append should return info");
+
+        assert_eq!(info.model_context_window, Some(258_400));
     }
 }
