@@ -182,7 +182,12 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         }
     }
 
-    assert_eq!(stream_error_messages, vec!["Reconnecting... 2/2"]);
+    let expected_stream_errors = if cfg!(debug_assertions) {
+        vec!["Reconnecting... 1/2", "Reconnecting... 2/2"]
+    } else {
+        vec!["Reconnecting... 2/2"]
+    };
+    assert_eq!(stream_error_messages, expected_stream_errors);
     assert_eq!(response_mock.requests().len(), 1);
 
     Ok(())

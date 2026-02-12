@@ -4482,8 +4482,10 @@ async fn run_sampling_request(
                 "stream disconnected - retrying sampling request ({retries}/{max_retries} in {delay:?})...",
             );
 
-            // Do not notify for the first websocket retry, sometimes we lose connection and it needs to be reestablished.
+            // In release builds, hide the first websocket retry notification to reduce noisy
+            // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
+                || cfg!(debug_assertions)
                 || !sess
                     .services
                     .model_client
