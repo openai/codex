@@ -7,11 +7,20 @@ use crate::types::HookPayload;
 
 #[derive(Default, Clone)]
 pub struct HooksConfig {
+    /// Legacy notify command - wired to after_agent for backward compatibility.
     pub legacy_notify_argv: Option<Vec<String>>,
+    /// Command to run on session start.
+    pub session_start: Option<Vec<String>>,
+    /// Command to run before context compaction.
+    pub pre_compact: Option<Vec<String>>,
+    /// Command to run after each tool use.
+    pub after_tool_use: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
 pub struct Hooks {
+    session_start: Vec<Hook>,
+    pre_compact: Vec<Hook>,
     after_agent: Vec<Hook>,
     after_tool_use: Vec<Hook>,
 }
@@ -26,20 +35,34 @@ impl Default for Hooks {
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
+        // Helper to build a hook from an argv config
+        let build_hook = |argv: Option<Vec<String>>| -> Vec<Hook> {
+            argv.filter(|v| !v.is_empty() && !v[0].is_empty())
+                .map(crate::command_hook)
+                .into_iter()
+                .collect()
+        };
+
+        // Legacy notify is wired to after_agent for backward compatibility
         let after_agent = config
             .legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
             .into_iter()
             .collect();
+
         Self {
+            session_start: build_hook(config.session_start),
+            pre_compact: build_hook(config.pre_compact),
             after_agent,
-            after_tool_use: Vec::new(),
+            after_tool_use: build_hook(config.after_tool_use),
         }
     }
 
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
+            HookEvent::SessionStart { .. } => &self.session_start,
+            HookEvent::PreCompact { .. } => &self.pre_compact,
             HookEvent::AfterAgent { .. } => &self.after_agent,
             HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
@@ -187,6 +210,7 @@ mod tests {
         assert!(
             Hooks::new(HooksConfig {
                 legacy_notify_argv: Some(vec![]),
+                ..Default::default()
             })
             .after_agent
             .is_empty()
@@ -194,6 +218,7 @@ mod tests {
         assert!(
             Hooks::new(HooksConfig {
                 legacy_notify_argv: Some(vec!["".to_string()]),
+                ..Default::default()
             })
             .after_agent
             .is_empty()
@@ -201,6 +226,7 @@ mod tests {
         assert_eq!(
             Hooks::new(HooksConfig {
                 legacy_notify_argv: Some(vec!["notify-send".to_string()]),
+                ..Default::default()
             })
             .after_agent
             .len(),

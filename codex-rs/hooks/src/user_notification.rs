@@ -72,6 +72,37 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
     }
 }
 
+/// Generic command hook that passes the full HookPayload as JSON as the final argument.
+/// This is the new-style hook that supports all event types.
+pub fn command_hook(argv: Vec<String>) -> Hook {
+    let argv = Arc::new(argv);
+    Hook {
+        func: Arc::new(move |payload: &HookPayload| {
+            let argv = Arc::clone(&argv);
+            Box::pin(async move {
+                let mut command = match command_from_argv(&argv) {
+                    Some(command) => command,
+                    None => return HookOutcome::Continue,
+                };
+
+                // Serialize the full payload as JSON and pass as final argument
+                if let Ok(json_payload) = serde_json::to_string(payload) {
+                    command.arg(json_payload);
+                }
+
+                // Fire-and-forget style
+                command
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+
+                let _ = command.spawn();
+                HookOutcome::Continue
+            })
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
