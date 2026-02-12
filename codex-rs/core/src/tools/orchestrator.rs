@@ -130,6 +130,18 @@ impl ToolOrchestrator {
                 output,
                 network_policy_decision,
             }))) => {
+                if let Some(payload) = network_policy_decision.as_ref() {
+                    tracing::debug!(
+                        "sandbox denied with structured network decision (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
+                        payload.decision,
+                        payload.source,
+                        payload.host,
+                        payload.protocol,
+                        payload.port
+                    );
+                } else {
+                    tracing::debug!("sandbox denied without structured network decision payload");
+                }
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
@@ -139,6 +151,11 @@ impl ToolOrchestrator {
                 let retry_details = build_denial_reason(
                     network_policy_decision.as_ref(),
                     should_prompt_for_network_approval(turn_ctx),
+                );
+                tracing::debug!(
+                    "retry denial reason prepared (reason={}, has_network_context={})",
+                    retry_details.reason,
+                    retry_details.network_approval_context.is_some()
                 );
 
                 // Most tools disallow no-sandbox retry under OnRequest. However, for managed
@@ -150,6 +167,11 @@ impl ToolOrchestrator {
                     &turn_ctx.sandbox_policy,
                     retry_details.network_approval_context.is_some(),
                 ) {
+                    tracing::debug!(
+                        "retry without sandbox blocked by approval gate (approval_policy={:?}, has_network_context={})",
+                        approval_policy,
+                        retry_details.network_approval_context.is_some()
+                    );
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
                         network_policy_decision,
@@ -169,9 +191,15 @@ impl ToolOrchestrator {
                         retry_reason: Some(retry_details.reason),
                         network_approval_context: retry_details.network_approval_context.clone(),
                     };
+                    tracing::debug!(
+                        "requesting retry approval (reason={}, has_network_context={})",
+                        approval_ctx.retry_reason.as_deref().unwrap_or("<none>"),
+                        approval_ctx.network_approval_context.is_some()
+                    );
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
+                    tracing::debug!("retry approval decision: {decision:?}");
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -194,6 +222,11 @@ impl ToolOrchestrator {
                             tracing::warn!(
                                 host = %network_approval_context.host,
                                 "failed to grant temporary network host allowance; retry may remain blocked"
+                            );
+                        } else {
+                            tracing::debug!(
+                                "granted temporary network host allowance for retry: {}",
+                                network_approval_context.host
                             );
                         }
                         granted_host.map(|host| (network.clone(), host))
@@ -223,6 +256,7 @@ impl ToolOrchestrator {
                 let second_attempt = (*tool).run(req, &escalated_attempt, tool_ctx).await;
                 if let Some((network, host)) = temporary_allowed_host {
                     network.revoke_temporary_allowed_host(&host).await;
+                    tracing::debug!("revoked temporary network host allowance after retry: {host}");
                 }
                 second_attempt
             }
@@ -402,7 +436,9 @@ mod tests {
         assert!(!can_retry_without_sandbox(
             false,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            },
             false
         ));
     }
@@ -412,7 +448,9 @@ mod tests {
         assert!(can_retry_without_sandbox(
             false,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            },
             true
         ));
     }
@@ -432,7 +470,9 @@ mod tests {
         assert!(!can_retry_without_sandbox(
             false,
             AskForApproval::Never,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            },
             true
         ));
     }
@@ -442,7 +482,9 @@ mod tests {
         assert!(can_retry_without_sandbox(
             true,
             AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
+                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+            },
             false
         ));
     }

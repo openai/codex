@@ -182,7 +182,7 @@ impl NetworkProxySpec {
 fn should_ask_on_allowlist_miss(sandbox_policy: &SandboxPolicy) -> bool {
     matches!(
         sandbox_policy,
-        SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. }
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
     )
 }
 
@@ -190,13 +190,17 @@ fn should_ask_on_allowlist_miss(sandbox_policy: &SandboxPolicy) -> bool {
 mod tests {
     use super::*;
     use codex_protocol::protocol::NetworkAccess;
+    use codex_protocol::protocol::ReadOnlyAccess;
 
     #[test]
     fn restricted_sandbox_modes_ask_on_allowlist_miss() {
-        assert!(should_ask_on_allowlist_miss(&SandboxPolicy::ReadOnly));
+        assert!(should_ask_on_allowlist_miss(&SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        }));
         assert!(should_ask_on_allowlist_miss(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
+                read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
