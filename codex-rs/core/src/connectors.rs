@@ -270,10 +270,9 @@ pub fn merge_connectors(
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
     let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
     for connector in &mut connectors {
-        connector.is_enabled = apps
-            .as_ref()
-            .and_then(|apps| apps.get(&connector.id))
-            .is_none_or(|app| app.enabled);
+        if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
+            connector.is_enabled = app.enabled;
+        }
     }
     connectors
 }

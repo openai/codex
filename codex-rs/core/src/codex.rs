@@ -114,6 +114,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
@@ -245,6 +246,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 
@@ -1720,6 +1722,48 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn reload_user_config_layer(&self) {
+        let config_toml_path = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .codex_home
+                .join(CONFIG_TOML_FILE)
+        };
+
+        let user_config = match std::fs::read_to_string(&config_toml_path) {
+            Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
+                Ok(config) => config,
+                Err(err) => {
+                    warn!("failed to parse user config while reloading layer: {err}");
+                    return;
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                toml::Value::Table(Default::default())
+            }
+            Err(err) => {
+                warn!("failed to read user config while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let config_toml_path = match AbsolutePathBuf::try_from(config_toml_path) {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("failed to resolve user config path while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.config_layer_stack = config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
         let session_configuration = {
             let state = self.state.lock().await;
@@ -3005,6 +3049,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::RefreshMcpServers { config } => {
                 handlers::refresh_mcp_servers(&sess, config).await;
             }
+            Op::ReloadUserConfig => {
+                handlers::reload_user_config(&sess).await;
+            }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
@@ -3421,6 +3468,10 @@ mod handlers {
     pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
         let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
         *guard = Some(refresh_config);
+    }
+
+    pub async fn reload_user_config(sess: &Arc<Session>) {
+        sess.reload_user_config_layer().await;
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
@@ -5471,6 +5522,42 @@ mod tests {
             let base_instructions = session.get_base_instructions().await;
             assert_eq!(base_instructions.text, model_info.base_instructions);
         }
+    }
+
+    #[tokio::test]
+    async fn reload_user_config_layer_updates_effective_apps_config() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let codex_home = session.codex_home().await;
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+        std::fs::write(
+            &config_toml_path,
+            "[apps.calendar]\nenabled = false\ndisabled_reason = \"user\"\n",
+        )
+        .expect("write user config");
+
+        session.reload_user_config_layer().await;
+
+        let config = session.get_config().await;
+        let apps_toml = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("apps"))
+            .cloned()
+            .expect("apps table");
+        let apps = crate::config::types::AppsConfigToml::deserialize(apps_toml)
+            .expect("deserialize apps config");
+        let app = apps
+            .apps
+            .get("calendar")
+            .expect("calendar app config exists");
+
+        assert!(!app.enabled);
+        assert_eq!(
+            app.disabled_reason,
+            Some(crate::config::types::AppDisabledReason::User)
+        );
     }
 
     #[test]

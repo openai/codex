@@ -6694,7 +6694,21 @@ impl ChatWidget {
         }
 
         match result {
-            Ok(snapshot) => {
+            Ok(mut snapshot) => {
+                snapshot.connectors =
+                    connectors::with_app_enabled_state(snapshot.connectors, &self.config);
+                if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors_cache {
+                    let enabled_by_id: HashMap<&str, bool> = existing_snapshot
+                        .connectors
+                        .iter()
+                        .map(|connector| (connector.id.as_str(), connector.is_enabled))
+                        .collect();
+                    for connector in &mut snapshot.connectors {
+                        if let Some(is_enabled) = enabled_by_id.get(connector.id.as_str()) {
+                            connector.is_enabled = *is_enabled;
+                        }
+                    }
+                }
                 self.refresh_connectors_popup_if_open(&snapshot.connectors);
                 if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
