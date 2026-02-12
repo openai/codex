@@ -1,4 +1,5 @@
 use crate::memories::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT;
+use crate::memories::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT;
 use crate::memories::STAGE_ONE_CONTEXT_WINDOW_PERCENT;
 use crate::memories::memory_root;
 use crate::truncate::TruncationPolicy;
@@ -82,6 +83,10 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         .ok()?
         .trim()
         .to_string();
+    let memory_summary = truncate_text(
+        &memory_summary,
+        TruncationPolicy::Tokens(MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
+    );
     if memory_summary.is_empty() {
         return None;
     }
