@@ -1291,7 +1291,7 @@ pub struct AppInfo {
     /// Whether this app is enabled in config.toml.
     /// Example:
     /// ```toml
-    /// [app.bad_app]
+    /// [apps.bad_app]
     /// enabled = false
     /// ```
     #[serde(default = "default_enabled")]
