@@ -237,10 +237,40 @@ pub(crate) fn create_seatbelt_command_args(
         }
     };
 
-    let file_read_policy = if sandbox_policy.has_full_disk_read_access() {
-        "; allow read-only file operations\n(allow file-read*)"
+    let (file_read_policy, file_read_dir_params) = if sandbox_policy.has_full_disk_read_access() {
+        (
+            "; allow read-only file operations\n(allow file-read*)".to_string(),
+            Vec::new(),
+        )
     } else {
-        ""
+        let mut readable_roots_policies: Vec<String> = Vec::new();
+        let mut file_read_params = Vec::new();
+        for (index, root) in sandbox_policy
+            .get_readable_roots_with_cwd(sandbox_policy_cwd)
+            .into_iter()
+            .enumerate()
+        {
+            // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
+            let canonical_root = root
+                .as_path()
+                .canonicalize()
+                .unwrap_or_else(|_| root.to_path_buf());
+            let root_param = format!("READABLE_ROOT_{index}");
+            file_read_params.push((root_param.clone(), canonical_root));
+            readable_roots_policies.push(format!("(subpath (param \"{root_param}\"))"));
+        }
+
+        if readable_roots_policies.is_empty() {
+            ("".to_string(), Vec::new())
+        } else {
+            (
+                format!(
+                    "; allow read-only file operations\n(allow file-read*\n{}\n)",
+                    readable_roots_policies.join(" ")
+                ),
+                file_read_params,
+            )
+        }
     };
 
     let proxy = proxy_policy_inputs(network);
@@ -250,7 +280,12 @@ pub(crate) fn create_seatbelt_command_args(
         "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
     );
 
-    let dir_params = [file_write_dir_params, macos_dir_params()].concat();
+    let dir_params = [
+        file_read_dir_params,
+        file_write_dir_params,
+        macos_dir_params(),
+    ]
+    .concat();
 
     let mut seatbelt_args: Vec<String> = vec!["-p".to_string(), full_policy];
     let definition_args = dir_params
@@ -329,7 +364,7 @@ mod tests {
     #[test]
     fn create_seatbelt_args_routes_network_through_proxy_ports() {
         let policy = dynamic_network_policy(
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             false,
             &ProxyPolicyInputs {
                 ports: vec![43128, 48081],
@@ -363,7 +398,7 @@ mod tests {
     #[test]
     fn create_seatbelt_args_allows_local_binding_when_explicitly_enabled() {
         let policy = dynamic_network_policy(
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             false,
             &ProxyPolicyInputs {
                 ports: vec![43128],
@@ -395,6 +430,7 @@ mod tests {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
+                read_only_access: Default::default(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -422,6 +458,7 @@ mod tests {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
+                read_only_access: Default::default(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -442,6 +479,7 @@ mod tests {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
+                read_only_access: Default::default(),
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -491,6 +529,7 @@ mod tests {
                 .into_iter()
                 .map(|p| p.try_into().unwrap())
                 .collect(),
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -676,6 +715,7 @@ mod tests {
 
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -760,6 +800,7 @@ mod tests {
         // `.codex` checks are done properly for cwd.
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
