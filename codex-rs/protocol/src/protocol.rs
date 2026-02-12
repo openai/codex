@@ -1167,7 +1167,7 @@ impl CodexErrorInfo {
             Self::ThreadRollbackFailed => false,
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
-            | Self::ModelCap { .. }
+            | Self::ServerOverloaded
             | Self::HttpConnectionFailed { .. }
             | Self::ResponseStreamConnectionFailed { .. }
             | Self::InternalServerError
