@@ -97,6 +97,8 @@ Primary inputs (always read these, if exists):
 Under `{{ memory_root }}/`:
 - `raw_memories.md`
   - mechanical merge of `raw_memories` from Phase 1;
+  - source of rollout-level metadata needed for MEMORY.md header annotations;
+    you should be able to find `cwd` and `updated_at` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
@@ -129,8 +131,8 @@ Rules:
 Clustered schema:
 ---
 rollout_summary_files:
-  - <file1.md> (<a few words annotation such as "success, most useful" or "uncertain, no user feedback">)
-  - <file2.md> (<annotation>)
+  - <file1.md> (<annotation that includes status/usefulness, cwd, and updated_at, e.g. "success, most useful architecture walkthrough, cwd=/repo/path, updated_at=2026-02-12T10:30:00Z">)
+  - <file2.md> (<annotation with cwd=/..., updated_at=...>)
 description: brief description of the shared tasks/outcomes
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
@@ -141,6 +143,9 @@ keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo con
 Schema rules (strict):
 - Keep entries compact and retrieval-friendly.
 - A single note block may correspond to multiple related tasks; aggregate when tasks and lessons align.
+- In `rollout_summary_files`, each parenthesized annotation must include
+  `cwd=<path>` and `updated_at=<timestamp>` copied from that rollout summary metadata.
+  If missing from an individual rollout summary, recover them from `raw_memories.md`.
 - If you need to reference skills, do it in the BODY as bullets, not in the header
   (e.g., "- Related skill: skills/<skill-name>/SKILL.md").
 - Use lowercase, hyphenated skill folder names.
