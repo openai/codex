@@ -428,6 +428,37 @@
         }
       ]
     },
+    "HooksTomlConfig": {
+      "additionalProperties": false,
+      "description": "Hook configuration for lifecycle events. Each field is an array of strings representing a command and its arguments. The hook receives a JSON payload as the final argument.",
+      "properties": {
+        "after_tool_use": {
+          "default": null,
+          "description": "Command to run after each tool execution. Example: `after_tool_use = [\"bash\", \"~/.codex/hooks/post-tool.sh\"]`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_compact": {
+          "default": null,
+          "description": "Command to run before context compaction occurs. Example: `pre_compact = [\"bash\", \"~/.codex/hooks/pre-compact.sh\"]`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_start": {
+          "default": null,
+          "description": "Command to run when a session starts. Example: `session_start = [\"bash\", \"~/.codex/hooks/session-start.sh\"]`",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -1425,6 +1456,15 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksTomlConfig"
+        }
+      ],
+      "default": null,
+      "description": "Hook configuration for lifecycle events."
     },
     "instructions": {
       "description": "System instructions.",
