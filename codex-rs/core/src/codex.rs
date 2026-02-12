@@ -1099,7 +1099,7 @@ impl Session {
             });
         }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
-        if config.approval_policy.value() == AskForApproval::OnFailure {
+        if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
             post_session_configured_events.push(Event {
                 id: "".to_owned(),
                 msg: EventMsg::Warning(WarningEvent {
