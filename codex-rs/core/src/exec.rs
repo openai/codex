@@ -16,6 +16,8 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
+use serde::Deserialize;
+
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
@@ -44,6 +46,7 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const NETWORK_POLICY_DECISION_PREFIX: &str = "CODEX_NETWORK_POLICY_DECISION ";
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -530,7 +533,15 @@ pub(crate) fn is_likely_sandbox_denied(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
 ) -> bool {
-    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
+    if sandbox_type == SandboxType::None {
+        return false;
+    }
+
+    if has_network_policy_ask_decision(exec_output) {
+        return true;
+    }
+
+    if exec_output.exit_code == 0 {
         return false;
     }
 
@@ -581,6 +592,35 @@ pub(crate) fn is_likely_sandbox_denied(
     }
 
     false
+}
+
+#[derive(Deserialize)]
+struct NetworkPolicyDecisionPayload {
+    decision: String,
+    source: String,
+}
+
+fn has_network_policy_ask_decision(exec_output: &ExecToolCallOutput) -> bool {
+    [
+        &exec_output.stderr.text,
+        &exec_output.stdout.text,
+        &exec_output.aggregated_output.text,
+    ]
+    .into_iter()
+    .any(|section| section.lines().any(section_contains_network_policy_ask))
+}
+
+fn section_contains_network_policy_ask(line: &str) -> bool {
+    let payload = line.strip_prefix(NETWORK_POLICY_DECISION_PREFIX);
+    let Some(payload) = payload else {
+        return false;
+    };
+
+    let Ok(payload) = serde_json::from_str::<NetworkPolicyDecisionPayload>(payload) else {
+        return false;
+    };
+
+    payload.decision == "ask" && payload.source == "decider"
 }
 
 #[derive(Debug, Clone)]
@@ -961,6 +1001,33 @@ mod tests {
         );
         assert!(is_likely_sandbox_denied(
             SandboxType::MacosSeatbelt,
+            &output
+        ));
+    }
+
+    #[test]
+    fn sandbox_detection_flags_network_policy_ask_with_zero_exit_code() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+        );
+
+        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+    }
+
+    #[test]
+    fn sandbox_detection_ignores_network_policy_non_decider_with_zero_exit_code() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"google.com","port":80}"#,
+        );
+
+        assert!(!is_likely_sandbox_denied(
+            SandboxType::LinuxSeccomp,
             &output
         ));
     }
