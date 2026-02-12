@@ -18,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -65,20 +66,7 @@ fn user_message_item(text: &str) -> ResponseItem {
 }
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .replace_cwd_when_contains(
-            PRETURN_CONTEXT_DIFF_CWD_MARKER,
-            PRETURN_CONTEXT_DIFF_CWD_MARKER,
-        )
-        .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
-}
-
-fn summary_snapshot_text(summary: &str) -> String {
-    summary_with_prefix(summary).replace('\n', "\\n")
-}
-
-fn request_input_shape(request: &responses::ResponsesRequest) -> String {
-    context_snapshot::request_input_shape(request, &context_snapshot_options())
+    ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindOnly)
 }
 
 fn sectioned_request_shapes(
@@ -86,6 +74,20 @@ fn sectioned_request_shapes(
     sections: &[(&str, &responses::ResponsesRequest)],
 ) -> String {
     context_snapshot::sectioned_request_shapes(scenario, sections, &context_snapshot_options())
+}
+
+fn json_fragment(text: &str) -> String {
+    serde_json::to_string(text)
+        .expect("serialize text to JSON")
+        .trim_matches('"')
+        .to_string()
+}
+
+fn request_contains_text(request: &responses::ResponsesRequest, text: &str) -> bool {
+    request
+        .body_json()
+        .to_string()
+        .contains(&json_fragment(text))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1452,8 +1454,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     );
 
     let compact_request = compact_mock.single_request();
-    let compact_shape = request_input_shape(&compact_request);
-    let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(
@@ -1465,19 +1465,26 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
         )
     );
     assert!(
-        compact_shape.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER),
+        request_contains_text(&compact_request, PRETURN_CONTEXT_DIFF_CWD_MARKER),
         "expected remote compact request to include pre-turn context diff"
     );
     assert!(
-        !compact_shape.contains("USER_THREE"),
+        !request_contains_text(&compact_request, "USER_THREE"),
         "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("REMOTE_PRE_TURN_SUMMARY")),
+        request_contains_text(
+            &requests[2],
+            &summary_with_prefix("REMOTE_PRE_TURN_SUMMARY")
+        ),
         "post-compaction request should include remote summary text"
     );
     assert_eq!(
-        follow_up_shape.matches("USER_THREE").count(),
+        requests[2]
+            .message_input_texts("user")
+            .iter()
+            .filter(|text| text.as_str() == "USER_THREE")
+            .count(),
         1,
         "post-compaction request should contain incoming user exactly once from runtime append"
     );
@@ -1565,7 +1572,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     );
 
     let include_attempt_request = first_compact_mock.single_request();
-    let include_attempt_shape = request_input_shape(&include_attempt_request);
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
         sectioned_request_shapes(
@@ -1577,7 +1583,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
         )
     );
     assert!(
-        !include_attempt_shape.contains("USER_TWO"),
+        !request_contains_text(&include_attempt_request, "USER_TWO"),
         "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
@@ -1673,7 +1679,6 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     );
 
     let include_attempt_request = compact_mock.single_request();
-    let include_attempt_shape = request_input_shape(&include_attempt_request);
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_context_window_exceeded_shapes",
         sectioned_request_shapes(
@@ -1685,7 +1690,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
         )
     );
     assert!(
-        !include_attempt_shape.contains("USER_TWO"),
+        !request_contains_text(&include_attempt_request, "USER_TWO"),
         "current behavior excludes incoming user message from remote pre-turn compaction input"
     );
     assert!(
@@ -1755,8 +1760,6 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     );
 
     let compact_request = compact_mock.single_request();
-    let compact_shape = request_input_shape(&compact_request);
-    let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_shapes",
         sectioned_request_shapes(
@@ -1768,11 +1771,16 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
         )
     );
     assert!(
-        compact_shape.contains("function_call_output"),
+        !compact_request
+            .inputs_of_type("function_call_output")
+            .is_empty(),
         "remote mid-turn compaction request should include function call output"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("REMOTE_MID_TURN_SUMMARY")),
+        request_contains_text(
+            &requests[1],
+            &summary_with_prefix("REMOTE_MID_TURN_SUMMARY")
+        ),
         "post-mid-turn request should include remote compaction summary text"
     );
 
@@ -1825,7 +1833,6 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     );
     let compact_request = compact_mock.single_request();
     let follow_up_request = responses_mock.single_request();
-    let follow_up_shape = request_input_shape(&follow_up_request);
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
         sectioned_request_shapes(
@@ -1837,11 +1844,14 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
         )
     );
     assert!(
-        !follow_up_shape.contains(&summary_snapshot_text("REMOTE_MANUAL_EMPTY_SUMMARY")),
+        !request_contains_text(
+            &follow_up_request,
+            &summary_with_prefix("REMOTE_MANUAL_EMPTY_SUMMARY"),
+        ),
         "post-compact request should not include compact summary when remote compaction is skipped"
     );
     assert!(
-        follow_up_shape.contains("USER_ONE"),
+        request_contains_text(&follow_up_request, "USER_ONE"),
         "post-compact request should include the submitted user message"
     );
 
@@ -1913,8 +1923,6 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
     assert_eq!(requests.len(), 2, "expected user and post-compact requests");
 
     let compact_request = compact_mock.single_request();
-    let compact_shape = request_input_shape(&compact_request);
-    let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "remote_manual_compact_with_history_shapes",
         sectioned_request_shapes(
@@ -1926,15 +1934,18 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
         )
     );
     assert!(
-        compact_shape.contains("USER_ONE"),
+        request_contains_text(&compact_request, "USER_ONE"),
         "remote compaction request should include existing user history"
     );
     assert!(
-        follow_up_shape.contains("USER_TWO"),
+        request_contains_text(&requests[1], "USER_TWO"),
         "post-compact request should include latest user message"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("REMOTE_MANUAL_WITH_HISTORY_SUMMARY")),
+        request_contains_text(
+            &requests[1],
+            &summary_with_prefix("REMOTE_MANUAL_WITH_HISTORY_SUMMARY"),
+        ),
         "post-compact request should include remote compact summary text"
     );
 

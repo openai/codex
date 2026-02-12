@@ -22,6 +22,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
@@ -201,21 +202,7 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
     );
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
-    ContextSnapshotOptions::default()
-        .replace_exact_text(SUMMARIZATION_PROMPT, "<SUMMARIZATION_PROMPT>")
-        .replace_cwd_when_contains(
-            PRETURN_CONTEXT_DIFF_CWD_MARKER,
-            PRETURN_CONTEXT_DIFF_CWD_MARKER,
-        )
-        .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
-}
-
-fn summary_snapshot_text(summary: &str) -> String {
-    summary_with_prefix(summary).replace('\n', "\\n")
-}
-
-fn request_input_shape(request: &core_test_support::responses::ResponsesRequest) -> String {
-    context_snapshot::request_input_shape(request, &context_snapshot_options())
+    ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindOnly)
 }
 
 fn sectioned_request_shapes(
@@ -223,6 +210,13 @@ fn sectioned_request_shapes(
     sections: &[(&str, &core_test_support::responses::ResponsesRequest)],
 ) -> String {
     context_snapshot::sectioned_request_shapes(scenario, sections, &context_snapshot_options())
+}
+
+fn request_contains_text(
+    request: &core_test_support::responses::ResponsesRequest,
+    text: &str,
+) -> bool {
+    body_contains_text(&request.body_json().to_string(), text)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3064,8 +3058,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     let requests = request_log.requests();
     assert_eq!(requests.len(), 4, "expected user, user, compact, follow-up");
 
-    let compact_shape = request_input_shape(&requests[2]);
-    let follow_up_shape = request_input_shape(&requests[3]);
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
         sectioned_request_shapes(
@@ -3077,15 +3069,15 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         )
     );
     assert!(
-        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        request_contains_text(&requests[2], SUMMARIZATION_PROMPT),
         "expected compact request to include summarization prompt"
     );
     assert!(
-        compact_shape.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER),
+        request_contains_text(&requests[2], PRETURN_CONTEXT_DIFF_CWD_MARKER),
         "expected compact request to include pre-turn context diff"
     );
     assert!(
-        !compact_shape.contains("USER_THREE"),
+        !request_contains_text(&requests[2], "USER_THREE"),
         "current behavior excludes incoming user message from pre-turn compaction input"
     );
     let follow_up_has_incoming_image = requests[3].inputs_of_type("message").iter().any(|item| {
@@ -3110,7 +3102,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         "expected post-compaction follow-up request to keep incoming user image content"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("PRE_TURN_SUMMARY")),
+        request_contains_text(&requests[3], &summary_with_prefix("PRE_TURN_SUMMARY")),
         "expected post-compaction request to include summary text"
     );
 }
@@ -3187,7 +3179,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
         "expected first turn and at least one compaction request"
     );
 
-    let include_attempt_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
         sectioned_request_shapes(
@@ -3200,7 +3191,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     );
 
     assert!(
-        !include_attempt_shape.contains("USER_TWO"),
+        !request_contains_text(&requests[1], "USER_TWO"),
         "current behavior excludes incoming user message from pre-turn compaction input"
     );
     assert!(
@@ -3260,8 +3251,6 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
 
-    let compact_shape = request_input_shape(&requests[1]);
-    let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",
         sectioned_request_shapes(
@@ -3273,15 +3262,17 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
         )
     );
     assert!(
-        compact_shape.contains("function_call_output"),
+        !requests[1]
+            .inputs_of_type("function_call_output")
+            .is_empty(),
         "mid-turn compaction request should include function call output"
     );
     assert!(
-        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        request_contains_text(&requests[1], SUMMARIZATION_PROMPT),
         "mid-turn compaction request should include summarization prompt"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("MID_TURN_SUMMARY")),
+        request_contains_text(&requests[2], &summary_with_prefix("MID_TURN_SUMMARY")),
         "post-mid-turn compaction request should include summary text"
     );
 }
@@ -3335,8 +3326,6 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
         "expected manual /compact request and follow-up turn request"
     );
 
-    let compact_shape = request_input_shape(&requests[0]);
-    let follow_up_shape = request_input_shape(&requests[1]);
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
         sectioned_request_shapes(
@@ -3348,11 +3337,11 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
         )
     );
     assert!(
-        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        request_contains_text(&requests[0], SUMMARIZATION_PROMPT),
         "manual /compact request should include summarization prompt"
     );
     assert!(
-        follow_up_shape.contains("AFTER_MANUAL_EMPTY_COMPACT"),
+        request_contains_text(&requests[1], "AFTER_MANUAL_EMPTY_COMPACT"),
         "follow-up request should include the submitted user message"
     );
 }
@@ -3419,8 +3408,6 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
 
-    let compact_shape = request_input_shape(&requests[1]);
-    let follow_up_shape = request_input_shape(&requests[2]);
     insta::assert_snapshot!(
         "manual_compact_with_history_shapes",
         sectioned_request_shapes(
@@ -3432,19 +3419,19 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
         )
     );
     assert!(
-        compact_shape.contains("USER_ONE"),
+        request_contains_text(&requests[1], "USER_ONE"),
         "manual compact request should include existing user history"
     );
     assert!(
-        compact_shape.contains("<SUMMARIZATION_PROMPT>"),
+        request_contains_text(&requests[1], SUMMARIZATION_PROMPT),
         "manual compact request should include summarization prompt"
     );
     assert!(
-        follow_up_shape.contains(&summary_snapshot_text("MANUAL_SUMMARY")),
+        request_contains_text(&requests[2], &summary_with_prefix("MANUAL_SUMMARY")),
         "post-compact request should include compact summary text"
     );
     assert!(
-        follow_up_shape.contains("USER_TWO"),
+        request_contains_text(&requests[2], "USER_TWO"),
         "post-compact request should include the latest user message"
     );
 }
