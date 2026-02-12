@@ -16,12 +16,11 @@ use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
 
-use serde::Deserialize;
-
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::get_platform_sandbox;
+use crate::network_policy_decision::extract_network_policy_decisions;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -46,7 +45,6 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
-const NETWORK_POLICY_DECISION_PREFIX: &str = "CODEX_NETWORK_POLICY_DECISION ";
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -537,7 +535,7 @@ pub(crate) fn is_likely_sandbox_denied(
         return false;
     }
 
-    if has_network_policy_ask_decision(exec_output) {
+    if has_network_policy_blocking_decision(exec_output) {
         return true;
     }
 
@@ -594,33 +592,15 @@ pub(crate) fn is_likely_sandbox_denied(
     false
 }
 
-#[derive(Deserialize)]
-struct NetworkPolicyDecisionPayload {
-    decision: String,
-    source: String,
-}
-
-fn has_network_policy_ask_decision(exec_output: &ExecToolCallOutput) -> bool {
+fn has_network_policy_blocking_decision(exec_output: &ExecToolCallOutput) -> bool {
     [
         &exec_output.stderr.text,
         &exec_output.stdout.text,
         &exec_output.aggregated_output.text,
     ]
     .into_iter()
-    .any(|section| section.lines().any(section_contains_network_policy_ask))
-}
-
-fn section_contains_network_policy_ask(line: &str) -> bool {
-    let payload = line.strip_prefix(NETWORK_POLICY_DECISION_PREFIX);
-    let Some(payload) = payload else {
-        return false;
-    };
-
-    let Ok(payload) = serde_json::from_str::<NetworkPolicyDecisionPayload>(payload) else {
-        return false;
-    };
-
-    payload.decision == "ask" && payload.source == "decider"
+    .flat_map(|section| extract_network_policy_decisions(section))
+    .any(|payload| payload.is_blocking_decision())
 }
 
 #[derive(Debug, Clone)]
@@ -1018,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_detection_ignores_network_policy_non_decider_with_zero_exit_code() {
+    fn sandbox_detection_flags_network_policy_non_decider_with_zero_exit_code() {
         let output = make_exec_output(
             0,
             "",
@@ -1026,10 +1006,34 @@ mod tests {
             r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"google.com","port":80}"#,
         );
 
+        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+    }
+
+    #[test]
+    fn sandbox_detection_ignores_network_policy_allow_with_zero_exit_code() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"allow","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+        );
+
         assert!(!is_likely_sandbox_denied(
             SandboxType::LinuxSeccomp,
             &output
         ));
+    }
+
+    #[test]
+    fn sandbox_detection_flags_network_policy_ask_from_json_blocked_response() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"{"status":"blocked","host":"google.com","reason":"not_allowed","policy_decision_prefix":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"google.com\",\"port\":80}","message":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"google.com\",\"port\":80}\nCodex blocked this request: domain not in allowlist (this is not a denylist block)."}"#,
+        );
+
+        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
     }
 
     #[tokio::test]
