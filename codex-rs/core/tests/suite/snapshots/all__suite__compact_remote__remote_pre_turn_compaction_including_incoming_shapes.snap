@@ -13,12 +13,12 @@ Scenario: Remote pre-turn auto-compaction with a context override emits the cont
 05:message/user:USER_TWO
 06:message/assistant:REMOTE_SECOND_REPLY
 07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+08:message/user:USER_THREE
 
 ## Remote Post-Compaction History Layout
 00:message/user:USER_ONE
-01:message/user:USER_TWO
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<AGENTS_MD>
-04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user:<AGENTS_MD>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+04:message/user:USER_TWO
 05:message/user:<COMPACTION_SUMMARY>\nREMOTE_PRE_TURN_SUMMARY
-06:message/user:USER_THREE

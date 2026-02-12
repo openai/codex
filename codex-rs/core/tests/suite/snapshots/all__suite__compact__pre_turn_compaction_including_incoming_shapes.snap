@@ -13,13 +13,14 @@ Scenario: Pre-turn auto-compaction with a context override emits the context dif
 05:message/user:USER_TWO
 06:message/assistant:SECOND_REPLY
 07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-08:message/user:<SUMMARIZATION_PROMPT>
+08:message/user:<image> | </image> | USER_THREE
+09:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-03:message/user:USER_ONE
-04:message/user:USER_TWO
-05:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
-06:message/user:<image> | <input_image:image_url> | </image> | USER_THREE
+00:message/user:USER_ONE
+01:message/user:USER_TWO
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+05:message/user:<image> | </image> | USER_THREE
+06:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
