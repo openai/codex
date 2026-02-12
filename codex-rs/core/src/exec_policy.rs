@@ -1385,8 +1385,8 @@ prefix_rule(
     }
 
     #[tokio::test]
-    async fn dangerous_git_push_requires_approval_in_danger_full_access() {
-        let command = vec_str(&["git", "push", "origin", "+main"]);
+    async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
+        let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
         let manager = ExecPolicyManager::default();
         let requirement = manager
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
