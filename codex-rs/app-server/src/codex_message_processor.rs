@@ -211,6 +211,7 @@ use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
+use codex_core::state_db::read_feedback_logs_from_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -234,7 +235,6 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_state::LogQuery;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -266,7 +266,6 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
-const MAX_FEEDBACK_LOG_BYTES: usize = 10 * 1024 * 1024;
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -5965,7 +5964,7 @@ impl CodexMessageProcessor {
         };
         let sqlite_feedback_logs = if include_logs {
             let state_db_ctx = get_state_db(&self.config, None).await;
-            read_feedback_logs_from_state_db_context(state_db_ctx.as_ref(), conversation_id).await
+            read_feedback_logs_from_state_db(state_db_ctx.as_ref(), conversation_id).await
         } else {
             None
         };
@@ -6114,49 +6113,6 @@ fn collect_resume_override_mismatches(
     }
 
     mismatch_details
-}
-
-async fn read_feedback_logs_from_state_db_context(
-    state_db_ctx: Option<&StateDbHandle>,
-    conversation_id: Option<ThreadId>,
-) -> Option<Vec<u8>> {
-    let state_db_ctx = state_db_ctx?;
-    let thread_id = conversation_id?.to_string();
-    let rows = state_db_ctx
-        .query_logs(&LogQuery {
-            thread_ids: vec![thread_id],
-            descending: true,
-            ..Default::default()
-        })
-        .await
-        .ok()?;
-    if rows.is_empty() {
-        return None;
-    }
-
-    let mut bytes = 0usize;
-    let mut lines = Vec::new();
-    for row in rows {
-        let mut line = match row.message {
-            Some(message) => message,
-            None => continue,
-        };
-        if !line.ends_with('\n') {
-            line.push('\n');
-        }
-        let line_bytes = line.len();
-        if bytes + line_bytes > MAX_FEEDBACK_LOG_BYTES {
-            break;
-        }
-        bytes += line_bytes;
-        lines.push(line);
-    }
-    if lines.is_empty() {
-        return None;
-    }
-
-    lines.reverse();
-    Some(lines.concat().into_bytes())
 }
 
 fn skills_to_info(

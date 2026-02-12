@@ -15,6 +15,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
+use codex_state::LogQuery;
 use codex_state::STATE_DB_VERSION;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
@@ -26,6 +27,7 @@ use uuid::Uuid;
 
 /// Core-facing handle to the optional SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
+const MAX_FEEDBACK_LOG_BYTES: usize = 10 * 1024 * 1024;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
@@ -93,6 +95,54 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     .await
     .ok()?;
     require_backfill_complete(runtime, config.codex_home.as_path()).await
+}
+
+pub async fn read_feedback_logs(config: &Config, thread_id: Option<ThreadId>) -> Option<Vec<u8>> {
+    let state_db_ctx = get_state_db(config, None).await;
+    read_feedback_logs_from_state_db(state_db_ctx.as_ref(), thread_id).await
+}
+
+pub async fn read_feedback_logs_from_state_db(
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: Option<ThreadId>,
+) -> Option<Vec<u8>> {
+    let state_db_ctx = state_db_ctx?;
+    let thread_id = thread_id?.to_string();
+    let rows = state_db_ctx
+        .query_logs(&LogQuery {
+            thread_ids: vec![thread_id],
+            descending: true,
+            ..Default::default()
+        })
+        .await
+        .ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+
+    let mut bytes = 0usize;
+    let mut lines = Vec::new();
+    for row in rows {
+        let mut line = match row.message {
+            Some(message) => message,
+            None => continue,
+        };
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        let line_bytes = line.len();
+        if bytes + line_bytes > MAX_FEEDBACK_LOG_BYTES {
+            break;
+        }
+        bytes += line_bytes;
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    lines.reverse();
+    Some(lines.concat().into_bytes())
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
