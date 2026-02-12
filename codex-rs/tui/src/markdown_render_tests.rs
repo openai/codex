@@ -5,6 +5,7 @@ use ratatui::text::Span;
 use ratatui::text::Text;
 
 use crate::markdown_render::render_markdown_text;
+use crate::markdown_render::render_markdown_text_with_width;
 use insta::assert_snapshot;
 
 #[test]
@@ -699,6 +700,59 @@ fn horizontal_rule_renders_em_dashes() {
 }
 
 #[test]
+fn table_renders_box_drawing_with_alignment() {
+    let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | bb | ccc |\n| long | mid | x |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "┌──────┬────────┬───────┐".to_string(),
+            "│ Left │ Center │ Right │".to_string(),
+            "├──────┼────────┼───────┤".to_string(),
+            "│ a    │   bb   │   ccc │".to_string(),
+            "│ long │  mid   │     x │".to_string(),
+            "└──────┴────────┴───────┘".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn table_keeps_structure_when_wrap_width_is_narrow() {
+    let md = "| A | B |\n|:-:|--:|\n| wide content | 42 |\n";
+    let text = render_markdown_text_with_width(md, Some(8));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "┌──────────────┬────┐".to_string(),
+            "│      A       │  B │".to_string(),
+            "├──────────────┼────┤".to_string(),
+            "│ wide content │ 42 │".to_string(),
+            "└──────────────┴────┘".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn code_block_with_inner_triple_backticks_outer_four() {
     let md = r#"````text
 Here is a code block that shows another fenced block:
@@ -809,6 +863,7 @@ Table below (alignment test):
 | Left | Center | Right |
 |:-----|:------:|------:|
 | a    |   b    |     c |
+
 Inline HTML: <sup>sup</sup> and <sub>sub</sub>.
 HTML block:
 <div style="border:1px solid #ccc;padding:2px">inline block</div>
