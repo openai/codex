@@ -1873,10 +1873,7 @@ impl App {
             AppEvent::WindowsSandboxGrantReadRootCompleted { path, error } => match error {
                 Some(err) => {
                     self.chat_widget
-                        .add_to_history(history_cell::new_error_event(format!(
-                            "Failed to grant sandbox read access for {}: {err}",
-                            path.display()
-                        )));
+                        .add_to_history(history_cell::new_error_event(format!("Error: {err}")));
                 }
                 None => {
                     self.chat_widget
