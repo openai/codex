@@ -84,11 +84,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          total_ram="$(awk '/MemTotal/ {printf "%.1f GiB\n", $2 / 1024 / 1024}' /proc/meminfo)"
           echo "Runner: ${RUNNER_NAME:-unknown}"
           echo "OS: $(uname -a)"
-          echo "CPU model: $(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/,\"\",$2); print $2; exit}')"
+          echo "CPU model: ${cpu_model}"
           echo "Logical CPUs: $(nproc)"
-          echo "Total RAM: $(awk '/MemTotal/ {printf \"%.1f GiB\\n\", $2 / 1024 / 1024}' /proc/meminfo)"
+          echo "Total RAM: ${total_ram}"
           echo "Disk usage:"
           df -h .
       - name: Print runner specs (macOS)
@@ -96,13 +98,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
           echo "Runner: ${RUNNER_NAME:-unknown}"
           echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
           echo "Hardware model: $(sysctl -n hw.model)"
           echo "CPU architecture: $(uname -m)"
           echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
           echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
-          echo "Total RAM: $(sysctl -n hw.memsize | awk '{printf \"%.1f GiB\\n\", $1 / 1024 / 1024 / 1024}')"
+          echo "Total RAM: ${total_ram}"
           echo "Disk usage:"
           df -h .
       - name: Install Linux bwrap build dependencies
