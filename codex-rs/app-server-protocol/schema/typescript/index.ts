@@ -77,6 +77,7 @@ export type { FunctionCallOutputPayload } from "./FunctionCallOutputPayload";
 export type { FuzzyFileSearchParams } from "./FuzzyFileSearchParams";
 export type { FuzzyFileSearchResponse } from "./FuzzyFileSearchResponse";
 export type { FuzzyFileSearchResult } from "./FuzzyFileSearchResult";
+export type { FuzzyFileSearchSessionUpdatedNotification } from "./FuzzyFileSearchSessionUpdatedNotification";
 export type { GetAuthStatusParams } from "./GetAuthStatusParams";
 export type { GetAuthStatusResponse } from "./GetAuthStatusResponse";
 export type { GetConversationSummaryParams } from "./GetConversationSummaryParams";

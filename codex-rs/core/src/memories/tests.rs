@@ -1,4 +1,3 @@
-use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
 use crate::memories::ensure_layout;
@@ -11,6 +10,7 @@ use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[test]
@@ -21,39 +21,8 @@ fn memory_root_uses_shared_global_path() {
 }
 
 #[test]
-fn parse_stage_one_output_accepts_fenced_json() {
-    let raw = "```json\n{\"raw_memory\":\"abc\",\"rollout_summary\":\"short\"}\n```";
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert!(parsed.raw_memory.contains("abc"));
-    assert_eq!(parsed.rollout_summary, "short");
-}
-
-#[test]
-fn parse_stage_one_output_rejects_legacy_keys() {
-    let raw = r#"{"rawMemory":"abc","summary":"short"}"#;
-    assert!(parse_stage_one_output(raw).is_err());
-}
-
-#[test]
-fn parse_stage_one_output_accepts_empty_pair_for_skip() {
-    let raw = r#"{"raw_memory":"","rollout_summary":""}"#;
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert_eq!(parsed.raw_memory, "");
-    assert_eq!(parsed.rollout_summary, "");
-}
-
-#[test]
-fn parse_stage_one_output_accepts_optional_rollout_slug() {
-    let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert!(parsed.raw_memory.contains("abc"));
-    assert_eq!(parsed.rollout_summary, "short");
-    assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
-}
-
-#[test]
 fn stage_one_output_schema_requires_all_declared_properties() {
-    let schema = super::stage_one::stage_one_output_schema();
+    let schema = crate::memories::phase1::output_schema();
     let properties = schema
         .get("properties")
         .and_then(Value::as_object)
@@ -97,6 +66,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
+        cwd: PathBuf::from("/tmp/workspace"),
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
@@ -115,4 +85,5 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
+    assert!(raw_memories.contains("cwd: /tmp/workspace"));
 }

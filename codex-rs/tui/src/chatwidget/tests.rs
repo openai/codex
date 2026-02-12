@@ -3381,6 +3381,24 @@ async fn slash_clean_submits_background_terminal_cleanup() {
 }
 
 #[tokio::test]
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDrop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryUpdate);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
+}
+
+#[tokio::test]
 async fn slash_resume_opens_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

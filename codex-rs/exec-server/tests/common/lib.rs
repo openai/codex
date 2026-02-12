@@ -166,7 +166,11 @@ impl ClientHandler for InteractiveClient {
             .unwrap()
             .push(request.clone());
 
-        let accept = self.elicitations_to_accept.contains(&request.message);
+        let message = match &request {
+            CreateElicitationRequestParams::FormElicitationParams { message, .. }
+            | CreateElicitationRequestParams::UrlElicitationParams { message, .. } => message,
+        };
+        let accept = self.elicitations_to_accept.contains(message);
         async move {
             if accept {
                 Ok(CreateElicitationResult {

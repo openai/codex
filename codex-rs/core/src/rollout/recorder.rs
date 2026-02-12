@@ -1116,6 +1116,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Result<()> {
+        let home = TempDir::new().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+        config.features.enable(Feature::Sqlite);
+
+        let uuid = Uuid::from_u128(9010);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let stale_path = home.path().join(format!(
+            "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+        ));
+
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.model_provider_id.clone(),
+            None,
+        )
+        .await
+        .expect("state db should initialize");
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .expect("backfill should be complete");
+        let created_at = chrono::Utc
+            .with_ymd_and_hms(2025, 1, 3, 13, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            stale_path,
+            created_at,
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(config.model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.first_user_message = Some("Hello from user".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let default_provider = config.model_provider_id.clone();
+        let page = RolloutRecorder::list_threads(
+            &config,
+            10,
+            None,
+            ThreadSortKey::CreatedAt,
+            &[],
+            None,
+            default_provider.as_str(),
+        )
+        .await?;
+        assert_eq!(page.items.len(), 0);
+        let stored_path = runtime
+            .find_rollout_path_by_id(thread_id, Some(false))
+            .await
+            .expect("state db lookup should succeed");
+        assert_eq!(stored_path, None);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Result<()> {
         let home = TempDir::new().expect("temp dir");
         let mut config = ConfigBuilder::default()

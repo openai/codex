@@ -296,6 +296,12 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Drop all persisted memory artifacts and memory-tracking DB rows.
+    DropMemories,
+
+    /// Trigger a single pass of the startup memory pipeline.
+    UpdateMemories,
+
     /// Set a user-facing thread name in the persisted rollout metadata.
     /// This is a local-only operation handled by codex-core; it does not
     /// involve the model.

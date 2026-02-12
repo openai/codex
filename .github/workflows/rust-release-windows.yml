@@ -86,20 +86,17 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-windows-${{ matrix.bundle }}-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |
-          cargo build --target ${{ matrix.target }} --release ${{ matrix.build_args }}
+          cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - name: Stage Windows binaries
         shell: bash
@@ -195,10 +192,8 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
 
-      - if: ${{ matrix.runner == 'windows-arm64' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
 
       - name: Compress artifacts
         shell: bash
@@ -259,7 +254,7 @@ jobs:
             fi
 
             # Keep raw executables and produce .zst alongside them.
-            zstd -T0 -19 "$dest/$base"
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6

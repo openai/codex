@@ -1,7 +1,9 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
+use crate::fuzzy_file_search::start_fuzzy_file_search_session;
 use crate::models::supported_models;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
@@ -47,6 +49,12 @@ use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::FuzzyFileSearchSessionStartParams;
+use codex_app_server_protocol::FuzzyFileSearchSessionStartResponse;
+use codex_app_server_protocol::FuzzyFileSearchSessionStopParams;
+use codex_app_server_protocol::FuzzyFileSearchSessionStopResponse;
+use codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams;
+use codex_app_server_protocol::FuzzyFileSearchSessionUpdateResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -294,6 +302,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     thread_state_manager: ThreadStateManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     feedback: CodexFeedback,
 }
 
@@ -361,6 +370,7 @@ impl CodexMessageProcessor {
             active_login: Arc::new(Mutex::new(None)),
             thread_state_manager: ThreadStateManager::new(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
     }
@@ -725,6 +735,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::FuzzyFileSearchSessionStart { request_id, params } => {
+                self.fuzzy_file_search_session_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::FuzzyFileSearchSessionUpdate { request_id, params } => {
+                self.fuzzy_file_search_session_update(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::FuzzyFileSearchSessionStop { request_id, params } => {
+                self.fuzzy_file_search_session_stop(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
@@ -1910,9 +1932,7 @@ impl CodexMessageProcessor {
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
-            let snapshot = collect_mcp_snapshot(&config).await;
-            let mcp_tool_names = snapshot.tools.keys().cloned().collect::<HashSet<_>>();
-            if let Err(message) = validate_dynamic_tools(&dynamic_tools, &mcp_tool_names) {
+            if let Err(message) = validate_dynamic_tools(&dynamic_tools) {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message,
@@ -5562,6 +5582,89 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn fuzzy_file_search_session_start(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: FuzzyFileSearchSessionStartParams,
+    ) {
+        let FuzzyFileSearchSessionStartParams { session_id, roots } = params;
+        if session_id.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "sessionId must not be empty".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let session =
+            start_fuzzy_file_search_session(session_id.clone(), roots, self.outgoing.clone());
+        match session {
+            Ok(session) => {
+                let mut sessions = self.fuzzy_search_sessions.lock().await;
+                sessions.insert(session_id, session);
+                self.outgoing
+                    .send_response(request_id, FuzzyFileSearchSessionStartResponse {})
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start fuzzy file search session: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn fuzzy_file_search_session_update(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: FuzzyFileSearchSessionUpdateParams,
+    ) {
+        let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
+        let found = {
+            let sessions = self.fuzzy_search_sessions.lock().await;
+            if let Some(session) = sessions.get(&session_id) {
+                session.update_query(query);
+                true
+            } else {
+                false
+            }
+        };
+        if !found {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("fuzzy file search session not found: {session_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, FuzzyFileSearchSessionUpdateResponse {})
+            .await;
+    }
+
+    async fn fuzzy_file_search_session_stop(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: FuzzyFileSearchSessionStopParams,
+    ) {
+        let FuzzyFileSearchSessionStopParams { session_id } = params;
+        {
+            let mut sessions = self.fuzzy_search_sessions.lock().await;
+            sessions.remove(&session_id);
+        }
+
+        self.outgoing
+            .send_response(request_id, FuzzyFileSearchSessionStopResponse {})
+            .await;
+    }
+
     async fn upload_feedback(&self, request_id: ConnectionRequestId, params: FeedbackUploadParams) {
         if !self.config.feedback_enabled {
             let error = JSONRPCErrorError {
@@ -5716,10 +5819,7 @@ fn errors_to_info(
         .collect()
 }
 
-fn validate_dynamic_tools(
-    tools: &[ApiDynamicToolSpec],
-    mcp_tool_names: &HashSet<String>,
-) -> Result<(), String> {
+fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     let mut seen = HashSet::new();
     for tool in tools {
         let name = tool.name.trim();
@@ -5734,9 +5834,6 @@ fn validate_dynamic_tools(
         }
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
-        }
-        if mcp_tool_names.contains(name) {
-            return Err(format!("dynamic tool name conflicts with MCP tool: {name}"));
         }
         if !seen.insert(name.to_string()) {
             return Err(format!("duplicate dynamic tool name: {name}"));
@@ -6240,7 +6337,7 @@ mod tests {
             description: "test".to_string(),
             input_schema: json!({"type": "null"}),
         }];
-        let err = validate_dynamic_tools(&tools, &HashSet::new()).expect_err("invalid schema");
+        let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
 
@@ -6252,7 +6349,7 @@ mod tests {
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
         }];
-        validate_dynamic_tools(&tools, &HashSet::new()).expect("valid schema");
+        validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]

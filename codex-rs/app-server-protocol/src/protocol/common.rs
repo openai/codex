@@ -458,6 +458,21 @@ client_request_definitions! {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
     },
+    #[experimental("fuzzyFileSearch/sessionStart")]
+    FuzzyFileSearchSessionStart => "fuzzyFileSearch/sessionStart" {
+        params: FuzzyFileSearchSessionStartParams,
+        response: FuzzyFileSearchSessionStartResponse,
+    },
+    #[experimental("fuzzyFileSearch/sessionUpdate")]
+    FuzzyFileSearchSessionUpdate => "fuzzyFileSearch/sessionUpdate" {
+        params: FuzzyFileSearchSessionUpdateParams,
+        response: FuzzyFileSearchSessionUpdateResponse,
+    },
+    #[experimental("fuzzyFileSearch/sessionStop")]
+    FuzzyFileSearchSessionStop => "fuzzyFileSearch/sessionStop" {
+        params: FuzzyFileSearchSessionStopParams,
+        response: FuzzyFileSearchSessionStopResponse,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         params: v1::ExecOneOffCommandParams,
@@ -702,6 +717,47 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStartParams {
+    pub session_id: String,
+    pub roots: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionStartResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdateParams {
+    pub session_id: String,
+    pub query: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionUpdateResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStopParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Default)]
+pub struct FuzzyFileSearchSessionStopResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdatedNotification {
+    pub session_id: String,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
@@ -734,6 +790,7 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),

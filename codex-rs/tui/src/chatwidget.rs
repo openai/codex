@@ -3384,6 +3384,12 @@ impl ChatWidget {
             SlashCommand::Clean => {
                 self.clean_background_terminals();
             }
+            SlashCommand::MemoryDrop => {
+                self.submit_op(Op::DropMemories);
+            }
+            SlashCommand::MemoryUpdate => {
+                self.submit_op(Op::UpdateMemories);
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }

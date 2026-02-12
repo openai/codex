@@ -57,7 +57,6 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
 
     strategy:
@@ -139,20 +138,6 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/.cargo-home/bin/
-            ${{ github.workspace }}/.cargo-home/registry/index/
-            ${{ github.workspace }}/.cargo-home/registry/cache/
-            ${{ github.workspace }}/.cargo-home/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
-
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -220,7 +205,14 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
-          cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-${{ matrix.target }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -432,6 +424,11 @@ jobs:
         run: |
           rm -rf dist/shell-tool-mcp*
           rm -rf dist/windows-binaries*
+          # cargo-timing.html appears under multiple target-specific directories.
+          # If included in files: dist/**, release upload races on duplicate
+          # asset names and can fail with 404s.
+          find dist -type f -name 'cargo-timing.html' -delete
+          find dist -type d -empty -delete
 
           ls -R dist/
 

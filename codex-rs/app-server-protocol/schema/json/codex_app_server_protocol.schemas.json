@@ -5386,6 +5386,30 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "query",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "type": "object"
+    },
     "GetAuthStatusParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -8423,6 +8447,26 @@
             "params"
           ],
           "title": "ConfigWarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionUpdated"
+              ],
+              "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdatedNotification",
           "type": "object"
         },
         {
