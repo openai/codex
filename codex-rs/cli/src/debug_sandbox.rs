@@ -216,7 +216,7 @@ async fn run_command_under_sandbox(
     // This proxy should only live for the lifetime of the child process.
     let network_proxy = match config.network.as_ref() {
         Some(spec) => Some(
-            spec.start_proxy()
+            spec.start_proxy(config.sandbox_policy.get())
                 .await
                 .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
         ),

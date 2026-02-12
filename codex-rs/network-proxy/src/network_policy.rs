@@ -220,9 +220,9 @@ fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reasons::REASON_NOT_ALLOWED;
     use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_NOT_ALLOWED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
