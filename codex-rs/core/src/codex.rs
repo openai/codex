@@ -4400,20 +4400,32 @@ async fn built_tools(
         None
     };
 
-    if turn_context.config.features.enabled(Feature::Apps) {
-        let mut selected_mcp_tools =
+    if turn_context.config.features.enabled(Feature::SearchTool) {
+        let mut app_mcp_tools = HashMap::new();
+        let mut non_app_mcp_tools = HashMap::new();
+
+        for (name, tool_info) in mcp_tools {
+            if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                app_mcp_tools.insert(name, tool_info);
+            } else {
+                non_app_mcp_tools.insert(name, tool_info);
+            }
+        }
+
+        let mut selected_app_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+                filter_mcp_tools_by_name(app_mcp_tools.clone(), &selected_tools)
             } else {
                 HashMap::new()
             };
 
         if let Some(connectors) = connectors_for_tools.as_ref() {
-            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
-            selected_mcp_tools.extend(apps_mcp_tools);
+            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(app_mcp_tools, connectors);
+            selected_app_mcp_tools.extend(apps_mcp_tools);
         }
 
-        mcp_tools = selected_mcp_tools;
+        selected_app_mcp_tools.extend(non_app_mcp_tools);
+        mcp_tools = selected_app_mcp_tools;
     } else if let Some(connectors) = connectors_for_tools.as_ref() {
         mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
@@ -5366,10 +5378,7 @@ mod tests {
 
     #[test]
     fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
-        let selected_tool_names = vec![
-            "mcp__codex_apps__calendar_create_event".to_string(),
-            "mcp__rmcp__echo".to_string(),
-        ];
+        let selected_tool_names = vec!["mcp__codex_apps__calendar_create_event".to_string()];
         let mcp_tools = HashMap::from([
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
@@ -5386,8 +5395,6 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
@@ -5396,8 +5403,19 @@ mod tests {
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
-        selected_mcp_tools.extend(apps_mcp_tools);
+        let mut app_mcp_tools = HashMap::new();
+        let mut non_app_mcp_tools = HashMap::new();
+        for (name, tool_info) in mcp_tools {
+            if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                app_mcp_tools.insert(name, tool_info);
+            } else {
+                non_app_mcp_tools.insert(name, tool_info);
+            }
+        }
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(app_mcp_tools.clone(), &selected_tool_names);
+        selected_mcp_tools.extend(filter_codex_apps_mcp_tools_only(app_mcp_tools, &connectors));
+        selected_mcp_tools.extend(non_app_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
         tool_names.sort();
@@ -5412,7 +5430,7 @@ mod tests {
 
     #[test]
     fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
-        let selected_tool_names = vec!["mcp__rmcp__echo".to_string()];
+        let selected_tool_names = Vec::new();
         let mcp_tools = HashMap::from([
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
@@ -5429,8 +5447,6 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
@@ -5439,8 +5455,19 @@ mod tests {
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
-        selected_mcp_tools.extend(apps_mcp_tools);
+        let mut app_mcp_tools = HashMap::new();
+        let mut non_app_mcp_tools = HashMap::new();
+        for (name, tool_info) in mcp_tools {
+            if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                app_mcp_tools.insert(name, tool_info);
+            } else {
+                non_app_mcp_tools.insert(name, tool_info);
+            }
+        }
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(app_mcp_tools.clone(), &selected_tool_names);
+        selected_mcp_tools.extend(filter_codex_apps_mcp_tools_only(app_mcp_tools, &connectors));
+        selected_mcp_tools.extend(non_app_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
         tool_names.sort();
@@ -5448,6 +5475,110 @@ mod tests {
             tool_names,
             vec![
                 "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn search_tool_selection_hides_unselected_codex_apps_tools() {
+        let selected_tool_names = Vec::new();
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let connectors = filter_connectors_for_input(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &[user_message("run the selected tools")],
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let mut app_mcp_tools = HashMap::new();
+        let mut non_app_mcp_tools = HashMap::new();
+        for (name, tool_info) in mcp_tools {
+            if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                app_mcp_tools.insert(name, tool_info);
+            } else {
+                non_app_mcp_tools.insert(name, tool_info);
+            }
+        }
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(app_mcp_tools.clone(), &selected_tool_names);
+        selected_mcp_tools.extend(filter_codex_apps_mcp_tools_only(app_mcp_tools, &connectors));
+        selected_mcp_tools.extend(non_app_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(tool_names, vec!["mcp__rmcp__echo".to_string()]);
+    }
+
+    #[test]
+    fn search_tool_selection_unions_selected_and_mentioned_codex_apps_tools() {
+        let selected_tool_names = vec!["mcp__codex_apps__calendar_create_event".to_string()];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__codex_apps__tasks_create_task".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "tasks_create_task",
+                    Some("tasks"),
+                    Some("Tasks"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let connectors = filter_connectors_for_input(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &[user_message("use $tasks and then echo the response")],
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let mut app_mcp_tools = HashMap::new();
+        let mut non_app_mcp_tools = HashMap::new();
+        for (name, tool_info) in mcp_tools {
+            if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+                app_mcp_tools.insert(name, tool_info);
+            } else {
+                non_app_mcp_tools.insert(name, tool_info);
+            }
+        }
+        let mut selected_mcp_tools =
+            filter_mcp_tools_by_name(app_mcp_tools.clone(), &selected_tool_names);
+        selected_mcp_tools.extend(filter_codex_apps_mcp_tools_only(app_mcp_tools, &connectors));
+        selected_mcp_tools.extend(non_app_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__codex_apps__tasks_create_task".to_string(),
                 "mcp__rmcp__echo".to_string(),
             ]
         );

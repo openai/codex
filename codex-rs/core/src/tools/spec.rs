@@ -874,7 +874,7 @@ fn create_search_tool_bm25_tool() -> ToolSpec {
         (
             "query".to_string(),
             JsonSchema::String {
-                description: Some("Search query for MCP tools.".to_string()),
+                description: Some("Search query for apps tools.".to_string()),
             },
         ),
         (
@@ -889,7 +889,7 @@ fn create_search_tool_bm25_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "search_tool_bm25".to_string(),
-        description: "Searches MCP tool metadata with BM25 and exposes matching tools for the next model call.".to_string(),
+        description: "Searches apps tool metadata with BM25 and exposes matching app tools for the next model call.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
