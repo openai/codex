@@ -132,6 +132,7 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
+use codex_state::LogQuery;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -157,6 +158,7 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const MAX_FEEDBACK_LOG_BYTES: usize = 10 * 1024 * 1024;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -1142,6 +1144,7 @@ impl ChatWidget {
         } else {
             None
         };
+        let sqlite_feedback_logs = self.sqlite_feedback_logs(include_logs);
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             snapshot,
@@ -1149,9 +1152,85 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             include_logs,
             self.feedback_audience,
+            sqlite_feedback_logs,
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
+    }
+
+    fn sqlite_feedback_logs(&self, include_logs: bool) -> Option<Vec<u8>> {
+        if !include_logs || !self.config.features.enabled(Feature::Sqlite) {
+            return None;
+        }
+        let thread_id = self.thread_id?;
+        let thread_id_text = thread_id.to_string();
+        let codex_home = self.config.codex_home.clone();
+        let codex_home_display = codex_home.display().to_string();
+        let model_provider_id = self.config.model_provider_id.clone();
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return None;
+        };
+
+        tokio::task::block_in_place(|| {
+            handle.block_on(async {
+                let state_db_ctx = match codex_state::StateRuntime::init(
+                    codex_home,
+                    model_provider_id,
+                    None,
+                )
+                .await
+                {
+                    Ok(db) => db,
+                    Err(err) => {
+                        tracing::warn!(
+                            "feedback sqlite log read failed to initialize state db at {codex_home_display}: {err}"
+                        );
+                        return None;
+                    }
+                };
+                let query = LogQuery {
+                    thread_ids: vec![thread_id_text.clone()],
+                    descending: true,
+                    ..Default::default()
+                };
+                let rows = match state_db_ctx.query_logs(&query).await {
+                    Ok(rows) => rows,
+                    Err(err) => {
+                        tracing::warn!(
+                            "feedback sqlite log query failed for thread_id={thread_id_text}: {err}"
+                        );
+                        return None;
+                    }
+                };
+                if rows.is_empty() {
+                    return None;
+                }
+
+                let mut bytes = 0usize;
+                let mut lines = Vec::new();
+                for row in rows {
+                    let mut line = match row.message {
+                        Some(message) => message,
+                        None => continue,
+                    };
+                    if !line.ends_with('\n') {
+                        line.push('\n');
+                    }
+                    let line_bytes = line.len();
+                    if bytes + line_bytes > MAX_FEEDBACK_LOG_BYTES {
+                        break;
+                    }
+                    bytes += line_bytes;
+                    lines.push(line);
+                }
+                if lines.is_empty() {
+                    return None;
+                }
+
+                lines.reverse();
+                Some(lines.concat().into_bytes())
+            })
+        })
     }
 
     pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {

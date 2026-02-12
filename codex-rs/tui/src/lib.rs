@@ -26,6 +26,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
+use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
@@ -405,9 +406,18 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = if config.features.enabled(Feature::Sqlite) {
+        codex_state::StateRuntime::init(
+            config.codex_home.clone(),
+            config.model_provider_id.clone(),
+            None,
+        )
         .await
-        .map(|db| log_db::start(db).with_filter(env_filter()));
+        .ok()
+        .map(|db| log_db::start(db).with_filter(env_filter()))
+    } else {
+        None
+    };
 
     let _ = tracing_subscriber::registry()
         .with(file_layer)

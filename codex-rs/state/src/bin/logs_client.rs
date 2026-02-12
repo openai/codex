@@ -4,6 +4,8 @@ use std::time::Duration;
 use anyhow::Context;
 use chrono::DateTime;
 use clap::Parser;
+use codex_protocol::logging::TOOL_CALL_LOG_PREFIX;
+use codex_protocol::logging::TOOL_CALL_LOG_TARGET;
 use codex_state::LogQuery;
 use codex_state::LogRow;
 use codex_state::StateRuntime;
@@ -250,14 +252,14 @@ fn format_row(row: &LogRow) -> String {
     let thread_id = row.thread_id.as_deref().unwrap_or("-");
     let thread_id_colored = thread_id.blue().dimmed().to_string();
     let target_colored = target.dimmed().to_string();
-    let message_colored = heuristic_formatting(message);
+    let message_colored = heuristic_formatting(target, message);
     format!(
         "{timestamp_colored} {level_colored} [{thread_id_colored}] {target_colored} - {message_colored}"
     )
 }
 
-fn heuristic_formatting(message: &str) -> String {
-    if matcher::apply_patch(message) {
+fn heuristic_formatting(target: &str, message: &str) -> String {
+    if matcher::apply_patch(target, message) {
         formatter::apply_patch(message)
     } else {
         message.bold().to_string()
@@ -265,8 +267,19 @@ fn heuristic_formatting(message: &str) -> String {
 }
 
 mod matcher {
-    pub(super) fn apply_patch(message: &str) -> bool {
-        message.contains("ToolCall: apply_patch")
+    use super::TOOL_CALL_LOG_PREFIX;
+    use super::TOOL_CALL_LOG_TARGET;
+
+    pub(super) fn apply_patch(target: &str, message: &str) -> bool {
+        if target != TOOL_CALL_LOG_TARGET {
+            return false;
+        }
+
+        let Some((_, rest)) = message.split_once(TOOL_CALL_LOG_PREFIX) else {
+            return false;
+        };
+        let tool_name = rest.trim_start().split_whitespace().next();
+        tool_name == Some("apply_patch")
     }
 }
 
