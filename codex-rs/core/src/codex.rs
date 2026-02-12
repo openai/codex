@@ -37,6 +37,8 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
+use crate::turn_metadata::TurnMetadataHeaderJob;
+use crate::turn_metadata::TurnMetadataPoll;
 use crate::turn_metadata::build_turn_metadata_header;
 use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
 use crate::util::error_or_panic;
@@ -90,7 +92,6 @@ use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -102,7 +103,6 @@ use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
-use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
@@ -557,7 +557,7 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    turn_metadata_header: OnceCell<Option<String>>,
+    turn_metadata_job: Arc<TurnMetadataHeaderJob>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -637,7 +637,7 @@ impl TurnContext {
             truncation_policy,
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
-            turn_metadata_header: self.turn_metadata_header.clone(),
+            turn_metadata_job: self.turn_metadata_job.clone(),
         }
     }
 
@@ -653,39 +653,23 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
-    async fn build_turn_metadata_header(&self) -> Option<String> {
-        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
-        self.turn_metadata_header
-            .get_or_init(|| async {
-                build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
-            })
-            .await
-            .clone()
-    }
-
-    /// Resolves the per-turn metadata header under a shared timeout policy.
-    ///
-    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
-    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
-    pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        resolve_turn_metadata_header_with_timeout(
-            self.build_turn_metadata_header(),
-            self.turn_metadata_header.get().cloned().flatten(),
-        )
-        .await
+    /// Returns turn metadata if ready, without waiting on metadata computation.
+    pub(crate) fn poll_turn_metadata_header(&self) -> TurnMetadataPoll {
+        self.turn_metadata_job.poll()
     }
 
     /// Starts best-effort background computation of turn metadata.
     ///
-    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
+    /// Requests do not await this task. Callers should poll via
+    /// [`TurnContext::poll_turn_metadata_header`] and attach metadata only when ready.
     pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
-        let context = Arc::clone(self);
-        tokio::spawn(async move {
-            trace!("Spawning turn metadata calculation task");
-            context.build_turn_metadata_header().await;
-            trace!("Turn metadata calculation task completed");
-        });
+        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level).to_string();
+        self.turn_metadata_job
+            .spawn(self.cwd.clone(), Some(sandbox));
+    }
+
+    pub(crate) fn cancel_turn_metadata_header_task(&self) {
+        self.turn_metadata_job.cancel();
     }
 }
 
@@ -942,7 +926,7 @@ impl Session {
             truncation_policy: model_info.truncation_policy.into(),
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
-            turn_metadata_header: OnceCell::new(),
+            turn_metadata_job: Arc::new(TurnMetadataHeaderJob::default()),
         }
     }
 
@@ -3969,7 +3953,7 @@ async fn spawn_review_thread(
         js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
-        turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
+        turn_metadata_job: Arc::new(TurnMetadataHeaderJob::default()),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -3979,6 +3963,7 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
+    tc.spawn_turn_metadata_header_task();
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
@@ -4057,7 +4042,14 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 ///   back to the model in the next sampling request.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the turn complete.
-///
+struct TurnMetadataJobCancellation<'a>(&'a TurnContext);
+
+impl Drop for TurnMetadataJobCancellation<'_> {
+    fn drop(&mut self) {
+        self.0.cancel_turn_metadata_header_task();
+    }
+}
+
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -4065,6 +4057,8 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    let _turn_metadata_job_cancellation = TurnMetadataJobCancellation(turn_context.as_ref());
+
     if input.is_empty() {
         return None;
     }
@@ -4186,7 +4180,6 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
     let mut client_session =
@@ -4238,6 +4231,10 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let turn_metadata_header = match turn_context.poll_turn_metadata_header() {
+            TurnMetadataPoll::Ready(header) => header,
+            TurnMetadataPoll::Pending => None,
+        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -5196,6 +5193,7 @@ async fn try_run_sampling_request(
             &turn_context.otel_manager,
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
+            Some(turn_context.sub_id.as_str()),
             turn_metadata_header,
         )
         .instrument(trace_span!("stream_request"))
