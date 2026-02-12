@@ -46,6 +46,71 @@ use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_apps_thread_start_stress_on_linux_arm() -> Result<()> {
+    const ITERATIONS: usize = 20;
+
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: None,
+        is_accessible: false,
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle) =
+        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+
+    for _ in 0..ITERATIONS {
+        let codex_home = TempDir::new()?;
+        write_connectors_config(codex_home.path(), &server_url)?;
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new("chatgpt-token")
+                .account_id("account-123")
+                .chatgpt_user_id("user-123")
+                .chatgpt_account_id("account-123"),
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+        let start_request = mcp
+            .send_thread_start_request(ThreadStartParams::default())
+            .await?;
+        let start_response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(start_request)),
+        )
+        .await??;
+        let ThreadStartResponse { thread, .. } = to_response(start_response)?;
+
+        let list_request = mcp
+            .send_apps_list_request(AppsListParams {
+                limit: None,
+                cursor: None,
+                thread_id: Some(thread.id),
+                force_refetch: false,
+            })
+            .await?;
+        let list_response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(list_request)),
+        )
+        .await??;
+        let _: AppsListResponse = to_response(list_response)?;
+    }
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
