@@ -45,19 +45,10 @@ jobs:
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
-      - name: Verify config schema fixture
-        shell: bash
-        working-directory: codex-rs
-        run: |
-          set -euo pipefail
-          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
-          cargo run -p codex-core --bin codex-write-config-schema
-          git diff --exit-code core/config.schema.json
-
   build:
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -66,7 +57,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      CODEX_BWRAP_ENABLE_FFI: ${{ contains(matrix.target, 'unknown-linux') && '1' || '0' }}
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -84,13 +75,38 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v6
+      - name: Print runner specs (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          total_ram="$(awk '/MemTotal/ {printf "%.1f GiB\n", $2 / 1024 / 1024}' /proc/meminfo)"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(uname -a)"
+          echo "CPU model: ${cpu_model}"
+          echo "Logical CPUs: $(nproc)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
+      - name: Print runner specs (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          total_ram="$(sysctl -n hw.memsize | awk '{printf "%.1f GiB\n", $1 / 1024 / 1024 / 1024}')"
+          echo "Runner: ${RUNNER_NAME:-unknown}"
+          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
+          echo "Hardware model: $(sysctl -n hw.model)"
+          echo "CPU architecture: $(uname -m)"
+          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+          echo "Total RAM: ${total_ram}"
+          echo "Disk usage:"
+          df -h .
       - name: Install Linux bwrap build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -121,20 +137,6 @@ jobs:
           echo "CARGO_HOME=${cargo_home}" >> "$GITHUB_ENV"
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
-
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/.cargo-home/bin/
-            ${{ github.workspace }}/.cargo-home/registry/index/
-            ${{ github.workspace }}/.cargo-home/registry/cache/
-            ${{ github.workspace }}/.cargo-home/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
@@ -203,11 +205,14 @@ jobs:
       - name: Cargo build
         shell: bash
         run: |
-          if [[ "${{ contains(matrix.target, 'windows') }}" == 'true' ]]; then
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-windows-sandbox-setup --bin codex-command-runner
-          else
-            cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
-          fi
+          cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-${{ matrix.target }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - if: ${{ contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
@@ -215,18 +220,6 @@ jobs:
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
-
-      - if: ${{ contains(matrix.target, 'windows') }}
-        name: Sign Windows binaries with Azure Trusted Signing
-        uses: ./.github/actions/windows-code-sign
-        with:
-          target: ${{ matrix.target }}
-          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
       - if: ${{ runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
@@ -306,15 +299,8 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
-          else
-            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-            cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
-          fi
+          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
 
           if [[ "${{ matrix.target }}" == *linux* ]]; then
             cp target/${{ matrix.target }}/release/codex.sigstore "$dest/codex-${{ matrix.target }}.sigstore"
@@ -325,34 +311,18 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
-      - if: ${{ matrix.runner == 'windows-11-arm' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
-
       - name: Compress artifacts
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
-          repo_root=$PWD
-
-          # We want to ship the raw Windows executables in the GitHub Release
-          # in addition to the compressed archives. Keep the originals for
-          # Windows targets; remove them elsewhere to limit the number of
-          # artifacts that end up in the GitHub Release.
-          keep_originals=false
-          if [[ "${{ matrix.runner }}" == windows* ]]; then
-            keep_originals=true
-          fi
 
           # For compatibility with environments that lack the `zstd` tool we
-          # additionally create a `.tar.gz` for all platforms and `.zip` for
-          # Windows alongside every single binary that we publish. The end result is:
+          # additionally create a `.tar.gz` alongside every binary we publish.
+          # The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   codex-<target>.zip          (only for Windows)
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -372,43 +342,9 @@ jobs:
             # Create per-binary tar.gz
             tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
 
-            # Create zip archive for Windows binaries
-            # Must run from inside the dest dir so 7z won't
-            # embed the directory path inside the zip.
-            if [[ "${{ matrix.runner }}" == windows* ]]; then
-              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
-                # Bundle the sandbox helper binaries into the main codex zip so
-                # WinGet installs include the required helpers next to codex.exe.
-                # Fall back to the single-binary zip if the helpers are missing
-                # to avoid breaking releases.
-                bundle_dir="$(mktemp -d)"
-                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
-                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
-                  cp "$dest/$base" "$bundle_dir/$base"
-                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
-                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
-                  # Use an absolute path so bundle zips land in the real dist
-                  # dir even when 7z runs from a temp directory.
-                  (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
-                else
-                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
-                  echo "warning: expected $runner_src and $setup_src"
-                  (cd "$dest" && 7z a "${base}.zip" "$base")
-                fi
-                rm -rf "$bundle_dir"
-              else
-                (cd "$dest" && 7z a "${base}.zip" "$base")
-              fi
-            fi
-
-            # Also create .zst (existing behaviour) *and* remove the original
-            # uncompressed binary to keep the directory small.
-            zstd_args=(-T0 -19)
-            if [[ "${keep_originals}" == false ]]; then
-              zstd_args+=(--rm)
-            fi
-            zstd "${zstd_args[@]}" "$dest/$base"
+            # Also create .zst and remove the uncompressed binaries to keep
+            # non-Windows artifact directories small.
+            zstd -T0 -19 --rm "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
@@ -418,6 +354,13 @@ jobs:
           # equivalents we generated in the previous step.
           path: |
             codex-rs/dist/${{ matrix.target }}/*
+
+  build-windows:
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-windows.yml
+    with:
+      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+    secrets: inherit
 
   shell-tool-mcp:
     name: shell-tool-mcp
@@ -431,6 +374,7 @@ jobs:
   release:
     needs:
       - build
+      - build-windows
       - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
@@ -479,6 +423,12 @@ jobs:
       - name: Delete entries from dist/ that should not go in the release
         run: |
           rm -rf dist/shell-tool-mcp*
+          rm -rf dist/windows-binaries*
+          # cargo-timing.html appears under multiple target-specific directories.
+          # If included in files: dist/**, release upload races on duplicate
+          # asset names and can fail with 404s.
+          find dist -type f -name 'cargo-timing.html' -delete
+          find dist -type d -empty -delete
 
           ls -R dist/
 
@@ -602,18 +552,20 @@ jobs:
           version="${{ needs.release.outputs.version }}"
           tag="${{ needs.release.outputs.tag }}"
           mkdir -p dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
-            --dir dist/npm
-          gh release download "$tag" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-sdk-npm-${version}.tgz" \
-            --dir dist/npm
+          patterns=(
+            "codex-npm-${version}.tgz"
+            "codex-npm-linux-*-${version}.tgz"
+            "codex-npm-darwin-*-${version}.tgz"
+            "codex-npm-win32-*-${version}.tgz"
+            "codex-responses-api-proxy-npm-${version}.tgz"
+            "codex-sdk-npm-${version}.tgz"
+          )
+          for pattern in "${patterns[@]}"; do
+            gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$pattern" \
+              --dir dist/npm
+          done
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
       - name: Publish to npm
@@ -622,19 +574,44 @@ jobs:
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
         run: |
           set -euo pipefail
-          tag_args=()
+          prefix=""
           if [[ -n "${NPM_TAG}" ]]; then
-            tag_args+=(--tag "${NPM_TAG}")
+            prefix="${NPM_TAG}-"
           fi
 
-          tarballs=(
-            "codex-npm-${VERSION}.tgz"
-            "codex-responses-api-proxy-npm-${VERSION}.tgz"
-            "codex-sdk-npm-${VERSION}.tgz"
-          )
+          shopt -s nullglob
+          tarballs=(dist/npm/*-"${VERSION}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found in dist/npm for version ${VERSION}"
+            exit 1
+          fi
 
           for tarball in "${tarballs[@]}"; do
-            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            "${publish_cmd[@]}"
           done
 
   update-branch:

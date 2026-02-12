@@ -4,7 +4,7 @@
 //! - Manages interactive processes (create, reuse, buffer output with caps).
 //! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and
 //!   retry semantics in a single, descriptive flow.
-//! - Spawns the PTY from a sandbox‑transformed `ExecEnv`; on sandbox denial,
+//! - Spawns the PTY from a sandbox-transformed `ExecRequest`; on sandbox denial,
 //!   retries without sandbox when policy allows (no re‑prompt thanks to caching).
 //! - Uses the shared `is_likely_sandbox_denied` heuristic to keep denial messages
 //!   consistent with other exec paths.
@@ -12,7 +12,7 @@
 //! Flow at a glance (open process)
 //! 1) Build a small request `{ command, cwd }`.
 //! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
-//! 3) Runtime: transform `CommandSpec` → `ExecEnv` → spawn PTY.
+//! 3) Runtime: transform `CommandSpec` -> `ExecRequest` -> spawn PTY.
 //! 4) If denial, orchestrator retries with `SandboxType::None`.
 //! 5) Process handle is returned with streaming output + metadata.
 //!
@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_network_proxy::NetworkProxy;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -40,6 +41,10 @@ mod errors;
 mod head_tail_buffer;
 mod process;
 mod process_manager;
+
+pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
+    process_manager::set_deterministic_process_ids_for_tests(enabled);
+}
 
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::UnifiedExecProcess;
@@ -79,6 +84,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
+    pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -203,6 +209,7 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
+                    network: None,
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,

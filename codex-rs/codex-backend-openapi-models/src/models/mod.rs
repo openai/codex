@@ -27,6 +27,9 @@ pub mod paginated_list_task_list_item_;
 pub use self::paginated_list_task_list_item_::PaginatedListTaskListItem;
 
 // Rate Limits
+pub mod additional_rate_limit_details;
+pub use self::additional_rate_limit_details::AdditionalRateLimitDetails;
+
 pub mod rate_limit_status_payload;
 pub use self::rate_limit_status_payload::PlanType;
 pub use self::rate_limit_status_payload::RateLimitStatusPayload;

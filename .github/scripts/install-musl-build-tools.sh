@@ -17,7 +17,7 @@ if [[ -n "${APT_INSTALL_ARGS:-}" ]]; then
 fi
 
 sudo apt-get update "${apt_update_args[@]}"
-sudo apt-get install -y "${apt_install_args[@]}" musl-tools pkg-config g++ clang libc++-dev libc++abi-dev lld
+sudo apt-get install -y "${apt_install_args[@]}" ca-certificates curl musl-tools pkg-config libcap-dev g++ clang libc++-dev libc++abi-dev lld xz-utils
 
 case "${TARGET}" in
   x86_64-unknown-linux-musl)
@@ -31,6 +31,11 @@ case "${TARGET}" in
     exit 1
     ;;
 esac
+
+libcap_version="2.75"
+libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
+libcap_tarball_name="libcap-${libcap_version}.tar.xz"
+libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
@@ -47,6 +52,43 @@ runner_temp="${RUNNER_TEMP:-/tmp}"
 tool_root="${runner_temp}/codex-musl-tools-${TARGET}"
 mkdir -p "${tool_root}"
 
+libcap_root="${tool_root}/libcap-${libcap_version}"
+libcap_src_root="${libcap_root}/src"
+libcap_prefix="${libcap_root}/prefix"
+libcap_pkgconfig_dir="${libcap_prefix}/lib/pkgconfig"
+
+if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
+  mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
+  libcap_tarball="${libcap_root}/${libcap_tarball_name}"
+
+  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
+
+  tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"
+  libcap_source_dir="${libcap_src_root}/libcap-${libcap_version}"
+  make -C "${libcap_source_dir}/libcap" -j"$(nproc)" \
+    CC="${musl_linker}" \
+    AR=ar \
+    RANLIB=ranlib
+
+  cp "${libcap_source_dir}/libcap/libcap.a" "${libcap_prefix}/lib/libcap.a"
+  cp "${libcap_source_dir}/libcap/include/uapi/linux/capability.h" "${libcap_prefix}/include/linux/capability.h"
+  cp "${libcap_source_dir}/libcap/../libcap/include/sys/capability.h" "${libcap_prefix}/include/sys/capability.h"
+
+  cat > "${libcap_pkgconfig_dir}/libcap.pc" <<EOF
+prefix=${libcap_prefix}
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libcap
+Description: Linux capabilities
+Version: ${libcap_version}
+Libs: -L\${libdir} -lcap
+Cflags: -I\${includedir}
+EOF
+fi
+
 sysroot=""
 if command -v zig >/dev/null; then
   zig_bin="$(command -v zig)"
@@ -59,7 +101,19 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
@@ -77,6 +131,21 @@ for arg in "\$@"; do
       fi
       continue
       ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
+      continue
+      ;;
+    -Wp,-U_FORTIFY_SOURCE)
+      # aws-lc-sys emits this GCC preprocessor forwarding form in debug
+      # builds, but zig cc expects the define flag directly.
+      args+=("-U_FORTIFY_SOURCE")
+      continue
+      ;;
   esac
   args+=("\${arg}")
 done
@@ -89,20 +158,49 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
   fi
   case "\${arg}" in
     --target)
+      # Drop explicit --target and its value: we always pass zig's -target below.
       skip_next=1
       continue
       ;;
     --target=*|-target=*|-target)
+      # Zig expects -target and rejects Rust triples like *-unknown-linux-musl.
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
+      continue
+      ;;
+    -Wp,-U_FORTIFY_SOURCE)
+      # aws-lc-sys emits this GCC forwarding form in debug builds; zig c++
+      # expects the define flag directly.
+      args+=("-U_FORTIFY_SOURCE")
       continue
       ;;
   esac
@@ -161,3 +259,21 @@ echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
+
+# Allow pkg-config resolution during cross-compilation.
+echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+pkg_config_path="${libcap_pkgconfig_dir}"
+if [[ -n "${PKG_CONFIG_PATH:-}" ]]; then
+  pkg_config_path="${pkg_config_path}:${PKG_CONFIG_PATH}"
+fi
+echo "PKG_CONFIG_PATH=${pkg_config_path}" >> "$GITHUB_ENV"
+pkg_config_path_var="PKG_CONFIG_PATH_${TARGET}"
+pkg_config_path_var="${pkg_config_path_var//-/_}"
+echo "${pkg_config_path_var}=${libcap_pkgconfig_dir}" >> "$GITHUB_ENV"
+
+if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
+  echo "PKG_CONFIG_SYSROOT_DIR=${sysroot}" >> "$GITHUB_ENV"
+  pkg_config_sysroot_var="PKG_CONFIG_SYSROOT_DIR_${TARGET}"
+  pkg_config_sysroot_var="${pkg_config_sysroot_var//-/_}"
+  echo "${pkg_config_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
+fi

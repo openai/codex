@@ -903,41 +903,33 @@ remote_models = true
             },
         );
         let layers = response.layers.expect("layers present");
-        if cfg!(unix) {
-            let system_file = AbsolutePathBuf::from_absolute_path(
-                crate::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX,
-            )
-            .expect("system file");
-            assert_eq!(layers.len(), 3, "expected three layers on unix");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User {
-                    file: user_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(2).unwrap().name,
-                ConfigLayerSource::System { file: system_file }
-            );
+        // Local macOS machines can surface an MDM-managed config layer at the
+        // top of the stack; ignore it so this test stays focused on file/user/system ordering.
+        let layers = if matches!(
+            layers.first().map(|layer| &layer.name),
+            Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+        ) {
+            &layers[1..]
         } else {
-            assert_eq!(layers.len(), 2, "expected two layers");
-            assert_eq!(
-                layers.first().unwrap().name,
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile {
-                    file: managed_file.clone()
-                }
-            );
-            assert_eq!(
-                layers.get(1).unwrap().name,
-                ConfigLayerSource::User { file: user_file }
-            );
-        }
+            layers.as_slice()
+        };
+        assert_eq!(layers.len(), 3, "expected three layers");
+        assert_eq!(
+            layers.first().unwrap().name,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile {
+                file: managed_file.clone()
+            }
+        );
+        assert_eq!(
+            layers.get(1).unwrap().name,
+            ConfigLayerSource::User {
+                file: user_file.clone()
+            }
+        );
+        assert!(matches!(
+            layers.get(2).unwrap().name,
+            ConfigLayerSource::System { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1135,6 +1127,16 @@ remote_models = true
             },
         );
         let layers = response.layers.expect("layers");
+        // Local macOS machines can surface an MDM-managed config layer at the
+        // top of the stack; ignore it so this test stays focused on file/session/user ordering.
+        let layers = if matches!(
+            layers.first().map(|layer| &layer.name),
+            Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+        ) {
+            &layers[1..]
+        } else {
+            layers.as_slice()
+        };
         assert_eq!(
             layers.first().unwrap().name,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }

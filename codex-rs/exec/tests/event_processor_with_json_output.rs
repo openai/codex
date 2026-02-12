@@ -92,12 +92,13 @@ fn session_configured_produces_thread_started_event() {
             model: "codex-mini-latest".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            network_proxy: None,
             rollout_path: Some(rollout_path),
         }),
     );
@@ -116,6 +117,7 @@ fn task_started_produces_turn_started_event() {
     let out = ep.collect_thread_events(&event(
         "t1",
         EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: Some(32_000),
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -309,6 +311,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     let complete = event(
         "p3",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -676,6 +679,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let complete = event(
         "t2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -828,6 +832,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
     let complete_event = event(
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -1275,6 +1280,7 @@ fn task_complete_produces_turn_completed_with_usage() {
     let complete_event = event(
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     );

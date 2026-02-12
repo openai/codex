@@ -74,8 +74,17 @@ pub enum ContentItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
+/// Classifies an assistant message as interim commentary or final answer text.
+///
+/// Providers do not emit this consistently, so callers must treat `None` as
+/// "phase unknown" and keep compatibility behavior for legacy models.
 pub enum MessagePhase {
+    /// Mid-turn assistant text (for example preamble/progress narration).
+    ///
+    /// Additional tool calls or assistant output may follow before turn
+    /// completion.
     Commentary,
+    /// The assistant's terminal answer text for the current turn.
     FinalAnswer,
 }
 
@@ -93,7 +102,8 @@ pub enum ResponseItem {
         #[ts(optional)]
         end_turn: Option<bool>,
         // Optional output-message phase (for example: "commentary", "final_answer").
-        // Do not use directly; availability can vary by provider and model.
+        // Availability varies by provider/model, so downstream consumers must
+        // preserve fallback behavior when this is absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
@@ -302,7 +312,7 @@ impl DeveloperInstructions {
 
         let (sandbox_mode, writable_roots) = match sandbox_policy {
             SandboxPolicy::DangerFullAccess => (SandboxMode::DangerFullAccess, None),
-            SandboxPolicy::ReadOnly => (SandboxMode::ReadOnly, None),
+            SandboxPolicy::ReadOnly { .. } => (SandboxMode::ReadOnly, None),
             SandboxPolicy::ExternalSandbox { .. } => (SandboxMode::DangerFullAccess, None),
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
@@ -1213,6 +1223,7 @@ mod tests {
     fn builds_permissions_from_policy() {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
+            read_only_access: Default::default(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

@@ -43,14 +43,16 @@ use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParam;
+use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::Resource;
@@ -223,7 +225,16 @@ impl ElicitationRequestManager {
                                     ProtocolRequestId::Integer(value)
                                 }
                             },
-                            message: elicitation.message,
+                            message: match elicitation {
+                                CreateElicitationRequestParams::FormElicitationParams {
+                                    message,
+                                    ..
+                                }
+                                | CreateElicitationRequestParams::UrlElicitationParams {
+                                    message,
+                                    ..
+                                } => message,
+                            },
                         }),
                     })
                     .await;
@@ -531,6 +542,33 @@ impl McpConnectionManager {
         tools
     }
 
+    /// Force-refresh codex apps tools by bypassing the in-process cache.
+    ///
+    /// On success, the refreshed tools replace the cache contents. On failure,
+    /// the existing cache remains unchanged.
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<()> {
+        let managed_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .client()
+            .await
+            .context("failed to get client")?;
+
+        let tools = list_tools_for_client_uncached(
+            CODEX_APPS_MCP_SERVER_NAME,
+            &managed_client.client,
+            managed_client.tool_timeout,
+        )
+        .await
+        .with_context(|| {
+            format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
+        })?;
+
+        write_cached_codex_apps_tools(&tools);
+        Ok(())
+    }
+
     /// Returns a single map that contains all resources. Each key is the
     /// server name and the value is a vector of resources.
     pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
@@ -551,7 +589,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        meta: None,
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resources(params, timeout).await {
@@ -616,7 +655,8 @@ impl McpConnectionManager {
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| PaginatedRequestParam {
+                    let params = cursor.as_ref().map(|next| PaginatedRequestParams {
+                        meta: None,
                         cursor: Some(next.clone()),
                     });
                     let response = match client.list_resource_templates(params, timeout).await {
@@ -706,7 +746,7 @@ impl McpConnectionManager {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
@@ -722,7 +762,7 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParam>,
+        params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -738,7 +778,7 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParam,
+        params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
@@ -841,6 +881,37 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
+pub(crate) fn filter_codex_apps_mcp_tools_only(
+    mut mcp_tools: HashMap<String, ToolInfo>,
+    connectors: &[crate::connectors::AppInfo],
+) -> HashMap<String, ToolInfo> {
+    let allowed: HashSet<&str> = connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+
+    mcp_tools.retain(|_, tool| {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            return false;
+        }
+        let Some(connector_id) = tool.connector_id.as_deref() else {
+            return false;
+        };
+        allowed.contains(connector_id)
+    });
+
+    mcp_tools
+}
+
+pub(crate) fn filter_mcp_tools_by_name(
+    mut mcp_tools: HashMap<String, ToolInfo>,
+    selected_tools: &[String],
+) -> HashMap<String, ToolInfo> {
+    let allowed: HashSet<&str> = selected_tools.iter().map(String::as_str).collect();
+    mcp_tools.retain(|name, _| allowed.contains(name.as_str()));
+    mcp_tools
+}
+
 fn normalize_codex_apps_tool_title(
     server_name: &str,
     connector_name: Option<&str>,
@@ -921,21 +992,28 @@ async fn start_server_task(
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
-    let params = InitializeRequestParam {
+    let params = InitializeRequestParams {
+        meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
+            extensions: None,
             roots: None,
             sampling: None,
             // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
             // indicates this should be an empty object.
             elicitation: Some(ElicitationCapability {
-                schema_validation: None,
+                form: Some(FormElicitationCapability {
+                    schema_validation: None,
+                }),
+                url: None,
             }),
+            tasks: None,
         },
         client_info: Implementation {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".into()),
+            description: None,
             icons: None,
             website_url: None,
         },
@@ -1185,6 +1263,7 @@ mod tests {
                 input_schema: Arc::new(JsonObject::default()),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             },

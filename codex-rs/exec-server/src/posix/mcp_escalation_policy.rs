@@ -4,7 +4,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_execpolicy::Policy;
 use rmcp::ErrorData as McpError;
 use rmcp::RoleServer;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ElicitationSchema;
@@ -69,7 +69,8 @@ impl McpEscalationPolicy {
             .pause_for(async {
                 context
                     .peer
-                    .create_elicitation(CreateElicitationRequestParam {
+                    .create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+                        meta: None,
                         message: format!(
                             "Allow agent to run `{command}` in `{}`?",
                             workdir.display()

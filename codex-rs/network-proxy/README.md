@@ -3,7 +3,7 @@
 `codex-network-proxy` is Codex's local network policy enforcement proxy. It runs:
 
 - an HTTP proxy (default `127.0.0.1:3128`)
-- an optional SOCKS5 proxy (default `127.0.0.1:8081`, disabled by default)
+- a SOCKS5 proxy (default `127.0.0.1:8081`, enabled by default)
 - an admin HTTP API (default `127.0.0.1:8080`)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
@@ -17,34 +17,33 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 Example config:
 
 ```toml
-[network_proxy]
+[network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
-# Optional SOCKS5 listener (disabled by default).
-enable_socks5 = false
+# SOCKS5 listener (enabled by default).
+enable_socks5 = true
 socks_url = "http://127.0.0.1:8081"
-enable_socks5_udp = false
+enable_socks5_udp = true
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
-allow_upstream_proxy = false
+allow_upstream_proxy = true
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
-[network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
-allowed_domains = ["*.openai.com"]
+allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
 denied_domains = ["evil.example"]
 
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = false
+allow_local_binding = true
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
@@ -148,8 +147,8 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
-- HTTPS tunneling uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
-  native toolchain and CMake on macOS/Linux/Windows.
+- HTTPS tunneling uses rustls via Rama's `rama-tls-rustls`; this avoids BoringSSL/OpenSSL symbol
+  collisions in mixed TLS dependency graphs.
 
 ## Security notes (important)
 

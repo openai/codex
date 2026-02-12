@@ -13,19 +13,31 @@ mod socks5;
 mod state;
 mod upstream;
 
-use anyhow::Result;
+pub use config::NetworkMode;
+pub use config::NetworkProxyConfig;
+pub use config::host_and_port_from_network_addr;
 pub use network_policy::NetworkDecision;
 pub use network_policy::NetworkPolicyDecider;
 pub use network_policy::NetworkPolicyRequest;
 pub use network_policy::NetworkPolicyRequestArgs;
 pub use network_policy::NetworkProtocol;
+pub use proxy::ALL_PROXY_ENV_KEYS;
+pub use proxy::ALLOW_LOCAL_BINDING_ENV_KEY;
 pub use proxy::Args;
+pub use proxy::DEFAULT_NO_PROXY_VALUE;
+pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
 pub use proxy::NetworkProxyHandle;
-
-pub async fn run_main(args: Args) -> Result<()> {
-    let _ = args;
-    let proxy = NetworkProxy::builder().build().await?;
-    proxy.run().await?.wait().await
-}
+pub use proxy::PROXY_URL_ENV_KEYS;
+pub use proxy::has_proxy_url_env_vars;
+pub use proxy::proxy_url_env_value;
+pub use runtime::ConfigReloader;
+pub use runtime::ConfigState;
+pub use runtime::NetworkProxyState;
+pub use state::NetworkProxyConstraintError;
+pub use state::NetworkProxyConstraints;
+pub use state::PartialNetworkConfig;
+pub use state::PartialNetworkProxyConfig;
+pub use state::build_config_state;
+pub use state::validate_policy_against_constraints;

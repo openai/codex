@@ -34,6 +34,25 @@ pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 /// be concatenated with the following separator.
 const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
+fn render_js_repl_instructions(config: &Config) -> Option<String> {
+    if !config.features.enabled(Feature::JsRepl) {
+        return None;
+    }
+
+    let mut section = String::from("## JavaScript REPL (Node)\n");
+    section.push_str("- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel. `codex.state` persists for the session (best effort) and is cleared by `js_repl_reset`.\n");
+    section.push_str("- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n");
+    section.push_str("- Helpers available in `js_repl`: `codex.state` and `codex.tmpDir`.\n");
+    section.push_str("- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n");
+    section.push_str("- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n");
+
+    section.push_str(
+        "- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`.",
+    );
+
+    Some(section)
+}
+
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(
@@ -60,6 +79,13 @@ pub(crate) async fn get_user_instructions(
             error!("error trying to find project doc: {e:#}");
         }
     };
+
+    if let Some(js_repl_section) = render_js_repl_instructions(config) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&js_repl_section);
+    }
 
     let skills_section = skills.and_then(render_skills_section);
     if let Some(skills_section) = skills_section {
@@ -236,7 +262,10 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
-    use crate::skills::load_skills;
+    use crate::features::Feature;
+    use crate::skills::loader::SkillRoot;
+    use crate::skills::loader::load_skills_from_roots;
+    use codex_protocol::protocol::SkillScope;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -273,6 +302,13 @@ mod tests {
             .map(std::string::ToString::to_string)
             .collect();
         config
+    }
+
+    fn load_test_skills(config: &Config) -> crate::skills::SkillLoadOutcome {
+        load_skills_from_roots([SkillRoot {
+            path: config.codex_home.join("skills"),
+            scope: SkillScope::User,
+        }])
     }
 
     /// AGENTS.md missing – should yield `None`.
@@ -362,6 +398,19 @@ mod tests {
             res.is_none(),
             "With limit 0 the function should return None"
         );
+    }
+
+    #[tokio::test]
+    async fn js_repl_instructions_are_appended_when_enabled() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::JsRepl);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("js_repl instructions expected");
+        let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel. `codex.state` persists for the session (best effort) and is cleared by `js_repl_reset`.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers available in `js_repl`: `codex.state` and `codex.tmpDir`.\n- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log`.";
+        assert_eq!(res, expected);
     }
 
     /// When both system instructions *and* a project doc are present the two
@@ -502,7 +551,7 @@ mod tests {
             "extract from pdfs",
         );
 
-        let skills = load_skills(&cfg);
+        let skills = load_test_skills(&cfg);
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
@@ -529,7 +578,7 @@ mod tests {
         let cfg = make_config(&tmp, 4096, None).await;
         create_skill(cfg.codex_home.clone(), "linting", "run clippy");
 
-        let skills = load_skills(&cfg);
+        let skills = load_test_skills(&cfg);
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
@@ -545,6 +594,30 @@ mod tests {
             "## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- linting: run clippy (file: {expected_path_str})\n### How to use skills\n{usage_rules}"
         );
         assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn apps_feature_does_not_emit_user_instructions_by_itself() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None).await;
+        assert_eq!(res, None);
+    }
+
+    #[tokio::test]
+    async fn apps_feature_does_not_append_to_project_doc_user_instructions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
+
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::Apps);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("instructions expected");
+        assert_eq!(res, "base doc");
     }
 
     fn create_skill(codex_home: PathBuf, name: &str, description: &str) {

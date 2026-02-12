@@ -338,7 +338,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "previousAccountId": {
-          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior ID token did not include a workspace identifier (`chatgpt_account_id`) or when the token could not be parsed.",
+          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior auth state did not include a workspace identifier (`chatgpt_account_id`).",
           "type": [
             "string",
             "null"
@@ -371,13 +371,19 @@
         "accessToken": {
           "type": "string"
         },
-        "idToken": {
+        "chatgptAccountId": {
           "type": "string"
+        },
+        "chatgptPlanType": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "accessToken",
-        "idToken"
+        "chatgptAccountId"
       ],
       "title": "ChatgptAuthTokensRefreshResponse",
       "type": "object"
@@ -1878,6 +1884,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -1886,35 +1893,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -2567,6 +2545,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -2576,6 +2557,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -2590,6 +2572,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -2599,6 +2584,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -2893,6 +2879,17 @@
             },
             "model_provider_id": {
               "type": "string"
+            },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
             },
             "reasoning_effort": {
               "anyOf": [
@@ -4125,6 +4122,12 @@
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
             },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "turn_aborted"
@@ -4781,6 +4784,95 @@
             "type"
           ],
           "title": "CollabCloseEndEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_begin"
+              ],
+              "title": "CollabResumeBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabResumeBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the receiver agent reported to the sender agent after resume."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_end"
+              ],
+              "title": "CollabResumeEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabResumeEndEventMsg",
           "type": "object"
         }
       ],
@@ -5528,6 +5620,16 @@
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -6088,11 +6190,23 @@
       ]
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -6437,6 +6551,18 @@
             }
           ]
         },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "plan_type": {
           "anyOf": [
             {
@@ -6498,6 +6624,57 @@
         "used_percent"
       ],
       "type": "object"
+    },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -7512,8 +7689,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -7571,6 +7756,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -8119,6 +8312,26 @@
           "properties": {
             "method": {
               "enum": [
+                "app/list/updated"
+              ],
+              "title": "App/list/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AppListUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "App/list/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/reasoning/summaryTextDelta"
               ],
               "title": "Item/reasoning/summaryTextDeltaNotificationMethod",
@@ -8593,6 +8806,25 @@
         "sessionId"
       ],
       "title": "SessionConfiguredNotification",
+      "type": "object"
+    },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
+      ],
       "type": "object"
     },
     "SessionSource": {
@@ -9190,6 +9422,7 @@
           "type": "object"
         },
         {
+          "description": "Assistant-authored message payload used in turn-item streams.\n\n`phase` is optional because not all providers/models emit it. Consumers should use it when present, but retain legacy completion semantics when it is `None`.",
           "properties": {
             "content": {
               "items": {
@@ -9199,6 +9432,17 @@
             },
             "id": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter."
             },
             "type": {
               "enum": [
@@ -9896,6 +10140,7 @@
         "type": "string"
       },
       "AppInfo": {
+        "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
         "properties": {
           "description": {
             "type": [
@@ -9944,11 +10189,29 @@
         ],
         "type": "object"
       },
+      "AppListUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - notification emitted when the app list changes.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/AppInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "AppListUpdatedNotification",
+        "type": "object"
+      },
       "AppsConfig": {
         "type": "object"
       },
       "AppsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - list available apps/connectors.",
         "properties": {
           "cursor": {
             "description": "Opaque pagination cursor returned by a previous call.",
@@ -9956,6 +10219,10 @@
               "string",
               "null"
             ]
+          },
+          "forceRefetch": {
+            "description": "When true, bypass app caches and fetch the latest data from sources.",
+            "type": "boolean"
           },
           "limit": {
             "description": "Optional page size; defaults to a reasonable server-side value.",
@@ -9965,6 +10232,13 @@
               "integer",
               "null"
             ]
+          },
+          "threadId": {
+            "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "title": "AppsListParams",
@@ -9972,6 +10246,7 @@
       },
       "AppsListResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - app list response.",
         "properties": {
           "data": {
             "items": {
@@ -10087,6 +10362,7 @@
             "enum": [
               "contextWindowExceeded",
               "usageLimitExceeded",
+              "serverOverloaded",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -10095,35 +10371,6 @@
               "other"
             ],
             "type": "string"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "modelCap": {
-                "properties": {
-                  "model": {
-                    "type": "string"
-                  },
-                  "reset_after_seconds": {
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                      "integer",
-                      "null"
-                    ]
-                  }
-                },
-                "required": [
-                  "model"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "modelCap"
-            ],
-            "title": "ModelCapCodexErrorInfo",
-            "type": "object"
           },
           {
             "additionalProperties": false,
@@ -10254,6 +10501,7 @@
         "enum": [
           "spawnAgent",
           "sendInput",
+          "resumeAgent",
           "wait",
           "closeAgent"
         ],
@@ -11021,6 +11269,15 @@
               "null"
             ]
           },
+          "allowedWebSearchModes": {
+            "items": {
+              "$ref": "#/definitions/v2/WebSearchMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "enforceResidency": {
             "anyOf": [
               {
@@ -11647,7 +11904,22 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "rateLimits": {
-            "$ref": "#/definitions/v2/RateLimitSnapshot"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              }
+            ],
+            "description": "Backward-compatible single-bucket view; mirrors the historical payload."
+          },
+          "rateLimitsByLimitId": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/RateLimitSnapshot"
+            },
+            "description": "Multi-bucket view keyed by metered `limit_id` (for example, `codex`).",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -11948,12 +12220,19 @@
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
-                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
+                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
                 "type": "string"
               },
-              "idToken": {
-                "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
+              "chatgptAccountId": {
+                "description": "Workspace/account identifier supplied by the client.",
                 "type": "string"
+              },
+              "chatgptPlanType": {
+                "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": {
                 "enum": [
@@ -11965,7 +12244,7 @@
             },
             "required": [
               "accessToken",
-              "idToken",
+              "chatgptAccountId",
               "type"
             ],
             "title": "ChatgptAuthTokensv2::LoginAccountParams",
@@ -12222,11 +12501,23 @@
         "type": "string"
       },
       "MessagePhase": {
-        "enum": [
-          "commentary",
-          "final_answer"
-        ],
-        "type": "string"
+        "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+        "oneOf": [
+          {
+            "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+            "enum": [
+              "commentary"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "The assistant's terminal answer text for the current turn.",
+            "enum": [
+              "final_answer"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
@@ -12346,6 +12637,84 @@
           "enabled"
         ],
         "type": "string"
+      },
+      "NetworkRequirements": {
+        "properties": {
+          "allowLocalBinding": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "allowUnixSockets": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "allowUpstreamProxy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "allowedDomains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "dangerouslyAllowNonLoopbackAdmin": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "dangerouslyAllowNonLoopbackProxy": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "deniedDomains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "httpPort": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "socksPort": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "OverriddenMetadata": {
         "properties": {
@@ -12565,6 +12934,18 @@
               }
             ]
           },
+          "limitId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limitName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planType": {
             "anyOf": [
               {
@@ -12644,6 +13025,53 @@
         ],
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
+      },
+      "ReadOnlyAccess": {
+        "oneOf": [
+          {
+            "properties": {
+              "includePlatformDefaults": {
+                "default": true,
+                "type": "boolean"
+              },
+              "readableRoots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "RestrictedReadOnlyAccess",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "fullAccess"
+                ],
+                "title": "FullAccessReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "FullAccessReadOnlyAccess",
+            "type": "object"
+          }
+        ]
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -13485,6 +13913,16 @@
           },
           {
             "properties": {
+              "access": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -13536,6 +13974,16 @@
               "networkAccess": {
                 "default": false,
                 "type": "boolean"
+              },
+              "readOnlyAccess": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
               },
               "type": {
                 "enum": [
@@ -13866,6 +14314,24 @@
         ],
         "type": "object"
       },
+      "SkillsListExtraRootsForCwd": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "extraUserRoots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cwd",
+          "extraUserRoots"
+        ],
+        "type": "object"
+      },
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13879,6 +14345,17 @@
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"
+          },
+          "perCwdExtraUserRoots": {
+            "default": null,
+            "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+            "items": {
+              "$ref": "#/definitions/v2/SkillsListExtraRootsForCwd"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "title": "SkillsListParams",

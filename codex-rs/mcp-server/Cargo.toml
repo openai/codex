@@ -18,9 +18,9 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }

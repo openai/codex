@@ -13,13 +13,14 @@ use anyhow::Context;
 use codex_mcp_server::CodexToolCallParam;
 
 use pretty_assertions::assert_eq;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::ClientCapabilities;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
-use rmcp::model::InitializeRequestParam;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::JsonRpcNotification;
 use rmcp::model::JsonRpcRequest;
@@ -112,19 +113,26 @@ impl McpProcess {
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
-        let params = InitializeRequestParam {
+        let params = InitializeRequestParams {
+            meta: None,
             capabilities: ClientCapabilities {
                 elicitation: Some(ElicitationCapability {
-                    schema_validation: None,
+                    form: Some(FormElicitationCapability {
+                        schema_validation: None,
+                    }),
+                    url: None,
                 }),
                 experimental: None,
+                extensions: None,
                 roots: None,
                 sampling: None,
+                tasks: None,
             },
             client_info: Implementation {
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
+                description: None,
                 icons: None,
                 website_url: None,
             },
@@ -194,12 +202,14 @@ impl McpProcess {
         &mut self,
         params: CodexToolCallParam,
     ) -> anyhow::Result<i64> {
-        let codex_tool_call_params = CallToolRequestParam {
+        let codex_tool_call_params = CallToolRequestParams {
+            meta: None,
             name: "codex".into(),
             arguments: Some(match serde_json::to_value(params)? {
                 serde_json::Value::Object(map) => map,
                 _ => unreachable!("params serialize to object"),
             }),
+            task: None,
         };
         self.send_request(
             "tools/call",
@@ -353,6 +363,36 @@ impl McpProcess {
                 JsonRpcMessage::Response(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
                 }
+            }
+        }
+    }
+}
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        // These tests spawn a `codex-mcp-server` child process.
+        //
+        // We keep that child alive for the test and rely on Tokio's `kill_on_drop(true)` when this
+        // helper is dropped. Tokio documents kill-on-drop as best-effort: dropping requests
+        // termination, but it does not guarantee the child has fully exited and been reaped before
+        // teardown continues.
+        //
+        // That makes cleanup timing nondeterministic. Leak detection can occasionally observe the
+        // child still alive at teardown and report `LEAK`, which makes the test flaky.
+        //
+        // Drop can't be async, so we do a bounded synchronous cleanup:
+        //
+        // 1. Request termination with `start_kill()`.
+        // 2. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        let _ = self.process.start_kill();
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        while start.elapsed() < timeout {
+            match self.process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return,
             }
         }
     }

@@ -33,6 +33,24 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     }
 }
 
+/// Whether a `ResponseItem` should be persisted for the memories.
+#[inline]
+pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } => role != "developer",
+        ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Reasoning { .. }
+        | ResponseItem::GhostSnapshot { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
 /// Whether an `EventMsg` should be persisted in rollout files.
 #[inline]
 pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
@@ -47,7 +65,9 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::UndoCompleted(_)
-        | EventMsg::TurnAborted(_) => true,
+        | EventMsg::TurnAborted(_)
+        | EventMsg::TurnStarted(_)
+        | EventMsg::TurnComplete(_) => true,
         EventMsg::ItemCompleted(event) => {
             // Plan items are derived from streaming tags and are not part of the
             // raw ResponseItem history, so we persist their completion to replay
@@ -56,8 +76,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         }
         EventMsg::Error(_)
         | EventMsg::Warning(_)
-        | EventMsg::TurnStarted(_)
-        | EventMsg::TurnComplete(_)
         | EventMsg::AgentMessageDelta(_)
         | EventMsg::AgentReasoningDelta(_)
         | EventMsg::AgentReasoningRawContentDelta(_)
@@ -109,6 +127,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabCloseEnd(_) => false,
+        | EventMsg::CollabCloseEnd(_)
+        | EventMsg::CollabResumeBegin(_)
+        | EventMsg::CollabResumeEnd(_) => false,
     }
 }

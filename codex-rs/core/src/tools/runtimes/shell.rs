@@ -4,6 +4,7 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
@@ -23,6 +24,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -33,6 +35,7 @@ pub struct ShellRequest {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub env: std::collections::HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -76,7 +79,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn approval_keys(&self, req: &ShellRequest) -> Vec<Self::ApprovalKey> {
         vec![ApprovalKey {
-            command: req.command.clone(),
+            command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
         }]
@@ -146,7 +149,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command =
+            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
@@ -164,7 +168,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(spec)
+            .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
