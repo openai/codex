@@ -25,8 +25,8 @@ use serde_json::Value;
 use serde_json::json;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
-    "MCP tools (`mcp__...`) are hidden until you search for them.",
-    "Matching tools are added to `active_selected_tools`.",
+    "app tools from `codex_apps` (`mcp__codex_apps__...`) are hidden until you search for them.",
+    "Core tools and non-app MCP tools remain available without searching.",
 ];
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -174,7 +174,7 @@ async fn search_tool_adds_developer_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
+async fn search_tool_keeps_non_app_mcp_tools_without_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -233,12 +233,8 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
         "tools list should include search_tool_bm25 when enabled: {tools:?}"
     );
     assert!(
-        !tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "tools list should not include MCP tools before search: {tools:?}"
-    );
-    assert!(
-        !tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "tools list should not include MCP tools before search: {tools:?}"
+        tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "tools list should include non-app MCP tools without search: {tools:?}"
     );
 
     Ok(())
@@ -325,18 +321,14 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
 
     let first_tools = tool_names(&requests[0].body_json());
     assert!(
-        !first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "first request should not include MCP tools before search: {first_tools:?}"
+        first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "first request should include non-app MCP tools without search: {first_tools:?}"
     );
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
         second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should include selected MCP tool: {second_tools:?}"
-    );
-    assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should only include selected MCP tool: {second_tools:?}"
+        "second request should include non-app MCP tools: {second_tools:?}"
     );
 
     let search_output_payload = search_tool_output_payload(&requests[1], call_id);
@@ -344,15 +336,27 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
         search_output_payload.get("selected_tools").is_none(),
         "selected_tools should not be returned: {search_output_payload:?}"
     );
+    assert!(
+        search_output_payload.get("query").is_some(),
+        "search_tool_bm25 output should include query: {search_output_payload:?}"
+    );
+    assert!(
+        search_output_payload.get("total_tools").is_some(),
+        "search_tool_bm25 output should include total_tools: {search_output_payload:?}"
+    );
+    assert!(
+        search_output_payload.get("tools").is_some(),
+        "search_tool_bm25 output should include tools: {search_output_payload:?}"
+    );
     assert_eq!(
         active_selected_tools(&search_output_payload),
-        vec!["mcp__rmcp__echo".to_string()],
+        Vec::<String>::new(),
     );
 
     let third_tools = tool_names(&requests[2].body_json());
     assert!(
-        !third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should not include MCP tools after turn reset: {third_tools:?}"
+        third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "third request should include non-app MCP tools in the next turn: {third_tools:?}"
     );
 
     Ok(())
@@ -447,30 +451,27 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
 
     let first_tools = tool_names(&requests[0].body_json());
     assert!(
-        !first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "first request should not include MCP tools before search: {first_tools:?}"
+        first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "first request should include non-app MCP tools without search: {first_tools:?}"
     );
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
         second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should include echo after first search: {second_tools:?}"
-    );
-    assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should not include image before second search runs: {second_tools:?}"
+        "second request should include non-app MCP tools: {second_tools:?}"
     );
 
     let third_tools = tool_names(&requests[2].body_json());
     assert!(
         third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should still include echo: {third_tools:?}"
-    );
-    assert!(
-        third_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "third request should include image after second search: {third_tools:?}"
+        "third request should include non-app MCP tools: {third_tools:?}"
     );
 
+    let first_search_payload = search_tool_output_payload(&requests[1], first_call_id);
+    assert_eq!(
+        active_selected_tools(&first_search_payload),
+        Vec::<String>::new(),
+    );
     let second_search_payload = search_tool_output_payload(&requests[2], second_call_id);
     assert!(
         second_search_payload.get("selected_tools").is_none(),
@@ -478,10 +479,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
     );
     assert_eq!(
         active_selected_tools(&second_search_payload),
-        vec![
-            "mcp__rmcp__echo".to_string(),
-            "mcp__rmcp__image".to_string(),
-        ],
+        Vec::<String>::new(),
     );
 
     Ok(())

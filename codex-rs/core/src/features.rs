@@ -89,7 +89,7 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Allow the model to search MCP tools via BM25 before exposing them.
+    /// Allow the model to search apps tools via BM25 before exposing app tools.
     SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
