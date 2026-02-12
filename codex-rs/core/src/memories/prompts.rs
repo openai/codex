@@ -30,7 +30,6 @@ struct MemoryToolDeveloperInstructionsTemplate<'a> {
 }
 
 /// Builds the consolidation subagent prompt for a specific memory root.
-///
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     let template = ConsolidationPromptTemplate {
@@ -74,6 +73,9 @@ pub(super) fn build_stage_one_input_message(
     .render()?)
 }
 
+/// Build prompt used for read path. This prompt must be added to the developer instructions. In
+/// case of large memory files, the `memory_summary.md` is truncated at
+/// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
 pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
     let base_path = memory_root(codex_home);
     let memory_summary_path = base_path.join("memory_summary.md");

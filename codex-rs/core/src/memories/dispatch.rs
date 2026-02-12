@@ -4,8 +4,8 @@ use crate::config::Constrained;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
+use crate::memories::phase2::spawn_phase2_completion_task;
 use crate::memories::prompts::build_consolidation_prompt;
-use crate::memories::startup::phase2::spawn_phase2_completion_task;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_protocol::protocol::AskForApproval;
@@ -19,6 +19,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+//TODO(jif) clean.
+
 fn completion_watermark(
     claimed_watermark: i64,
     latest_memories: &[codex_state::Stage1Output],
@@ -31,7 +33,7 @@ fn completion_watermark(
         .max(claimed_watermark)
 }
 
-pub(super) async fn run_global_memory_consolidation(
+pub(in crate::memories) async fn run_global_memory_consolidation(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> bool {
@@ -261,7 +263,6 @@ pub(super) async fn run_global_memory_consolidation(
 #[cfg(test)]
 mod tests {
     use super::completion_watermark;
-    use super::memory_root;
     use super::run_global_memory_consolidation;
     use crate::CodexAuth;
     use crate::ThreadManager;
@@ -270,6 +271,7 @@ mod tests {
     use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
+    use crate::memories::memory_root;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
     use chrono::Utc;

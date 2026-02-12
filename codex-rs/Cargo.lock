@@ -1692,6 +1692,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
+ "codex-utils-sanitizer",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",

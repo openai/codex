@@ -9,6 +9,8 @@ use crate::memories::phase_two;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
 
+//TODO(jif) clean.
+
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,

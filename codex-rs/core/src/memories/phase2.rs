@@ -11,7 +11,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-pub(super) fn spawn_phase2_completion_task(
+pub(in crate::memories) fn spawn_phase2_completion_task(
     session: &Session,
     ownership_token: String,
     completion_watermark: i64,

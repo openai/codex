@@ -1,4 +1,3 @@
-use super::stage_one::parse_stage_one_output;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
 use crate::memories::ensure_layout;
@@ -21,39 +20,8 @@ fn memory_root_uses_shared_global_path() {
 }
 
 #[test]
-fn parse_stage_one_output_accepts_fenced_json() {
-    let raw = "```json\n{\"raw_memory\":\"abc\",\"rollout_summary\":\"short\"}\n```";
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert!(parsed.raw_memory.contains("abc"));
-    assert_eq!(parsed.rollout_summary, "short");
-}
-
-#[test]
-fn parse_stage_one_output_rejects_legacy_keys() {
-    let raw = r#"{"rawMemory":"abc","summary":"short"}"#;
-    assert!(parse_stage_one_output(raw).is_err());
-}
-
-#[test]
-fn parse_stage_one_output_accepts_empty_pair_for_skip() {
-    let raw = r#"{"raw_memory":"","rollout_summary":""}"#;
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert_eq!(parsed.raw_memory, "");
-    assert_eq!(parsed.rollout_summary, "");
-}
-
-#[test]
-fn parse_stage_one_output_accepts_optional_rollout_slug() {
-    let raw = r#"{"raw_memory":"abc","rollout_summary":"short","rollout_slug":"my-slug"}"#;
-    let parsed = parse_stage_one_output(raw).expect("parsed");
-    assert!(parsed.raw_memory.contains("abc"));
-    assert_eq!(parsed.rollout_summary, "short");
-    assert_eq!(parsed._rollout_slug, Some("my-slug".to_string()));
-}
-
-#[test]
 fn stage_one_output_schema_requires_all_declared_properties() {
-    let schema = super::stage_one::stage_one_output_schema();
+    let schema = crate::memories::phase1::output_schema();
     let properties = schema
         .get("properties")
         .and_then(Value::as_object)
