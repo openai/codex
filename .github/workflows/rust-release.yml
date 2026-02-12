@@ -79,32 +79,42 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Print runner specs (Linux)
-        if: ${{ runner.os == 'Linux' }}
+      - if: ${{ runner.os != 'Windows' }}
+        name: Print runner specs
         shell: bash
         run: |
           set -euo pipefail
-          echo "Runner: ${RUNNER_NAME:-unknown}"
-          echo "OS: $(uname -a)"
-          echo "CPU model: $(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/,\"\",$2); print $2; exit}')"
-          echo "Logical CPUs: $(nproc)"
-          echo "Total RAM: $(awk '/MemTotal/ {printf \"%.1f GiB\\n\", $2 / 1024 / 1024}' /proc/meminfo)"
-          echo "Disk usage:"
-          df -h .
-      - name: Print runner specs (macOS)
-        if: ${{ runner.os == 'macOS' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Runner: ${RUNNER_NAME:-unknown}"
-          echo "OS: $(sw_vers -productName) $(sw_vers -productVersion)"
-          echo "Hardware model: $(sysctl -n hw.model)"
-          echo "CPU architecture: $(uname -m)"
-          echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
-          echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
-          echo "Total RAM: $(sysctl -n hw.memsize | awk '{printf \"%.1f GiB\\n\", $1 / 1024 / 1024 / 1024}')"
-          echo "Disk usage:"
-          df -h .
+
+          echo "Runner: GitHub Actions ${GITHUB_RUN_ID}"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "OS: macOS $(sw_vers -productVersion)"
+            echo "Hardware model: $(sysctl -n hw.model)"
+            echo "CPU architecture: $(uname -m)"
+            echo "Logical CPUs: $(sysctl -n hw.logicalcpu)"
+            echo "Physical CPUs: $(sysctl -n hw.physicalcpu)"
+            mem_bytes="$(sysctl -n hw.memsize)"
+            echo "Total RAM: $(awk -v bytes="$mem_bytes" 'BEGIN {printf "%.1f GiB\n", bytes / 1024 / 1024 / 1024}')"
+            echo "Disk usage:"
+            df -h /System/Volumes/Data || df -h /
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "OS: $(uname -a)"
+            echo "CPU model: $(lscpu | awk -F: '/Model name:/ {sub(/^[ \t]+/, "", $2); print $2; exit}')"
+            echo "Logical CPUs: $(getconf _NPROCESSORS_ONLN)"
+            physical_cpus="$(
+              lscpu -p=core,socket \
+                | grep -v '^#' \
+                | sort -u \
+                | wc -l \
+                | tr -d '[:space:]'
+            )"
+            echo "Physical CPUs: ${physical_cpus}"
+            mem_kib="$(awk '/MemTotal:/ {print $2; exit}' /proc/meminfo)"
+            echo "Total RAM: $(awk -v kib="$mem_kib" 'BEGIN {printf "%.1f GiB\n", kib / 1024 / 1024}')"
+            echo "Disk usage:"
+            df -h /
+          else
+            echo "OS: ${{ runner.os }}"
+          fi
       - name: Install Linux bwrap build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
