@@ -209,7 +209,11 @@ fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &core_test_support::responses::ResponsesRequest)],
 ) -> String {
-    context_snapshot::format_labeled_requests_snapshot(scenario, sections, &context_snapshot_options())
+    context_snapshot::format_labeled_requests_snapshot(
+        scenario,
+        sections,
+        &context_snapshot_options(),
+    )
 }
 
 fn request_contains_text(

@@ -73,7 +73,11 @@ fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &responses::ResponsesRequest)],
 ) -> String {
-    context_snapshot::format_labeled_requests_snapshot(scenario, sections, &context_snapshot_options())
+    context_snapshot::format_labeled_requests_snapshot(
+        scenario,
+        sections,
+        &context_snapshot_options(),
+    )
 }
 
 fn json_fragment(text: &str) -> String {
