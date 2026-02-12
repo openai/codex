@@ -106,6 +106,7 @@ jobs:
           bazel_args=(
             test
             //...
+            --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI
