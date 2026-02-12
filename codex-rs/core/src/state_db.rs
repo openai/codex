@@ -107,11 +107,11 @@ pub async fn read_feedback_logs_from_state_db(
 ) -> Option<Vec<u8>> {
     let state_db_ctx = state_db_ctx?;
     let thread_id = thread_id?.to_string();
-    let process_log_id = codex_state::current_process_log_id().to_string();
+    let process_log_uuid = codex_state::current_process_log_uuid().to_string();
     let rows = state_db_ctx
         .query_feedback_logs(
             thread_id.as_str(),
-            process_log_id.as_str(),
+            process_log_uuid.as_str(),
             MAX_FEEDBACK_LOG_BYTES,
         )
         .await

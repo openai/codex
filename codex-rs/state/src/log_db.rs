@@ -49,7 +49,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::LogEntry;
 use crate::StateRuntime;
-use crate::current_process_log_id;
+use crate::current_process_log_uuid;
 
 const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 64;
@@ -57,7 +57,8 @@ const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const LOG_RETENTION_DAYS: i64 = 90;
 // Per-scope sqlite feedback log retention policy:
 // - We track bytes separately for each session scope (`thread_id`) and for
-//   process-scoped threadless logs (`thread_id IS NULL` + `process_id`).
+//   process-scoped threadless logs (`thread_id IS NULL` + `process_uuid`,
+//   persisted in sqlite column `process_id`).
 // - On insert, we lazily initialize a scope's byte count once from sqlite and
 //   then update it incrementally from appended lines.
 // - If a scope exceeds the trigger, we delete oldest rows in that same scope
@@ -72,7 +73,7 @@ pub struct LogDbLayer {
     fmt_fields: DefaultFields,
     fmt_timer: FmtSystemTime,
     dropped_log_entries: AtomicUsize,
-    process_id: String,
+    process_uuid: String,
 }
 
 #[derive(Default)]
@@ -83,12 +84,12 @@ struct LogScopeByteState {
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
-    let process_id = current_process_log_id().to_string();
+    let process_uuid = current_process_log_uuid().to_string();
     let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
     tokio::spawn(run_inserter(
         std::sync::Arc::clone(&state_db),
         receiver,
-        process_id.clone(),
+        process_uuid.clone(),
     ));
     tokio::spawn(run_retention_cleanup(state_db));
 
@@ -97,7 +98,7 @@ pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
         fmt_fields: DefaultFields::new(),
         fmt_timer: FmtSystemTime,
         dropped_log_entries: AtomicUsize::new(0),
-        process_id,
+        process_uuid,
     }
 }
 
@@ -123,7 +124,7 @@ impl LogDbLayer {
                         "Dropped {dropped} log entries because sqlite log queue was full; logging resumed."
                     )),
                     thread_id: resume_thread_id,
-                    process_id: Some(self.process_id.clone()),
+                    process_uuid: Some(self.process_uuid.clone()),
                     module_path: None,
                     file: None,
                     line: None,
@@ -234,7 +235,7 @@ where
             target: metadata.target().to_string(),
             message,
             thread_id,
-            process_id: Some(self.process_id.clone()),
+            process_uuid: Some(self.process_uuid.clone()),
             module_path: metadata.module_path().map(ToString::to_string),
             file: metadata.file().map(ToString::to_string),
             line: metadata.line().map(|line| line as i64),
@@ -369,7 +370,7 @@ fn feedback_level(level: Level) -> &'static str {
 async fn run_inserter(
     state_db: std::sync::Arc<StateRuntime>,
     mut receiver: mpsc::Receiver<LogEntry>,
-    process_id: String,
+    process_uuid: String,
 ) {
     let mut scope_bytes = LogScopeByteState::default();
     let mut buffer = Vec::with_capacity(LOG_BATCH_SIZE);
@@ -384,7 +385,7 @@ async fn run_inserter(
                             flush(
                                 &state_db,
                                 &mut buffer,
-                                process_id.as_str(),
+                                process_uuid.as_str(),
                                 &mut scope_bytes,
                             ).await;
                         }
@@ -393,7 +394,7 @@ async fn run_inserter(
                         flush(
                             &state_db,
                             &mut buffer,
-                            process_id.as_str(),
+                            process_uuid.as_str(),
                             &mut scope_bytes,
                         ).await;
                         break;
@@ -404,7 +405,7 @@ async fn run_inserter(
                 flush(
                     &state_db,
                     &mut buffer,
-                    process_id.as_str(),
+                    process_uuid.as_str(),
                     &mut scope_bytes,
                 ).await;
             }
@@ -415,7 +416,7 @@ async fn run_inserter(
 async fn flush(
     state_db: &std::sync::Arc<StateRuntime>,
     buffer: &mut Vec<LogEntry>,
-    process_id: &str,
+    process_uuid: &str,
     scope_bytes: &mut LogScopeByteState,
 ) {
     if buffer.is_empty() {
@@ -460,13 +461,13 @@ async fn flush(
     //   first), then
     // - incrementally add only this flush's delta.
     if !scope_bytes.process_threadless_initialized {
-        match state_db.process_threadless_log_bytes(process_id).await {
+        match state_db.process_threadless_log_bytes(process_uuid).await {
             Ok(total) => {
                 scope_bytes.process_threadless_bytes = total;
                 scope_bytes.process_threadless_initialized = true;
             }
             Err(err) => {
-                warn!("failed to initialize process threadless log bytes ({process_id}): {err}");
+                warn!("failed to initialize process threadless log bytes ({process_uuid}): {err}");
                 scope_bytes.process_threadless_bytes = scope_bytes
                     .process_threadless_bytes
                     .saturating_add(process_threadless_added_bytes);
@@ -479,14 +480,14 @@ async fn flush(
     }
     if scope_bytes.process_threadless_bytes > LOG_SCOPE_TRIM_TRIGGER_BYTES {
         match state_db
-            .trim_process_threadless_logs_to_target(process_id, LOG_SCOPE_TRIM_TARGET_BYTES)
+            .trim_process_threadless_logs_to_target(process_uuid, LOG_SCOPE_TRIM_TARGET_BYTES)
             .await
         {
             Ok(bytes) => {
                 scope_bytes.process_threadless_bytes = bytes;
             }
             Err(err) => {
-                warn!("failed to trim process threadless logs ({process_id}): {err}");
+                warn!("failed to trim process threadless logs ({process_uuid}): {err}");
             }
         }
     }
@@ -608,7 +609,7 @@ mod tests {
             target: "test".to_string(),
             message: Some(message.to_string()),
             thread_id: None,
-            process_id: None,
+            process_uuid: None,
             module_path: None,
             file: None,
             line: None,
@@ -623,7 +624,7 @@ mod tests {
             fmt_fields: DefaultFields::new(),
             fmt_timer: FmtSystemTime,
             dropped_log_entries: AtomicUsize::new(0),
-            process_id: "test-process".to_string(),
+            process_uuid: "test-process".to_string(),
         };
 
         layer.enqueue_entry(log_entry("first"));
@@ -657,7 +658,7 @@ mod tests {
             fmt_fields: DefaultFields::new(),
             fmt_timer: FmtSystemTime,
             dropped_log_entries: AtomicUsize::new(0),
-            process_id: "test-process".to_string(),
+            process_uuid: "test-process".to_string(),
         };
 
         layer.enqueue_entry(log_entry("first"));
