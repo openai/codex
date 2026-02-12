@@ -564,6 +564,80 @@ impl TurnContext {
         })
     }
 
+    pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
+        let mut config = (*self.config).clone();
+        config.model = Some(model.clone());
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let truncation_policy = model_info.truncation_policy.into();
+        let supported_reasoning_levels = model_info
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>();
+        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
+            if supported_reasoning_levels.contains(&current_reasoning_effort) {
+                Some(current_reasoning_effort)
+            } else {
+                supported_reasoning_levels
+                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                    .copied()
+                    .or(model_info.default_reasoning_level)
+            }
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        };
+        config.model_reasoning_effort = reasoning_effort;
+
+        let collaboration_mode =
+            self.collaboration_mode
+                .with_updates(Some(model.clone()), Some(reasoning_effort), None);
+        let features = self.features.clone();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: self.tools_config.web_search_mode,
+        });
+
+        Self {
+            sub_id: self.sub_id.clone(),
+            config: Arc::new(config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: model_info.clone(),
+            otel_manager: self
+                .otel_manager
+                .clone()
+                .with_model(model.as_str(), model_info.slug.as_str()),
+            provider: self.provider.clone(),
+            reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            cwd: self.cwd.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode,
+            personality: self.personality,
+            approval_policy: self.approval_policy,
+            sandbox_policy: self.sandbox_policy.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            tools_config,
+            features,
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_policy,
+            js_repl: Arc::clone(&self.js_repl),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_header: self.turn_metadata_header.clone(),
+        }
+    }
+
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -1348,20 +1422,25 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                 }
+                self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                    .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
-                    state.pending_resume_previous_model = None;
                 }
+                self.set_previous_model(previous_model).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
-                if let Some(prev) = Self::last_model_name(&rollout_items, curr) {
+                if let Some(prev) =
+                    Self::last_rollout_model_name(&rollout_items).filter(|p| *p != curr)
+                {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
                         &turn_context,
@@ -1373,9 +1452,6 @@ impl Session {
                         }),
                     )
                     .await;
-
-                    let mut state = self.state.lock().await;
-                    state.pending_resume_previous_model = Some(prev.to_string());
                 }
 
                 // Always add response items to conversation history
@@ -1399,6 +1475,10 @@ impl Session {
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
+                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                    .map(std::string::ToString::to_string);
+                self.set_previous_model(previous_model).await;
+
                 // Always add response items to conversation history
                 let reconstructed_history = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
@@ -1438,19 +1518,14 @@ impl Session {
         }
     }
 
-    fn last_model_name<'a>(rollout_items: &'a [RolloutItem], current: &str) -> Option<&'a str> {
-        let previous = rollout_items.iter().rev().find_map(|it| {
+    fn last_rollout_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
+        rollout_items.iter().rev().find_map(|it| {
             if let RolloutItem::TurnContext(ctx) = it {
                 Some(ctx.model.as_str())
             } else {
                 None
             }
-        })?;
-        if previous == current {
-            None
-        } else {
-            Some(previous)
-        }
+        })
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -1460,9 +1535,14 @@ impl Session {
         })
     }
 
-    async fn take_pending_resume_previous_model(&self) -> Option<String> {
+    async fn previous_model(&self) -> Option<String> {
+        let state = self.state.lock().await;
+        state.previous_model()
+    }
+
+    pub(crate) async fn set_previous_model(&self, previous_model: Option<String>) {
         let mut state = self.state.lock().await;
-        state.pending_resume_previous_model.take()
+        state.set_previous_model(previous_model);
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -2419,8 +2499,8 @@ impl Session {
                 total_tokens: estimated_total_tokens.max(0),
             };
 
-            if info.model_context_window.is_none() {
-                info.model_context_window = turn_context.model_context_window();
+            if let Some(model_context_window) = turn_context.model_context_window() {
+                info.model_context_window = Some(model_context_window);
             }
 
             state.set_token_info(Some(info));
@@ -3134,10 +3214,10 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let resumed_model = sess.take_pending_resume_previous_model().await;
+            let previous_model = sess.previous_model().await;
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
-                resumed_model.as_deref(),
+                previous_model.as_deref(),
                 &current_context,
             );
             if !update_items.is_empty() {
@@ -3529,6 +3609,8 @@ mod handlers {
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        sess.set_previous_model(Some(turn_context.model_info.slug.clone()))
+            .await;
 
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
@@ -3884,7 +3966,6 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
@@ -3892,9 +3973,11 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit
-        && run_auto_compact(&sess, &turn_context).await.is_err()
+    if run_pre_sampling_compact(&sess, &turn_context)
+        .await
+        .is_err()
     {
+        error!("Failed to run pre-sampling compact");
         return None;
     }
 
@@ -4131,6 +4214,62 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn run_pre_sampling_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
+    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
+    maybe_run_previous_model_inline_compact(
+        sess,
+        turn_context,
+        total_usage_tokens_before_compaction,
+    )
+    .await?;
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    // Compact if the total usage tokens are greater than the auto compact limit
+    if total_usage_tokens >= auto_compact_limit {
+        run_auto_compact(sess, turn_context).await?;
+    }
+    Ok(())
+}
+
+async fn maybe_run_previous_model_inline_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    total_usage_tokens: i64,
+) -> CodexResult<()> {
+    let Some(previous_model) = sess.previous_model().await else {
+        return Ok(());
+    };
+    let previous_turn_context = Arc::new(
+        turn_context
+            .with_model(previous_model, &sess.services.models_manager)
+            .await,
+    );
+
+    let Some(old_context_window) = previous_turn_context.model_context_window() else {
+        return Ok(());
+    };
+    let Some(new_context_window) = turn_context.model_context_window() else {
+        return Ok(());
+    };
+    let new_auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    let should_run = total_usage_tokens > new_auto_compact_limit
+        && previous_turn_context.model_info.slug != turn_context.model_info.slug
+        && old_context_window > new_context_window;
+    if should_run {
+        run_auto_compact(sess, &previous_turn_context).await?;
+    }
+    Ok(())
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
@@ -4392,7 +4531,7 @@ async fn built_tools(
         None
     };
 
-    if turn_context.config.features.enabled(Feature::SearchTool) {
+    if turn_context.config.features.enabled(Feature::Apps) {
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
                 filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
@@ -5512,6 +5651,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_resumed_hydrates_previous_model() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        })];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn resumed_history_seeds_initial_context_on_first_turn_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -5655,6 +5828,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recompute_token_usage_updates_model_context_window() {
+        let (session, mut turn_context) = make_session_and_context().await;
+
+        {
+            let mut state = session.state.lock().await;
+            state.set_token_info(Some(TokenUsageInfo {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window: Some(258_400),
+            }));
+        }
+
+        turn_context.model_info.context_window = Some(128_000);
+        turn_context.model_info.effective_context_window_percent = 100;
+
+        session.recompute_token_usage(&turn_context).await;
+
+        let actual = session.state.lock().await.token_info().expect("token info");
+        assert_eq!(actual.model_context_window, Some(128_000));
+    }
+
+    #[tokio::test]
     async fn record_initial_history_reconstructs_forked_transcript() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -5671,6 +5866,36 @@ mod tests {
         );
         let history = session.state.lock().await.clone_history();
         assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn record_initial_history_forked_hydrates_previous_model() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "forked-rollout-model";
+        let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        })];
+
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
     }
 
     #[tokio::test]
@@ -5736,6 +5961,10 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
+        assert_eq!(
+            sess.previous_model().await,
+            Some(tc.model_info.slug.clone())
+        );
     }
 
     #[tokio::test]
@@ -6034,6 +6263,44 @@ mod tests {
             out,
             "command timed out after 1000 milliseconds\nCommand output"
         );
+    }
+
+    #[tokio::test]
+    async fn turn_context_with_model_updates_model_fields() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
+        let updated = turn_context
+            .with_model("gpt-5.1".to_string(), &session.services.models_manager)
+            .await;
+        let expected_model_info = session
+            .services
+            .models_manager
+            .get_model_info("gpt-5.1", updated.config.as_ref())
+            .await;
+
+        assert_eq!(updated.config.model.as_deref(), Some("gpt-5.1"));
+        assert_eq!(updated.collaboration_mode.model(), "gpt-5.1");
+        assert_eq!(updated.model_info, expected_model_info);
+        assert_eq!(
+            updated.reasoning_effort,
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.collaboration_mode.reasoning_effort(),
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.truncation_policy,
+            expected_model_info.truncation_policy.into()
+        );
+        assert!(!Arc::ptr_eq(
+            &updated.tool_call_gate,
+            &turn_context.tool_call_gate
+        ));
     }
 
     #[test]
@@ -6567,6 +6834,32 @@ mod tests {
             }
             other => panic!("expected user message, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_task_hydrates_previous_model() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        sess.set_previous_model(None).await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        assert_eq!(
+            sess.previous_model().await,
+            Some(tc.model_info.slug.clone())
+        );
     }
 
     #[derive(Clone, Copy)]

@@ -315,6 +315,18 @@ mod tests {
     }
 
     #[test]
+    fn base_policy_allows_node_cpu_sysctls() {
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"machdep.cpu.brand_string\")"),
+            "base policy must allow CPU brand lookup for os.cpus()"
+        );
+        assert!(
+            MACOS_SEATBELT_BASE_POLICY.contains("(sysctl-name \"hw.model\")"),
+            "base policy must allow hardware model lookup for os.cpus()"
+        );
+    }
+
+    #[test]
     fn create_seatbelt_args_routes_network_through_proxy_ports() {
         let policy = dynamic_network_policy(
             &SandboxPolicy::ReadOnly,

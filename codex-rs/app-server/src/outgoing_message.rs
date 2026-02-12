@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -48,6 +49,62 @@ pub(crate) struct OutgoingMessageSender {
     request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ThreadScopedOutgoingMessageSender {
+    outgoing: Arc<OutgoingMessageSender>,
+    connection_ids: Arc<Vec<ConnectionId>>,
+}
+
+impl ThreadScopedOutgoingMessageSender {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        connection_ids: Vec<ConnectionId>,
+    ) -> Self {
+        Self {
+            outgoing,
+            connection_ids: Arc::new(connection_ids),
+        }
+    }
+
+    pub(crate) async fn send_request(
+        &self,
+        payload: ServerRequestPayload,
+    ) -> oneshot::Receiver<Result> {
+        if self.connection_ids.is_empty() {
+            let (_tx, rx) = oneshot::channel();
+            return rx;
+        }
+        self.outgoing
+            .send_request_to_connections(self.connection_ids.as_slice(), payload)
+            .await
+    }
+
+    pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        if self.connection_ids.is_empty() {
+            return;
+        }
+        self.outgoing
+            .send_server_notification_to_connections(self.connection_ids.as_slice(), notification)
+            .await;
+    }
+
+    pub(crate) async fn send_response<T: Serialize>(
+        &self,
+        request_id: ConnectionRequestId,
+        response: T,
+    ) {
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    pub(crate) async fn send_error(
+        &self,
+        request_id: ConnectionRequestId,
+        error: JSONRPCErrorError,
+    ) {
+        self.outgoing.send_error(request_id, error).await;
+    }
+}
+
 impl OutgoingMessageSender {
     pub(crate) fn new(sender: mpsc::Sender<OutgoingEnvelope>) -> Self {
         Self {
@@ -57,16 +114,27 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_request(
+    pub(crate) async fn send_request_to_connections(
         &self,
+        connection_ids: &[ConnectionId],
         request: ServerRequestPayload,
     ) -> oneshot::Receiver<Result> {
-        let (_id, rx) = self.send_request_with_id(request).await;
+        let (_id, rx) = self
+            .send_request_with_id_to_connections(connection_ids, request)
+            .await;
         rx
     }
 
     pub(crate) async fn send_request_with_id(
         &self,
+        request: ServerRequestPayload,
+    ) -> (RequestId, oneshot::Receiver<Result>) {
+        self.send_request_with_id_to_connections(&[], request).await
+    }
+
+    async fn send_request_with_id_to_connections(
+        &self,
+        connection_ids: &[ConnectionId],
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<Result>) {
         let id = RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed));
@@ -79,13 +147,34 @@ impl OutgoingMessageSender {
 
         let outgoing_message =
             OutgoingMessage::Request(request.request_with_id(outgoing_message_id.clone()));
-        if let Err(err) = self
-            .sender
-            .send(OutgoingEnvelope::Broadcast {
-                message: outgoing_message,
-            })
-            .await
-        {
+        let send_result = if connection_ids.is_empty() {
+            self.sender
+                .send(OutgoingEnvelope::Broadcast {
+                    message: outgoing_message,
+                })
+                .await
+        } else {
+            let mut send_error = None;
+            for connection_id in connection_ids {
+                if let Err(err) = self
+                    .sender
+                    .send(OutgoingEnvelope::ToConnection {
+                        connection_id: *connection_id,
+                        message: outgoing_message.clone(),
+                    })
+                    .await
+                {
+                    send_error = Some(err);
+                    break;
+                }
+            }
+            match send_error {
+                Some(err) => Err(err),
+                None => Ok(()),
+            }
+        };
+
+        if let Err(err) = send_result {
             warn!("failed to send request {outgoing_message_id:?} to client: {err:?}");
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback.remove(&outgoing_message_id);
@@ -172,29 +261,71 @@ impl OutgoingMessageSender {
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
-        if let Err(err) = self
-            .sender
-            .send(OutgoingEnvelope::Broadcast {
-                message: OutgoingMessage::AppServerNotification(notification),
-            })
-            .await
-        {
-            warn!("failed to send server notification to client: {err:?}");
+        self.send_server_notification_to_connections(&[], notification)
+            .await;
+    }
+
+    pub(crate) async fn send_server_notification_to_connections(
+        &self,
+        connection_ids: &[ConnectionId],
+        notification: ServerNotification,
+    ) {
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        if connection_ids.is_empty() {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::Broadcast {
+                    message: outgoing_message,
+                })
+                .await
+            {
+                warn!("failed to send server notification to client: {err:?}");
+            }
+            return;
+        }
+        for connection_id in connection_ids {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::ToConnection {
+                    connection_id: *connection_id,
+                    message: outgoing_message.clone(),
+                })
+                .await
+            {
+                warn!("failed to send server notification to client: {err:?}");
+            }
         }
     }
 
-    /// All notifications should be migrated to [`ServerNotification`] and
-    /// [`OutgoingMessage::Notification`] should be removed.
-    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+    pub(crate) async fn send_notification_to_connections(
+        &self,
+        connection_ids: &[ConnectionId],
+        notification: OutgoingNotification,
+    ) {
         let outgoing_message = OutgoingMessage::Notification(notification);
-        if let Err(err) = self
-            .sender
-            .send(OutgoingEnvelope::Broadcast {
-                message: outgoing_message,
-            })
-            .await
-        {
-            warn!("failed to send notification to client: {err:?}");
+        if connection_ids.is_empty() {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::Broadcast {
+                    message: outgoing_message,
+                })
+                .await
+            {
+                warn!("failed to send notification to client: {err:?}");
+            }
+            return;
+        }
+        for connection_id in connection_ids {
+            if let Err(err) = self
+                .sender
+                .send(OutgoingEnvelope::ToConnection {
+                    connection_id: *connection_id,
+                    message: outgoing_message.clone(),
+                })
+                .await
+            {
+                warn!("failed to send notification to client: {err:?}");
+            }
         }
     }
 
