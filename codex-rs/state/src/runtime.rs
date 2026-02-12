@@ -1,7 +1,10 @@
-use crate::{DB_ERROR_METRIC, METRIC_DB_INIT, STATE_DB_FILENAME, STATE_DB_VERSION};
+use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
 use crate::LogRow;
+use crate::METRIC_DB_INIT;
+use crate::STATE_DB_FILENAME;
+use crate::STATE_DB_VERSION;
 use crate::SortKey;
 use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
@@ -893,6 +896,8 @@ mod tests {
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::STATE_DB_FILENAME;
+    use crate::STATE_DB_VERSION;
     use crate::model::Phase2JobClaimOutcome;
     use crate::model::Stage1JobClaimOutcome;
     use crate::model::Stage1StartupClaimParams;
@@ -910,8 +915,6 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
     use uuid::Uuid;
-    use crate::STATE_DB_VERSION;
-    use crate::STATE_DB_FILENAME;
 
     fn unique_temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
