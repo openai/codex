@@ -10,6 +10,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Kill switch for the elevated sandbox NUX on Windows.
 ///
@@ -200,6 +201,25 @@ pub fn run_legacy_setup_preflight(
     )
 }
 
+#[cfg(target_os = "windows")]
+pub fn run_setup_refresh_with_extra_read_roots(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    extra_read_roots: Vec<PathBuf>,
+) -> anyhow::Result<()> {
+    codex_windows_sandbox::run_setup_refresh_with_extra_read_roots(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        extra_read_roots,
+    )
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn run_legacy_setup_preflight(
     _policy: &SandboxPolicy,
@@ -209,6 +229,18 @@ pub fn run_legacy_setup_preflight(
     _codex_home: &Path,
 ) -> anyhow::Result<()> {
     anyhow::bail!("legacy Windows sandbox setup is only supported on Windows")
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn run_setup_refresh_with_extra_read_roots(
+    _policy: &SandboxPolicy,
+    _policy_cwd: &Path,
+    _command_cwd: &Path,
+    _env_map: &HashMap<String, String>,
+    _codex_home: &Path,
+    _extra_read_roots: Vec<PathBuf>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("Windows sandbox read-root refresh is only supported on Windows")
 }
 
 #[cfg(test)]

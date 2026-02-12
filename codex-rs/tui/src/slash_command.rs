@@ -17,6 +17,8 @@ pub enum SlashCommand {
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
+    #[strum(serialize = "sandbox-add-read-dir")]
+    SandboxReadRoot,
     Experimental,
     Skills,
     Review,
@@ -84,7 +86,10 @@ impl SlashCommand {
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
-            SlashCommand::ElevateSandbox => "set up default agent sandbox",
+            SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
+            SlashCommand::SandboxReadRoot => {
+                "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
+            }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",
@@ -104,7 +109,10 @@ impl SlashCommand {
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
+            SlashCommand::Review
+                | SlashCommand::Rename
+                | SlashCommand::Plan
+                | SlashCommand::SandboxReadRoot
         )
     }
 
@@ -122,6 +130,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
@@ -151,6 +160,7 @@ impl SlashCommand {
 
     fn is_visible(self) -> bool {
         match self {
+            SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }
