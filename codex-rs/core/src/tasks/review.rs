@@ -97,7 +97,8 @@ async fn start_review_conversation(
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
-    sub_agent_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    sub_agent_config.effective_permissions.approval_policy =
+        Constrained::allow_only(AskForApproval::Never);
 
     let model = config
         .review_model
