@@ -45,6 +45,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
+use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
@@ -1198,6 +1199,7 @@ impl ConfigToml {
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -2122,7 +2124,7 @@ network_access = true  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(resolution, SandboxPolicy::ReadOnly);
+        assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
         let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(
@@ -2150,12 +2152,13 @@ exclude_slash_tmp = true
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root.clone()],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2191,12 +2194,13 @@ trust_level = "trusted"
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2363,7 +2367,7 @@ trust_level = "trusted"
         let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
             match config.sandbox_policy.get() {
-                &SandboxPolicy::ReadOnly => {}
+                SandboxPolicy::ReadOnly { .. } => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
@@ -2509,7 +2513,10 @@ trust_level = "trusted"
     #[test]
     fn web_search_mode_for_turn_uses_preference_for_read_only() {
         let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-        let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::ReadOnly);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::new_read_only_policy(),
+        );
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
@@ -2692,7 +2699,7 @@ profile = "project"
         if cfg!(target_os = "windows") {
             assert!(matches!(
                 config.sandbox_policy.get(),
-                SandboxPolicy::ReadOnly
+                SandboxPolicy::ReadOnly { .. }
             ));
         } else {
             assert!(matches!(
@@ -4666,7 +4673,7 @@ trust_level = "untrusted"
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(resolution, SandboxPolicy::ReadOnly),
+                matches!(resolution, SandboxPolicy::ReadOnly { .. }),
                 "Expected ReadOnly on Windows, got {resolution:?}"
             );
         } else {
@@ -4757,7 +4764,7 @@ trust_level = "untrusted"
         );
 
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(resolution, SandboxPolicy::new_workspace_write_policy());
         }
@@ -4904,7 +4911,7 @@ mcp_oauth_callback_port = 5678
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly),
+                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly { .. }),
                 "Expected ReadOnly on Windows"
             );
         } else {
@@ -4938,7 +4945,10 @@ mcp_oauth_callback_port = 5678
             .build()
             .await?;
 
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 
@@ -4972,7 +4982,10 @@ mcp_oauth_callback_port = 5678
             ))
             .build()
             .await?;
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 

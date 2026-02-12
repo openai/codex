@@ -260,6 +260,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
     pub async fn connect(
         &self,
         extra_headers: HeaderMap,
+        default_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
@@ -268,8 +269,8 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
-        let mut headers = self.provider.headers.clone();
-        headers.extend(extra_headers);
+        let mut headers =
+            merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         add_auth_headers_to_header_map(&self.auth, &mut headers);
 
         let (stream, server_reasoning_included, models_etag) =
@@ -282,6 +283,21 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             telemetry,
         ))
     }
+}
+
+fn merge_request_headers(
+    provider_headers: &HeaderMap,
+    extra_headers: HeaderMap,
+    default_headers: HeaderMap,
+) -> HeaderMap {
+    let mut headers = provider_headers.clone();
+    headers.extend(extra_headers);
+    for (name, value) in &default_headers {
+        if let http::header::Entry::Vacant(entry) = headers.entry(name) {
+            entry.insert(value.clone());
+        }
+    }
+    headers
 }
 
 async fn connect_websocket(
@@ -672,5 +688,38 @@ mod tests {
             .expect("expected websocket error payload to be parsed");
         let api_error = map_wrapped_websocket_error_event(wrapped_error);
         assert!(api_error.is_none());
+    }
+
+    #[test]
+    fn merge_request_headers_matches_http_precedence() {
+        let mut provider_headers = HeaderMap::new();
+        provider_headers.insert(
+            "originator",
+            HeaderValue::from_static("provider-originator"),
+        );
+        provider_headers.insert("x-priority", HeaderValue::from_static("provider"));
+
+        let mut extra_headers = HeaderMap::new();
+        extra_headers.insert("x-priority", HeaderValue::from_static("extra"));
+
+        let mut default_headers = HeaderMap::new();
+        default_headers.insert("originator", HeaderValue::from_static("default-originator"));
+        default_headers.insert("x-priority", HeaderValue::from_static("default"));
+        default_headers.insert("x-default-only", HeaderValue::from_static("default-only"));
+
+        let merged = merge_request_headers(&provider_headers, extra_headers, default_headers);
+
+        assert_eq!(
+            merged.get("originator"),
+            Some(&HeaderValue::from_static("provider-originator"))
+        );
+        assert_eq!(
+            merged.get("x-priority"),
+            Some(&HeaderValue::from_static("extra"))
+        );
+        assert_eq!(
+            merged.get("x-default-only"),
+            Some(&HeaderValue::from_static("default-only"))
+        );
     }
 }

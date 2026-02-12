@@ -25,8 +25,8 @@ pub(crate) struct SessionState {
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
     /// timestamp when resuming a session. Remove this once SQLite is in place.
     pub(crate) initial_context_seeded: bool,
-    /// Previous rollout model for one-shot model-switch handling on first turn after resume.
-    pub(crate) pending_resume_previous_model: Option<String>,
+    /// Previous model seen by the session, used for model-switch handling on task start.
+    previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
@@ -44,7 +44,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             initial_context_seeded: false,
-            pending_resume_previous_model: None,
+            previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
         }
@@ -57,6 +57,13 @@ impl SessionState {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         self.history.record_items(items, policy);
+    }
+
+    pub(crate) fn previous_model(&self) -> Option<String> {
+        self.previous_model.clone()
+    }
+    pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
+        self.previous_model = previous_model;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
