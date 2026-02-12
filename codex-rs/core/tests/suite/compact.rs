@@ -2420,8 +2420,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .strip_prefix(seeded_user_prefix)
         .unwrap_or_else(|| {
             panic!(
-                "final request should start with seeded user prefix from first request: {:?}",
-                seeded_user_prefix
+                "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
             )
         })
         .to_vec();
