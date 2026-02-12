@@ -6636,6 +6636,7 @@ mod tests {
             ),
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
+                ..Default::default()
             }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
@@ -6781,6 +6782,7 @@ mod tests {
             ),
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
+                ..Default::default()
             }),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
