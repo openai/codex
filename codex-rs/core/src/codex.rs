@@ -4311,6 +4311,15 @@ pub(crate) async fn run_turn(
             return None;
         }
     };
+    persist_pre_turn_items_for_compaction_outcome(
+        &sess,
+        &turn_context,
+        pre_turn_compaction_outcome,
+        &pre_turn_context_items,
+        &input,
+        response_item,
+    )
+    .await;
 
     let skills_outcome = Some(
         sess.services
@@ -4418,17 +4427,6 @@ pub(crate) async fn run_turn(
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-
-    persist_pre_turn_items_for_compaction_outcome(
-        &sess,
-        &turn_context,
-        pre_turn_compaction_outcome,
-        &pre_turn_context_items,
-        &input,
-        response_item,
-    )
-    .await;
-
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;
@@ -6117,6 +6115,49 @@ mod tests {
 
         let actual = session.clone_history().await.raw_items().to_vec();
         assert_eq!(actual, Vec::<ResponseItem>::new());
+    }
+
+    #[tokio::test]
+    async fn run_turn_persists_pre_turn_context_before_apps_tool_listing_cancellation() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let mut config = (*turn_context.config).clone();
+        config.features.enable(Feature::Apps);
+        turn_context.features = config.features.clone();
+        turn_context.config = Arc::new(config);
+        let turn_context = Arc::new(turn_context);
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+        let pre_turn_context_items = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "model-visible setting diff".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+
+        let result = run_turn(
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            input,
+            pre_turn_context_items.clone(),
+            None,
+            cancellation_token,
+        )
+        .await;
+        assert_eq!(result, None);
+
+        let mut expected_history = pre_turn_context_items;
+        expected_history.push(response_item);
+        let actual_history = session.clone_history().await.raw_items().to_vec();
+        assert_eq!(actual_history, expected_history);
     }
 
     #[test]
