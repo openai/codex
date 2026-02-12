@@ -119,6 +119,10 @@ impl NetworkDecision {
         Self::deny_with_source(reason, NetworkDecisionSource::Decider)
     }
 
+    pub fn ask(reason: impl Into<String>) -> Self {
+        Self::ask_with_source(reason, NetworkDecisionSource::Decider)
+    }
+
     pub fn deny_with_source(reason: impl Into<String>, source: NetworkDecisionSource) -> Self {
         let reason = reason.into();
         let reason = if reason.is_empty() {
@@ -216,7 +220,7 @@ fn map_decider_decision(decision: NetworkDecision) -> NetworkDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::reasons::REASON_NOT_ALLOWED;
     use crate::config::NetworkProxySettings;
     use crate::reasons::REASON_DENIED;
     use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -335,5 +339,17 @@ mod tests {
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ask_uses_decider_source_and_ask_decision() {
+        assert_eq!(
+            NetworkDecision::ask(REASON_NOT_ALLOWED),
+            NetworkDecision::Deny {
+                reason: REASON_NOT_ALLOWED.to_string(),
+                source: NetworkDecisionSource::Decider,
+                decision: NetworkPolicyDecision::Ask,
+            }
+        );
     }
 }
