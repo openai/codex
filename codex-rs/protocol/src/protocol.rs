@@ -1203,6 +1203,9 @@ impl TokenUsageInfo {
                 model_context_window,
             },
         };
+        if let Some(model_context_window) = model_context_window {
+            info.model_context_window = Some(model_context_window);
+        }
         if let Some(last) = last {
             info.append_last_usage(last);
         }
@@ -2713,6 +2716,40 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn token_usage_info_updates_context_window_when_new_value_provided() {
+        let info = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+        let last = Some(TokenUsage {
+            total_tokens: 123,
+            ..TokenUsage::default()
+        });
+
+        let updated =
+            TokenUsageInfo::new_or_append(&info, &last, Some(121_600)).expect("usage should exist");
+
+        assert_eq!(updated.model_context_window, Some(121_600));
+        assert_eq!(updated.last_token_usage.total_tokens, 123);
+        assert_eq!(updated.total_token_usage.total_tokens, 123);
+    }
+
+    #[test]
+    fn token_usage_info_preserves_context_window_when_no_new_value_provided() {
+        let info = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+        });
+
+        let updated =
+            TokenUsageInfo::new_or_append(&info, &None, None).expect("usage should exist");
+
+        assert_eq!(updated.model_context_window, Some(258_400));
     }
 
     /// Serialize Event to verify that its JSON representation has the expected
