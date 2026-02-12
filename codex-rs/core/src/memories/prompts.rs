@@ -56,9 +56,7 @@ pub(super) fn build_stage_one_input_message(
         .context_window
         .and_then(|limit| (limit > 0).then_some(limit))
         .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
-        .map(|limit| {
-            (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1)
-        })
+        .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
         .and_then(|limit| usize::try_from(limit).ok())
         .unwrap_or(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
     let truncated_rollout_contents = truncate_text(
