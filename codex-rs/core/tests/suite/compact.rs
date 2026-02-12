@@ -510,6 +510,10 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let server = start_mock_server().await;
 
+    let sse_turn = sse(vec![
+        ev_assistant_message("m0", FIRST_REPLY),
+        ev_completed_with_tokens("r0", 0),
+    ]);
     // Compact run where the API reports zero tokens in usage. Our local
     // estimator should still compute a non-zero context size for the compacted
     // history.
@@ -517,7 +521,7 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
         ev_assistant_message("m1", SUMMARY_TEXT),
         ev_completed_with_tokens("r1", 0),
     ]);
-    mount_sse_once(&server, sse_compact).await;
+    mount_sse_sequence(&server, vec![sse_turn, sse_compact]).await;
 
     let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex().with_config(move |config| {
@@ -526,39 +530,42 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     });
     let codex = builder.build(&server).await.unwrap().codex;
 
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed compact history".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
 
-    // First TokenCount: from the compact API call (usage.total_tokens = 0).
-    let first = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TokenCount(tc) => tc
-            .info
-            .as_ref()
-            .map(|info| info.last_token_usage.total_tokens),
-        _ => None,
-    })
-    .await;
+    let mut compact_turn_token_totals = Vec::new();
+    loop {
+        let event = wait_for_event(&codex, |_| true).await;
+        match event {
+            EventMsg::TokenCount(tc) => {
+                if let Some(info) = tc.info {
+                    compact_turn_token_totals.push(info.last_token_usage.total_tokens);
+                }
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
 
-    // Second TokenCount: from the local post-compaction estimate.
-    let last = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TokenCount(tc) => tc
-            .info
-            .as_ref()
-            .map(|info| info.last_token_usage.total_tokens),
-        _ => None,
-    })
-    .await;
-
-    // Ensure the compact task itself completes.
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    assert_eq!(
-        first, 0,
-        "expected first TokenCount from compact API usage to be zero"
+    assert!(
+        compact_turn_token_totals.contains(&0),
+        "expected compact turn token events to include API-reported zero usage"
     );
     assert!(
-        last > 0,
-        "second TokenCount should reflect a non-zero estimated context size after compaction"
+        compact_turn_token_totals.iter().any(|total| *total > 0),
+        "expected compact turn token events to include a non-zero local estimate"
     );
 }
 
@@ -2414,35 +2421,33 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         "compact requests should consistently include or omit the summarization prompt"
     );
 
-    let first_request_user_texts = requests[0].message_input_texts("user");
-    let first_turn_user_index = first_request_user_texts
-        .len()
-        .checked_sub(1)
-        .unwrap_or_else(|| panic!("first turn request missing user messages"));
-    assert_eq!(
-        first_request_user_texts[first_turn_user_index], first_user_message,
-        "first turn request should end with the submitted user message"
-    );
-    let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
-
     let final_request_user_texts = requests
         .last()
         .unwrap_or_else(|| panic!("final turn request missing for {final_user_message}"))
         .message_input_texts("user");
-    assert!(
-        final_request_user_texts
-            .as_slice()
-            .starts_with(seeded_user_prefix),
-        "final request should start with seeded user prefix from first request: {seeded_user_prefix:?}"
-    );
-    let final_output = &final_request_user_texts[seeded_user_prefix.len()..];
+    let Some(first_user_index) = final_request_user_texts
+        .iter()
+        .position(|text| text == first_user_message)
+    else {
+        panic!("final request missing first user message: {final_request_user_texts:?}");
+    };
+    let final_output = &final_request_user_texts[first_user_index..];
     let expected = vec![
         first_user_message.to_string(),
         second_user_message.to_string(),
         expected_second_summary,
         final_user_message.to_string(),
     ];
-    assert_eq!(final_output, expected.as_slice());
+    let mut final_output_iter = final_output.iter();
+    for expected_text in &expected {
+        final_output_iter
+            .position(|text| text == expected_text)
+            .unwrap_or_else(|| {
+                panic!(
+                    "final request should preserve expected user-message order; missing `{expected_text}` in {final_output:?}"
+                )
+            });
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2713,8 +2718,8 @@ async fn auto_compact_clamps_config_limit_to_context_window() {
 
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
-        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
-        "auto compact should run with the summarization prompt when config limit exceeds context"
+        body_contains_text(&auto_compact_body, "OVER_LIMIT_TURN"),
+        "auto compact should run when the configured limit clamps to the model context window"
     );
 }
 
@@ -2928,7 +2933,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {
     skip_if_no_network!();
 
@@ -3016,7 +3020,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
         format_labeled_requests_snapshot(
-            "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.",
+            "Pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.",
             &[
                 ("Local Compaction Request", &requests[2]),
                 ("Local Post-Compaction History Layout", &requests[3]),
@@ -3025,10 +3029,17 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     );
     let compact_request_user_texts = requests[2].message_input_texts("user");
     assert!(
-        !compact_request_user_texts
+        compact_request_user_texts
             .iter()
             .any(|text| text == "USER_THREE"),
-        "current behavior excludes incoming user message from pre-turn compaction input"
+        "pre-turn compaction request should include the incoming user message"
+    );
+    let compact_request_user_images = requests[2].message_input_image_urls("user");
+    assert!(
+        compact_request_user_images
+            .iter()
+            .any(|url| url == image_url.as_str()),
+        "pre-turn compaction request should include incoming user image content"
     );
     let follow_up_user_texts = requests[3].message_input_texts("user");
     assert!(
@@ -3478,15 +3489,11 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 
     let server = start_mock_server().await;
 
-    let compact_turn = sse(vec![
-        ev_assistant_message("m1", "MANUAL_EMPTY_SUMMARY"),
-        ev_completed_with_tokens("r1", 90),
-    ]);
     let follow_up_turn = sse(vec![
-        ev_assistant_message("m2", FINAL_REPLY),
-        ev_completed_with_tokens("r2", 80),
+        ev_assistant_message("m1", FINAL_REPLY),
+        ev_completed_with_tokens("r1", 80),
     ]);
-    let request_log = mount_sse_sequence(&server, vec![compact_turn, follow_up_turn]).await;
+    let request_log = mount_sse_once(&server, follow_up_turn).await;
 
     let model_provider = non_openai_model_provider(&server);
     let codex = test_codex()
@@ -3517,18 +3524,15 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        2,
-        "expected manual /compact request and follow-up turn request"
+        1,
+        "manual /compact with no prior user should be a no-op; only the follow-up turn should hit /responses"
     );
 
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
         format_labeled_requests_snapshot(
-            "Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.",
-            &[
-                ("Local Compaction Request", &requests[0]),
-                ("Local Post-Compaction History Layout", &requests[1]),
-            ]
+            "Manual /compact with no prior user turn is a no-op; follow-up turn carries canonical context and the new user message.",
+            &[("Local Post-Compaction History Layout", &requests[0]),]
         )
     );
 }

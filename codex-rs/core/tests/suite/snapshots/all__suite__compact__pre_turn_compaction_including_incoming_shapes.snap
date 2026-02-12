@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
+expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
 ---
-Scenario: Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.
+Scenario: Pre-turn auto-compaction with a context override includes incoming user content in the compact request and preserves it after compaction.
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>

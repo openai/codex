@@ -4305,7 +4305,15 @@ pub(crate) async fn run_turn(
                     );
                     EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(Some(message)))
                 }
-                other => EventMsg::Error(other.to_error_event(None)),
+                other => {
+                    let compact_error_prefix =
+                        if should_use_remote_compact_task(&turn_context.provider) {
+                            "Error running remote compact task"
+                        } else {
+                            "Error running local compact task"
+                        };
+                    EventMsg::Error(other.to_error_event(Some(compact_error_prefix.to_string())))
+                }
             };
             sess.send_event(&turn_context, event).await;
             return None;
