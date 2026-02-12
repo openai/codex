@@ -2552,7 +2552,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
+async fn snapshot_request_shape_mid_turn_continuation_compaction() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -2560,26 +2560,23 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let context_window = 100;
     let limit = context_window * 90 / 100;
     let over_limit_tokens = context_window * 95 / 100 + 1;
-    let follow_up_user = "FOLLOW_UP_AFTER_LIMIT";
 
     let first_turn = sse(vec![
         ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        ev_completed_with_tokens("r1", 50),
-    ]);
-    let function_call_follow_up = sse(vec![
-        ev_assistant_message("m2", FINAL_REPLY),
-        ev_completed_with_tokens("r2", over_limit_tokens),
+        ev_completed_with_tokens("r1", over_limit_tokens),
     ]);
     let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
     let auto_compact_turn = sse(vec![
-        ev_assistant_message("m3", &auto_summary_payload),
+        ev_assistant_message("m2", &auto_summary_payload),
         ev_completed_with_tokens("r3", 10),
     ]);
-    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);
+    let post_auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 10),
+    ]);
 
     // Mount responses in order and keep mocks only for the ones we assert on.
     let first_turn_mock = mount_sse_once(&server, first_turn).await;
-    let follow_up_mock = mount_sse_once(&server, function_call_follow_up).await;
     let auto_compact_mock = mount_sse_once(&server, auto_compact_turn).await;
     let post_auto_compact_mock = mount_sse_once(&server, post_auto_compact_turn).await;
 
@@ -2606,19 +2603,6 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: follow_up_user.into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
-
     // Assert first request captured expected user message that triggers function call.
     let first_request = first_turn_mock.single_request().input();
     assert!(
@@ -2635,7 +2619,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         "first request should include the user message that triggers the function call"
     );
 
-    let function_call_output = follow_up_mock
+    let function_call_output = auto_compact_mock
         .single_request()
         .function_call_output(DUMMY_CALL_ID);
     let output_text = function_call_output
@@ -2650,13 +2634,13 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
     assert!(
         body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
-        "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
+        "mid-turn auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",
         format_labeled_requests_snapshot(
-            "Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
+            "True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.",
             &[
                 (
                     "Local Compaction Request",
