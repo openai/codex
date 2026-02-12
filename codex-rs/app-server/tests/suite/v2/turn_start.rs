@@ -9,6 +9,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_models_cache_with_slug_for_originator;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -59,6 +60,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+const APP_SERVER_CACHE_ORIGINATOR: &str = "codex_app_server_cache_e2e";
 
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
@@ -131,6 +133,89 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_uses_originator_scoped_cache_slug() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+    let cached_slug = "app-server-cache-slug-e2e";
+    write_models_cache_with_slug_for_originator(
+        codex_home.path(),
+        APP_SERVER_CACHE_ORIGINATOR,
+        cached_slug,
+    )?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(
+            codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR,
+            Some(APP_SERVER_CACHE_ORIGINATOR),
+        )],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let response_request = requests
+        .into_iter()
+        .find(|request| request.url.path().ends_with("/responses"))
+        .expect("expected /responses request");
+    let body: serde_json::Value = serde_json::from_slice(&response_request.body)
+        .expect("responses request body should be json");
+    assert_eq!(body["model"].as_str(), Some(cached_slug));
+    assert!(
+        codex_home
+            .path()
+            .join("models_cache")
+            .join(APP_SERVER_CACHE_ORIGINATOR)
+            .join("models_cache.json")
+            .exists()
+    );
 
     Ok(())
 }
