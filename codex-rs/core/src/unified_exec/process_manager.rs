@@ -26,6 +26,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -207,7 +208,12 @@ impl UnifiedExecProcessManager {
             };
 
             let process = self
-                .open_session_with_sandbox(&request, cwd.clone(), context)
+                .open_session_with_sandbox(
+                    &request,
+                    cwd.clone(),
+                    context,
+                    retried_after_network_approval,
+                )
                 .await;
 
             let process = match process {
@@ -634,6 +640,7 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathBuf,
         context: &UnifiedExecContext,
+        skip_command_approval: bool,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
@@ -641,18 +648,27 @@ impl UnifiedExecProcessManager {
         ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = context
-            .session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
-                sandbox_permissions: request.sandbox_permissions,
-                prefix_rule: request.prefix_rule.clone(),
-            })
-            .await;
+        let exec_approval_requirement = if skip_command_approval {
+            // This is a same-call retry after explicit network approval.
+            // Do not re-prompt command approval.
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            context
+                .session
+                .services
+                .exec_policy
+                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                    command: &request.command,
+                    approval_policy: context.turn.approval_policy,
+                    sandbox_policy: &context.turn.sandbox_policy,
+                    sandbox_permissions: request.sandbox_permissions,
+                    prefix_rule: request.prefix_rule.clone(),
+                })
+                .await
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
