@@ -84,6 +84,13 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
         tracing::warn!("Failed to acquire requirements residency lock");
         return;
     };
+    if *guard != enforce_residency {
+        tracing::info!(
+            previous = ?*guard,
+            updated = ?enforce_residency,
+            "Updated Codex residency requirement"
+        );
+    }
     *guard = enforce_residency;
 }
 
@@ -202,6 +209,11 @@ pub fn default_headers() -> HeaderMap {
         let value = match requirement {
             ResidencyRequirement::Us => HeaderValue::from_static("us"),
         };
+        tracing::debug!(
+            header_name = RESIDENCY_HEADER_NAME,
+            header_value = ?value,
+            "Applying residency header to default HTTP client"
+        );
         headers.insert(RESIDENCY_HEADER_NAME, value);
     }
     headers
