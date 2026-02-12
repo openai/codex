@@ -3412,10 +3412,10 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let resumed_model = sess.take_pending_resume_previous_model().await;
+            let previous_model = sess.previous_model().await;
             let pre_turn_context_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
-                resumed_model.as_deref(),
+                previous_model.as_deref(),
                 &current_context,
             );
             let has_user_input = !items.is_empty();

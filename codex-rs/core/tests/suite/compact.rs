@@ -3235,9 +3235,9 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
         format_labeled_requests_snapshot(
-            "Pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
+            "Pre-turn auto-compaction context-window failure: compaction request includes the incoming user message and the turn errors.",
             &[(
-                "Local Compaction Request (Incoming User Excluded)",
+                "Local Compaction Request (Incoming User Included)",
                 &requests[1]
             ),]
         )
@@ -3247,6 +3247,87 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
         error_message.contains("ran out of room in the model's context window"),
         "expected context window exceeded message, got {error_message}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_turn_local_compaction_trim_retries_keep_incoming_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let compact_failed = sse_failed(
+        "compact-failed",
+        "context_length_exceeded",
+        CONTEXT_LIMIT_MESSAGE,
+    );
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            compact_failed.clone(),
+            compact_failed.clone(),
+            compact_failed.clone(),
+            compact_failed,
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(1);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    let incoming_text = "PRETURN_INCOMING_USER";
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: incoming_text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit user input");
+
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        error_message.contains(
+            "Incoming user message and/or turn context is too large to fit in context window"
+        ),
+        "expected oversized incoming-items error, got {error_message}"
+    );
+
+    let compact_attempts = request_log.requests();
+    assert_eq!(
+        compact_attempts.len(),
+        4,
+        "expected pre-turn compaction to retry while trimming seeded history only"
+    );
+    for (index, request) in compact_attempts.iter().enumerate() {
+        let body = request.body_json().to_string();
+        assert!(
+            body_contains_text(&body, SUMMARIZATION_PROMPT),
+            "request {index} should be a compaction attempt"
+        );
+        assert!(
+            request
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text == incoming_text),
+            "request {index} dropped incoming user text during trim retries"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

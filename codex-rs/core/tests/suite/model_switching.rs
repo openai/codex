@@ -139,7 +139,7 @@ async fn settings_only_empty_turn_persists_updates_for_next_non_empty_turn() -> 
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
