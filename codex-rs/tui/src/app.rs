@@ -1835,7 +1835,7 @@ impl App {
                             None,
                         ));
 
-                    let policy = self.config.sandbox_policy.get().clone();
+                    let policy = self.config.permissions.sandbox_policy.get().clone();
                     let policy_cwd = self.config.cwd.clone();
                     let command_cwd = self.config.cwd.clone();
                     let env_map: std::collections::HashMap<String, String> =
