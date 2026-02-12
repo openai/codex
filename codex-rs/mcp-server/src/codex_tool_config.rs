@@ -127,6 +127,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
                 .into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }
@@ -248,6 +249,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
             "Continue a Codex conversation by providing the thread id and prompt.".into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }
