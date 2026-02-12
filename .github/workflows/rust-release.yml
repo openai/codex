@@ -139,20 +139,6 @@ jobs:
           echo "${cargo_home}/bin" >> "$GITHUB_PATH"
           : > "${cargo_home}/config.toml"
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/.cargo-home/bin/
-            ${{ github.workspace }}/.cargo-home/registry/index/
-            ${{ github.workspace }}/.cargo-home/registry/cache/
-            ${{ github.workspace }}/.cargo-home/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
-
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
         uses: mlugg/setup-zig@v2
