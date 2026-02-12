@@ -1239,6 +1239,10 @@
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
+    "command_attribution": {
+      "description": "Optional command attribution label for commit message co-author trailers.\n\nSet to an empty string to disable automatic command attribution.",
+      "type": "string"
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
