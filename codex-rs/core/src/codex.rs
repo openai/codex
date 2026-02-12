@@ -4220,8 +4220,14 @@ async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
+    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
+    maybe_run_previous_model_inline_compact(
+        sess,
+        turn_context,
+        total_usage_tokens_before_compaction,
+    )
+    .await?;
     let total_usage_tokens = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(sess, turn_context, total_usage_tokens).await?;
     let auto_compact_limit = turn_context
         .model_info
         .auto_compact_token_limit()
