@@ -11,20 +11,12 @@ pub enum ContextSnapshotRenderMode {
 }
 
 #[derive(Debug, Clone)]
-struct ContextSnapshotPrefixCapture {
-    prefix: String,
-    marker_prefix: String,
-    marker_suffix: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ContextSnapshotOptions {
     render_mode: ContextSnapshotRenderMode,
     normalize_environment_context: bool,
     text_exact_replacements: Vec<(String, String)>,
     text_prefix_replacements: Vec<(String, String)>,
     text_contains_replacements: Vec<(String, String)>,
-    text_prefix_captures: Vec<ContextSnapshotPrefixCapture>,
     cwd_contains_replacements: Vec<(String, String)>,
     tool_name_replacements: Vec<(String, String)>,
 }
@@ -43,7 +35,6 @@ impl Default for ContextSnapshotOptions {
                 "<permissions instructions>".to_string(),
                 "<PERMISSIONS_INSTRUCTIONS>".to_string(),
             )],
-            text_prefix_captures: Vec::new(),
             cwd_contains_replacements: Vec::new(),
             tool_name_replacements: Vec::new(),
         }
@@ -88,21 +79,6 @@ impl ContextSnapshotOptions {
     ) -> Self {
         self.text_contains_replacements
             .push((needle.into(), replacement.into()));
-        self
-    }
-
-    pub fn capture_text_suffix_after_prefix(
-        mut self,
-        prefix: impl Into<String>,
-        marker_prefix: impl Into<String>,
-        marker_suffix: impl Into<String>,
-    ) -> Self {
-        self.text_prefix_captures
-            .push(ContextSnapshotPrefixCapture {
-                prefix: prefix.into(),
-                marker_prefix: marker_prefix.into(),
-                marker_suffix: marker_suffix.into(),
-            });
         self
     }
 
@@ -291,20 +267,6 @@ fn normalize_shape_text(text: &str, options: &ContextSnapshotOptions) -> String 
         .find(|(prefix, _)| text.starts_with(prefix.as_str()))
     {
         return replacement.clone();
-    }
-
-    if let Some(capture) = options
-        .text_prefix_captures
-        .iter()
-        .find(|capture| text.starts_with(capture.prefix.as_str()))
-    {
-        let suffix = text
-            .strip_prefix(capture.prefix.as_str())
-            .unwrap_or_default();
-        return format!(
-            "{}{}{}",
-            capture.marker_prefix, suffix, capture.marker_suffix
-        );
     }
 
     if options.normalize_environment_context && text.starts_with("<environment_context>") {

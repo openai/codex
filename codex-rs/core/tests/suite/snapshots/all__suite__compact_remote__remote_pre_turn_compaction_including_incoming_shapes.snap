@@ -20,5 +20,5 @@ Scenario: Remote pre-turn auto-compaction with a context override emits the cont
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:<AGENTS_MD>
 04:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-05:message/user:<SUMMARY:REMOTE_PRE_TURN_SUMMARY>
+05:message/user:Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\nREMOTE_PRE_TURN_SUMMARY
 06:message/user:USER_THREE
