@@ -55,7 +55,7 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let test = builder.build(&server).await?;
 
@@ -96,7 +96,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let test = builder.build(&server).await?;
 
@@ -168,7 +168,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let test = builder.build(&server).await?;
 
@@ -230,7 +230,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
     let rollout_path = initial
@@ -329,7 +329,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
     let rollout_path = initial
@@ -384,7 +384,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     assert_eq!(permissions_base.len(), 2);
 
     builder = builder.with_config(|config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     });
     let resumed = builder.resume(&server, home, rollout_path.clone()).await?;
     resumed
@@ -410,7 +410,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     assert!(!permissions_base.contains(permissions_resume.last().expect("new permissions")));
 
     let mut fork_config = initial.config.clone();
-    fork_config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
+    fork_config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
         .fork_thread(usize::MAX, fork_config, rollout_path, false)
@@ -465,8 +465,8 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let sandbox_policy_for_config = sandbox_policy.clone();
 
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
     });
     let test = builder.build(&server).await?;
 
