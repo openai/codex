@@ -185,10 +185,8 @@ jobs:
           cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
 
-      - if: ${{ matrix.runner == 'windows-arm64' }}
-        name: Install zstd
-        shell: powershell
-        run: choco install -y zstandard
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
 
       - name: Compress artifacts
         shell: bash
@@ -249,7 +247,7 @@ jobs:
             fi
 
             # Keep raw executables and produce .zst alongside them.
-            zstd -T0 -19 "$dest/$base"
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
           done
 
       - uses: actions/upload-artifact@v6
