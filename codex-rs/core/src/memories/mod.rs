@@ -31,7 +31,8 @@ const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
 /// Maximum number of tokens from `memory_summary.md` injected into memory tool
 /// developer instructions.
 const MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT: usize = 5_000;
-/// Portion of the model context window reserved for the stage-1 rollout input.
+/// Portion of the model effective input window reserved for the stage-1 rollout
+/// input.
 ///
 /// Keeping this below 100% leaves room for system instructions, prompt framing,
 /// and model output.

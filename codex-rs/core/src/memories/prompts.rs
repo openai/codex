@@ -46,8 +46,8 @@ pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
 
 /// Builds the stage-1 user message containing rollout metadata and content.
 ///
-/// Large rollout payloads are truncated to 70% of the active model context
-/// window token budget while keeping both head and tail context.
+/// Large rollout payloads are truncated to 70% of the active model's effective
+/// input window token budget while keeping both head and tail context.
 pub(super) fn build_stage_one_input_message(
     model_info: &ModelInfo,
     rollout_path: &Path,
@@ -57,6 +57,7 @@ pub(super) fn build_stage_one_input_message(
     let rollout_token_limit = model_info
         .context_window
         .and_then(|limit| (limit > 0).then_some(limit))
+        .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
         .map(|limit| (limit.saturating_mul(STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).max(1))
         .and_then(|limit| usize::try_from(limit).ok())
         .unwrap_or(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
@@ -108,8 +109,12 @@ mod tests {
         let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
         let mut model_info = model_info_from_slug("gpt-5.2-codex");
         model_info.context_window = Some(123_000);
-        let expected_rollout_token_limit =
-            usize::try_from((123_000_i64 * STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).unwrap();
+        let expected_rollout_token_limit = usize::try_from(
+            ((123_000_i64 * model_info.effective_context_window_percent) / 100)
+                * STAGE_ONE_CONTEXT_WINDOW_PERCENT
+                / 100,
+        )
+        .unwrap();
         let expected_truncated = truncate_text(
             &input,
             TruncationPolicy::Tokens(expected_rollout_token_limit),
