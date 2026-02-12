@@ -334,7 +334,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp", "m_drop", "m_update"]);
+        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
     }
 
     #[test]
