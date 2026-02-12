@@ -17,7 +17,7 @@ pub enum SlashCommand {
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
-    #[strum(serialize = "sandbox-read-root")]
+    #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
     Skills,
@@ -80,7 +80,9 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
-            SlashCommand::SandboxReadRoot => "grant sandbox read access: /sandbox-read-root <path>",
+            SlashCommand::SandboxReadRoot => {
+                "grant sandbox read access: /sandbox-add-read-dir <path>"
+            }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Apps => "manage apps",

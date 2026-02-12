@@ -3357,7 +3357,7 @@ impl ChatWidget {
             }
             SlashCommand::SandboxReadRoot => {
                 self.add_error_message(
-                    "Usage: /sandbox-read-root <absolute-directory-path>".to_string(),
+                    "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
                 );
             }
             SlashCommand::Experimental => {
