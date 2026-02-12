@@ -279,7 +279,7 @@ mod matcher {
         let Some((_, rest)) = message.split_once(TOOL_CALL_LOG_PREFIX) else {
             return false;
         };
-        let tool_name = rest.trim_start().split_whitespace().next();
+        let tool_name = rest.split_whitespace().next();
         tool_name == Some("apply_patch")
     }
 }
