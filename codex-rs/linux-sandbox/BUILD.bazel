@@ -5,8 +5,14 @@ codex_rust_crate(
     name = "linux-sandbox",
     crate_name = "codex_linux_sandbox",
     build_script_enabled = False,
-    deps_extra = [":vendored-bwrap-ffi"],
-    rustc_flags_extra = ["--cfg=vendored_bwrap_available"],
+    deps_extra = select({
+        "@platforms//os:linux": [":vendored-bwrap-ffi"],
+        "//conditions:default": [],
+    }),
+    rustc_flags_extra = select({
+        "@platforms//os:linux": ["--cfg=vendored_bwrap_available"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(
@@ -22,5 +28,6 @@ cc_library(
     ],
     includes = ["."],
     deps = ["@libcap//:libcap"],
+    target_compatible_with = ["@platforms//os:linux"],
     visibility = ["//visibility:private"],
 )
