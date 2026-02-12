@@ -122,6 +122,7 @@ Rules:
         }
         if profile.read_only {
             config
+                .permissions
                 .sandbox_policy
                 .set(SandboxPolicy::new_read_only_policy())
                 .map_err(|err| format!("sandbox_policy is invalid: {err}"))?;
