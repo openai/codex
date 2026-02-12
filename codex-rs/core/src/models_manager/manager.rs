@@ -299,11 +299,11 @@ impl ModelsManager {
         let models = cache.models.clone();
         *self.etag.write().await = cache.etag.clone();
         self.apply_remote_models(models.clone()).await;
-            info!(
-                models_count = models.len(),
-                etag = ?cache.etag,
-                "models cache: cache entry applied"
-            );
+        info!(
+            models_count = models.len(),
+            etag = ?cache.etag,
+            "models cache: cache entry applied"
+        );
         true
     }
 
