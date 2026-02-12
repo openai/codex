@@ -13,6 +13,9 @@ use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventPreCompact;
+use codex_hooks::HookPayload;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
@@ -25,6 +28,21 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    // Dispatch PreCompact hook before compaction begins
+    sess.hooks()
+        .dispatch(HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreCompact {
+                event: HookEventPreCompact {
+                    reason: "auto_token_limit".to_string(),
+                    transcript_path: None,
+                },
+            },
+        })
+        .await;
+
     run_remote_compact_task_inner(&sess, &turn_context).await?;
     Ok(())
 }
@@ -33,6 +51,21 @@ pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    // Dispatch PreCompact hook before compaction begins
+    sess.hooks()
+        .dispatch(HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreCompact {
+                event: HookEventPreCompact {
+                    reason: "manual".to_string(),
+                    transcript_path: None,
+                },
+            },
+        })
+        .await;
+
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),

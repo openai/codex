@@ -44,6 +44,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventSessionStart;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -1269,6 +1270,21 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+
+        // Dispatch SessionStart hook to notify external scripts that a session has begun.
+        sess.hooks()
+            .dispatch(HookPayload {
+                session_id: conversation_id,
+                cwd: session_configuration.cwd.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::SessionStart {
+                    event: HookEventSessionStart {
+                        model: session_configuration.collaboration_mode.model().to_string(),
+                        provider: config.model_provider_id.clone(),
+                    },
+                },
+            })
+            .await;
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();

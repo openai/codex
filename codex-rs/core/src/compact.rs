@@ -18,6 +18,9 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventPreCompact;
+use codex_hooks::HookPayload;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -40,6 +43,21 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    // Dispatch PreCompact hook before compaction begins
+    sess.hooks()
+        .dispatch(HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreCompact {
+                event: HookEventPreCompact {
+                    reason: "auto_token_limit".to_string(),
+                    transcript_path: None,
+                },
+            },
+        })
+        .await;
+
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
@@ -56,6 +74,21 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) -> CodexResult<()> {
+    // Dispatch PreCompact hook before compaction begins
+    sess.hooks()
+        .dispatch(HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreCompact {
+                event: HookEventPreCompact {
+                    reason: "manual".to_string(),
+                    transcript_path: None,
+                },
+            },
+        })
+        .await;
+
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
