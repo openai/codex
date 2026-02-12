@@ -29,9 +29,9 @@ mod phase_one {
     /// Prompt used for phase 1.
     pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
     /// Maximum number of rollout candidates processed per startup pass.
-    pub(super) const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
+    pub(super) const MAX_ROLLOUTS_PER_STARTUP: usize = 8;
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
-    pub(super) const CONCURRENCY_LIMIT: usize = 64;
+    pub(super) const CONCURRENCY_LIMIT: usize = 8;
     /// Fallback stage-1 rollout truncation limit (tokens) when model metadata
     /// does not include a valid context window.
     pub(super) const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
@@ -68,7 +68,7 @@ mod phase_two {
     /// job.
     pub(super) const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
     /// Heartbeat interval (seconds) for phase-2 running jobs.
-    pub(super) const JOB_HEARTBEAT_SECONDS: u64 = 30;
+    pub(super) const JOB_HEARTBEAT_SECONDS: u64 = 90;
 }
 
 mod metrics {
