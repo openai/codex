@@ -4888,6 +4888,103 @@ async fn approvals_popup_navigation_skips_disabled() {
     );
 }
 
+#[tokio::test]
+async fn permissions_selection_emits_history_cell_when_selection_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one permissions selection history cell"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Permissions updated to"),
+        "expected permissions selection history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_does_not_emit_history_cell_when_current() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "did not expect history cell when selecting current permissions"
+    );
+}
+
+#[tokio::test]
+async fn permissions_full_access_history_cell_emitted_only_after_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.notices.hide_full_access_warning = None;
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let mut open_confirmation_event = None;
+    let mut cells_before_confirmation = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                cells_before_confirmation.push(cell.display_lines(80));
+            }
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                open_confirmation_event = Some((preset, return_to_permissions));
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        cells_before_confirmation.is_empty(),
+        "did not expect history cell before confirming full access"
+    );
+    let (preset, return_to_permissions) =
+        open_confirmation_event.expect("expected full access confirmation event");
+    chat.open_full_access_confirmation(preset, return_to_permissions);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Enable full access?"),
+        "expected full access confirmation popup, got: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let cells_after_confirmation = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells_after_confirmation.len(),
+        1,
+        "expected one history cell after confirming full access"
+    );
+    let rendered = lines_to_single_string(&cells_after_confirmation[0]);
+    assert!(
+        rendered.contains("Permissions updated to Full Access"),
+        "expected full access update history message, got: {rendered}"
+    );
+}
+
 //
 // Snapshot test: command approval modal
 //
