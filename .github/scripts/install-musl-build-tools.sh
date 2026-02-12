@@ -59,7 +59,19 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
@@ -75,6 +87,15 @@ for arg in "\$@"; do
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
       continue
       ;;
     -Wp,-U_FORTIFY_SOURCE)
@@ -95,7 +116,19 @@ set -euo pipefail
 
 args=()
 skip_next=0
+pending_include=0
 for arg in "\$@"; do
+  if [[ "\${pending_include}" -eq 1 ]]; then
+    pending_include=0
+    if [[ "\${arg}" == /usr/include || "\${arg}" == /usr/include/* ]]; then
+      # Keep host-only headers available, but after the target sysroot headers.
+      args+=("-idirafter" "\${arg}")
+    else
+      args+=("-I" "\${arg}")
+    fi
+    continue
+  fi
+
   if [[ "\${skip_next}" -eq 1 ]]; then
     skip_next=0
     continue
@@ -111,6 +144,15 @@ for arg in "\$@"; do
       if [[ "\${arg}" == "-target" ]]; then
         skip_next=1
       fi
+      continue
+      ;;
+    -I)
+      pending_include=1
+      continue
+      ;;
+    -I/usr/include|-I/usr/include/*)
+      # Avoid making glibc headers win over musl headers.
+      args+=("-idirafter" "\${arg#-I}")
       continue
       ;;
     -Wp,-U_FORTIFY_SOURCE)
