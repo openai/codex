@@ -141,7 +141,10 @@ impl ModelsManager {
             .find_remote_model_by_longest_prefix(model, config)
             .await;
         let model = if let Some(remote) = remote {
-            remote
+            ModelInfo {
+                slug: model.to_string(),
+                ..remote
+            }
         } else {
             model_info::model_info_from_slug(model)
         };

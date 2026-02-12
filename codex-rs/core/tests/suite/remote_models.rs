@@ -112,7 +112,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 
     let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
 
-    assert_eq!(model_info.slug, specific.slug);
+    assert_eq!(model_info.slug, "gpt-5.3-codex-test");
     assert_eq!(model_info.base_instructions, specific.base_instructions);
 
     Ok(())
