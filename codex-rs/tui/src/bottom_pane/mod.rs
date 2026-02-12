@@ -618,6 +618,10 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_allow_model_while_task_running(&mut self, allow: bool) {
+        self.composer.set_allow_model_while_task_running(allow);
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {

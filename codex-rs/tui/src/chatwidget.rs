@@ -784,8 +784,28 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
+        self.bottom_pane.set_allow_model_while_task_running(
+            self.mcp_startup_status.is_some() && !self.agent_turn_running,
+        );
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+    }
+
+    fn slash_command_blocked_while_task_running(&self, cmd: SlashCommand) -> bool {
+        if cmd.available_during_task() || !self.bottom_pane.is_task_running() {
+            return false;
+        }
+
+        // During MCP startup we still show the task-running state, but /model is safe to open
+        // because no agent turn is executing yet.
+        if cmd == SlashCommand::Model
+            && self.mcp_startup_status.is_some()
+            && !self.agent_turn_running
+        {
+            return false;
+        }
+
+        true
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -3202,7 +3222,7 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if self.slash_command_blocked_while_task_running(cmd) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -3471,7 +3491,7 @@ impl ChatWidget {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if self.slash_command_blocked_while_task_running(cmd) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()

@@ -4499,6 +4499,88 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 }
 
 #[tokio::test]
+async fn model_command_allowed_while_only_mcp_startup_is_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.dispatch_command(SlashCommand::Model);
+
+    let cells = drain_insert_history(&mut rx);
+    let contains_disabled_error = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .any(|text| text.contains("disabled while a task is in progress"));
+    assert!(
+        !contains_disabled_error,
+        "expected /model to be allowed during MCP startup when no turn is running"
+    );
+}
+
+#[tokio::test]
+async fn model_command_still_blocked_during_agent_turn_even_with_mcp_startup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupUpdate(McpStartupUpdateEvent {
+            server: "alpha".into(),
+            status: McpStartupStatus::Starting,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.dispatch_command(SlashCommand::Model);
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells
+            .iter()
+            .map(|lines| lines_to_single_string(lines))
+            .any(|text| text.contains("disabled while a task is in progress")),
+        "expected /model to remain blocked while an agent turn is running"
+    );
+}
+
+#[tokio::test]
 async fn approvals_popup_shows_disabled_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

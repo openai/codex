@@ -281,6 +281,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    allow_model_while_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
@@ -383,6 +384,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            allow_model_while_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
             paste_burst: PasteBurst::default(),
@@ -2304,7 +2306,10 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
-        if !self.is_task_running || cmd.available_during_task() {
+        if !self.is_task_running
+            || cmd.available_during_task()
+            || (cmd == SlashCommand::Model && self.allow_model_while_task_running)
+        {
             return false;
         }
         let message = format!(
@@ -3161,6 +3166,10 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+    }
+
+    pub(crate) fn set_allow_model_while_task_running(&mut self, allow: bool) {
+        self.allow_model_while_task_running = allow;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -5289,6 +5298,35 @@ mod tests {
             }
         }
         assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn slash_model_allowed_during_task_when_override_enabled() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_task_running(true);
+        composer.set_allow_model_while_task_running(true);
+        composer.textarea.set_text_clearing_elements("/model");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::Command(SlashCommand::Model), result);
+        assert_eq!(
+            rx.try_recv().err(),
+            Some(tokio::sync::mpsc::error::TryRecvError::Empty)
+        );
     }
 
     #[test]
