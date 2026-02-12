@@ -6,25 +6,42 @@ use crate::types::HookOutcome;
 use crate::types::HookPayload;
 
 #[derive(Default, Clone)]
+pub struct HooksConfig {
+    pub legacy_notify_argv: Option<Vec<String>>,
+}
+
+#[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
+    after_tool_use: Vec<Hook>,
+}
+
+impl Default for Hooks {
+    fn default() -> Self {
+        Self::new(HooksConfig::default())
+    }
 }
 
 // Hooks are arbitrary, user-specified functions that are deterministically
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
-    pub fn new(notify: Option<Vec<String>>) -> Self {
-        let after_agent = notify
+    pub fn new(config: HooksConfig) -> Self {
+        let after_agent = config
+            .legacy_notify_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
             .into_iter()
             .collect();
-        Self { after_agent }
+        Self {
+            after_agent,
+            after_tool_use: Vec::new(),
+        }
     }
 
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
+            HookEvent::AfterToolUse { .. } => &self.after_tool_use,
         }
     }
 
@@ -70,6 +87,9 @@ mod tests {
 
     use super::*;
     use crate::types::HookEventAfterAgent;
+    use crate::types::HookEventAfterToolUse;
+    use crate::types::HookToolInput;
+    use crate::types::HookToolKind;
 
     const CWD: &str = "/tmp";
     const INPUT_MESSAGE: &str = "hello";
@@ -106,8 +126,33 @@ mod tests {
         }
     }
 
-    fn hooks_for_after_agent(hooks: Vec<Hook>) -> Hooks {
-        Hooks { after_agent: hooks }
+    fn after_tool_use_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterToolUse {
+                event: HookEventAfterToolUse {
+                    turn_id: format!("turn-{label}"),
+                    call_id: format!("call-{label}"),
+                    tool_name: "apply_patch".to_string(),
+                    tool_kind: HookToolKind::Custom,
+                    tool_input: HookToolInput::Custom {
+                        input: "*** Begin Patch".to_string(),
+                    },
+                    executed: true,
+                    success: true,
+                    duration_ms: 1,
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                    output_preview: "ok".to_string(),
+                },
+            },
+        }
     }
 
     #[test]
@@ -138,17 +183,27 @@ mod tests {
 
     #[test]
     fn hooks_new_requires_program_name() {
-        assert!(Hooks::new(None).after_agent.is_empty());
-        assert!(Hooks::new(Some(vec![])).after_agent.is_empty());
+        assert!(Hooks::new(HooksConfig::default()).after_agent.is_empty());
         assert!(
-            Hooks::new(Some(vec!["".to_string()]))
-                .after_agent
-                .is_empty()
+            Hooks::new(HooksConfig {
+                legacy_notify_argv: Some(vec![]),
+            })
+            .after_agent
+            .is_empty()
+        );
+        assert!(
+            Hooks::new(HooksConfig {
+                legacy_notify_argv: Some(vec!["".to_string()]),
+            })
+            .after_agent
+            .is_empty()
         );
         assert_eq!(
-            Hooks::new(Some(vec!["notify-send".to_string()]))
-                .after_agent
-                .len(),
+            Hooks::new(HooksConfig {
+                legacy_notify_argv: Some(vec!["notify-send".to_string()]),
+            })
+            .after_agent
+            .len(),
             1
         );
     }
@@ -156,7 +211,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_executes_hook() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let hooks = hooks_for_after_agent(vec![counting_hook(&calls, HookOutcome::Continue)]);
+        let hooks = Hooks {
+            after_agent: vec![counting_hook(&calls, HookOutcome::Continue)],
+            ..Hooks::default()
+        };
 
         hooks.dispatch(hook_payload("1")).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -172,10 +230,13 @@ mod tests {
     #[tokio::test]
     async fn dispatch_executes_multiple_hooks_for_same_event() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let hooks = hooks_for_after_agent(vec![
-            counting_hook(&calls, HookOutcome::Continue),
-            counting_hook(&calls, HookOutcome::Continue),
-        ]);
+        let hooks = Hooks {
+            after_agent: vec![
+                counting_hook(&calls, HookOutcome::Continue),
+                counting_hook(&calls, HookOutcome::Continue),
+            ],
+            ..Hooks::default()
+        };
 
         hooks.dispatch(hook_payload("2")).await;
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -184,12 +245,27 @@ mod tests {
     #[tokio::test]
     async fn dispatch_stops_when_hook_returns_stop() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let hooks = hooks_for_after_agent(vec![
-            counting_hook(&calls, HookOutcome::Stop),
-            counting_hook(&calls, HookOutcome::Continue),
-        ]);
+        let hooks = Hooks {
+            after_agent: vec![
+                counting_hook(&calls, HookOutcome::Stop),
+                counting_hook(&calls, HookOutcome::Continue),
+            ],
+            ..Hooks::default()
+        };
 
         hooks.dispatch(hook_payload("3")).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_after_tool_use_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_tool_use: vec![counting_hook(&calls, HookOutcome::Continue)],
+            ..Hooks::default()
+        };
+
+        hooks.dispatch(after_tool_use_payload("p")).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -222,7 +298,10 @@ mod tests {
         let payload = hook_payload("4");
         let expected = to_string(&payload)?;
 
-        let hooks = hooks_for_after_agent(vec![hook]);
+        let hooks = Hooks {
+            after_agent: vec![hook],
+            ..Hooks::default()
+        };
         hooks.dispatch(payload).await;
 
         let contents = timeout(Duration::from_secs(2), async {
@@ -277,7 +356,10 @@ mod tests {
         let payload = hook_payload("4");
         let expected = to_string(&payload)?;
 
-        let hooks = hooks_for_after_agent(vec![hook]);
+        let hooks = Hooks {
+            after_agent: vec![hook],
+            ..Hooks::default()
+        };
         hooks.dispatch(payload).await;
 
         let contents = timeout(Duration::from_secs(2), async {

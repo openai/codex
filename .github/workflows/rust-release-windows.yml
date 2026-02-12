@@ -1,0 +1,264 @@
+name: rust-release-windows
+
+on:
+  workflow_call:
+    inputs:
+      release-lto:
+        required: true
+        type: string
+    secrets:
+      AZURE_TRUSTED_SIGNING_CLIENT_ID:
+        required: true
+      AZURE_TRUSTED_SIGNING_TENANT_ID:
+        required: true
+      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID:
+        required: true
+      AZURE_TRUSTED_SIGNING_ENDPOINT:
+        required: true
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
+        required: true
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME:
+        required: true
+
+jobs:
+  build-windows-binaries:
+    name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundle: primary
+            build_args: --bin codex --bin codex-responses-api-proxy
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
+            target: aarch64-pc-windows-msvc
+            bundle: primary
+            build_args: --bin codex --bin codex-responses-api-proxy
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundle: helpers
+            build_args: --bin codex-windows-sandbox-setup --bin codex-command-runner
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
+            target: aarch64-pc-windows-msvc
+            bundle: helpers
+            build_args: --bin codex-windows-sandbox-setup --bin codex-command-runner
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Print runner specs (Windows)
+        shell: powershell
+        run: |
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $ramGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "Logical CPUs: $($computer.NumberOfLogicalProcessors)"
+          Write-Host "Physical CPUs: $($computer.NumberOfProcessors)"
+          Write-Host "Total RAM: $ramGiB GiB"
+          Write-Host "Disk usage:"
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
+      - uses: dtolnay/rust-toolchain@1.93
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo build (Windows binaries)
+        shell: bash
+        run: |
+          cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Stage Windows binaries
+        shell: bash
+        run: |
+          output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
+          mkdir -p "$output_dir"
+          if [[ "${{ matrix.bundle }}" == "primary" ]]; then
+            cp target/${{ matrix.target }}/release/codex.exe "$output_dir/codex.exe"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$output_dir/codex-responses-api-proxy.exe"
+          else
+            cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$output_dir/codex-windows-sandbox-setup.exe"
+            cp target/${{ matrix.target }}/release/codex-command-runner.exe "$output_dir/codex-command-runner.exe"
+          fi
+
+      - name: Upload Windows binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-binaries-${{ matrix.target }}-${{ matrix.bundle }}
+          path: |
+            codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
+
+  build-windows:
+    needs:
+      - build-windows-binaries
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+          - runner: windows-arm64
+            target: aarch64-pc-windows-msvc
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download prebuilt Windows primary binaries
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-binaries-${{ matrix.target }}-primary
+          path: codex-rs/target/${{ matrix.target }}/release
+
+      - name: Download prebuilt Windows helper binaries
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-binaries-${{ matrix.target }}-helpers
+          path: codex-rs/target/${{ matrix.target }}/release
+
+      - name: Verify binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh target/${{ matrix.target }}/release/codex.exe
+          ls -lh target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
+          ls -lh target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe
+          ls -lh target/${{ matrix.target }}/release/codex-command-runner.exe
+
+      - name: Sign Windows binaries with Azure Trusted Signing
+        uses: ./.github/actions/windows-code-sign
+        with:
+          target: ${{ matrix.target }}
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          dest="dist/${{ matrix.target }}"
+          mkdir -p "$dest"
+
+          cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
+          cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
+          cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+          cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
+
+      - name: Install DotSlash
+        uses: facebook/install-dotslash@v2
+
+      - name: Compress artifacts
+        shell: bash
+        run: |
+          # Path that contains the uncompressed binaries for the current
+          # ${{ matrix.target }}
+          dest="dist/${{ matrix.target }}"
+          repo_root=$PWD
+
+          # For compatibility with environments that lack the `zstd` tool we
+          # additionally create a `.tar.gz` and `.zip` for every Windows binary.
+          # The end result is:
+          #   codex-<target>.zst
+          #   codex-<target>.tar.gz
+          #   codex-<target>.zip
+          for f in "$dest"/*; do
+            base="$(basename "$f")"
+            # Skip files that are already archives (shouldn't happen, but be
+            # safe).
+            if [[ "$base" == *.tar.gz || "$base" == *.zip || "$base" == *.dmg ]]; then
+              continue
+            fi
+
+            # Don't try to compress signature bundles.
+            if [[ "$base" == *.sigstore ]]; then
+              continue
+            fi
+
+            # Create per-binary tar.gz
+            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+            # Create zip archive for Windows binaries.
+            # Must run from inside the dest dir so 7z won't embed the
+            # directory path inside the zip.
+            if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
+              # Bundle the sandbox helper binaries into the main codex zip so
+              # WinGet installs include the required helpers next to codex.exe.
+              # Fall back to the single-binary zip if the helpers are missing
+              # to avoid breaking releases.
+              bundle_dir="$(mktemp -d)"
+              runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
+              setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+              if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                cp "$dest/$base" "$bundle_dir/$base"
+                cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                # Use an absolute path so bundle zips land in the real dist
+                # dir even when 7z runs from a temp directory.
+                (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
+              else
+                echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                echo "warning: expected $runner_src and $setup_src"
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
+              rm -rf "$bundle_dir"
+            else
+              (cd "$dest" && 7z a "${base}.zip" "$base")
+            fi
+
+            # Keep raw executables and produce .zst alongside them.
+            "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
+          done
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            codex-rs/dist/${{ matrix.target }}/*

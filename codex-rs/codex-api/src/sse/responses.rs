@@ -239,6 +239,8 @@ pub fn process_responses_event(
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
                         response_error = ApiError::InvalidRequest { message };
+                    } else if is_server_overloaded_error(&error) {
+                        response_error = ApiError::ServerOverloaded;
                     } else {
                         let delay = try_parse_retry_after(&error);
                         let message = error.message.unwrap_or_default();
@@ -251,6 +253,17 @@ pub fn process_responses_event(
             return Err(ResponsesEventError::Api(ApiError::Stream(
                 "response.failed event received".into(),
             )));
+        }
+        "response.incomplete" => {
+            let reason = event.response.as_ref().and_then(|response| {
+                response
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str)
+            });
+            let reason = reason.unwrap_or("unknown");
+            let message = format!("Incomplete response returned, reason: {reason}");
+            return Err(ResponsesEventError::Api(ApiError::Stream(message)));
         }
         "response.completed" => {
             if let Some(resp_val) = event.response {
@@ -423,6 +436,11 @@ fn is_usage_not_included(error: &Error) -> bool {
 
 fn is_invalid_prompt_error(error: &Error) -> bool {
     error.code.as_deref() == Some("invalid_prompt")
+}
+
+fn is_server_overloaded_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("server_is_overloaded")
+        || error.code.as_deref() == Some("slow_down")
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {

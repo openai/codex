@@ -3,6 +3,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -16,6 +17,7 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
@@ -819,12 +821,7 @@ fn build_agent_shared_config(
     config.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
-    config
-        .approval_policy
-        .set(turn.approval_policy)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
-        })?;
+    config.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
         .sandbox_policy
         .set(turn.sandbox_policy.clone())
@@ -1690,22 +1687,6 @@ mod tests {
 
     #[tokio::test]
     async fn build_agent_spawn_config_uses_turn_context_values() {
-        fn pick_allowed_approval_policy(
-            constraint: &crate::config::Constrained<AskForApproval>,
-            base: AskForApproval,
-        ) -> AskForApproval {
-            let candidates = [
-                AskForApproval::Never,
-                AskForApproval::UnlessTrusted,
-                AskForApproval::OnRequest,
-                AskForApproval::OnFailure,
-            ];
-            candidates
-                .into_iter()
-                .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
-                .unwrap_or(base)
-        }
-
         fn pick_allowed_sandbox_policy(
             constraint: &crate::config::Constrained<SandboxPolicy>,
             base: SandboxPolicy,
@@ -1734,10 +1715,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.approval_policy = pick_allowed_approval_policy(
-            &turn.config.approval_policy,
-            *turn.config.approval_policy.get(),
-        );
         turn.sandbox_policy = pick_allowed_sandbox_policy(
             &turn.config.sandbox_policy,
             turn.config.sandbox_policy.get().clone(),
@@ -1757,7 +1734,7 @@ mod tests {
         expected.cwd = turn.cwd.clone();
         expected
             .approval_policy
-            .set(turn.approval_policy)
+            .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
             .sandbox_policy
@@ -1804,7 +1781,7 @@ mod tests {
         expected.cwd = turn.cwd.clone();
         expected
             .approval_policy
-            .set(turn.approval_policy)
+            .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
             .sandbox_policy

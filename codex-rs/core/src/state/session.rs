@@ -25,8 +25,8 @@ pub(crate) struct SessionState {
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
     /// timestamp when resuming a session. Remove this once SQLite is in place.
     pub(crate) initial_context_seeded: bool,
-    /// Previous rollout model for one-shot model-switch handling on first turn after resume.
-    pub(crate) pending_resume_previous_model: Option<String>,
+    /// Previous model seen by the session, used for model-switch handling on task start.
+    previous_model: Option<String>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
@@ -44,7 +44,7 @@ impl SessionState {
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
             initial_context_seeded: false,
-            pending_resume_previous_model: None,
+            previous_model: None,
             startup_regular_task: None,
             active_mcp_tool_selection: None,
         }
@@ -57,6 +57,13 @@ impl SessionState {
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
         self.history.record_items(items, policy);
+    }
+
+    pub(crate) fn previous_model(&self) -> Option<String> {
+        self.previous_model.clone()
+    }
+    pub(crate) fn set_previous_model(&mut self, previous_model: Option<String>) {
+        self.previous_model = previous_model;
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
@@ -170,20 +177,15 @@ impl SessionState {
     }
 }
 
-// Merge partial rate-limit updates: new fields overwrite existing values;
-// missing fields retain prior values. If `limit_id` is absent everywhere,
-// default it to `"codex"`.
+// Sometimes new snapshots don't include credits or plan information.
+// Preserve those from the previous snapshot when missing. For `limit_id`, treat
+// missing values as the default `"codex"` bucket.
 fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
     mut snapshot: RateLimitSnapshot,
 ) -> RateLimitSnapshot {
     if snapshot.limit_id.is_none() {
-        snapshot.limit_id = previous
-            .and_then(|prior| prior.limit_id.clone())
-            .or_else(|| Some("codex".to_string()));
-    }
-    if snapshot.limit_name.is_none() {
-        snapshot.limit_name = previous.and_then(|prior| prior.limit_name.clone());
+        snapshot.limit_id = Some("codex".to_string());
     }
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
@@ -298,7 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_rate_limits_preserves_previous_limit_id_when_missing() {
+    async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_bucket() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);
 
@@ -332,12 +334,12 @@ mod tests {
                 .latest_rate_limits
                 .as_ref()
                 .and_then(|v| v.limit_id.clone()),
-            Some("codex_other".to_string())
+            Some("codex".to_string())
         );
     }
 
     #[tokio::test]
-    async fn set_rate_limits_accepts_new_limit_id_bucket() {
+    async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);
 
@@ -360,7 +362,7 @@ mod tests {
 
         state.set_rate_limits(RateLimitSnapshot {
             limit_id: Some("codex_other".to_string()),
-            limit_name: Some("codex_other".to_string()),
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 30.0,
                 window_minutes: Some(120),
@@ -375,7 +377,7 @@ mod tests {
             state.latest_rate_limits,
             Some(RateLimitSnapshot {
                 limit_id: Some("codex_other".to_string()),
-                limit_name: Some("codex_other".to_string()),
+                limit_name: None,
                 primary: Some(RateLimitWindow {
                     used_percent: 30.0,
                     window_minutes: Some(120),
