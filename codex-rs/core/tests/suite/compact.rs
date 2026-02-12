@@ -46,7 +46,6 @@ use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
@@ -3025,25 +3024,23 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             ]
         )
     );
-    let follow_up_has_incoming_image = requests[3].inputs_of_type("message").iter().any(|item| {
-        if item.get("role").and_then(Value::as_str) != Some("user") {
-            return false;
-        }
-        let Some(content) = item.get("content").and_then(Value::as_array) else {
-            return false;
-        };
-        let has_user_text = content.iter().any(|span| {
-            span.get("type").and_then(Value::as_str) == Some("input_text")
-                && span.get("text").and_then(Value::as_str) == Some("USER_THREE")
-        });
-        let has_image = content.iter().any(|span| {
-            span.get("type").and_then(Value::as_str) == Some("input_image")
-                && span.get("image_url").and_then(Value::as_str) == Some(image_url.as_str())
-        });
-        has_user_text && has_image
-    });
+    let compact_request_user_texts = requests[2].message_input_texts("user");
     assert!(
-        follow_up_has_incoming_image,
+        !compact_request_user_texts
+            .iter()
+            .any(|text| text == "USER_THREE"),
+        "current behavior excludes incoming user message from pre-turn compaction input"
+    );
+    let follow_up_user_texts = requests[3].message_input_texts("user");
+    assert!(
+        follow_up_user_texts.iter().any(|text| text == "USER_THREE"),
+        "expected post-compaction follow-up request to keep incoming user text"
+    );
+    let follow_up_user_images = requests[3].message_input_image_urls("user");
+    assert!(
+        follow_up_user_images
+            .iter()
+            .any(|url| url == image_url.as_str()),
         "expected post-compaction follow-up request to keep incoming user image content"
     );
 }
