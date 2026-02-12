@@ -243,20 +243,26 @@ fn exec_command_vector(args: &ExecCommandArgs, session_shell: &Shell) -> Vec<Str
 }
 
 // Extracts read operations from a parsed command and resolves paths against cwd.
+// Returns no paths unless every parsed segment is a read operation.
 fn command_read_paths(command: &[String], cwd: &Path) -> Vec<PathBuf> {
-    parse_command(command)
-        .into_iter()
-        .filter_map(|parsed| match parsed {
-            ParsedCommand::Read { path, .. } => {
-                if path.is_absolute() {
-                    Some(path)
-                } else {
-                    Some(cwd.join(path))
-                }
-            }
-            _ => None,
-        })
-        .collect()
+    let parsed_commands = parse_command(command);
+    if parsed_commands.is_empty() {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::with_capacity(parsed_commands.len());
+    for parsed in parsed_commands {
+        let ParsedCommand::Read { path, .. } = parsed else {
+            return Vec::new();
+        };
+        if path.is_absolute() {
+            paths.push(path);
+        } else {
+            paths.push(cwd.join(path));
+        }
+    }
+
+    paths
 }
 
 // Merges connector selection only when at least one connector ID was discovered.
@@ -423,5 +429,23 @@ mod tests {
         let paths = read_paths_for_tool_call(&session, &turn, "shell_command", &payload);
 
         assert_eq!(paths, vec![PathBuf::from("/tmp/skills/alpha/SKILL.md")]);
+    }
+
+    #[tokio::test]
+    // Verifies shell command parsing fails closed when any segment is not a read.
+    async fn shell_command_with_non_read_segment_returns_no_paths() {
+        let (session, turn) = make_session_and_context().await;
+        let payload = ToolPayload::Function {
+            arguments: json!({
+                "command": "cat /tmp/skills/alpha/SKILL.md; echo done",
+                "workdir": "/tmp",
+                "timeout_ms": 1_000
+            })
+            .to_string(),
+        };
+
+        let paths = read_paths_for_tool_call(&session, &turn, "shell_command", &payload);
+
+        assert_eq!(paths, Vec::<PathBuf>::new());
     }
 }
