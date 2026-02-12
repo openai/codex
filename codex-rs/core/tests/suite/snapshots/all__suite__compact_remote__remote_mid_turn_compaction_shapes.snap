@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "sectioned_request_shapes(\"Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
 Scenario: Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
 

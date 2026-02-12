@@ -30,12 +30,15 @@ impl ContextSnapshotOptions {
     }
 }
 
-pub fn request_input_shape(request: &ResponsesRequest, options: &ContextSnapshotOptions) -> String {
+pub fn format_request_input_snapshot(
+    request: &ResponsesRequest,
+    options: &ContextSnapshotOptions,
+) -> String {
     let items = request.input();
-    response_items_shape(items.as_slice(), options)
+    format_response_items_snapshot(items.as_slice(), options)
 }
 
-pub fn response_items_shape(items: &[Value], options: &ContextSnapshotOptions) -> String {
+pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshotOptions) -> String {
     items
         .iter()
         .enumerate()
@@ -63,7 +66,7 @@ pub fn response_items_shape(items: &[Value], options: &ContextSnapshotOptions) -
                             content
                                 .iter()
                                 .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-                                .map(|text| normalize_shape_text(text, options))
+                                .map(|text| format_snapshot_text(text, options))
                                 .collect::<Vec<String>>()
                                 .join(" | ")
                         })
@@ -106,7 +109,7 @@ pub fn response_items_shape(items: &[Value], options: &ContextSnapshotOptions) -
                         .and_then(|summary| summary.first())
                         .and_then(|entry| entry.get("text"))
                         .and_then(Value::as_str)
-                        .map(|text| normalize_shape_text(text, options))
+                        .map(|text| format_snapshot_text(text, options))
                         .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
                     let has_encrypted_content = item
                         .get("encrypted_content")
@@ -130,33 +133,43 @@ pub fn response_items_shape(items: &[Value], options: &ContextSnapshotOptions) -
         .join("\n")
 }
 
-pub fn sectioned_request_shapes(
+pub fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &ResponsesRequest)],
     options: &ContextSnapshotOptions,
 ) -> String {
     let sections = sections
         .iter()
-        .map(|(title, request)| format!("## {title}\n{}", request_input_shape(request, options)))
+        .map(|(title, request)| {
+            format!(
+                "## {title}\n{}",
+                format_request_input_snapshot(request, options)
+            )
+        })
         .collect::<Vec<String>>()
         .join("\n\n");
     format!("Scenario: {scenario}\n\n{sections}")
 }
 
-pub fn sectioned_item_shapes(
+pub fn format_labeled_items_snapshot(
     scenario: &str,
     sections: &[(&str, &[Value])],
     options: &ContextSnapshotOptions,
 ) -> String {
     let sections = sections
         .iter()
-        .map(|(title, items)| format!("## {title}\n{}", response_items_shape(items, options)))
+        .map(|(title, items)| {
+            format!(
+                "## {title}\n{}",
+                format_response_items_snapshot(items, options)
+            )
+        })
         .collect::<Vec<String>>()
         .join("\n\n");
     format!("Scenario: {scenario}\n\n{sections}")
 }
 
-fn normalize_shape_text(text: &str, options: &ContextSnapshotOptions) -> String {
+fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText | ContextSnapshotRenderMode::FullText => {
             text.replace('\n', "\\n")

@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "sectioned_request_shapes(\"Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &follow_up_request),])"
+expression: "format_labeled_requests_snapshot(\"Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &follow_up_request),])"
 ---
 Scenario: Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.
 

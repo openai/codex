@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "sectioned_request_shapes(\"Pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Local Compaction Request (Incoming User Excluded)\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Local Compaction Request (Incoming User Excluded)\", &requests[1]),])"
 ---
 Scenario: Pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.
 

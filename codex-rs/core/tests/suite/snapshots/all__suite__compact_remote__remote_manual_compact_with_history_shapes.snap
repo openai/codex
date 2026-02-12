@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "sectioned_request_shapes(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", &requests[1]),])"
 ---
 Scenario: Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.
 

@@ -205,11 +205,11 @@ fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindOnly)
 }
 
-fn sectioned_request_shapes(
+fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &core_test_support::responses::ResponsesRequest)],
 ) -> String {
-    context_snapshot::sectioned_request_shapes(scenario, sections, &context_snapshot_options())
+    context_snapshot::format_labeled_requests_snapshot(scenario, sections, &context_snapshot_options())
 }
 
 fn request_contains_text(
@@ -3060,7 +3060,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 
     insta::assert_snapshot!(
         "pre_turn_compaction_including_incoming_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.",
             &[
                 ("Local Compaction Request", &requests[2]),
@@ -3181,7 +3181,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
     insta::assert_snapshot!(
         "pre_turn_compaction_context_window_exceeded_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
             &[(
                 "Local Compaction Request (Incoming User Excluded)",
@@ -3253,7 +3253,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
 
     insta::assert_snapshot!(
         "mid_turn_compaction_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
             &[
                 ("Local Compaction Request", &requests[1]),
@@ -3328,7 +3328,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
 
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.",
             &[
                 ("Local Compaction Request", &requests[0]),
@@ -3410,7 +3410,7 @@ async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
 
     insta::assert_snapshot!(
         "manual_compact_with_history_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.",
             &[
                 ("Local Compaction Request", &requests[1]),

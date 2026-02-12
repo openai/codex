@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "sectioned_request_shapes(\"Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&include_attempt_request),])"
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&include_attempt_request),])"
 ---
 Scenario: Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.
 

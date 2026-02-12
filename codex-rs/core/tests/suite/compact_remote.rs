@@ -69,11 +69,11 @@ fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindOnly)
 }
 
-fn sectioned_request_shapes(
+fn format_labeled_requests_snapshot(
     scenario: &str,
     sections: &[(&str, &responses::ResponsesRequest)],
 ) -> String {
-    context_snapshot::sectioned_request_shapes(scenario, sections, &context_snapshot_options())
+    context_snapshot::format_labeled_requests_snapshot(scenario, sections, &context_snapshot_options())
 }
 
 fn json_fragment(text: &str) -> String {
@@ -1456,7 +1456,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     let compact_request = compact_mock.single_request();
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_including_incoming_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message.",
             &[
                 ("Remote Compaction Request", &compact_request),
@@ -1574,7 +1574,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_failure_stops_without
     let include_attempt_request = first_compact_mock.single_request();
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_failure_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.",
             &[(
                 "Remote Compaction Request (Incoming User Excluded)",
@@ -1681,7 +1681,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
     let include_attempt_request = compact_mock.single_request();
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_context_window_exceeded_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
             &[(
                 "Remote Compaction Request (Incoming User Excluded)",
@@ -1762,7 +1762,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     let compact_request = compact_mock.single_request();
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
             &[
                 ("Remote Compaction Request", &compact_request),
@@ -1835,7 +1835,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
     let follow_up_request = responses_mock.single_request();
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.",
             &[
                 ("Remote Compaction Request", &compact_request),
@@ -1925,7 +1925,7 @@ async fn snapshot_request_shape_remote_manual_compact_with_previous_user_message
     let compact_request = compact_mock.single_request();
     insta::assert_snapshot!(
         "remote_manual_compact_with_history_shapes",
-        sectioned_request_shapes(
+        format_labeled_requests_snapshot(
             "Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.",
             &[
                 ("Remote Compaction Request", &compact_request),

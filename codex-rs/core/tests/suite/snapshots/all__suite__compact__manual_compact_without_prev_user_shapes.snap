@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "sectioned_request_shapes(\"Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.\",\n&[(\"Local Compaction Request\", &requests[0]),\n(\"Local Post-Compaction History Layout\", &requests[1]),])"
+expression: "format_labeled_requests_snapshot(\"Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.\",\n&[(\"Local Compaction Request\", &requests[0]),\n(\"Local Post-Compaction History Layout\", &requests[1]),])"
 ---
 Scenario: Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.
 

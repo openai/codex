@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "sectioned_request_shapes(\"Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
+expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
 ---
 Scenario: Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
 
