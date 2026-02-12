@@ -364,7 +364,6 @@ pub async fn run_main_with_transport(
         )
         .await
         .ok()
-        // Keep sqlite feedback logs aligned with /feedback ring-buffer capture fidelity.
         .map(|db| log_db::start(db).with_filter(Targets::new().with_default(Level::TRACE)))
     } else {
         None
