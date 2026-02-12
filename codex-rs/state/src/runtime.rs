@@ -2141,7 +2141,7 @@ VALUES (?, ?, ?, ?, ?)
             cwd,
             cli_version: "0.0.0".to_string(),
             title: String::new(),
-            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::ReadOnly),
+            sandbox_policy: crate::extract::enum_to_string(&SandboxPolicy::new_read_only_policy()),
             approval_mode: crate::extract::enum_to_string(&AskForApproval::OnRequest),
             tokens_used: 0,
             first_user_message: Some("hello".to_string()),
