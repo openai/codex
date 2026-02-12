@@ -8,6 +8,7 @@ use crate::codex::NetworkApprovalOutcome;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::network_policy_decision::denied_network_policy_message;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -196,6 +197,22 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         } else {
             None
         };
+        let network_policy_denial_message = if let (Some(network), Some(attempt_id)) =
+            (req.network.as_ref(), network_attempt_id.as_deref())
+        {
+            match network.latest_blocked_request_for_attempt(attempt_id).await {
+                Ok(Some(blocked)) => denied_network_policy_message(&blocked),
+                Ok(None) => None,
+                Err(err) => {
+                    tracing::debug!(
+                        "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         if let Some(attempt_id) = network_attempt_id.as_deref() {
             ctx.session
@@ -205,6 +222,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
 
         if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
             return Err(ToolError::Rejected("rejected by user".to_string()));
+        }
+        if let Some(message) = network_policy_denial_message {
+            return Err(ToolError::Rejected(message));
         }
 
         let out = out?;

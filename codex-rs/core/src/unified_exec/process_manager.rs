@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::codex::NetworkApprovalOutcome;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::network_policy_decision::denied_network_policy_message;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
@@ -88,6 +89,25 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
         env.insert(key.to_string(), value.to_string());
     }
     env
+}
+
+async fn network_policy_denial_message_for_attempt(
+    network: Option<&codex_network_proxy::NetworkProxy>,
+    attempt_id: Option<&str>,
+) -> Option<String> {
+    let (Some(network), Some(attempt_id)) = (network, attempt_id) else {
+        return None;
+    };
+    match network.latest_blocked_request_for_attempt(attempt_id).await {
+        Ok(Some(blocked)) => denied_network_policy_message(&blocked),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::debug!(
+                "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
+            );
+            None
+        }
+    }
 }
 
 struct PreparedProcessHandles {
@@ -272,6 +292,14 @@ impl UnifiedExecProcessManager {
                     "rejected by user".to_string(),
                 ));
             }
+            if let Some(message) = network_policy_denial_message_for_attempt(
+                request.network.as_ref(),
+                network_attempt_id.as_deref(),
+            )
+            .await
+            {
+                return Err(UnifiedExecError::create_process(message));
+            }
             process.check_for_sandbox_denial_with_text(&text).await?;
 
             let original_token_count = approx_token_count(&text);
@@ -310,6 +338,16 @@ impl UnifiedExecProcessManager {
             return Err(UnifiedExecError::create_process(
                 "rejected by user".to_string(),
             ));
+        }
+        if let Some(message) = network_policy_denial_message_for_attempt(
+            request.network.as_ref(),
+            network_attempt_id.as_deref(),
+        )
+        .await
+        {
+            process.terminate();
+            self.release_process_id(&request.process_id).await;
+            return Err(UnifiedExecError::create_process(message));
         }
 
         // Long‑lived command: persist the process so write_stdin can reuse
