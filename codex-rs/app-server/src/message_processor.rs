@@ -396,9 +396,19 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+    pub(crate) async fn try_attach_thread_listener(
+        &mut self,
+        thread_id: ThreadId,
+        connection_ids: Vec<ConnectionId>,
+    ) {
         self.codex_message_processor
-            .try_attach_thread_listener(thread_id)
+            .try_attach_thread_listener(thread_id, connection_ids)
+            .await;
+    }
+
+    pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_closed(connection_id)
             .await;
     }
 

@@ -111,7 +111,7 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::SearchTool);
+        config.features.enable(Feature::Apps);
     });
     let test = builder.build(&server).await?;
 
@@ -148,7 +148,7 @@ async fn search_tool_adds_developer_instructions() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::SearchTool);
+        config.features.enable(Feature::Apps);
     });
     let test = builder.build(&server).await?;
 
@@ -190,7 +190,7 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
 
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::SearchTool);
+        config.features.enable(Feature::Apps);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             "rmcp".to_string(),
@@ -273,7 +273,7 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
 
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::SearchTool);
+        config.features.enable(Feature::Apps);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             "rmcp".to_string(),
@@ -401,7 +401,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
 
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::SearchTool);
+        config.features.enable(Feature::Apps);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             "rmcp".to_string(),

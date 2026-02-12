@@ -179,6 +179,20 @@ pub fn create_client() -> CodexHttpClient {
 }
 
 pub fn build_reqwest_client() -> reqwest::Client {
+    let ua = get_codex_user_agent();
+
+    let mut builder = reqwest::Client::builder()
+        // Set UA via dedicated helper to avoid header validation pitfalls
+        .user_agent(ua)
+        .default_headers(default_headers());
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+pub fn default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("originator", originator().header_value);
     if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
@@ -190,17 +204,7 @@ pub fn build_reqwest_client() -> reqwest::Client {
         };
         headers.insert(RESIDENCY_HEADER_NAME, value);
     }
-    let ua = get_codex_user_agent();
-
-    let mut builder = reqwest::Client::builder()
-        // Set UA via dedicated helper to avoid header validation pitfalls
-        .user_agent(ua)
-        .default_headers(headers);
-    if is_sandboxed() {
-        builder = builder.no_proxy();
-    }
-
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    headers
 }
 
 fn is_sandboxed() -> bool {
