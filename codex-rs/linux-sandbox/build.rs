@@ -29,10 +29,6 @@ fn main() {
         "cargo:rerun-if-changed={}",
         vendor_dir.join("utils.c").display()
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest_dir.join("include/sys/capability.h").display()
-    );
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "linux" {
@@ -49,7 +45,7 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|err| err.to_string())?);
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let src_dir = resolve_bwrap_source_dir(&manifest_dir)?;
-    let _libcap = pkg_config::Config::new()
+    let libcap = pkg_config::Config::new()
         .probe("libcap")
         .map_err(|err| format!("libcap not available via pkg-config: {err}"))?;
 
@@ -69,14 +65,15 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
         .file(src_dir.join("network.c"))
         .file(src_dir.join("utils.c"))
         .include(&out_dir)
-        // Keep compilation on target libc/sysroot headers. Pulling host
-        // include paths from pkg-config can break cross-compiles (for
-        // example, Linux musl jobs accidentally consuming glibc headers).
-        .include(manifest_dir.join("include"))
         .include(&src_dir)
         .define("_GNU_SOURCE", None)
         // Rename `main` so we can call it via FFI.
         .define("main", Some("bwrap_main"));
+    for include_path in libcap.include_paths {
+        // Use -idirafter so target sysroot headers win (musl cross builds),
+        // while still allowing libcap headers from the host toolchain.
+        build.flag(format!("-idirafter{}", include_path.display()));
+    }
 
     build.compile("build_time_bwrap");
     println!("cargo:rustc-cfg=vendored_bwrap_available");
