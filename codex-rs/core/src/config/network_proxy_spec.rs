@@ -3,6 +3,7 @@ use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
@@ -11,6 +12,7 @@ use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::host_and_port_from_network_addr;
 use codex_network_proxy::validate_policy_against_constraints;
+use codex_protocol::protocol::SandboxPolicy;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,20 +94,27 @@ impl NetworkProxySpec {
         })
     }
 
-    pub async fn start_proxy(&self) -> std::io::Result<StartedNetworkProxy> {
+    pub async fn start_proxy(
+        &self,
+        sandbox_policy: &SandboxPolicy,
+    ) -> std::io::Result<StartedNetworkProxy> {
         let state =
             build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
                 std::io::Error::other(format!("failed to build network proxy state: {err}"))
             })?;
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         let state = NetworkProxyState::with_reloader(state, reloader);
-        let proxy = NetworkProxy::builder()
-            .state(Arc::new(state))
-            .build()
-            .await
-            .map_err(|err| {
-                std::io::Error::other(format!("failed to build network proxy: {err}"))
-            })?;
+        let mut builder = NetworkProxy::builder().state(Arc::new(state));
+        if should_ask_on_allowlist_miss(sandbox_policy) {
+            builder = builder.policy_decider(|_request| async {
+                // In restricted sandbox modes, allowlist misses should ask for
+                // explicit network approval instead of hard-denying.
+                NetworkDecision::ask("not_allowed")
+            });
+        }
+        let proxy = builder.build().await.map_err(|err| {
+            std::io::Error::other(format!("failed to build network proxy: {err}"))
+        })?;
         let handle = proxy
             .run()
             .await
@@ -167,5 +176,43 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
+    }
+}
+
+fn should_ask_on_allowlist_miss(sandbox_policy: &SandboxPolicy) -> bool {
+    matches!(
+        sandbox_policy,
+        SandboxPolicy::ReadOnly | SandboxPolicy::WorkspaceWrite { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::protocol::NetworkAccess;
+
+    #[test]
+    fn restricted_sandbox_modes_ask_on_allowlist_miss() {
+        assert!(should_ask_on_allowlist_miss(&SandboxPolicy::ReadOnly));
+        assert!(should_ask_on_allowlist_miss(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn yolo_and_external_modes_do_not_ask_on_allowlist_miss() {
+        assert!(!should_ask_on_allowlist_miss(
+            &SandboxPolicy::DangerFullAccess
+        ));
+        assert!(!should_ask_on_allowlist_miss(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            }
+        ));
     }
 }
