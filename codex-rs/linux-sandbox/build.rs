@@ -5,8 +5,10 @@ use std::path::PathBuf;
 fn main() {
     // Tell rustc/clippy that this is an expected cfg value.
     println!("cargo:rustc-check-cfg=cfg(vendored_bwrap_available)");
-    println!("cargo:rerun-if-env-changed=CODEX_BWRAP_ENABLE_FFI");
     println!("cargo:rerun-if-env-changed=CODEX_BWRAP_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_ALLOW_CROSS");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_SYSROOT_DIR");
 
     // Rebuild if the vendored bwrap sources change.
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default());
@@ -33,15 +35,8 @@ fn main() {
         return;
     }
 
-    // Opt-in: do not attempt to fetch/compile bwrap unless explicitly enabled.
-    let enable_ffi = matches!(env::var("CODEX_BWRAP_ENABLE_FFI"), Ok(value) if value == "1");
-    if !enable_ffi {
-        return;
-    }
-
     if let Err(err) = try_build_vendored_bwrap() {
-        // Keep normal builds working even if the experiment fails.
-        println!("cargo:warning=build-time bubblewrap disabled: {err}");
+        panic!("failed to compile vendored bubblewrap for Linux target: {err}");
     }
 }
 
@@ -50,7 +45,6 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|err| err.to_string())?);
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|err| err.to_string())?);
     let src_dir = resolve_bwrap_source_dir(&manifest_dir)?;
-
     let libcap = pkg_config::Config::new()
         .probe("libcap")
         .map_err(|err| format!("libcap not available via pkg-config: {err}"))?;
@@ -75,9 +69,10 @@ fn try_build_vendored_bwrap() -> Result<(), String> {
         .define("_GNU_SOURCE", None)
         // Rename `main` so we can call it via FFI.
         .define("main", Some("bwrap_main"));
-
     for include_path in libcap.include_paths {
-        build.include(include_path);
+        // Use -idirafter so target sysroot headers win (musl cross builds),
+        // while still allowing libcap headers from the host toolchain.
+        build.flag(format!("-idirafter{}", include_path.display()));
     }
 
     build.compile("build_time_bwrap");

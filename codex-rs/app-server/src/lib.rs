@@ -27,7 +27,6 @@ use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
-use crate::transport::has_initialized_connections;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
@@ -490,6 +489,7 @@ pub async fn run_main_with_transport(
                                 {
                                     break;
                                 }
+                                processor.connection_closed(connection_id).await;
                                 connections.remove(&connection_id);
                                 if shutdown_when_no_connections && connections.is_empty() {
                                     break;
@@ -544,8 +544,19 @@ pub async fn run_main_with_transport(
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                if has_initialized_connections(&connections) {
-                                    processor.try_attach_thread_listener(thread_id).await;
+                                let initialized_connection_ids: Vec<ConnectionId> = connections
+                                    .iter()
+                                    .filter_map(|(connection_id, connection_state)| {
+                                        connection_state.session.initialized.then_some(*connection_id)
+                                    })
+                                    .collect();
+                                if !initialized_connection_ids.is_empty() {
+                                    processor
+                                        .try_attach_thread_listener(
+                                            thread_id,
+                                            initialized_connection_ids,
+                                        )
+                                        .await;
                                 }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {

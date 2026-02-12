@@ -263,7 +263,9 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::features::Feature;
-    use crate::skills::load_skills;
+    use crate::skills::loader::SkillRoot;
+    use crate::skills::loader::load_skills_from_roots;
+    use codex_protocol::protocol::SkillScope;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -300,6 +302,13 @@ mod tests {
             .map(std::string::ToString::to_string)
             .collect();
         config
+    }
+
+    fn load_test_skills(config: &Config) -> crate::skills::SkillLoadOutcome {
+        load_skills_from_roots([SkillRoot {
+            path: config.codex_home.join("skills"),
+            scope: SkillScope::User,
+        }])
     }
 
     /// AGENTS.md missing – should yield `None`.
@@ -542,7 +551,7 @@ mod tests {
             "extract from pdfs",
         );
 
-        let skills = load_skills(&cfg);
+        let skills = load_test_skills(&cfg);
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
@@ -569,7 +578,7 @@ mod tests {
         let cfg = make_config(&tmp, 4096, None).await;
         create_skill(cfg.codex_home.clone(), "linting", "run clippy");
 
-        let skills = load_skills(&cfg);
+        let skills = load_test_skills(&cfg);
         let res = get_user_instructions(
             &cfg,
             skills.errors.is_empty().then_some(skills.skills.as_slice()),
