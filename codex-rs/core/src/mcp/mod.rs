@@ -30,8 +30,8 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
-const OPENAI_API_BASE_URL: &str = "https://api.openai.com";
-const CONNECTORS_MCP_PATH: &str = "/v1/connectors/mcp/";
+const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
+const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/mcp/";
 
 // Legacy vs new MCP gateway
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +95,7 @@ fn normalize_codex_apps_base_url(base_url: &str) -> String {
 
 fn codex_apps_mcp_url_for_gateway(base_url: &str, gateway: CodexAppsMcpGateway) -> String {
     if gateway == CodexAppsMcpGateway::MCPGateway {
-        return format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}");
+        return format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
     }
 
     let base_url = normalize_codex_apps_base_url(base_url);
@@ -452,8 +452,8 @@ mod tests {
     }
 
     #[test]
-    fn codex_apps_mcp_url_for_gateway_2_uses_openai_connectors_gateway() {
-        let expected_url = format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}");
+    fn codex_apps_mcp_url_for_gateway_uses_openai_connectors_gateway() {
+        let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
 
         assert_eq!(
             codex_apps_mcp_url_for_gateway(
@@ -504,12 +504,12 @@ mod tests {
 
         assert_eq!(
             codex_apps_mcp_url(&config),
-            format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}")
+            format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}")
         );
     }
 
     #[test]
-    fn with_codex_apps_mcp_uses_apps_gateway_only_with_apps_enabled() {
+    fn codex_apps_server_config_switches_gateway_with_flags() {
         let mut config = crate::config::test_config();
         config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
@@ -539,7 +539,7 @@ mod tests {
             _ => panic!("expected streamable http transport for codex apps"),
         };
 
-        let expected_url = format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}");
+        let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
         assert_eq!(url, &expected_url);
     }
 }
