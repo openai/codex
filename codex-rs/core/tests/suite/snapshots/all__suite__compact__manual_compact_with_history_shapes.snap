@@ -8,7 +8,7 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
+03:message/user:first manual turn
 04:message/assistant:FIRST_REPLY
 05:message/user:<SUMMARIZATION_PROMPT>
 
@@ -16,6 +16,6 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
-04:message/user:<COMPACTION_SUMMARY>\nMANUAL_SUMMARY
-05:message/user:USER_TWO
+03:message/user:first manual turn
+04:message/user:<COMPACTION_SUMMARY>\nFIRST_MANUAL_SUMMARY
+05:message/user:second manual turn

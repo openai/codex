@@ -2383,6 +2383,17 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         "second compact request should include latest history"
     );
 
+    insta::assert_snapshot!(
+        "manual_compact_with_history_shapes",
+        format_labeled_requests_snapshot(
+            "Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.",
+            &[
+                ("Local Compaction Request", &requests[1]),
+                ("Local Post-Compaction History Layout", &requests[2]),
+            ]
+        )
+    );
+
     let first_compact_has_prompt = contains_user_text(&requests[1], SUMMARIZATION_PROMPT);
     let second_compact_has_prompt = contains_user_text(&requests[3], SUMMARIZATION_PROMPT);
     assert_eq!(
@@ -2564,8 +2575,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let first_turn_mock = mount_sse_once(&server, first_turn).await;
     let follow_up_mock = mount_sse_once(&server, function_call_follow_up).await;
     let auto_compact_mock = mount_sse_once(&server, auto_compact_turn).await;
-    // We don't assert on the post-compact request, so no need to keep its mock.
-    mount_sse_once(&server, post_auto_compact_turn).await;
+    let post_auto_compact_mock = mount_sse_once(&server, post_auto_compact_turn).await;
 
     let model_provider = non_openai_model_provider(&server);
 
@@ -2635,6 +2645,23 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     assert!(
         body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
         "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
+    );
+
+    insta::assert_snapshot!(
+        "mid_turn_compaction_shapes",
+        format_labeled_requests_snapshot(
+            "Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
+            &[
+                (
+                    "Local Compaction Request",
+                    &auto_compact_mock.single_request()
+                ),
+                (
+                    "Local Post-Compaction History Layout",
+                    &post_auto_compact_mock.single_request()
+                ),
+            ]
+        )
     );
 }
 
@@ -3110,67 +3137,6 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_request_shape_mid_turn_continuation_compaction() {
-    let server = start_mock_server().await;
-
-    let first_turn = sse(vec![
-        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        ev_completed_with_tokens("r1", 500),
-    ]);
-    let auto_compact_turn = sse(vec![
-        ev_assistant_message("m2", "MID_TURN_SUMMARY"),
-        ev_completed_with_tokens("r2", 100),
-    ]);
-    let post_compact_turn = sse(vec![
-        ev_assistant_message("m3", FINAL_REPLY),
-        ev_completed_with_tokens("r3", 80),
-    ]);
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![first_turn, auto_compact_turn, post_compact_turn],
-    )
-    .await;
-
-    let model_provider = non_openai_model_provider(&server);
-    let codex = test_codex()
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            set_test_compact_prompt(config);
-            config.model_auto_compact_token_limit = Some(200);
-        })
-        .build(&server)
-        .await
-        .expect("build codex")
-        .codex;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "USER_ONE".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .expect("submit user input");
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
-
-    insta::assert_snapshot!(
-        "mid_turn_compaction_shapes",
-        format_labeled_requests_snapshot(
-            "Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
-            &[
-                ("Local Compaction Request", &requests[1]),
-                ("Local Post-Compaction History Layout", &requests[2]),
-            ]
-        )
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
     let server = start_mock_server().await;
 
@@ -3224,78 +3190,6 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
             &[
                 ("Local Compaction Request", &requests[0]),
                 ("Local Post-Compaction History Layout", &requests[1]),
-            ]
-        )
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_request_shape_manual_compact_with_previous_user_messages() {
-    let server = start_mock_server().await;
-
-    let first_turn = sse(vec![
-        ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 80),
-    ]);
-    let compact_turn = sse(vec![
-        ev_assistant_message("m2", "MANUAL_SUMMARY"),
-        ev_completed_with_tokens("r2", 90),
-    ]);
-    let follow_up_turn = sse(vec![
-        ev_assistant_message("m3", FINAL_REPLY),
-        ev_completed_with_tokens("r3", 80),
-    ]);
-    let request_log =
-        mount_sse_sequence(&server, vec![first_turn, compact_turn, follow_up_turn]).await;
-
-    let model_provider = non_openai_model_provider(&server);
-    let codex = test_codex()
-        .with_config(move |config| {
-            config.model_provider = model_provider;
-            set_test_compact_prompt(config);
-        })
-        .build(&server)
-        .await
-        .expect("build codex")
-        .codex;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "USER_ONE".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .expect("submit first user input");
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    codex.submit(Op::Compact).await.expect("run /compact");
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "USER_TWO".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .expect("submit second user input");
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 3, "expected user, compact, follow-up");
-
-    insta::assert_snapshot!(
-        "manual_compact_with_history_shapes",
-        format_labeled_requests_snapshot(
-            "Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.",
-            &[
-                ("Local Compaction Request", &requests[1]),
-                ("Local Post-Compaction History Layout", &requests[2]),
             ]
         )
     );

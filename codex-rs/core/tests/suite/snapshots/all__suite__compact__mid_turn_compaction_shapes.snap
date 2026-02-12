@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
-expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
+expression: "format_labeled_requests_snapshot(\"Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.\",\n&[(\"Local Compaction Request\", &auto_compact_mock.single_request()),\n(\"Local Post-Compaction History Layout\",\n&post_auto_compact_mock.single_request()),])"
 ---
 Scenario: Mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.
 
@@ -8,14 +8,16 @@ Scenario: Mid-turn continuation compaction after tool output: compact request in
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
+03:message/user:function call limit push
 04:function_call/test_tool
 05:function_call_output:unsupported call: test_tool
-06:message/user:<SUMMARIZATION_PROMPT>
+06:message/assistant:FINAL_REPLY
+07:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:USER_ONE
-04:message/user:<COMPACTION_SUMMARY>\nMID_TURN_SUMMARY
+03:message/user:function call limit push
+04:message/user:<COMPACTION_SUMMARY>\nAUTO_SUMMARY
+05:message/user:FOLLOW_UP_AFTER_LIMIT
