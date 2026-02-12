@@ -142,6 +142,12 @@ impl ToolOrchestrator {
                 } else {
                     tracing::debug!("sandbox denied without structured network decision payload");
                 }
+                if network_policy_decision.is_some() {
+                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                        output,
+                        network_policy_decision,
+                    })));
+                }
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,

@@ -253,6 +253,20 @@ pub struct ApplyPatchApprovalResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecCommandNetworkApprovalContext {
+    pub host: String,
+    pub protocol: ExecCommandNetworkApprovalProtocol,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecCommandNetworkApprovalProtocol {
+    Http,
+    Https,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ThreadId,
     /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
@@ -261,6 +275,7 @@ pub struct ExecCommandApprovalParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub reason: Option<String>,
+    pub network_approval_context: Option<ExecCommandNetworkApprovalContext>,
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 

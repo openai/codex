@@ -177,6 +177,28 @@
         }
       ]
     },
+    "CommandExecutionNetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/CommandExecutionNetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "CommandExecutionNetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https"
+      ],
+      "type": "string"
+    },
     "CommandExecutionRequestApprovalParams": {
       "properties": {
         "command": {
@@ -205,6 +227,17 @@
         },
         "itemId": {
           "type": "string"
+        },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecutionNetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional context for host-scoped network approvals."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
@@ -280,6 +313,16 @@
         "cwd": {
           "type": "string"
         },
+        "networkApprovalContext": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecCommandNetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "parsedCmd": {
           "items": {
             "$ref": "#/definitions/ParsedCommand"
@@ -301,6 +344,28 @@
         "parsedCmd"
       ],
       "type": "object"
+    },
+    "ExecCommandNetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/ExecCommandNetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "ExecCommandNetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https"
+      ],
+      "type": "string"
     },
     "FileChange": {
       "oneOf": [

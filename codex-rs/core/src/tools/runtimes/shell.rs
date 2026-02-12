@@ -4,6 +4,7 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use crate::codex::NetworkApprovalOutcome;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
@@ -190,11 +191,20 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex);
+        let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
+            ctx.session.take_network_approval_outcome(attempt_id).await
+        } else {
+            None
+        };
 
         if let Some(attempt_id) = network_attempt_id.as_deref() {
             ctx.session
                 .unregister_network_approval_attempt(attempt_id)
                 .await;
+        }
+
+        if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
+            return Err(ToolError::Rejected("rejected by user".to_string()));
         }
 
         let out = out?;

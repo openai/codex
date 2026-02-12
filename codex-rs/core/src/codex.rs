@@ -533,6 +533,12 @@ struct NetworkApprovalAttempt {
     command: Vec<String>,
     cwd: PathBuf,
     approved_hosts: Mutex<HashSet<String>>,
+    outcome: Mutex<Option<NetworkApprovalOutcome>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NetworkApprovalOutcome {
+    DeniedByUser,
 }
 
 const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
@@ -2137,6 +2143,7 @@ impl Session {
                 command,
                 cwd,
                 approved_hosts: Mutex::new(HashSet::new()),
+                outcome: Mutex::new(None),
             }),
         );
     }
@@ -2144,6 +2151,18 @@ impl Session {
     pub(crate) async fn unregister_network_approval_attempt(&self, attempt_id: &str) {
         let mut attempts = self.network_approval_attempts.lock().await;
         attempts.remove(attempt_id);
+    }
+
+    pub(crate) async fn take_network_approval_outcome(
+        &self,
+        attempt_id: &str,
+    ) -> Option<NetworkApprovalOutcome> {
+        let attempt = {
+            let attempts = self.network_approval_attempts.lock().await;
+            attempts.get(attempt_id).cloned()
+        }?;
+        let mut outcome = attempt.outcome.lock().await;
+        outcome.take()
     }
 
     async fn resolve_network_approval_attempt(
@@ -2166,22 +2185,19 @@ impl Session {
             );
         }
 
-        if attempts.len() == 1
-            && let Some(attempt) = attempts.values().next().cloned()
-        {
+        if attempts.len() == 1 {
             tracing::debug!(
-                "inline network approval decider falling back to only active attempt for host {}",
+                "inline network approval decider falling back to sole active attempt for host {}",
                 request.host
             );
-            return Some(attempt);
-        } else {
-            tracing::debug!(
-                "inline network approval decider cannot disambiguate attempt for host {} (active_attempts={})",
-                request.host,
-                attempts.len()
-            );
+            return attempts.values().next().cloned();
         }
 
+        tracing::debug!(
+            "inline network approval decider cannot disambiguate attempt for host {} (active_attempts={})",
+            request.host,
+            attempts.len()
+        );
         None
     }
 
@@ -2255,6 +2271,8 @@ impl Session {
                 NetworkDecision::Allow
             }
             ReviewDecision::Denied | ReviewDecision::Abort => {
+                let mut outcome = attempt.outcome.lock().await;
+                *outcome = Some(NetworkApprovalOutcome::DeniedByUser);
                 NetworkDecision::deny(REASON_NOT_ALLOWED)
             }
         }
@@ -7248,7 +7266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_network_approval_attempt_falls_back_to_only_active_attempt() {
+    async fn resolve_network_approval_attempt_falls_back_to_single_active_attempt() {
         let (session, _turn_context) = make_session_and_context().await;
         session
             .register_network_approval_attempt(
@@ -7274,10 +7292,58 @@ mod tests {
         );
 
         let resolved = session.resolve_network_approval_attempt(&request).await;
-        assert!(resolved.is_some());
+        let resolved = resolved.expect("single active attempt should be used as fallback");
+        assert_eq!(resolved.call_id, "call-1");
 
         session
             .unregister_network_approval_attempt("attempt-1")
+            .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_network_approval_attempt_returns_exact_attempt_match() {
+        let (session, _turn_context) = make_session_and_context().await;
+        session
+            .register_network_approval_attempt(
+                "attempt-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "google.com".to_string()],
+                std::env::temp_dir(),
+            )
+            .await;
+        session
+            .register_network_approval_attempt(
+                "attempt-2".to_string(),
+                "turn-2".to_string(),
+                "call-2".to_string(),
+                vec!["curl".to_string(), "openai.com".to_string()],
+                std::env::temp_dir(),
+            )
+            .await;
+
+        let request = codex_network_proxy::NetworkPolicyRequest::new(
+            codex_network_proxy::NetworkPolicyRequestArgs {
+                protocol: codex_network_proxy::NetworkProtocol::Http,
+                host: "openai.com".to_string(),
+                port: 80,
+                client_addr: None,
+                method: Some("GET".to_string()),
+                command: None,
+                exec_policy_hint: None,
+                attempt_id: Some("attempt-2".to_string()),
+            },
+        );
+
+        let resolved = session.resolve_network_approval_attempt(&request).await;
+        let resolved = resolved.expect("attempt-2 should resolve");
+        assert_eq!(resolved.call_id, "call-2");
+
+        session
+            .unregister_network_approval_attempt("attempt-1")
+            .await;
+        session
+            .unregister_network_approval_attempt("attempt-2")
             .await;
     }
 
@@ -7351,6 +7417,45 @@ mod tests {
             .await;
 
         assert_eq!(decision, codex_network_proxy::NetworkDecision::Allow);
+    }
+
+    #[tokio::test]
+    async fn take_network_approval_outcome_clears_stored_value() {
+        let (session, _turn_context) = make_session_and_context().await;
+        session
+            .register_network_approval_attempt(
+                "attempt-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "google.com".to_string()],
+                std::env::temp_dir(),
+            )
+            .await;
+
+        let attempt = {
+            let attempts = session.network_approval_attempts.lock().await;
+            attempts
+                .get("attempt-1")
+                .cloned()
+                .expect("attempt should exist")
+        };
+        {
+            let mut outcome = attempt.outcome.lock().await;
+            *outcome = Some(NetworkApprovalOutcome::DeniedByUser);
+        }
+
+        assert_eq!(
+            session.take_network_approval_outcome("attempt-1").await,
+            Some(NetworkApprovalOutcome::DeniedByUser)
+        );
+        assert_eq!(
+            session.take_network_approval_outcome("attempt-1").await,
+            None
+        );
+
+        session
+            .unregister_network_approval_attempt("attempt-1")
+            .await;
     }
 
     #[tokio::test]
