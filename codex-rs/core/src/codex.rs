@@ -1348,20 +1348,25 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = true;
                 }
+                self.set_previous_model(None).await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                    .map(std::string::ToString::to_string);
                 {
                     let mut state = self.state.lock().await;
                     state.initial_context_seeded = false;
-                    state.pending_resume_previous_model = None;
                 }
+                self.set_previous_model(previous_model).await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr = turn_context.model_info.slug.as_str();
-                if let Some(prev) = Self::last_model_name(&rollout_items, curr) {
+                if let Some(prev) =
+                    Self::last_rollout_model_name(&rollout_items).filter(|p| *p != curr)
+                {
                     warn!("resuming session with different model: previous={prev}, current={curr}");
                     self.send_event(
                         &turn_context,
@@ -1373,9 +1378,6 @@ impl Session {
                         }),
                     )
                     .await;
-
-                    let mut state = self.state.lock().await;
-                    state.pending_resume_previous_model = Some(prev.to_string());
                 }
 
                 // Always add response items to conversation history
@@ -1399,6 +1401,10 @@ impl Session {
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
+                let previous_model = Self::last_rollout_model_name(&rollout_items)
+                    .map(std::string::ToString::to_string);
+                self.set_previous_model(previous_model).await;
+
                 // Always add response items to conversation history
                 let reconstructed_history = self
                     .reconstruct_history_from_rollout(&turn_context, &rollout_items)
@@ -1438,19 +1444,14 @@ impl Session {
         }
     }
 
-    fn last_model_name<'a>(rollout_items: &'a [RolloutItem], current: &str) -> Option<&'a str> {
-        let previous = rollout_items.iter().rev().find_map(|it| {
+    fn last_rollout_model_name(rollout_items: &[RolloutItem]) -> Option<&str> {
+        rollout_items.iter().rev().find_map(|it| {
             if let RolloutItem::TurnContext(ctx) = it {
                 Some(ctx.model.as_str())
             } else {
                 None
             }
-        })?;
-        if previous == current {
-            None
-        } else {
-            Some(previous)
-        }
+        })
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -1460,9 +1461,14 @@ impl Session {
         })
     }
 
-    async fn take_pending_resume_previous_model(&self) -> Option<String> {
+    async fn previous_model(&self) -> Option<String> {
+        let state = self.state.lock().await;
+        state.previous_model()
+    }
+
+    pub(crate) async fn set_previous_model(&self, previous_model: Option<String>) {
         let mut state = self.state.lock().await;
-        state.pending_resume_previous_model.take()
+        state.set_previous_model(previous_model);
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -3134,10 +3140,10 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let resumed_model = sess.take_pending_resume_previous_model().await;
+            let previous_model = sess.previous_model().await;
             let update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
-                resumed_model.as_deref(),
+                previous_model.as_deref(),
                 &current_context,
             );
             if !update_items.is_empty() {
@@ -3529,6 +3535,8 @@ mod handlers {
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        sess.set_previous_model(Some(turn_context.model_info.slug.clone()))
+            .await;
 
         let mut history = sess.clone_history().await;
         history.drop_last_n_user_turns(num_turns);
@@ -5512,6 +5520,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_resumed_hydrates_previous_model() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "previous-rollout-model";
+        let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        })];
+
+        session
+            .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ThreadId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn resumed_history_seeds_initial_context_on_first_turn_only() {
         let (session, turn_context) = make_session_and_context().await;
         let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
@@ -5674,6 +5716,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_initial_history_forked_hydrates_previous_model() {
+        let (session, turn_context) = make_session_and_context().await;
+        let previous_model = "forked-rollout-model";
+        let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(turn_context.sub_id.clone()),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            model: previous_model.to_string(),
+            personality: turn_context.personality,
+            collaboration_mode: Some(turn_context.collaboration_mode.clone()),
+            effort: turn_context.reasoning_effort,
+            summary: turn_context.reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: Some(turn_context.truncation_policy.into()),
+        })];
+
+        session
+            .record_initial_history(InitialHistory::Forked(rollout_items))
+            .await;
+
+        assert_eq!(
+            session.previous_model().await,
+            Some(previous_model.to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn thread_rollback_drops_last_turn_from_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
@@ -5736,6 +5808,10 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
+        assert_eq!(
+            sess.previous_model().await,
+            Some(tc.model_info.slug.clone())
+        );
     }
 
     #[tokio::test]
@@ -6567,6 +6643,32 @@ mod tests {
             }
             other => panic!("expected user message, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_task_hydrates_previous_model() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        sess.set_previous_model(None).await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        assert_eq!(
+            sess.previous_model().await,
+            Some(tc.model_info.slug.clone())
+        );
     }
 
     #[derive(Clone, Copy)]

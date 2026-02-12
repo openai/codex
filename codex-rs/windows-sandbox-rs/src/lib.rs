@@ -262,10 +262,15 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
+        if !policy.has_full_disk_read_access() {
+            anyhow::bail!(
+                "Restricted read-only access is not yet supported by the Windows sandbox backend"
+            );
+        }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
             match &policy {
-                SandboxPolicy::ReadOnly => {
+                SandboxPolicy::ReadOnly { .. } => {
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
                     (h, psid, None)
@@ -558,6 +563,7 @@ mod windows_impl {
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
+                read_only_access: Default::default(),
                 network_access,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -576,7 +582,9 @@ mod windows_impl {
 
         #[test]
         fn applies_network_block_for_read_only() {
-            assert!(should_apply_network_block(&SandboxPolicy::ReadOnly));
+            assert!(should_apply_network_block(
+                &SandboxPolicy::new_read_only_policy()
+            ));
         }
     }
 }
