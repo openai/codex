@@ -34,6 +34,7 @@ pub(crate) async fn run_remote_compact_task(
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -87,7 +88,7 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = Prompt {
-        input: history.for_prompt(),
+        input: history.for_prompt(&turn_context.model_info.input_modalities),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions,

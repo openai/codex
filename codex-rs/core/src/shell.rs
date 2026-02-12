@@ -1,3 +1,4 @@
+use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
@@ -241,27 +242,6 @@ pub fn get_shell(shell_type: ShellType, path: Option<&PathBuf>) -> Option<Shell>
         ShellType::PowerShell => get_powershell_shell(path),
         ShellType::Sh => get_sh_shell(path),
         ShellType::Cmd => get_cmd_shell(path),
-    }
-}
-
-pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
-    match shell_path.as_os_str().to_str() {
-        Some("zsh") => Some(ShellType::Zsh),
-        Some("sh") => Some(ShellType::Sh),
-        Some("cmd") => Some(ShellType::Cmd),
-        Some("bash") => Some(ShellType::Bash),
-        Some("pwsh") => Some(ShellType::PowerShell),
-        Some("powershell") => Some(ShellType::PowerShell),
-        _ => {
-            let shell_name = shell_path.file_stem();
-            if let Some(shell_name) = shell_name
-                && shell_name != shell_path
-            {
-                detect_shell_type(&PathBuf::from(shell_name))
-            } else {
-                None
-            }
-        }
     }
 }
 

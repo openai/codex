@@ -905,21 +905,20 @@ pub enum LoginAccountParams {
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
-    #[serde(rename = "chatgptAuthTokens")]
-    #[ts(rename = "chatgptAuthTokens")]
+    #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
+    #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {
-        /// ID token (JWT) supplied by the client.
-        ///
-        /// This token is used for identity and account metadata (email, plan type,
-        /// workspace id).
-        #[serde(rename = "idToken")]
-        #[ts(rename = "idToken")]
-        id_token: String,
         /// Access token (JWT) supplied by the client.
-        /// This token is used for backend API requests.
-        #[serde(rename = "accessToken")]
-        #[ts(rename = "accessToken")]
+        /// This token is used for backend API requests and email extraction.
         access_token: String,
+        /// Workspace/account identifier supplied by the client.
+        chatgpt_account_id: String,
+        /// Optional plan type supplied by the client.
+        ///
+        /// When `null`, Codex attempts to derive the plan type from access-token
+        /// claims. If unavailable, the plan defaults to `unknown`.
+        #[ts(optional = nullable)]
+        chatgpt_plan_type: Option<String>,
     },
 }
 
@@ -991,8 +990,8 @@ pub struct ChatgptAuthTokensRefreshParams {
     /// Clients that manage multiple accounts/workspaces can use this as a hint
     /// to refresh the token for the correct workspace.
     ///
-    /// This may be `null` when the prior ID token did not include a workspace
-    /// identifier (`chatgpt_account_id`) or when the token could not be parsed.
+    /// This may be `null` when the prior auth state did not include a workspace
+    /// identifier (`chatgpt_account_id`).
     #[ts(optional = nullable)]
     pub previous_account_id: Option<String>,
 }
@@ -1001,15 +1000,19 @@ pub struct ChatgptAuthTokensRefreshParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ChatgptAuthTokensRefreshResponse {
-    pub id_token: String,
     pub access_token: String,
+    pub chatgpt_account_id: String,
+    pub chatgpt_plan_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GetAccountRateLimitsResponse {
+    /// Backward-compatible single-bucket view; mirrors the historical payload.
     pub rate_limits: RateLimitSnapshot,
+    /// Multi-bucket view keyed by metered `limit_id` (for example, `codex`).
+    pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1201,6 +1204,9 @@ pub struct AppsListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// Optional thread id used to evaluate app feature gating from that thread's config.
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     /// When true, bypass app caches and fetch the latest data from sources.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub force_refetch: bool,
@@ -3100,6 +3106,8 @@ pub struct AccountRateLimitsUpdatedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
@@ -3109,6 +3117,8 @@ pub struct RateLimitSnapshot {
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
     fn from(value: CoreRateLimitSnapshot) -> Self {
         Self {
+            limit_id: value.limit_id,
+            limit_name: value.limit_name,
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),

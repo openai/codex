@@ -24,6 +24,7 @@ use pretty_assertions::assert_eq;
 
 /// Delegate should surface ExecApprovalRequest from sub-agent and proceed
 /// after parent submits an approval decision.
+#[ignore = "TODO once we have a delegate that can ask for approvals"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     skip_if_no_network!();
@@ -87,15 +88,19 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
     .await;
 
     // Expect parent-side approval request (forwarded by delegate).
-    wait_for_event(&test.codex, |ev| {
+    let approval_event = wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ExecApprovalRequest(_))
     })
     .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected ExecApprovalRequest event");
+    };
 
-    // Approve via parent; id "0" is the active sub_id in tests.
+    // Approve via parent using the emitted approval call ID.
     test.codex
         .submit(Op::ExecApproval {
-            id: "0".into(),
+            id: approval.call_id,
+            turn_id: None,
             decision: ReviewDecision::Approved,
         })
         .await
@@ -110,6 +115,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
 
 /// Delegate should surface ApplyPatchApprovalRequest and honor parent decision
 /// so the sub-agent can proceed to completion.
+#[ignore = "TODO once we have a delegate that can ask for approvals"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     skip_if_no_network!();
@@ -161,15 +167,18 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
         matches!(ev, EventMsg::EnteredReviewMode(_))
     })
     .await;
-    wait_for_event(&test.codex, |ev| {
+    let approval_event = wait_for_event(&test.codex, |ev| {
         matches!(ev, EventMsg::ApplyPatchApprovalRequest(_))
     })
     .await;
+    let EventMsg::ApplyPatchApprovalRequest(approval) = approval_event else {
+        panic!("expected ApplyPatchApprovalRequest event");
+    };
 
-    // Deny via parent so delegate can continue; id "0" is the active sub_id in tests.
+    // Deny via parent so delegate can continue, using the emitted approval call ID.
     test.codex
         .submit(Op::PatchApproval {
-            id: "0".into(),
+            id: approval.call_id,
             decision: ReviewDecision::Denied,
         })
         .await

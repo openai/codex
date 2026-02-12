@@ -807,6 +807,94 @@ mod tests {
     }
 
     #[test]
+    fn serialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+        let request = ClientRequest::Initialize {
+            request_id: RequestId::Integer(42),
+            params: v1::InitializeParams {
+                client_info: v1::ClientInfo {
+                    name: "codex_vscode".to_string(),
+                    title: Some("Codex VS Code Extension".to_string()),
+                    version: "0.1.0".to_string(),
+                },
+                capabilities: Some(v1::InitializeCapabilities {
+                    experimental_api: true,
+                    opt_out_notification_methods: Some(vec![
+                        "codex/event/session_configured".to_string(),
+                        "item/agentMessage/delta".to_string(),
+                    ]),
+                }),
+            },
+        };
+
+        assert_eq!(
+            json!({
+                "method": "initialize",
+                "id": 42,
+                "params": {
+                    "clientInfo": {
+                        "name": "codex_vscode",
+                        "title": "Codex VS Code Extension",
+                        "version": "0.1.0"
+                    },
+                    "capabilities": {
+                        "experimentalApi": true,
+                        "optOutNotificationMethods": [
+                            "codex/event/session_configured",
+                            "item/agentMessage/delta"
+                        ]
+                    }
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_initialize_with_opt_out_notification_methods() -> Result<()> {
+        let request: ClientRequest = serde_json::from_value(json!({
+            "method": "initialize",
+            "id": 42,
+            "params": {
+                "clientInfo": {
+                    "name": "codex_vscode",
+                    "title": "Codex VS Code Extension",
+                    "version": "0.1.0"
+                },
+                "capabilities": {
+                    "experimentalApi": true,
+                    "optOutNotificationMethods": [
+                        "codex/event/session_configured",
+                        "item/agentMessage/delta"
+                    ]
+                }
+            }
+        }))?;
+
+        assert_eq!(
+            request,
+            ClientRequest::Initialize {
+                request_id: RequestId::Integer(42),
+                params: v1::InitializeParams {
+                    client_info: v1::ClientInfo {
+                        name: "codex_vscode".to_string(),
+                        title: Some("Codex VS Code Extension".to_string()),
+                        version: "0.1.0".to_string(),
+                    },
+                    capabilities: Some(v1::InitializeCapabilities {
+                        experimental_api: true,
+                        opt_out_notification_methods: Some(vec![
+                            "codex/event/session_configured".to_string(),
+                            "item/agentMessage/delta".to_string(),
+                        ]),
+                    }),
+                },
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn conversation_id_serializes_as_plain_string() -> Result<()> {
         let id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
 
@@ -1003,7 +1091,8 @@ mod tests {
             request_id: RequestId::Integer(5),
             params: v2::LoginAccountParams::ChatgptAuthTokens {
                 access_token: "access-token".to_string(),
-                id_token: "id-token".to_string(),
+                chatgpt_account_id: "org-123".to_string(),
+                chatgpt_plan_type: Some("business".to_string()),
             },
         };
         assert_eq!(
@@ -1013,7 +1102,8 @@ mod tests {
                 "params": {
                     "type": "chatgptAuthTokens",
                     "accessToken": "access-token",
-                    "idToken": "id-token"
+                    "chatgptAccountId": "org-123",
+                    "chatgptPlanType": "business"
                 }
             }),
             serde_json::to_value(&request)?,
@@ -1099,6 +1189,27 @@ mod tests {
                 "method": "collaborationMode/list",
                 "id": 7,
                 "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_apps() -> Result<()> {
+        let request = ClientRequest::AppsList {
+            request_id: RequestId::Integer(8),
+            params: v2::AppsListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "app/list",
+                "id": 8,
+                "params": {
+                    "cursor": null,
+                    "limit": null,
+                    "threadId": null
+                }
             }),
             serde_json::to_value(&request)?,
         );

@@ -129,7 +129,7 @@ impl FeedbackNoteView {
                             Line::from("  Share this and add some info about your problem:"),
                             Line::from(vec![
                                 "    ".into(),
-                                format!("go/codex-feedback/{thread_id}").bold(),
+                                format!("https://go/codex-feedback/{thread_id}").bold(),
                             ]),
                         ]);
                     }

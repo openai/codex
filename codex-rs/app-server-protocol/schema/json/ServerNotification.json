@@ -1204,6 +1204,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -1213,6 +1216,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -1227,6 +1231,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -1236,6 +1243,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -1530,6 +1538,17 @@
             },
             "model_provider_id": {
               "type": "string"
+            },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
             },
             "reasoning_effort": {
               "anyOf": [
@@ -2761,6 +2780,12 @@
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -4381,6 +4406,18 @@
             }
           ]
         },
+        "limitId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -4424,6 +4461,18 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "plan_type": {
@@ -5580,6 +5629,25 @@
         "model",
         "rolloutPath",
         "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
       ],
       "type": "object"
     },

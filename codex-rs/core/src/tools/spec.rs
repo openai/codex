@@ -1,4 +1,6 @@
 use crate::agent::AgentRole;
+use crate::client_common::tools::FreeformTool;
+use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
@@ -17,7 +19,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,8 +32,8 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
-    pub supports_image_input: bool,
     pub search_tool: bool,
+    pub js_repl_enabled: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub request_rule_enabled: bool,
@@ -53,6 +54,7 @@ impl ToolsConfig {
             web_search_mode,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_js_repl = features.enabled(Feature::JsRepl);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
@@ -87,14 +89,18 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            supports_image_input: model_info.input_modalities.contains(&InputModality::Image),
             search_tool: include_search_tool,
+            js_repl_enabled: include_js_repl,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
+}
+
+pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, _config: &ToolsConfig) -> Vec<ToolSpec> {
+    tools
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -168,10 +174,10 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             "justification".to_string(),
             JsonSchema::String {
                 description: Some(
-                    r#"Only set if sandbox_permissions is \"require_escalated\". 
-                    Request approval from the user to run this command outside the sandbox. 
-                    Phrased as a simple question that summarizes the purpose of the 
-                    command as it relates to the task at hand - e.g. 'Do you want to 
+                    r#"Only set if sandbox_permissions is \"require_escalated\".
+                    Request approval from the user to run this command outside the sandbox.
+                    Phrased as a simple question that summarizes the purpose of the
+                    command as it relates to the task at hand - e.g. 'Do you want to
                     fetch and pull the latest version of this git branch?'"#
                     .to_string(),
                 ),
@@ -185,7 +191,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             JsonSchema::Array {
                 items: Box::new(JsonSchema::String { description: None }),
                 description: Some(
-                    r#"Only specify when sandbox_permissions is `require_escalated`. 
+                    r#"Only specify when sandbox_permissions is `require_escalated`.
                     Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
                     Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
                 ),
@@ -342,7 +348,7 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
@@ -405,7 +411,7 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
@@ -453,26 +459,80 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
+fn create_collab_input_items_schema() -> JsonSchema {
+    let properties = BTreeMap::from([
+        (
+            "type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Input item type: text, image, local_image, skill, or mention.".to_string(),
+                ),
+            },
+        ),
+        (
+            "text".to_string(),
+            JsonSchema::String {
+                description: Some("Text content when type is text.".to_string()),
+            },
+        ),
+        (
+            "image_url".to_string(),
+            JsonSchema::String {
+                description: Some("Image URL when type is image.".to_string()),
+            },
+        ),
+        (
+            "path".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Path when type is local_image/skill, or mention target such as app://<connector-id> when type is mention."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "name".to_string(),
+            JsonSchema::String {
+                description: Some("Display name when type is skill or mention.".to_string()),
+            },
+        ),
+    ]);
+
+    JsonSchema::Array {
+        items: Box::new(JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        }),
+        description: Some(
+            "Structured input items. Use this to pass explicit mentions (for example app:// connector paths)."
+                .to_string(),
+        ),
+    }
+}
+
 fn create_spawn_agent_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Initial task for the new agent. Include scope, constraints, and the expected output."
-                    .to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "agent_type".to_string(),
-        JsonSchema::String {
-            description: Some(format!(
-                "Optional agent type ({}). Use an explicit type when delegating.",
-                AgentRole::enum_values().join(", ")
-            )),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Initial plain-text task for the new agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "agent_type".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Optional agent type ({}). Use an explicit type when delegating.",
+                    AgentRole::enum_values().join(", ")
+                )),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -482,35 +542,40 @@ fn create_spawn_agent_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["message".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
 }
 
 fn create_send_input_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Agent id to message (from spawn_agent).".to_string()),
-        },
-    );
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some("Message to send to the agent.".to_string()),
-        },
-    );
-    properties.insert(
-        "interrupt".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                    .to_string(),
-            ),
-        },
-    );
+    let properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some("Agent id to message (from spawn_agent).".to_string()),
+            },
+        ),
+        (
+            "message".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Legacy plain-text message to send to the agent. Use either message or items."
+                        .to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
@@ -520,7 +585,7 @@ fn create_send_input_tool() -> ToolSpec {
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string(), "message".to_string()]),
+            required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -983,6 +1048,36 @@ fn create_list_dir_tool() -> ToolSpec {
     })
 }
 
+fn create_js_repl_tool() -> ToolSpec {
+    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+
+    ToolSpec::Freeform(FreeformTool {
+        name: "js_repl".to_string(),
+        description: "Runs JavaScript in a persistent Node kernel with top-level await. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-js-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+            .to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: JS_REPL_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
+fn create_js_repl_reset_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "js_repl_reset".to_string(),
+        description:
+            "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_list_mcp_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -1086,6 +1181,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
         },
     })
 }
+
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -1289,6 +1385,8 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
+    use crate::tools::handlers::JsReplHandler;
+    use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -1316,6 +1414,8 @@ pub(crate) fn build_specs(
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let js_repl_handler = Arc::new(JsReplHandler);
+    let js_repl_reset_handler = Arc::new(JsReplResetHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1364,6 +1464,13 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config.js_repl_enabled {
+        builder.push_spec(create_js_repl_tool());
+        builder.push_spec(create_js_repl_reset_tool());
+        builder.register_handler("js_repl", js_repl_handler);
+        builder.register_handler("js_repl_reset", js_repl_reset_handler);
+    }
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
@@ -1438,10 +1545,8 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    if config.supports_image_input {
-        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-        builder.register_handler("view_image", view_image_handler);
-    }
+    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -1711,7 +1816,8 @@ mod tests {
     #[test]
     fn test_build_specs_collab_tools_enabled() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
         features.enable(Feature::CollaborationModes);
@@ -1736,7 +1842,8 @@ mod tests {
     #[test]
     fn request_user_input_requires_collaboration_modes_feature() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1758,6 +1865,47 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
+    }
+
+    #[test]
+    fn js_repl_requires_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl"),
+            "js_repl should be disabled when the feature is off"
+        );
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
+            "js_repl_reset should be disabled when the feature is off"
+        );
+    }
+
+    #[test]
+    fn js_repl_enabled_adds_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
     }
 
     fn assert_model_tools(
@@ -1796,7 +1944,8 @@ mod tests {
     #[test]
     fn web_search_mode_cached_sets_external_web_access_false() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1818,7 +1967,8 @@ mod tests {
     #[test]
     fn web_search_mode_live_sets_external_web_access_true() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2017,29 +2167,6 @@ mod tests {
     }
 
     #[test]
-    fn test_non_multimodal_models_exclude_view_image() {
-        let config = test_config();
-        let mut model_info = ModelsManager::construct_model_info_offline("gpt-5.1", &config);
-        model_info.input_modalities = vec![InputModality::Text];
-        let mut features = Features::with_defaults();
-        features.enable(Feature::CollaborationModes);
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-        });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
-
-        assert!(
-            !tools
-                .iter()
-                .map(|t| t.spec.name())
-                .any(|name| name == VIEW_IMAGE_TOOL_NAME),
-            "view_image should be excluded for non-multimodal models"
-        );
-    }
-
-    #[test]
     fn test_gpt_5_1_codex_max_unified_exec_web_search() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2066,7 +2193,7 @@ mod tests {
     #[test]
     fn test_build_specs_default_shell_present() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2088,7 +2215,8 @@ mod tests {
     #[ignore]
     fn test_parallel_support_flags() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2143,7 +2271,7 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_converted() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2228,7 +2356,7 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2272,7 +2400,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2324,7 +2453,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2372,7 +2502,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ApplyPatchFreeform);
@@ -2424,7 +2555,8 @@ mod tests {
     #[test]
     fn test_mcp_tool_anyof_defaults_to_string() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2484,7 +2616,7 @@ mod tests {
 
         let expected = if cfg!(windows) {
             r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
@@ -2514,7 +2646,7 @@ Examples of valid command strings:
 
         let expected = if cfg!(windows) {
             r#"Runs a Powershell command (Windows) and returns its output.
-        
+
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
@@ -2533,7 +2665,8 @@ Examples of valid command strings:
     #[test]
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         let config = test_config();
-        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {

@@ -198,6 +198,9 @@ pub enum Op {
     ExecApproval {
         /// The id of the submission we are approving
         id: String,
+        /// Turn id associated with the approval event, when available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
     },
@@ -1149,11 +1152,13 @@ pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
+    pub turn_id: String,
     pub last_agent_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnStartedEvent {
+    pub turn_id: String,
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
     #[serde(default)]
@@ -1246,6 +1251,8 @@ pub struct TokenCountEvent {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
@@ -1737,6 +1744,8 @@ impl From<CompactedItem> for ResponseItem {
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
@@ -2265,6 +2274,13 @@ pub struct SkillsListEntry {
     pub errors: Vec<SkillErrorInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SessionNetworkProxyRuntime {
+    pub http_addr: String,
+    pub socks_addr: String,
+    pub admin_addr: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
@@ -2305,6 +2321,11 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    /// Runtime proxy bind addresses, when the managed proxy was started for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub network_proxy: Option<SessionNetworkProxyRuntime>,
 
     /// Path in which the rollout is stored. Can be `None` for ephemeral threads
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2387,6 +2408,7 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnAbortedEvent {
+    pub turn_id: Option<String>,
     pub reason: TurnAbortReason,
 }
 
@@ -2675,6 +2697,24 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn turn_aborted_event_deserializes_without_turn_id() -> Result<()> {
+        let event: EventMsg = serde_json::from_value(json!({
+            "type": "turn_aborted",
+            "reason": "interrupted",
+        }))?;
+
+        match event {
+            EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) => {
+                assert_eq!(turn_id, None);
+                assert_eq!(reason, TurnAbortReason::Interrupted);
+            }
+            _ => panic!("expected turn_aborted event"),
+        }
+
+        Ok(())
+    }
+
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
@@ -2696,6 +2736,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                network_proxy: None,
                 rollout_path: Some(rollout_file.path().to_path_buf()),
             }),
         };

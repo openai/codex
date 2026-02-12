@@ -19,6 +19,8 @@ use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
+use crate::config::types::WindowsSandboxModeToml;
+use crate::config::types::WindowsToml;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
@@ -45,9 +47,9 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
@@ -78,16 +80,18 @@ use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
-mod constraint;
 pub mod edit;
+mod network_proxy_spec;
 pub mod profile;
 pub mod schema;
 pub mod service;
 pub mod types;
-pub use constraint::Constrained;
-pub use constraint::ConstraintError;
-pub use constraint::ConstraintResult;
+pub use codex_config::Constrained;
+pub use codex_config::ConstraintError;
+pub use codex_config::ConstraintResult;
 
+pub use network_proxy_spec::NetworkProxySpec;
+pub use network_proxy_spec::StartedNetworkProxy;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
@@ -154,15 +158,11 @@ pub struct Config {
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
     /// Effective network configuration applied to all spawned processes.
-    pub network: Option<NetworkProxy>,
+    pub network: Option<NetworkProxySpec>,
 
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
-
-    /// On Windows, indicates that a previously configured workspace-write sandbox
-    /// was coerced to read-only because native auto mode is unsupported.
-    pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
@@ -304,6 +304,9 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
+    /// Optional absolute path to the Node runtime used by `js_repl`.
+    pub js_repl_node_path: Option<PathBuf>,
+
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
@@ -340,6 +343,10 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
+
+    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
+    /// legacy feature keys.
+    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -935,6 +942,9 @@ pub struct ConfigToml {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Optional absolute path to the Node runtime used by `js_repl`.
+    pub js_repl_node_path: Option<AbsolutePathBuf>,
+
     /// Profile to use from the `profiles` map.
     pub profile: Option<String>,
 
@@ -1035,6 +1045,10 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
+
+    /// Windows-specific configuration.
+    #[serde(default)]
+    pub windows: Option<WindowsToml>,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
@@ -1138,12 +1152,6 @@ pub struct GhostSnapshotToml {
     pub disable_warnings: Option<bool>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct SandboxPolicyResolution {
-    pub policy: SandboxPolicy,
-    pub forced_auto_mode_downgraded_on_windows: bool,
-}
-
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
     fn derive_sandbox_policy(
@@ -1153,7 +1161,7 @@ impl ConfigToml {
         windows_sandbox_level: WindowsSandboxLevel,
         resolved_cwd: &Path,
         sandbox_policy_constraint: Option<&Constrained<SandboxPolicy>>,
-    ) -> SandboxPolicyResolution {
+    ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
             || self.sandbox_mode.is_some();
@@ -1161,10 +1169,19 @@ impl ConfigToml {
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or_else(|| {
-                // if no sandbox_mode is set, but user has marked directory as trusted or untrusted, use WorkspaceWrite
+                // If no sandbox_mode is set but this directory has a trust decision,
+                // default to workspace-write except on unsandboxed Windows where we
+                // default to read-only.
                 self.get_active_project(resolved_cwd).and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
-                        Some(SandboxMode::WorkspaceWrite)
+                        if cfg!(target_os = "windows")
+                            && windows_sandbox_level
+                                == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+                        {
+                            Some(SandboxMode::ReadOnly)
+                        } else {
+                            Some(SandboxMode::WorkspaceWrite)
+                        }
                     } else {
                         None
                     }
@@ -1189,8 +1206,7 @@ impl ConfigToml {
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         };
-        let mut forced_auto_mode_downgraded_on_windows = false;
-        let mut downgrade_workspace_write_if_unsupported = |policy: &mut SandboxPolicy| {
+        let downgrade_workspace_write_if_unsupported = |policy: &mut SandboxPolicy| {
             if cfg!(target_os = "windows")
                 // If the experimental Windows sandbox is enabled, do not force a downgrade.
                 && windows_sandbox_level
@@ -1198,7 +1214,6 @@ impl ConfigToml {
                 && matches!(&*policy, SandboxPolicy::WorkspaceWrite { .. })
             {
                 *policy = SandboxPolicy::new_read_only_policy();
-                forced_auto_mode_downgraded_on_windows = true;
             }
         };
         if matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite) {
@@ -1215,10 +1230,7 @@ impl ConfigToml {
             sandbox_policy = constraint.get().clone();
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
-        SandboxPolicyResolution {
-            policy: sandbox_policy,
-            forced_auto_mode_downgraded_on_windows,
-        }
+        sandbox_policy
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
@@ -1276,6 +1288,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub js_repl_node_path: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
@@ -1402,6 +1415,7 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            js_repl_node_path: js_repl_node_path_override,
             base_instructions,
             developer_instructions,
             personality,
@@ -1437,6 +1451,7 @@ impl Config {
         };
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = {
             use std::env;
 
@@ -1466,11 +1481,12 @@ impl Config {
             || config_profile.sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
-        let windows_sandbox_level = WindowsSandboxLevel::from_features(&features);
-        let SandboxPolicyResolution {
-            policy: mut sandbox_policy,
-            forced_auto_mode_downgraded_on_windows,
-        } = cfg.derive_sandbox_policy(
+        let windows_sandbox_level = match windows_sandbox_mode {
+            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
+            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            None => WindowsSandboxLevel::from_features(&features),
+        };
+        let mut sandbox_policy = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
             windows_sandbox_level,
@@ -1633,6 +1649,9 @@ impl Config {
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
+        let js_repl_node_path = js_repl_node_path_override
+            .or(config_profile.js_repl_node_path.map(Into::into))
+            .or(cfg.js_repl_node_path.map(Into::into));
 
         let review_model = override_review_model.or(cfg.review_model);
 
@@ -1657,7 +1676,7 @@ impl Config {
             mcp_servers,
             exec_policy: _,
             enforce_residency,
-            network: _network_requirements,
+            network: network_requirements,
         } = requirements;
 
         apply_requirement_constrained_value(
@@ -1682,6 +1701,20 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
+        let network = match network_requirements {
+            Some(Sourced { value, source }) => {
+                let network = NetworkProxySpec::from_constraints(&config_layer_stack, value)
+                    .map_err(|err| {
+                        std::io::Error::new(
+                            err.kind(),
+                            format!("failed to build managed network proxy from {source}: {err}"),
+                        )
+                    })?;
+                Some(network)
+            }
+            None => None,
+        };
+
         let config = Self {
             model,
             review_model,
@@ -1694,9 +1727,8 @@ impl Config {
             approval_policy: constrained_approval_policy.value,
             sandbox_policy: constrained_sandbox_policy.value,
             enforce_residency: enforce_residency.value,
-            network: None,
+            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
-            forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
@@ -1736,6 +1768,7 @@ impl Config {
             ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
+            js_repl_node_path,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
@@ -1761,6 +1794,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
+            windows_sandbox_mode,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -1808,12 +1842,13 @@ impl Config {
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
                 let trace_exporter = t.trace_exporter.unwrap_or_else(|| exporter.clone());
+                let metrics_exporter = t.metrics_exporter.unwrap_or(OtelExporterKind::Statsig);
                 OtelConfig {
                     log_user_prompt,
                     environment,
                     exporter,
                     trace_exporter,
-                    metrics_exporter: OtelExporterKind::Statsig,
+                    metrics_exporter,
                 }
             },
         };
@@ -1865,21 +1900,29 @@ impl Config {
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
-        if value {
-            self.features.enable(Feature::WindowsSandbox);
-            self.forced_auto_mode_downgraded_on_windows = false;
+        self.windows_sandbox_mode = if value {
+            Some(WindowsSandboxModeToml::Unelevated)
+        } else if matches!(
+            self.windows_sandbox_mode,
+            Some(WindowsSandboxModeToml::Unelevated)
+        ) {
+            None
         } else {
-            self.features.disable(Feature::WindowsSandbox);
-        }
+            self.windows_sandbox_mode
+        };
     }
 
     pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
-        if value {
-            self.features.enable(Feature::WindowsSandboxElevated);
-            self.forced_auto_mode_downgraded_on_windows = false;
+        self.windows_sandbox_mode = if value {
+            Some(WindowsSandboxModeToml::Elevated)
+        } else if matches!(
+            self.windows_sandbox_mode,
+            Some(WindowsSandboxModeToml::Elevated)
+        ) {
+            None
         } else {
-            self.features.disable(Feature::WindowsSandboxElevated);
-        }
+            self.windows_sandbox_mode
+        };
     }
 }
 
@@ -2060,13 +2103,7 @@ network_access = false  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(
-            resolution,
-            SandboxPolicyResolution {
-                policy: SandboxPolicy::DangerFullAccess,
-                forced_auto_mode_downgraded_on_windows: false,
-            }
-        );
+        assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
 
         let sandbox_read_only = r#"
 sandbox_mode = "read-only"
@@ -2085,13 +2122,7 @@ network_access = true  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(
-            resolution,
-            SandboxPolicyResolution {
-                policy: SandboxPolicy::ReadOnly,
-                forced_auto_mode_downgraded_on_windows: false,
-            }
-        );
+        assert_eq!(resolution, SandboxPolicy::ReadOnly);
 
         let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(
@@ -2119,24 +2150,15 @@ exclude_slash_tmp = true
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(
-                resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::ReadOnly,
-                    forced_auto_mode_downgraded_on_windows: true,
-                }
-            );
+            assert_eq!(resolution, SandboxPolicy::ReadOnly);
         } else {
             assert_eq!(
                 resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![writable_root.clone()],
-                        network_access: false,
-                        exclude_tmpdir_env_var: true,
-                        exclude_slash_tmp: true,
-                    },
-                    forced_auto_mode_downgraded_on_windows: false,
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![writable_root.clone()],
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
                 }
             );
         }
@@ -2169,24 +2191,15 @@ trust_level = "trusted"
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(
-                resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::ReadOnly,
-                    forced_auto_mode_downgraded_on_windows: true,
-                }
-            );
+            assert_eq!(resolution, SandboxPolicy::ReadOnly);
         } else {
             assert_eq!(
                 resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::WorkspaceWrite {
-                        writable_roots: vec![writable_root],
-                        network_access: false,
-                        exclude_tmpdir_env_var: true,
-                        exclude_slash_tmp: true,
-                    },
-                    forced_auto_mode_downgraded_on_windows: false,
+                SandboxPolicy::WorkspaceWrite {
+                    writable_roots: vec![writable_root],
+                    network_access: false,
+                    exclude_tmpdir_env_var: true,
+                    exclude_slash_tmp: true,
                 }
             );
         }
@@ -2349,10 +2362,6 @@ trust_level = "trusted"
 
         let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
-            assert!(
-                config.forced_auto_mode_downgraded_on_windows,
-                "expected workspace-write request to be downgraded on Windows"
-            );
             match config.sandbox_policy.get() {
                 &SandboxPolicy::ReadOnly => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
@@ -2685,13 +2694,11 @@ profile = "project"
                 config.sandbox_policy.get(),
                 SandboxPolicy::ReadOnly
             ));
-            assert!(config.forced_auto_mode_downgraded_on_windows);
         } else {
             assert!(matches!(
                 config.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
-            assert!(!config.forced_auto_mode_downgraded_on_windows);
         }
 
         Ok(())
@@ -4010,7 +4017,6 @@ model_verbosity = "high"
                 enforce_residency: Constrained::allow_any(None),
                 network: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
@@ -4032,6 +4038,7 @@ model_verbosity = "high"
                 ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
+                js_repl_node_path: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
@@ -4053,6 +4060,7 @@ model_verbosity = "high"
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
+                windows_sandbox_mode: None,
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -4070,6 +4078,23 @@ model_verbosity = "high"
             },
             o3_profile_config
         );
+        Ok(())
+    }
+
+    #[test]
+    fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                cwd: Some(fixture.cwd()),
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
         Ok(())
     }
 
@@ -4099,7 +4124,6 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -4121,6 +4145,7 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            js_repl_node_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -4142,6 +4167,7 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
+            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4203,7 +4229,6 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -4225,6 +4250,7 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            js_repl_node_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -4246,6 +4272,7 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
+            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4293,7 +4320,6 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -4315,6 +4341,7 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            js_repl_node_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
@@ -4336,6 +4363,7 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
+            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4638,15 +4666,13 @@ trust_level = "untrusted"
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(resolution.policy, SandboxPolicy::ReadOnly),
-                "Expected ReadOnly on Windows, got {:?}",
-                resolution.policy
+                matches!(resolution, SandboxPolicy::ReadOnly),
+                "Expected ReadOnly on Windows, got {resolution:?}"
             );
         } else {
             assert!(
-                matches!(resolution.policy, SandboxPolicy::WorkspaceWrite { .. }),
-                "Expected WorkspaceWrite for untrusted project, got {:?}",
-                resolution.policy
+                matches!(resolution, SandboxPolicy::WorkspaceWrite { .. }),
+                "Expected WorkspaceWrite for untrusted project, got {resolution:?}"
             );
         }
 
@@ -4689,7 +4715,7 @@ trust_level = "untrusted"
             Some(&constrained),
         );
 
-        assert_eq!(resolution.policy, SandboxPolicy::DangerFullAccess);
+        assert_eq!(resolution, SandboxPolicy::DangerFullAccess);
         Ok(())
     }
 
@@ -4731,21 +4757,9 @@ trust_level = "untrusted"
         );
 
         if cfg!(target_os = "windows") {
-            assert_eq!(
-                resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::ReadOnly,
-                    forced_auto_mode_downgraded_on_windows: true,
-                }
-            );
+            assert_eq!(resolution, SandboxPolicy::ReadOnly);
         } else {
-            assert_eq!(
-                resolution,
-                SandboxPolicyResolution {
-                    policy: SandboxPolicy::new_workspace_write_policy(),
-                    forced_auto_mode_downgraded_on_windows: false,
-                }
-            );
+            assert_eq!(resolution, SandboxPolicy::new_workspace_write_policy());
         }
         Ok(())
     }

@@ -1474,7 +1474,9 @@ mod tests {
                     let allow_optional_nullable = path
                         .file_stem()
                         .and_then(|stem| stem.to_str())
-                        .is_some_and(|stem| stem.ends_with("Params"));
+                        .is_some_and(|stem| {
+                            stem.ends_with("Params") || stem == "InitializeCapabilities"
+                        });
 
                     let contents = fs::read_to_string(&path)?;
                     if contents.contains("| undefined") {

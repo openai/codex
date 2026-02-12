@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -14,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -61,6 +62,24 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("CODEX_CI", "1"),
 ];
 
+/// Test-only override for deterministic unified exec process IDs.
+///
+/// In production builds this value should remain at its default (`false`) and
+/// must not be toggled.
+static FORCE_DETERMINISTIC_PROCESS_IDS: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn set_deterministic_process_ids_for_tests(enabled: bool) {
+    FORCE_DETERMINISTIC_PROCESS_IDS.store(enabled, Ordering::Relaxed);
+}
+
+fn deterministic_process_ids_forced_for_tests() -> bool {
+    FORCE_DETERMINISTIC_PROCESS_IDS.load(Ordering::Relaxed)
+}
+
+fn should_use_deterministic_process_ids() -> bool {
+    cfg!(test) || deterministic_process_ids_forced_for_tests()
+}
+
 fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
     for (key, value) in UNIFIED_EXEC_ENV {
         env.insert(key.to_string(), value.to_string());
@@ -85,10 +104,7 @@ impl UnifiedExecProcessManager {
         loop {
             let mut store = self.process_store.lock().await;
 
-            let process_id = if !cfg!(test) && !cfg!(feature = "deterministic_process_ids") {
-                // production mode → random
-                rand::rng().random_range(1_000..100_000).to_string()
-            } else {
+            let process_id = if should_use_deterministic_process_ids() {
                 // test or deterministic mode
                 let next = store
                     .reserved_process_ids
@@ -99,6 +115,9 @@ impl UnifiedExecProcessManager {
                     .unwrap_or(1000);
 
                 next.to_string()
+            } else {
+                // production mode → random
+                rand::rng().random_range(1_000..100_000).to_string()
             };
 
             if store.reserved_process_ids.contains(&process_id) {
@@ -460,7 +479,7 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
-        env: &ExecEnv,
+        env: &ExecRequest,
         tty: bool,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
@@ -520,7 +539,7 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             cwd,
             env,
-            network: context.turn.config.network.clone(),
+            network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),

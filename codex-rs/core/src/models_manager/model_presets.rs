@@ -11,7 +11,7 @@ pub const HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG: &str = "hide_gpt5_1_migration_pro
 pub const HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG: &str =
     "hide_gpt-5.1-codex-max_migration_prompt";
 
-static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
+pub(crate) static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     vec![
         ModelPreset {
             id: "gpt-5.2-codex".to_string(),
@@ -357,11 +357,6 @@ fn gpt_52_codex_upgrade() -> ModelUpgrade {
 
 pub(super) fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
     PRESETS.iter().cloned().collect()
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub fn all_model_presets() -> &'static Vec<ModelPreset> {
-    &PRESETS
 }
 
 #[cfg(test)]
