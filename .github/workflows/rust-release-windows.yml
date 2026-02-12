@@ -89,7 +89,14 @@ jobs:
       - name: Cargo build (Windows binaries)
         shell: bash
         run: |
-          cargo build --target ${{ matrix.target }} --release ${{ matrix.build_args }}
+          cargo build --target ${{ matrix.target }} --release --timings ${{ matrix.build_args }}
+
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-release-windows-${{ matrix.target }}-${{ matrix.bundle }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - name: Stage Windows binaries
         shell: bash
