@@ -36,6 +36,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
@@ -46,6 +47,7 @@ use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -2180,6 +2182,11 @@ fn end_exec(
             exit_code,
             duration: std::time::Duration::from_millis(5),
             formatted_output: aggregated,
+            status: if exit_code == 0 {
+                CoreExecCommandStatus::Completed
+            } else {
+                CoreExecCommandStatus::Failed
+            },
         }),
     });
 }
@@ -2641,6 +2648,7 @@ async fn exec_end_without_begin_uses_event_command() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "done".to_string(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
 
@@ -3378,6 +3386,24 @@ async fn slash_clean_submits_background_terminal_cleanup() {
         rendered.contains("Stopping all background terminals."),
         "expected cleanup confirmation, got {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn slash_memory_drop_submits_drop_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryDrop);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::DropMemories));
+}
+
+#[tokio::test]
+async fn slash_memory_update_submits_update_memories_op() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::MemoryUpdate);
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::UpdateMemories));
 }
 
 #[tokio::test]
@@ -5266,6 +5292,7 @@ async fn apply_patch_events_emit_history_cells() {
         stderr: String::new(),
         success: true,
         changes: end_changes,
+        status: CorePatchApplyStatus::Completed,
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
@@ -5493,6 +5520,7 @@ async fn apply_patch_full_flow_integration_like() {
             stderr: String::new(),
             success: true,
             changes: end_changes,
+            status: CorePatchApplyStatus::Completed,
         }),
     });
 }
@@ -6083,6 +6111,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             exit_code: 0,
             duration: std::time::Duration::from_millis(16000),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     });
     chat.handle_codex_event(Event {

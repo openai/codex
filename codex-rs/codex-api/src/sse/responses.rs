@@ -254,6 +254,17 @@ pub fn process_responses_event(
                 "response.failed event received".into(),
             )));
         }
+        "response.incomplete" => {
+            let reason = event.response.as_ref().and_then(|response| {
+                response
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str)
+            });
+            let reason = reason.unwrap_or("unknown");
+            let message = format!("Incomplete response returned, reason: {reason}");
+            return Err(ResponsesEventError::Api(ApiError::Stream(message)));
+        }
         "response.completed" => {
             if let Some(resp_val) = event.response {
                 match serde_json::from_value::<ResponseCompleted>(resp_val) {

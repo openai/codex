@@ -1019,7 +1019,7 @@ async fn fork_thread(
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
     manager
-        .fork_thread(nth_user_message, config.clone(), path)
+        .fork_thread(nth_user_message, config.clone(), path, false)
         .await
         .expect("fork conversation")
         .thread

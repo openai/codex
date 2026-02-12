@@ -1401,6 +1401,7 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "shlex",
  "similar",
  "strum_macros 0.27.2",
  "tempfile",
@@ -1692,6 +1693,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
+ "codex-utils-sanitizer",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
@@ -1720,7 +1722,6 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
- "regex",
  "regex-lite",
  "reqwest",
  "rmcp",
@@ -2483,6 +2484,13 @@ dependencies = [
  "codex-core",
  "codex-utils-absolute-path",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-utils-sanitizer"
+version = "0.0.0"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
@@ -7395,9 +7403,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a621b37a548ff6ab6292d57841eb25785a7f146d89391a19c9f199414bd13da"
+checksum = "1bef41ebc9ebed2c1b1d90203e9d1756091e8a00bbc3107676151f39868ca0ee"
 dependencies = [
  "async-trait",
  "axum",
@@ -7431,9 +7439,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b79ed92303f9262db79575aa8c3652581668e9d136be6fd0b9ededa78954c95"
+checksum = "0e88ad84b8b6237a934534a62b379a5be6388915663c0cc598ceb9b3292bbbfe"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

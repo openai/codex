@@ -218,6 +218,19 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Begin a non-elevated grant of read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxGrantReadRoot {
+        path: String,
+    },
+
+    /// Result of attempting to grant read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxGrantReadRootCompleted {
+        path: PathBuf,
+        error: Option<String>,
+    },
+
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     EnableWindowsSandboxForAgentMode {

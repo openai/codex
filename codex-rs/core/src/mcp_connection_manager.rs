@@ -43,7 +43,9 @@ use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
 use rmcp::model::ClientCapabilities;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ListResourceTemplatesResult;
@@ -223,7 +225,16 @@ impl ElicitationRequestManager {
                                     ProtocolRequestId::Integer(value)
                                 }
                             },
-                            message: elicitation.message,
+                            message: match elicitation {
+                                CreateElicitationRequestParams::FormElicitationParams {
+                                    message,
+                                    ..
+                                }
+                                | CreateElicitationRequestParams::UrlElicitationParams {
+                                    message,
+                                    ..
+                                } => message,
+                            },
                         }),
                     })
                     .await;
@@ -985,12 +996,16 @@ async fn start_server_task(
         meta: None,
         capabilities: ClientCapabilities {
             experimental: None,
+            extensions: None,
             roots: None,
             sampling: None,
             // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
             // indicates this should be an empty object.
             elicitation: Some(ElicitationCapability {
-                schema_validation: None,
+                form: Some(FormElicitationCapability {
+                    schema_validation: None,
+                }),
+                url: None,
             }),
             tasks: None,
         },
@@ -998,6 +1013,7 @@ async fn start_server_task(
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".into()),
+            description: None,
             icons: None,
             website_url: None,
         },
@@ -1247,6 +1263,7 @@ mod tests {
                 input_schema: Arc::new(JsonObject::default()),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
                 meta: None,
             },

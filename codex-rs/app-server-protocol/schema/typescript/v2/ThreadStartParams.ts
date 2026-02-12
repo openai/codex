@@ -10,4 +10,8 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */
-experimentalRawEvents: boolean};
+experimentalRawEvents: boolean, /**
+ * If true, persist additional rollout EventMsg variants required to
+ * reconstruct a richer thread history on resume/fork/read.
+ */
+persistExtendedHistory: boolean};
