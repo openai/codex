@@ -2390,9 +2390,9 @@ impl Session {
             );
         }
         // Add developer instructions for memories.
-        if let Some(memory_prompt) =
-            build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-            && turn_context.features.enabled(Feature::MemoryTool)
+        if turn_context.features.enabled(Feature::MemoryTool)
+            && let Some(memory_prompt) =
+                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
         {
             items.push(DeveloperInstructions::new(memory_prompt).into());
         }
@@ -5399,6 +5399,62 @@ mod tests {
             connector_id: connector_id.map(str::to_string),
             connector_name: connector_name.map(str::to_string),
         }
+    }
+
+    fn has_developer_instruction_with_text(items: &[ResponseItem], needle: &str) -> bool {
+        items.iter().any(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                content.iter().any(|content_item| match content_item {
+                    ContentItem::InputText { text } => text.contains(needle),
+                    _ => false,
+                })
+            }
+            _ => false,
+        })
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_includes_memory_prompt_when_enabled() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        let memory_root = crate::memories::memory_root(&turn_context.config.codex_home);
+        tokio::fs::create_dir_all(&memory_root)
+            .await
+            .expect("memory root should be created");
+        tokio::fs::write(
+            memory_root.join("memory_summary.md"),
+            "MEMORY_TEST_SUMMARY_ENABLED",
+        )
+        .await
+        .expect("memory summary should be written");
+
+        turn_context.features.enable(Feature::MemoryTool);
+        let items = session.build_initial_context(&turn_context).await;
+        assert!(
+            has_developer_instruction_with_text(&items, "MEMORY_TEST_SUMMARY_ENABLED"),
+            "memory prompt should be included when memory_tool is enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_context_omits_memory_prompt_when_disabled() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        let memory_root = crate::memories::memory_root(&turn_context.config.codex_home);
+        tokio::fs::create_dir_all(&memory_root)
+            .await
+            .expect("memory root should be created");
+        tokio::fs::write(
+            memory_root.join("memory_summary.md"),
+            "MEMORY_TEST_SUMMARY_DISABLED",
+        )
+        .await
+        .expect("memory summary should be written");
+
+        turn_context.features.disable(Feature::MemoryTool);
+        let items = session.build_initial_context(&turn_context).await;
+        assert!(
+            !has_developer_instruction_with_text(&items, "MEMORY_TEST_SUMMARY_DISABLED"),
+            "memory prompt should be omitted when memory_tool is disabled"
+        );
     }
 
     #[tokio::test]

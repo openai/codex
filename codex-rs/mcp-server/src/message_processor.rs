@@ -34,13 +34,20 @@ use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::query_project::auto_warm_query_project_index;
+use crate::query_project::create_tool_for_query_project;
+use crate::query_project::create_tool_for_repo_index_refresh;
+use crate::query_project::handle_query_project;
+use crate::query_project::handle_repo_index_refresh;
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
+    config: Arc<Config>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
+    auto_warm_started: bool,
 }
 
 impl MessageProcessor {
@@ -65,9 +72,11 @@ impl MessageProcessor {
         Self {
             outgoing,
             initialized: false,
+            config,
             codex_linux_sandbox_exe,
             thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            auto_warm_started: false,
         }
     }
 
@@ -168,7 +177,7 @@ impl MessageProcessor {
                 self.handle_roots_list_changed();
             }
             ClientNotification::InitializedNotification(_) => {
-                self.handle_initialized_notification();
+                self.handle_initialized_notification().await;
             }
             ClientNotification::CustomNotification(_) => {
                 tracing::warn!("ignoring custom client notification");
@@ -311,6 +320,8 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
+                create_tool_for_query_project(),
+                create_tool_for_repo_index_refresh(),
             ],
             next_cursor: None,
         };
@@ -329,6 +340,14 @@ impl MessageProcessor {
             "codex-reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
+            }
+            "query_project" => {
+                let result = handle_query_project(arguments, self.config.as_ref()).await;
+                self.outgoing.send_response(id, result).await;
+            }
+            "repo_index_refresh" => {
+                let result = handle_repo_index_refresh(arguments, self.config.as_ref()).await;
+                self.outgoing.send_response(id, result).await;
             }
             _ => {
                 let result = CallToolResult {
@@ -592,7 +611,37 @@ impl MessageProcessor {
         tracing::info!("notifications/roots/list_changed");
     }
 
-    fn handle_initialized_notification(&self) {
+    async fn handle_initialized_notification(&mut self) {
         tracing::info!("notifications/initialized");
+        if self.auto_warm_started {
+            return;
+        }
+
+        if !self.config.query_project_index.auto_warm {
+            tracing::info!("query_project index auto-warm disabled via config.toml");
+            return;
+        }
+
+        self.auto_warm_started = true;
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            match auto_warm_query_project_index(config.as_ref()).await {
+                Ok(outcome) => {
+                    tracing::info!(
+                        repo_root = %outcome.repo_root.display(),
+                        scanned_files = outcome.stats.scanned_files,
+                        updated_files = outcome.stats.updated_files,
+                        removed_files = outcome.stats.removed_files,
+                        indexed_chunks = outcome.stats.indexed_chunks,
+                        embedding_mode = ?outcome.embedding_status.mode_used,
+                        embedding_ready = outcome.embedding_status.ready,
+                        "query_project index auto-warm completed"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!("query_project index auto-warm failed: {err}");
+                }
+            }
+        });
     }
 }

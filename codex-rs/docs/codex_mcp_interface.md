@@ -125,11 +125,16 @@ Clients should render events and, when present, surface approval requests (see n
 
 ## Tool responses
 
-The `codex` and `codex-reply` tools return standard MCP `CallToolResult` payloads. For
-compatibility with MCP clients that prefer `structuredContent`, Codex mirrors the
-content blocks inside `structuredContent` alongside the `threadId`.
+Codex currently exposes four MCP tools:
 
-Example:
+- `codex`
+- `codex-reply`
+- `query_project`
+- `repo_index_refresh`
+
+All tools return standard MCP `CallToolResult` payloads.
+
+`codex` and `codex-reply` include the active thread id in `structuredContent`:
 
 ```json
 {
@@ -137,6 +142,144 @@ Example:
   "structuredContent": {
     "threadId": "019bbed6-1e9e-7f31-984c-a05b65045719",
     "content": "Hello from Codex"
+  }
+}
+```
+
+`query_project` and `repo_index_refresh` return tool-specific JSON in both:
+
+- `content[0].text` as a JSON string
+- `structuredContent` as the same parsed JSON object
+
+Repo tool payloads do not include `threadId`.
+`repo_index_refresh` accepts `require_embeddings` (default `false`) for callers
+that want strict failure semantics when embeddings are unavailable.
+
+`query_project` input guidance:
+
+- Call `query_project` before directly reading files so you begin from relevant, ranked snippets.
+- `query` (required): plain-language description of what to find.
+- `limit` (optional): max results, default `8`, capped at `200`.
+- `file_globs` (optional): include filters like `src/**/*.rs`.
+- `alpha` (optional): blend lexical/embedding scores (`0.0` lexical-only, `1.0` embedding-only).
+- `repo_root` and `embedding_model` (optional): override defaults when needed.
+
+`query_project` example:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"repo_root\":\"/workspace/repo\",\"query\":\"auth middleware\",\"limit\":8,\"alpha\":0.6,\"embedding_model\":\"text-embedding-3-small\",\"embedding_status\":{\"mode_used\":\"skip\",\"ready\":false,\"reason\":\"missing_api_key\"},\"refresh\":{\"scanned_files\":410,\"updated_files\":3,\"removed_files\":0,\"indexed_chunks\":1294},\"results\":[{\"path\":\"src/auth/middleware.rs\",\"line_range\":{\"start\":12,\"end\":40},\"snippet\":\"...\",\"score\":0.9123}]}"
+    }
+  ],
+  "structuredContent": {
+    "repo_root": "/workspace/repo",
+    "query": "auth middleware",
+    "limit": 8,
+    "alpha": 0.6,
+    "embedding_model": "text-embedding-3-small",
+    "embedding_status": {
+      "mode_used": "skip",
+      "ready": false,
+      "reason": "missing_api_key"
+    },
+    "refresh": {
+      "scanned_files": 410,
+      "updated_files": 3,
+      "removed_files": 0,
+      "indexed_chunks": 1294
+    },
+    "results": [
+      {
+        "path": "src/auth/middleware.rs",
+        "line_range": { "start": 12, "end": 40 },
+        "snippet": "...",
+        "score": 0.9123
+      }
+    ]
+  }
+}
+```
+
+## Index setup for `query_project`
+
+`query_project` relies on a local hybrid index stored under the repo at `.codex/repo_hybrid_index`.
+
+Recommended setup flow for MCP clients:
+
+1. (Optional) Set `OPENAI_API_KEY` when you want embedding-backed ranking.
+2. Complete the MCP handshake (`initialize` + `notifications/initialized`); Codex will start a background auto-warm for the current repo.
+3. Use `query_project` for searches; it performs incremental refresh automatically before each query.
+4. Read `embedding_status` in responses to detect whether embeddings are active (`ready: true`) or lexical-only fallback is in use.
+5. Optionally call `repo_index_refresh` when you want an explicit warm-up at a chosen `repo_root` and/or specific `file_globs`.
+
+Warm-up request example:
+
+```json
+{
+  "name": "repo_index_refresh",
+  "arguments": {
+    "repo_root": "/workspace/repo",
+    "file_globs": ["src/**/*.rs", "docs/**"],
+    "require_embeddings": false
+  }
+}
+```
+
+Notes:
+
+- Use `require_embeddings: true` only when embeddings are mandatory for your workflow; calls will fail if `OPENAI_API_KEY` is unavailable.
+- Use `force_full: true` only when you explicitly want a full rebuild instead of normal incremental refresh.
+
+## Configuring index defaults
+
+Codex reads index defaults from `config.toml` under `[query_project_index]`:
+
+```toml
+[query_project_index]
+auto_warm = true
+require_embeddings = false
+embedding_model = "text-embedding-3-small"
+file_globs = ["src/**/*.rs", "docs/**"]
+```
+
+- `auto_warm` controls whether MCP `notifications/initialized` triggers background warm-up.
+- `require_embeddings` controls fallback behavior for `query_project` and `repo_index_refresh` when `OPENAI_API_KEY` is unavailable.
+- `embedding_model` sets the default embedding model when the tool call does not provide one.
+- `file_globs` sets default include filters when the tool call omits `file_globs`.
+
+In the TUI, run `/index` to inspect effective index settings and use:
+
+- `/index auto-warm on|off`
+- `/index require-embeddings on|off`
+- `/index embedding-model <name|default>`
+
+For settings not exposed in the TUI (for example `file_globs`), edit `config.toml` directly.
+
+`repo_index_refresh` example:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"repo_root\":\"/workspace/repo\",\"stats\":{\"scanned_files\":410,\"updated_files\":0,\"removed_files\":0,\"indexed_chunks\":1294},\"embedding_status\":{\"mode_used\":\"required\",\"ready\":true}}"
+    }
+  ],
+  "structuredContent": {
+    "repo_root": "/workspace/repo",
+    "stats": {
+      "scanned_files": 410,
+      "updated_files": 0,
+      "removed_files": 0,
+      "indexed_chunks": 1294
+    },
+    "embedding_status": {
+      "mode_used": "required",
+      "ready": true
+    }
   }
 }
 ```

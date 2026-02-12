@@ -80,6 +80,16 @@ fn search_tool_output_payload(request: &ResponsesRequest, call_id: &str) -> Valu
     serde_json::from_str(&content).expect("search_tool_bm25 content should be valid JSON")
 }
 
+fn function_call_output_text(request: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
+    let (content, success) = request
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output should be present");
+    (
+        content.expect("function_call_output should include content"),
+        success,
+    )
+}
+
 fn active_selected_tools(payload: &Value) -> Vec<String> {
     payload
         .get("active_selected_tools")
@@ -483,6 +493,100 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             "mcp__rmcp__image".to_string(),
         ],
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_rejects_blank_query() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search-invalid-query";
+    let args = json!({
+        "query": "   ",
+        "limit": 1,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "search_tool_bm25", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "invalid query"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Apps);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "search for tool",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let (output_text, success) = function_call_output_text(&requests[1], call_id);
+    assert!(
+        output_text.contains("query must not be empty"),
+        "expected blank query validation error, got: {output_text:?}"
+    );
+    assert_ne!(success, Some(true));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_rejects_zero_limit() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search-invalid-limit";
+    let args = json!({
+        "query": "echo",
+        "limit": 0,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "search_tool_bm25", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "invalid limit"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Apps);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "search for tool",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let (output_text, success) = function_call_output_text(&requests[1], call_id);
+    assert!(
+        output_text.contains("limit must be greater than zero"),
+        "expected zero limit validation error, got: {output_text:?}"
+    );
+    assert_ne!(success, Some(true));
 
     Ok(())
 }

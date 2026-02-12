@@ -32,6 +32,42 @@ use mcp_test_support::format_with_current_shell;
 // Allow ample time on slower CI or under load to avoid flakes.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_tools_list_includes_query_project_tools() -> anyhow::Result<()> {
+    let McpHandle {
+        process: mut mcp_process,
+        server: _server,
+        dir: _dir,
+    } = create_mcp_process(vec![]).await?;
+
+    let request_id = mcp_process.send_list_tools_request().await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_response_message(RequestId::Number(request_id)),
+    )
+    .await??;
+
+    let tool_names = response
+        .result
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+
+    assert!(
+        tool_names.contains(&"query_project"),
+        "tools/list should include query_project, got: {tool_names:?}"
+    );
+    assert!(
+        tool_names.contains(&"repo_index_refresh"),
+        "tools/list should include repo_index_refresh, got: {tool_names:?}"
+    );
+
+    Ok(())
+}
+
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
 /// command, as expected.

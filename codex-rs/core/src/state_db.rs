@@ -507,7 +507,77 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
 mod tests {
     use super::*;
     use crate::rollout::list::parse_cursor;
+    use chrono::TimeZone;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    const TEST_PROVIDER: &str = "test-provider";
+
+    fn thread_id_from_uuid(uuid: Uuid) -> ThreadId {
+        ThreadId::from_string(&uuid.to_string()).expect("thread id should parse")
+    }
+
+    async fn init_state_runtime(home: &Path) -> std::sync::Arc<codex_state::StateRuntime> {
+        let runtime =
+            codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
+                .await
+                .expect("state runtime should initialize");
+        runtime
+            .mark_backfill_complete(None)
+            .await
+            .expect("backfill should be complete");
+        runtime
+    }
+
+    fn write_rollout_file(home: &Path, ts: &str, uuid: Uuid) -> PathBuf {
+        let dir = home.join("sessions").join("2025").join("01").join("03");
+        std::fs::create_dir_all(&dir).expect("session directory should be created");
+        let rollout_path = dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+        let payload = serde_json::json!({
+            "id": uuid,
+            "timestamp": ts,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": TEST_PROVIDER,
+            "base_instructions": null,
+        });
+        let session_meta = serde_json::json!({
+            "timestamp": ts,
+            "type": "session_meta",
+            "payload": payload,
+        });
+        std::fs::write(&rollout_path, format!("{session_meta}\n"))
+            .expect("rollout should be written");
+        rollout_path
+    }
+
+    async fn upsert_thread_with_path(
+        runtime: &codex_state::StateRuntime,
+        home: &Path,
+        thread_id: ThreadId,
+        rollout_path: PathBuf,
+    ) {
+        let created_at = chrono::Utc
+            .with_ymd_and_hms(2025, 1, 3, 12, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path,
+            created_at,
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some(TEST_PROVIDER.to_string());
+        builder.cwd = home.to_path_buf();
+        let metadata = builder.build(TEST_PROVIDER);
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert should succeed");
+    }
 
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {
@@ -525,5 +595,82 @@ mod tests {
 
         assert_eq!(anchor.id, uuid);
         assert_eq!(anchor.ts, expected_ts);
+    }
+
+    #[tokio::test]
+    async fn read_repair_updates_existing_rollout_path() {
+        let temp = TempDir::new().expect("temp dir");
+        let runtime = init_state_runtime(temp.path()).await;
+        let uuid = Uuid::from_u128(7001);
+        let thread_id = thread_id_from_uuid(uuid);
+        let stale_path = temp.path().join(format!(
+            "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
+        ));
+        upsert_thread_with_path(runtime.as_ref(), temp.path(), thread_id, stale_path).await;
+
+        let real_path = write_rollout_file(temp.path(), "2025-01-03T13-00-00", uuid);
+        read_repair_rollout_path(
+            Some(runtime.as_ref()),
+            Some(thread_id),
+            Some(false),
+            real_path.as_path(),
+        )
+        .await;
+
+        let repaired = runtime
+            .find_rollout_path_by_id(thread_id, Some(false))
+            .await
+            .expect("lookup should succeed");
+        assert_eq!(repaired, Some(real_path));
+    }
+
+    #[tokio::test]
+    async fn read_repair_reconciles_missing_thread_from_rollout() {
+        let temp = TempDir::new().expect("temp dir");
+        let runtime = init_state_runtime(temp.path()).await;
+        let uuid = Uuid::from_u128(7002);
+        let thread_id = thread_id_from_uuid(uuid);
+        let rollout_path = write_rollout_file(temp.path(), "2025-01-03T14-00-00", uuid);
+
+        read_repair_rollout_path(
+            Some(runtime.as_ref()),
+            Some(thread_id),
+            Some(false),
+            rollout_path.as_path(),
+        )
+        .await;
+
+        let repaired = runtime
+            .find_rollout_path_by_id(thread_id, Some(false))
+            .await
+            .expect("lookup should succeed");
+        assert_eq!(repaired, Some(rollout_path));
+    }
+
+    #[tokio::test]
+    async fn reconcile_rollout_sets_archived_state_for_archived_listing() {
+        let temp = TempDir::new().expect("temp dir");
+        let runtime = init_state_runtime(temp.path()).await;
+        let uuid = Uuid::from_u128(7003);
+        let thread_id = thread_id_from_uuid(uuid);
+        let rollout_path = write_rollout_file(temp.path(), "2025-01-03T15-00-00", uuid);
+
+        reconcile_rollout(
+            Some(runtime.as_ref()),
+            rollout_path.as_path(),
+            TEST_PROVIDER,
+            None,
+            &[],
+            Some(true),
+        )
+        .await;
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("lookup should succeed")
+            .expect("thread metadata should exist");
+        assert_eq!(metadata.rollout_path, rollout_path);
+        assert!(metadata.archived_at.is_some());
     }
 }

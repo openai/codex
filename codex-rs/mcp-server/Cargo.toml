@@ -22,11 +22,16 @@ codex-core = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+futures = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+globset = { workspace = true }
+ignore = { workspace = true }
+reqwest = { workspace = true }
+sqlx = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

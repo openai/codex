@@ -41,6 +41,7 @@ const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 64;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const LOG_RETENTION_DAYS: i64 = 90;
+const LOG_RETENTION_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
@@ -234,6 +235,21 @@ async fn flush(state_db: &std::sync::Arc<StateRuntime>, buffer: &mut Vec<LogEntr
 }
 
 async fn run_retention_cleanup(state_db: std::sync::Arc<StateRuntime>) {
+    run_retention_cleanup_with_interval(state_db, LOG_RETENTION_CLEANUP_INTERVAL).await;
+}
+
+async fn run_retention_cleanup_with_interval(
+    state_db: std::sync::Arc<StateRuntime>,
+    interval: Duration,
+) {
+    run_retention_cleanup_once(&state_db).await;
+    loop {
+        tokio::time::sleep(interval).await;
+        run_retention_cleanup_once(&state_db).await;
+    }
+}
+
+async fn run_retention_cleanup_once(state_db: &StateRuntime) {
     let Some(cutoff) = Utc::now().checked_sub_signed(ChronoDuration::days(LOG_RETENTION_DAYS))
     else {
         return;
@@ -285,5 +301,81 @@ impl Visit for MessageVisitor {
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         self.record_field(field, format!("{value:?}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stale_log(message: &str) -> LogEntry {
+        let stale_ts = Utc::now()
+            .checked_sub_signed(ChronoDuration::days(LOG_RETENTION_DAYS + 1))
+            .expect("stale timestamp should be representable")
+            .timestamp();
+        LogEntry {
+            ts: stale_ts,
+            ts_nanos: 0,
+            level: "INFO".to_string(),
+            target: "log-db-test".to_string(),
+            message: Some(message.to_string()),
+            thread_id: None,
+            module_path: None,
+            file: None,
+            line: None,
+        }
+    }
+
+    async fn wait_for_log_count(state_db: &StateRuntime, expected_count: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let logs = state_db
+                .query_logs(&crate::LogQuery::default())
+                .await
+                .expect("query logs should succeed");
+            if logs.len() == expected_count {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for log count {expected_count}, saw {}",
+                logs.len()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn retention_cleanup_runs_periodically_for_long_lived_processes() {
+        let temp = std::env::temp_dir().join(format!(
+            "codex-state-log-db-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should be after epoch")
+                .as_nanos()
+        ));
+        let state_db = StateRuntime::init(temp.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("state db should initialize");
+
+        state_db
+            .insert_log(&stale_log("old-startup-log"))
+            .await
+            .expect("log insert should succeed");
+        let cleanup_task = tokio::spawn(run_retention_cleanup_with_interval(
+            std::sync::Arc::clone(&state_db),
+            Duration::from_millis(20),
+        ));
+
+        wait_for_log_count(&state_db, 0).await;
+
+        state_db
+            .insert_log(&stale_log("old-runtime-log"))
+            .await
+            .expect("log insert should succeed");
+        wait_for_log_count(&state_db, 0).await;
+
+        cleanup_task.abort();
+        let _ = tokio::fs::remove_dir_all(temp).await;
     }
 }

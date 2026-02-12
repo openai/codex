@@ -13,6 +13,7 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
+use crate::config::types::QueryProjectIndex;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -235,6 +236,9 @@ pub struct Config {
 
     /// Ordered list of status line item identifiers for the TUI.
     pub tui_status_line: Option<Vec<String>>,
+
+    /// Configuration for the local `query_project` index used by MCP clients.
+    pub query_project_index: QueryProjectIndex,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -967,6 +971,9 @@ pub struct ConfigToml {
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
+    /// Configuration for the local `query_project` index used by MCP clients.
+    pub query_project_index: Option<QueryProjectIndex>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -1657,6 +1664,32 @@ impl Config {
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
 
+        let query_project_index = cfg.query_project_index.unwrap_or_default();
+        let query_project_index = QueryProjectIndex {
+            auto_warm: query_project_index.auto_warm,
+            require_embeddings: query_project_index.require_embeddings,
+            embedding_model: query_project_index.embedding_model.and_then(|model| {
+                let trimmed = model.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }),
+            file_globs: query_project_index
+                .file_globs
+                .into_iter()
+                .filter_map(|glob| {
+                    let trimmed = glob.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+                .collect(),
+        };
+
         let log_dir = cfg
             .log_dir
             .as_ref()
@@ -1834,6 +1867,7 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            query_project_index,
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -4074,6 +4108,7 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
+                query_project_index: QueryProjectIndex::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4181,6 +4216,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            query_project_index: QueryProjectIndex::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4286,6 +4322,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            query_project_index: QueryProjectIndex::default(),
             otel: OtelConfig::default(),
         };
 
@@ -4377,6 +4414,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            query_project_index: QueryProjectIndex::default(),
             otel: OtelConfig::default(),
         };
 

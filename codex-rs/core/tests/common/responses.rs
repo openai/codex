@@ -1167,6 +1167,11 @@ pub async fn mount_response_sequence(
 /// - Every `custom_tool_call_output` must match a prior `custom_tool_call`.
 /// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
 ///   in the `input` must have a matching output entry.
+///
+/// For chained requests (`previous_response_id` set), output→call matching is
+/// relaxed because prior call items may be inherited from previous response
+/// context. Call→output symmetry is still enforced for calls present in the
+/// current request payload.
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1182,10 +1187,17 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
     let Ok(body): Result<Value, _> = serde_json::from_slice(&body_bytes) else {
         return;
     };
+    let is_chained_request = body
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty());
     let Some(items) = body.get("input").and_then(Value::as_array) else {
         panic!("input array not found in request");
     };
+    validate_input_item_invariants(items, is_chained_request);
+}
 
+fn validate_input_item_invariants(items: &[Value], is_chained_request: bool) {
     use std::collections::HashSet;
 
     fn get_call_id(item: &Value) -> Option<&str> {
@@ -1230,17 +1242,19 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         "orphan custom_tool_call_output with empty call_id should be dropped",
     );
 
-    for cid in &function_call_outputs {
-        assert!(
-            function_calls.contains(cid) || local_shell_calls.contains(cid),
-            "function_call_output without matching call in input: {cid}",
-        );
-    }
-    for cid in &custom_tool_call_outputs {
-        assert!(
-            custom_tool_calls.contains(cid),
-            "custom_tool_call_output without matching call in input: {cid}",
-        );
+    if !is_chained_request {
+        for cid in &function_call_outputs {
+            assert!(
+                function_calls.contains(cid) || local_shell_calls.contains(cid),
+                "function_call_output without matching call in input: {cid}",
+            );
+        }
+        for cid in &custom_tool_call_outputs {
+            assert!(
+                custom_tool_calls.contains(cid),
+                "custom_tool_call_output without matching call in input: {cid}",
+            );
+        }
     }
 
     for cid in &function_calls {
@@ -1254,5 +1268,63 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             custom_tool_call_outputs.contains(cid),
             "Custom tool call output is missing for call id: {cid}",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_input_item_invariants;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::any::Any;
+
+    #[test]
+    fn chained_request_allows_output_for_prior_call() {
+        let items = vec![json!({
+            "type": "function_call_output",
+            "call_id": "prior-call",
+            "output": "{}"
+        })];
+        validate_input_item_invariants(&items, true);
+    }
+
+    #[test]
+    fn chained_request_requires_output_for_new_function_call() {
+        let items = vec![json!({
+            "type": "function_call",
+            "call_id": "call-1"
+        })];
+        let panic = std::panic::catch_unwind(|| {
+            validate_input_item_invariants(&items, true);
+        });
+        assert_eq!(
+            panic_message(panic.expect_err("expected invariant failure")),
+            "Function call output is missing for call id: call-1"
+        );
+    }
+
+    #[test]
+    fn chained_request_requires_output_for_new_custom_tool_call() {
+        let items = vec![json!({
+            "type": "custom_tool_call",
+            "call_id": "tool-1"
+        })];
+        let panic = std::panic::catch_unwind(|| {
+            validate_input_item_invariants(&items, true);
+        });
+        assert_eq!(
+            panic_message(panic.expect_err("expected invariant failure")),
+            "Custom tool call output is missing for call id: tool-1"
+        );
+    }
+
+    fn panic_message(payload: Box<dyn Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => match payload.downcast::<&'static str>() {
+                Ok(message) => (*message).to_string(),
+                Err(_) => "<non-string panic>".to_string(),
+            },
+        }
     }
 }

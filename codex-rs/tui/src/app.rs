@@ -2001,6 +2001,75 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistQueryProjectIndexConfig {
+                auto_warm,
+                require_embeddings,
+                embedding_model,
+            } => {
+                let mut updates = Vec::new();
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home);
+
+                if let Some(enabled) = auto_warm {
+                    updates.push(format!("auto-warm {}", if enabled { "on" } else { "off" }));
+                    builder = builder.set_query_project_index_auto_warm(enabled);
+                }
+
+                if let Some(required) = require_embeddings {
+                    updates.push(format!(
+                        "require-embeddings {}",
+                        if required { "on" } else { "off" }
+                    ));
+                    builder = builder.set_query_project_index_require_embeddings(required);
+                }
+
+                if let Some(model) = embedding_model.as_ref() {
+                    match model {
+                        Some(model) => {
+                            updates.push(format!("embedding-model {model}"));
+                            builder = builder.set_query_project_index_embedding_model(Some(model));
+                        }
+                        None => {
+                            updates.push("embedding-model default".to_string());
+                            builder = builder.set_query_project_index_embedding_model(None);
+                        }
+                    }
+                }
+
+                if updates.is_empty() {
+                    return Ok(AppRunControl::Continue);
+                }
+
+                match builder.apply().await {
+                    Ok(()) => {
+                        if let Some(enabled) = auto_warm {
+                            self.config.query_project_index.auto_warm = enabled;
+                            self.chat_widget.set_query_project_index_auto_warm(enabled);
+                        }
+                        if let Some(required) = require_embeddings {
+                            self.config.query_project_index.require_embeddings = required;
+                            self.chat_widget
+                                .set_query_project_index_require_embeddings(required);
+                        }
+                        if let Some(model) = embedding_model {
+                            self.config.query_project_index.embedding_model = model.clone();
+                            self.chat_widget
+                                .set_query_project_index_embedding_model(model);
+                        }
+                        self.chat_widget.add_info_message(
+                            format!("Saved index settings: {}", updates.join(", ")),
+                            None,
+                        );
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist query_project index settings"
+                        );
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save index settings: {err}"));
+                    }
+                }
+            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
                 if let Err(err) = self.config.approval_policy.set(policy) {

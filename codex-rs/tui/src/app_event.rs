@@ -162,6 +162,13 @@ pub(crate) enum AppEvent {
         personality: Personality,
     },
 
+    /// Persist one or more query_project index defaults to config.toml.
+    PersistQueryProjectIndexConfig {
+        auto_warm: Option<bool>,
+        require_embeddings: Option<bool>,
+        embedding_model: Option<Option<String>>,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,

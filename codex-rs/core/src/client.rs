@@ -169,6 +169,8 @@ pub struct ModelClientSession {
     connection: Option<ApiWebSocketConnection>,
     websocket_last_request: Option<ResponsesApiRequest>,
     websocket_last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+    http_last_request: Option<ResponsesApiRequest>,
+    http_last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -239,6 +241,8 @@ impl ModelClient {
             connection: None,
             websocket_last_request: None,
             websocket_last_response_rx: None,
+            http_last_request: None,
+            http_last_response_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -510,6 +514,7 @@ impl ModelClientSession {
             store: provider.is_azure_responses_endpoint(),
             stream: true,
             include,
+            previous_response_id: None,
             prompt_cache_key,
             text,
         };
@@ -543,7 +548,7 @@ impl ModelClientSession {
     }
 
     fn get_incremental_items(
-        &self,
+        previous_request: &ResponsesApiRequest,
         request: &ResponsesApiRequest,
         last_response: Option<&LastResponse>,
     ) -> Option<Vec<ResponseItem>> {
@@ -551,7 +556,6 @@ impl ModelClientSession {
         // We only append when non-input request fields are unchanged and `input` is a strict
         // extension of the previous known input. Server-returned output items are treated as part
         // of the baseline so we do not resend them.
-        let previous_request = self.websocket_last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
         let mut request_without_input = request.clone();
@@ -580,13 +584,64 @@ impl ModelClientSession {
         }
     }
 
-    fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_last_response_rx
-            .take()
-            .and_then(|mut receiver| match receiver.try_recv() {
-                Ok(last_response) => Some(last_response),
-                Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
-            })
+    fn get_websocket_incremental_items(
+        &self,
+        request: &ResponsesApiRequest,
+        last_response: Option<&LastResponse>,
+    ) -> Option<Vec<ResponseItem>> {
+        let previous_request = self.websocket_last_request.as_ref()?;
+        Self::get_incremental_items(previous_request, request, last_response)
+    }
+
+    fn get_last_response(
+        response_rx: &mut Option<oneshot::Receiver<LastResponse>>,
+    ) -> Option<LastResponse> {
+        let receiver = response_rx.as_mut()?;
+        match receiver.try_recv() {
+            Ok(last_response) => {
+                response_rx.take();
+                Some(last_response)
+            }
+            Err(TryRecvError::Closed) => {
+                response_rx.take();
+                None
+            }
+            Err(TryRecvError::Empty) => None,
+        }
+    }
+
+    fn get_last_websocket_response(&mut self) -> Option<LastResponse> {
+        Self::get_last_response(&mut self.websocket_last_response_rx)
+    }
+
+    fn get_last_http_response(&mut self) -> Option<LastResponse> {
+        Self::get_last_response(&mut self.http_last_response_rx)
+    }
+
+    fn prepare_azure_http_request(
+        &mut self,
+        mut request: ResponsesApiRequest,
+    ) -> ResponsesApiRequest {
+        let Some(last_response) = self.get_last_http_response() else {
+            return request;
+        };
+
+        if last_response.response_id.is_empty() {
+            return request;
+        }
+
+        let Some(previous_request) = self.http_last_request.as_ref() else {
+            trace!("incremental request failed, missing previous request state");
+            return request;
+        };
+        let incremental_items =
+            Self::get_incremental_items(previous_request, &request, Some(&last_response));
+        if let Some(append_items) = incremental_items {
+            request.previous_response_id = Some(last_response.response_id);
+            request.input = append_items;
+        }
+
+        request
     }
 
     fn prepare_websocket_request(
@@ -594,7 +649,7 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
-        let Some(last_response) = self.get_last_response() else {
+        let Some(last_response) = self.get_last_websocket_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
@@ -602,7 +657,7 @@ impl ModelClientSession {
             trace!("incremental request failed, can't append");
             return ResponsesWsRequest::ResponseCreate(payload);
         }
-        let incremental_items = self.get_incremental_items(request, Some(&last_response));
+        let incremental_items = self.get_websocket_incremental_items(request, Some(&last_response));
         if let Some(append_items) = incremental_items {
             if responses_websockets_v2_enabled && !last_response.response_id.is_empty() {
                 let payload = ResponseCreateWsRequest {
@@ -716,7 +771,7 @@ impl ModelClientSession {
     /// `text` controls used for output schemas.
     #[allow(clippy::too_many_arguments)]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         otel_manager: &OtelManager,
@@ -746,13 +801,19 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let options = self.build_responses_options(turn_metadata_header, compression);
 
-            let request = self.build_responses_request(
+            let is_azure_responses_endpoint =
+                client_setup.api_provider.is_azure_responses_endpoint();
+            let request_for_state = self.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort,
                 summary,
             )?;
+            let mut request = request_for_state.clone();
+            if is_azure_responses_endpoint {
+                request = self.prepare_azure_http_request(request);
+            }
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -763,7 +824,12 @@ impl ModelClientSession {
 
             match stream_result {
                 Ok(stream) => {
-                    let (stream, _) = map_response_stream(stream, otel_manager.clone());
+                    let (stream, last_response_rx) =
+                        map_response_stream(stream, otel_manager.clone());
+                    if is_azure_responses_endpoint {
+                        self.http_last_request = Some(request_for_state);
+                        self.http_last_response_rx = Some(last_response_rx);
+                    }
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(
