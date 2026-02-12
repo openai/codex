@@ -1,4 +1,5 @@
 pub mod auth;
+pub(crate) mod elicitation_form;
 mod skill_dependencies;
 pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 
@@ -21,6 +22,7 @@ use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
+use crate::features::Features;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
@@ -30,8 +32,15 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
-const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
-const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/gateways/flat/mcp";
+
+const OPENAI_CONNECTORS_MCP_URL: &str = "https://api.openai.com/v1/connectors/gateways/flat/";
+
+pub(crate) fn is_apps_mcp_gateway_elicitation_flow_active(
+    features: &Features,
+    server_name: &str,
+) -> bool {
+    features.enabled(Feature::AppsMcpGateway) && server_name == CODEX_APPS_MCP_SERVER_NAME
+}
 
 // Legacy vs new MCP gateway
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +104,7 @@ fn normalize_codex_apps_base_url(base_url: &str) -> String {
 
 fn codex_apps_mcp_url_for_gateway(base_url: &str, gateway: CodexAppsMcpGateway) -> String {
     if gateway == CodexAppsMcpGateway::MCPGateway {
-        return format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
+        return OPENAI_CONNECTORS_MCP_URL.to_string();
     }
 
     let base_url = normalize_codex_apps_base_url(base_url);
@@ -208,6 +217,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         auth_status_entries.clone(),
         &config.permissions.approval_policy,
         tx_event,
+        config.features.enabled(Feature::AppsMcpGateway),
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
@@ -452,35 +462,33 @@ mod tests {
 
     #[test]
     fn codex_apps_mcp_url_for_gateway_uses_openai_connectors_gateway() {
-        let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
-
         assert_eq!(
             codex_apps_mcp_url_for_gateway(
                 "https://chatgpt.com/backend-api",
                 CodexAppsMcpGateway::MCPGateway
             ),
-            expected_url.as_str()
+            OPENAI_CONNECTORS_MCP_URL
         );
         assert_eq!(
             codex_apps_mcp_url_for_gateway(
                 "https://chat.openai.com",
                 CodexAppsMcpGateway::MCPGateway
             ),
-            expected_url.as_str()
+            OPENAI_CONNECTORS_MCP_URL
         );
         assert_eq!(
             codex_apps_mcp_url_for_gateway(
                 "http://localhost:8080/api/codex",
                 CodexAppsMcpGateway::MCPGateway
             ),
-            expected_url.as_str()
+            OPENAI_CONNECTORS_MCP_URL
         );
         assert_eq!(
             codex_apps_mcp_url_for_gateway(
                 "http://localhost:8080",
                 CodexAppsMcpGateway::MCPGateway
             ),
-            expected_url.as_str()
+            OPENAI_CONNECTORS_MCP_URL
         );
     }
 
@@ -501,10 +509,7 @@ mod tests {
         config.chatgpt_base_url = "https://chatgpt.com".to_string();
         config.features.enable(Feature::AppsMcpGateway);
 
-        assert_eq!(
-            codex_apps_mcp_url(&config),
-            format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}")
-        );
+        assert_eq!(codex_apps_mcp_url(&config), OPENAI_CONNECTORS_MCP_URL);
     }
 
     #[test]
@@ -538,7 +543,6 @@ mod tests {
             _ => panic!("expected streamable http transport for codex apps"),
         };
 
-        let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
-        assert_eq!(url, &expected_url);
+        assert_eq!(url, OPENAI_CONNECTORS_MCP_URL);
     }
 }

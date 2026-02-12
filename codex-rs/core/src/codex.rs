@@ -66,6 +66,7 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::RequestId as ProtocolRequestId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -84,6 +85,7 @@ use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
@@ -153,6 +155,7 @@ use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::is_apps_mcp_gateway_elicitation_flow_active;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -237,6 +240,8 @@ use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
+use crate::tools::handlers::build_mcp_elicitation_request_user_input_args;
+use crate::tools::handlers::build_mcp_elicitation_response_from_user_input;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
@@ -525,6 +530,7 @@ impl Codex {
 pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
+    mcp_event_tx: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
@@ -923,6 +929,43 @@ impl Session {
         });
     }
 
+    // MCP startup/runtime events are emitted into a dedicated channel
+    // (`Session::mcp_event_tx`) instead of directly to `self.tx_event` so the
+    // session can inspect and selectively transform them first. Most events are
+    // forwarded unchanged, but codex_apps gateway elicitation requests are
+    // intercepted and converted into the request_user_input flow, with the
+    // elicitation resolved asynchronously rather than surfacing the raw MCP
+    // request event to clients. Both initial MCP startup and later MCP refreshes
+    // route through this forwarder, so this is the single interception point.
+    fn start_mcp_event_forwarder(self: &Arc<Self>, rx_event: Receiver<Event>) {
+        let weak_sess = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while let Ok(event) = rx_event.recv().await {
+                let Some(sess) = weak_sess.upgrade() else {
+                    break;
+                };
+                if let EventMsg::ElicitationRequest(elicitation) = &event.msg
+                    && is_apps_mcp_gateway_elicitation_flow_active(
+                        &sess.features,
+                        &elicitation.server_name,
+                    )
+                {
+                    let prompt_sess = Arc::clone(&sess);
+                    let prompt_event = elicitation.clone();
+                    tokio::spawn(async move {
+                        prompt_sess
+                            .prompt_codex_apps_elicitation_via_request_user_input(prompt_event)
+                            .await;
+                    });
+                    continue;
+                }
+                if let Err(e) = sess.tx_event.send(event).await {
+                    debug!("dropping event because channel is closed: {e}");
+                }
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
@@ -1303,6 +1346,7 @@ impl Session {
             // setup is straightforward enough and performs well.
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
                 &config.permissions.approval_policy,
+                config.features.enabled(Feature::AppsMcpGateway),
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
@@ -1358,9 +1402,11 @@ impl Session {
         );
         state.set_startup_regular_task(startup_regular_task);
 
+        let (tx_mcp_event, rx_mcp_event) = async_channel::unbounded();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
+            mcp_event_tx: tx_mcp_event.clone(),
             agent_status,
             state: Mutex::new(state),
             features: config.features.clone(),
@@ -1371,6 +1417,7 @@ impl Session {
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
+        sess.start_mcp_event_forwarder(rx_mcp_event);
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
@@ -1430,7 +1477,8 @@ impl Session {
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
             &session_configuration.approval_policy,
-            tx_event.clone(),
+            tx_mcp_event.clone(),
+            config.features.enabled(Feature::AppsMcpGateway),
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth),
@@ -2275,6 +2323,47 @@ impl Session {
         self.flush_rollout().await;
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
+        }
+    }
+
+    async fn prompt_codex_apps_elicitation_via_request_user_input(
+        &self,
+        elicitation: codex_protocol::approvals::ElicitationRequestEvent,
+    ) {
+        let response = if let Some((turn_context, cancellation_token)) =
+            self.active_turn_context_and_cancellation_token().await
+        {
+            let args = build_mcp_elicitation_request_user_input_args(&elicitation);
+            let call_id = format!("mcp_elicitation_request_{}", turn_context.sub_id);
+            let turn_sub_id = turn_context.sub_id.clone();
+            let user_input = tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => {
+                    let empty = RequestUserInputResponse {
+                        answers: HashMap::new(),
+                    };
+                    self.notify_user_input_response(&turn_sub_id, empty).await;
+                    None
+                }
+                response = self.request_user_input(turn_context.as_ref(), call_id, args) => response,
+            };
+            build_mcp_elicitation_response_from_user_input(user_input, &elicitation)
+        } else {
+            ElicitationResponse {
+                action: ElicitationAction::Cancel,
+                content: None,
+            }
+        };
+
+        let request_id = protocol_request_id_to_rmcp(&elicitation.id);
+        if let Err(err) = self
+            .resolve_elicitation(elicitation.server_name, request_id, response)
+            .await
+        {
+            warn!(
+                error = %err,
+                "failed to resolve codex_apps MCP elicitation request"
+            );
         }
     }
 
@@ -3272,7 +3361,8 @@ impl Session {
             store_mode,
             auth_statuses,
             &turn_context.config.permissions.approval_policy,
-            self.get_tx_event(),
+            self.mcp_event_tx.clone(),
+            turn_context.features.enabled(Feature::AppsMcpGateway),
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth.as_ref()),
@@ -3352,6 +3442,15 @@ impl Session {
             .lock()
             .await
             .cancel();
+    }
+}
+
+fn protocol_request_id_to_rmcp(request_id: &ProtocolRequestId) -> RequestId {
+    match request_id {
+        ProtocolRequestId::String(value) => {
+            rmcp::model::NumberOrString::String(Arc::from(value.as_str()))
+        }
+        ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(*value),
     }
 }
 
@@ -7947,9 +8046,11 @@ mod tests {
             Arc::clone(&js_repl),
         );
 
+        let (mcp_event_tx, _rx_mcp_event) = async_channel::unbounded();
         let session = Session {
             conversation_id,
             tx_event,
+            mcp_event_tx,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
             features: config.features.clone(),
@@ -8100,9 +8201,11 @@ mod tests {
             Arc::clone(&js_repl),
         ));
 
+        let (mcp_event_tx, _rx_mcp_event) = async_channel::unbounded();
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
+            mcp_event_tx,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
             features: config.features.clone(),

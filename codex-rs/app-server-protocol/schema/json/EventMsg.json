@@ -1763,6 +1763,7 @@
             "message": {
               "type": "string"
             },
+            "requested_schema": true,
             "server_name": {
               "type": "string"
             },
@@ -1772,6 +1773,12 @@
               ],
               "title": "ElicitationRequestEventMsgType",
               "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -7008,6 +7015,7 @@
         "message": {
           "type": "string"
         },
+        "requested_schema": true,
         "server_name": {
           "type": "string"
         },
@@ -7017,6 +7025,12 @@
           ],
           "title": "ElicitationRequestEventMsgType",
           "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

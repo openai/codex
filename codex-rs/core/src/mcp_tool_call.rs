@@ -10,6 +10,7 @@ use crate::codex::TurnContext;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::is_apps_mcp_gateway_elicitation_flow_active;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -350,6 +351,10 @@ async fn maybe_request_mcp_tool_approval(
         if !annotations.is_some_and(requires_mcp_tool_approval) {
             return None;
         }
+    }
+
+    if is_apps_mcp_gateway_elicitation_flow_active(&turn_context.config.features, server) {
+        return None;
     }
 
     let approval_key = if approval_mode == AppToolApproval::Auto {

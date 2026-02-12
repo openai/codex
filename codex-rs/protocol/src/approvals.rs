@@ -7,6 +7,7 @@ use crate::protocol::FileChange;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use ts_rs::TS;
 
 /// Proposed execpolicy change to allow commands starting with this prefix.
@@ -102,9 +103,10 @@ pub struct ElicitationRequestEvent {
     #[ts(type = "string | number")]
     pub id: RequestId,
     pub message: String,
-    // TODO: MCP servers can request we fill out a schema for the elicitation. We don't support
-    // this yet.
-    // pub requested_schema: ElicitRequestParamsRequestedSchema,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
