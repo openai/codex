@@ -1,7 +1,5 @@
-use crate::memories::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT;
-use crate::memories::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT;
-use crate::memories::STAGE_ONE_CONTEXT_WINDOW_PERCENT;
 use crate::memories::memory_root;
+use crate::memories::phase_one;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use askama::Template;
@@ -32,7 +30,6 @@ struct MemoryToolDeveloperInstructionsTemplate<'a> {
 }
 
 /// Builds the consolidation subagent prompt for a specific memory root.
-///
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     let template = ConsolidationPromptTemplate {
@@ -58,9 +55,9 @@ pub(super) fn build_stage_one_input_message(
         .context_window
         .and_then(|limit| (limit > 0).then_some(limit))
         .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
-        .map(|limit| (limit.saturating_mul(STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).max(1))
+        .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
         .and_then(|limit| usize::try_from(limit).ok())
-        .unwrap_or(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
+        .unwrap_or(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
     let truncated_rollout_contents = truncate_text(
         rollout_contents,
         TruncationPolicy::Tokens(rollout_token_limit),
@@ -76,6 +73,9 @@ pub(super) fn build_stage_one_input_message(
     .render()?)
 }
 
+/// Build prompt used for read path. This prompt must be added to the developer instructions. In
+/// case of large memory files, the `memory_summary.md` is truncated at
+/// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
 pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
     let base_path = memory_root(codex_home);
     let memory_summary_path = base_path.join("memory_summary.md");
@@ -86,7 +86,7 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         .to_string();
     let memory_summary = truncate_text(
         &memory_summary,
-        TruncationPolicy::Tokens(MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
+        TruncationPolicy::Tokens(phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
     );
     if memory_summary.is_empty() {
         return None;
@@ -111,7 +111,7 @@ mod tests {
         model_info.context_window = Some(123_000);
         let expected_rollout_token_limit = usize::try_from(
             ((123_000_i64 * model_info.effective_context_window_percent) / 100)
-                * STAGE_ONE_CONTEXT_WINDOW_PERCENT
+                * phase_one::CONTEXT_WINDOW_PERCENT
                 / 100,
         )
         .unwrap();
@@ -140,7 +140,7 @@ mod tests {
         model_info.context_window = None;
         let expected_truncated = truncate_text(
             &input,
-            TruncationPolicy::Tokens(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),
+            TruncationPolicy::Tokens(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),
         );
         let message = build_stage_one_input_message(
             &model_info,
