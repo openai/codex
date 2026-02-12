@@ -132,10 +132,18 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
         1_000,
         TruncationPolicyConfig::bytes(10_000),
     );
-    remote_model.supported_reasoning_levels.push(ReasoningEffortPreset {
-        effort: ReasoningEffort::High,
-        description: ReasoningEffort::High.to_string(),
-    });
+    remote_model.default_reasoning_level = Some(ReasoningEffort::High);
+    remote_model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: ReasoningEffort::High.to_string(),
+        },
+    ];
+    remote_model.supports_reasoning_summaries = true;
     mount_models_once(
         &server,
         ModelsResponse {
@@ -160,7 +168,6 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
         .with_config(|config| {
             config.features.enable(Feature::RemoteModels);
             config.model = Some(requested_model.to_string());
-            config.model_reasoning_effort = Some(ReasoningEffort::High);
         })
         .build(&server)
         .await?;
