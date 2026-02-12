@@ -102,9 +102,9 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models_manager::model_info::model_info_from_slug;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
-    use crate::models_manager::model_info::model_info_from_slug;
 
     #[test]
     fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
