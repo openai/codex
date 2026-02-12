@@ -15,6 +15,7 @@ mod rate_limits;
 #[cfg(test)]
 pub(crate) use card::new_status_output;
 pub(crate) use card::new_status_output_with_rate_limits;
+pub(crate) use card::permissions_display_text;
 pub(crate) use helpers::format_directory_display;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use rate_limits::RateLimitSnapshotDisplay;

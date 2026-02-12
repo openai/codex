@@ -107,13 +107,22 @@ use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
 async fn test_config() -> Config {
-    // Use base defaults to avoid depending on host state.
-    let codex_home = std::env::temp_dir();
+    // Use an isolated codex_home to avoid depending on host state.
+    let codex_home = tempdir().expect("tempdir").keep();
     ConfigBuilder::default()
-        .codex_home(codex_home.clone())
+        .codex_home(codex_home)
         .build()
         .await
         .expect("config")
+}
+
+fn set_user_config_layer(chat: &mut ChatWidget, config_toml: TomlValue) {
+    let user_config_path = AbsolutePathBuf::try_from(std::env::temp_dir().join("config.toml"))
+        .expect("absolute user config path");
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config(&user_config_path, config_toml);
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -4169,6 +4178,69 @@ async fn approvals_selection_popup_snapshot() {
     });
     #[cfg(not(target_os = "windows"))]
     assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn approvals_popup_shows_custom_option_for_custom_user_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let user_config_toml: TomlValue = toml::from_str(
+        r#"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+network_access = true
+"#,
+    )
+    .expect("valid user config.toml");
+    set_user_config_layer(&mut chat, user_config_toml);
+
+    chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 150);
+
+    assert!(
+        popup.contains("Custom"),
+        "expected popup to include a Custom option, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("workspace-write with network access, on-request"),
+        "expected Custom option description to match status-card details, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn approvals_popup_hides_custom_option_for_default_or_full_access_user_config() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let user_default_toml: TomlValue = toml::from_str(
+        r#"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+"#,
+    )
+    .expect("valid default-equivalent user config.toml");
+    set_user_config_layer(&mut chat, user_default_toml);
+
+    chat.open_permissions_popup();
+    let default_popup = render_bottom_popup(&chat, 120);
+    assert!(
+        !default_popup.contains("Custom"),
+        "default-equivalent config.toml should not surface Custom, got:\n{default_popup}"
+    );
+
+    let user_full_toml: TomlValue = toml::from_str(
+        r#"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+"#,
+    )
+    .expect("valid full-access-equivalent user config.toml");
+    set_user_config_layer(&mut chat, user_full_toml);
+
+    chat.open_permissions_popup();
+    let full_popup = render_bottom_popup(&chat, 120);
+    assert!(
+        !full_popup.contains("Custom"),
+        "full-access-equivalent config.toml should not surface Custom, got:\n{full_popup}"
+    );
 }
 
 #[cfg(target_os = "windows")]
