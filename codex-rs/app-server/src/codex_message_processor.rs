@@ -2304,6 +2304,7 @@ impl CodexMessageProcessor {
             model_providers,
             source_kinds,
             archived,
+            cwd,
         } = params;
 
         let requested_page_size = limit
@@ -2322,6 +2323,7 @@ impl CodexMessageProcessor {
                 source_kinds,
                 core_sort_key,
                 archived.unwrap_or(false),
+                cwd.map(PathBuf::from),
             )
             .await
         {
@@ -3060,6 +3062,7 @@ impl CodexMessageProcessor {
                 None,
                 CoreThreadSortKey::UpdatedAt,
                 false,
+                None,
             )
             .await
         {
@@ -3081,6 +3084,7 @@ impl CodexMessageProcessor {
         source_kinds: Option<Vec<ThreadSourceKind>>,
         sort_key: CoreThreadSortKey,
         archived: bool,
+        cwd: Option<PathBuf>,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         let mut cursor_obj: Option<RolloutCursor> = match cursor.as_ref() {
             Some(cursor_str) => {
@@ -3162,6 +3166,9 @@ impl CodexMessageProcessor {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
+                    && cwd
+                        .as_ref()
+                        .is_none_or(|expected_cwd| &summary.cwd == expected_cwd)
                 {
                     filtered.push(summary);
                     if filtered.len() >= remaining {
