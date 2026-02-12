@@ -49,9 +49,11 @@ use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::Level;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
@@ -414,7 +416,8 @@ pub async fn run_main(
         )
         .await
         .ok()
-        .map(|db| log_db::start(db).with_filter(env_filter()))
+        // Keep sqlite feedback logs aligned with /feedback ring-buffer capture fidelity.
+        .map(|db| log_db::start(db).with_filter(Targets::new().with_default(Level::TRACE)))
     } else {
         None
     };
