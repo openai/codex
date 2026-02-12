@@ -6,7 +6,6 @@ use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -1632,7 +1631,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
 async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     skip_if_no_network!();
 
-    let server = start_mock_server().await;
+    let server = MockServer::start().await;
     let previous_model = "gpt-5.2-codex";
     let next_model = "gpt-5.1-codex-max";
 
@@ -1676,11 +1675,6 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             config.features.enable(Feature::RemoteModels);
         });
     let test = builder.build(&server).await.expect("build test codex");
-    let _ = test
-        .thread_manager
-        .list_models(&test.config, RefreshStrategy::Online)
-        .await;
-    assert_eq!(models_mock.requests().len(), 1);
 
     test.codex
         .submit(Op::UserTurn {
@@ -1726,6 +1720,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
 
     let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
     assert_eq!(
         requests.len(),
         3,
@@ -1744,7 +1739,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
 async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     skip_if_no_network!();
 
-    let server = start_mock_server().await;
+    let server = MockServer::start().await;
     let previous_model = "gpt-5.2-codex";
     let next_model = "gpt-5.1-codex-max";
 
@@ -1791,11 +1786,6 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .build(&server)
         .await
         .expect("build initial test codex");
-    let _ = initial
-        .thread_manager
-        .list_models(&initial.config, RefreshStrategy::Online)
-        .await;
-    assert_eq!(models_mock.requests().len(), 1);
     let home = initial.home.clone();
     let rollout_path = initial
         .session_configured
@@ -1873,6 +1863,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
 
     let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
     assert_eq!(
         requests.len(),
         3,
