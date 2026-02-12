@@ -20,6 +20,10 @@ Network access and filesystem read/write roots are controlled by
 Seatbelt also supports macOS permission-profile extensions layered on top of
 `SandboxPolicy`:
 
+- no extension profile provided:
+  keeps legacy default preferences read access (`user-preference-read`).
+- extension profile provided with no `macos_preferences` grant:
+  does not add preferences access clauses.
 - `macos_preferences = "readonly"`:
   enables cfprefs read clauses and `user-preference-read`.
 - `macos_preferences = "readwrite"`:

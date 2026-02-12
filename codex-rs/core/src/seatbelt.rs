@@ -14,6 +14,7 @@ use tokio::process::Child;
 use url::Url;
 
 use crate::protocol::SandboxPolicy;
+use crate::seatbelt_permissions::MacOsPreferencesPermission;
 use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::seatbelt_permissions::build_seatbelt_extensions;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
@@ -295,9 +296,16 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
 
     let proxy = proxy_policy_inputs(network);
     let network_policy = dynamic_network_policy(sandbox_policy, enforce_managed_network, &proxy);
-    let seatbelt_extensions = extensions
-        .map(build_seatbelt_extensions)
-        .unwrap_or_default();
+    let seatbelt_extensions = extensions.map_or_else(
+        || {
+            // Backward-compatibility default when no extension profile is provided.
+            build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                ..Default::default()
+            })
+        },
+        build_seatbelt_extensions,
+    );
 
     let full_policy = if seatbelt_extensions.policy.is_empty() {
         format!(
@@ -457,6 +465,21 @@ mod tests {
     }
 
     #[test]
+    fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
+        let cwd = std::env::temp_dir();
+        let args = create_seatbelt_command_args(
+            vec!["echo".to_string(), "ok".to_string()],
+            &SandboxPolicy::new_read_only_policy(),
+            cwd.as_path(),
+            false,
+            None,
+        );
+        let policy = &args[1];
+        assert!(policy.contains("(allow user-preference-read)"));
+        assert!(!policy.contains("(allow user-preference-write)"));
+    }
+
+    #[test]
     fn seatbelt_args_omit_macos_extensions_when_profile_is_empty() {
         let cwd = std::env::temp_dir();
         let args = create_seatbelt_command_args_with_extensions(
@@ -471,6 +494,7 @@ mod tests {
         assert!(!policy.contains("appleevent-send"));
         assert!(!policy.contains("com.apple.axserver"));
         assert!(!policy.contains("com.apple.CalendarAgent"));
+        assert!(!policy.contains("user-preference-read"));
         assert!(!policy.contains("user-preference-write"));
     }
 
@@ -643,6 +667,14 @@ mod tests {
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
 )
+
+; macOS permission profile extensions
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow mach-lookup
+    (global-name "com.apple.cfprefsd.daemon")
+    (global-name "com.apple.cfprefsd.agent")
+    (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)
 "#,
         );
 
@@ -930,6 +962,14 @@ mod tests {
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
+
+; macOS permission profile extensions
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow mach-lookup
+    (global-name "com.apple.cfprefsd.daemon")
+    (global-name "com.apple.cfprefsd.agent")
+    (local-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read)
 "#,
         );
 
