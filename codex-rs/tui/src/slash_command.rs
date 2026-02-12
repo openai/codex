@@ -47,9 +47,9 @@ pub enum SlashCommand {
     Personality,
     TestApproval,
     // Debugging commands.
-    #[strum(serialize = "m_drop")]
+    #[strum(serialize = "debug-m-drop")]
     MemoryDrop,
-    #[strum(serialize = "m_update")]
+    #[strum(serialize = "debug-m-update")]
     MemoryUpdate,
 }
 
