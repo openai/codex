@@ -99,6 +99,8 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
+      # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -160,6 +162,12 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            profile: release
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
