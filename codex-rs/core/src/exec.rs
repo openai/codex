@@ -20,7 +20,7 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
 use crate::get_platform_sandbox;
-use crate::network_policy_decision::extract_network_policy_decisions;
+use crate::network_policy_decision::NetworkPolicyDecisionPayload;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -252,7 +252,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         expiration,
         env,
-        network,
+        network: network.clone(),
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -260,9 +260,39 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
+    let blocked_cursor = match network.as_ref() {
+        Some(network) => network.blocked_requests_cursor().await.ok(),
+        None => None,
+    };
     let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
-    finalize_exec_result(raw_output_result, sandbox, duration)
+    let finalized = finalize_exec_result(raw_output_result, sandbox, duration);
+    let telemetry_decision = match (network.as_ref(), blocked_cursor) {
+        (Some(network), Some(cursor)) => {
+            blocking_network_policy_decision_from_blocked_queue(network, cursor).await
+        }
+        (None, _) => None,
+        (Some(_), None) => None,
+    };
+    match finalized {
+        Ok(exec_output) => {
+            if let Some(policy_decision) = telemetry_decision {
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(exec_output),
+                    network_policy_decision: Some(policy_decision),
+                }));
+            }
+            Ok(exec_output)
+        }
+        Err(CodexErr::Sandbox(SandboxErr::Denied {
+            output,
+            network_policy_decision,
+        })) => Err(CodexErr::Sandbox(SandboxErr::Denied {
+            output,
+            network_policy_decision: network_policy_decision.or(telemetry_decision),
+        })),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -491,6 +521,7 @@ fn finalize_exec_result(
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
+                    network_policy_decision: None,
                 }));
             }
 
@@ -533,10 +564,6 @@ pub(crate) fn is_likely_sandbox_denied(
 ) -> bool {
     if sandbox_type == SandboxType::None {
         return false;
-    }
-
-    if has_network_policy_blocking_decision(exec_output) {
-        return true;
     }
 
     if exec_output.exit_code == 0 {
@@ -592,15 +619,63 @@ pub(crate) fn is_likely_sandbox_denied(
     false
 }
 
-fn has_network_policy_blocking_decision(exec_output: &ExecToolCallOutput) -> bool {
-    [
-        &exec_output.stderr.text,
-        &exec_output.stdout.text,
-        &exec_output.aggregated_output.text,
-    ]
-    .into_iter()
-    .flat_map(|section| extract_network_policy_decisions(section))
-    .any(|payload| payload.is_blocking_decision())
+async fn blocking_network_policy_decision_from_blocked_queue(
+    network: &NetworkProxy,
+    blocked_cursor: u64,
+) -> Option<NetworkPolicyDecisionPayload> {
+    let blocked = network.blocked_requests_since(blocked_cursor).await.ok()?;
+    select_network_policy_decision_from_blocked_entries(blocked)
+}
+
+fn select_network_policy_decision_from_blocked_entries(
+    blocked: Vec<codex_network_proxy::BlockedRequest>,
+) -> Option<NetworkPolicyDecisionPayload> {
+    let mut latest_blocking_decision = None;
+
+    for entry in blocked.into_iter().rev() {
+        let Some(payload) = network_policy_decision_from_blocked_entry(&entry) else {
+            continue;
+        };
+
+        // If the command produced an ask-from-decider block, prefer that for retry
+        // prompting even if a later deny was also recorded.
+        if payload.is_ask_from_decider() {
+            return Some(payload);
+        }
+        if latest_blocking_decision.is_none() {
+            latest_blocking_decision = Some(payload);
+        }
+    }
+
+    latest_blocking_decision
+}
+
+fn network_policy_decision_from_blocked_entry(
+    entry: &codex_network_proxy::BlockedRequest,
+) -> Option<NetworkPolicyDecisionPayload> {
+    let decision = entry.decision.as_deref()?;
+    if decision.eq_ignore_ascii_case("allow") {
+        return None;
+    }
+
+    let source = entry.source.as_deref()?;
+    let protocol = match entry.protocol.as_str() {
+        "http-connect" => Some("https_connect".to_string()),
+        "socks5" => Some("socks5_tcp".to_string()),
+        "socks5-udp" => Some("socks5_udp".to_string()),
+        "http" | "https" | "https_connect" | "socks5_tcp" | "socks5_udp" => {
+            Some(entry.protocol.clone())
+        }
+        _ => None,
+    }?;
+    Some(NetworkPolicyDecisionPayload {
+        decision: decision.to_string(),
+        source: source.to_string(),
+        protocol: Some(protocol),
+        host: Some(entry.host.clone()),
+        reason: Some(entry.reason.clone()),
+        port: entry.port,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -921,6 +996,7 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_network_proxy::BlockedRequest;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
@@ -972,6 +1048,17 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
+        let output = make_exec_output(
+            0,
+            "",
+            "",
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+        );
+        assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
+    }
+
+    #[test]
     fn sandbox_detection_uses_aggregated_output() {
         let output = make_exec_output(
             101,
@@ -986,36 +1073,12 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_detection_flags_network_policy_ask_with_zero_exit_code() {
+    fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
         let output = make_exec_output(
             0,
             "",
             "",
-            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
-        );
-
-        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
-    }
-
-    #[test]
-    fn sandbox_detection_flags_network_policy_non_decider_with_zero_exit_code() {
-        let output = make_exec_output(
-            0,
-            "",
-            "",
-            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"baseline_policy","protocol":"http","host":"google.com","port":80}"#,
-        );
-
-        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
-    }
-
-    #[test]
-    fn sandbox_detection_ignores_network_policy_allow_with_zero_exit_code() {
-        let output = make_exec_output(
-            0,
-            "",
-            "",
-            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"allow","source":"decider","protocol":"http","host":"google.com","port":80}"#,
+            r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","source":"decider","protocol":"http","host":"google.com","port":80}"#,
         );
 
         assert!(!is_likely_sandbox_denied(
@@ -1025,15 +1088,104 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_detection_flags_network_policy_ask_from_json_blocked_response() {
-        let output = make_exec_output(
-            0,
-            "",
-            "",
-            r#"{"status":"blocked","host":"google.com","reason":"not_allowed","policy_decision_prefix":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"google.com\",\"port\":80}","message":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"google.com\",\"port\":80}\nCodex blocked this request: domain not in allowlist (this is not a denylist block)."}"#,
-        );
+    fn network_policy_decision_maps_fresh_entries() {
+        let entry = BlockedRequest {
+            host: "google.com".to_string(),
+            reason: "not_allowed".to_string(),
+            client: None,
+            method: Some("GET".to_string()),
+            mode: None,
+            protocol: "http-connect".to_string(),
+            decision: Some("ask".to_string()),
+            source: Some("decider".to_string()),
+            port: Some(443),
+            timestamp: 200,
+        };
 
-        assert!(is_likely_sandbox_denied(SandboxType::LinuxSeccomp, &output));
+        let payload = network_policy_decision_from_blocked_entry(&entry)
+            .expect("blocked entry should map to structured decision");
+        assert_eq!(
+            payload,
+            NetworkPolicyDecisionPayload {
+                decision: "ask".to_string(),
+                source: "decider".to_string(),
+                protocol: Some("https_connect".to_string()),
+                host: Some("google.com".to_string()),
+                reason: Some("not_allowed".to_string()),
+                port: Some(443),
+            }
+        );
+    }
+
+    #[test]
+    fn network_policy_decision_ignores_allow_entries() {
+        let entry = BlockedRequest {
+            host: "google.com".to_string(),
+            reason: "not_allowed".to_string(),
+            client: None,
+            method: Some("GET".to_string()),
+            mode: None,
+            protocol: "http".to_string(),
+            decision: Some("allow".to_string()),
+            source: Some("decider".to_string()),
+            port: Some(80),
+            timestamp: 200,
+        };
+
+        assert_eq!(network_policy_decision_from_blocked_entry(&entry), None);
+    }
+
+    #[test]
+    fn network_policy_decision_ignores_entries_without_source() {
+        let entry = BlockedRequest {
+            host: "google.com".to_string(),
+            reason: "not_allowed".to_string(),
+            client: None,
+            method: Some("GET".to_string()),
+            mode: None,
+            protocol: "http".to_string(),
+            decision: Some("ask".to_string()),
+            source: None,
+            port: Some(80),
+            timestamp: 100,
+        };
+
+        assert_eq!(network_policy_decision_from_blocked_entry(&entry), None);
+    }
+
+    #[test]
+    fn select_network_policy_decision_prefers_ask_from_decider_over_newer_deny() {
+        let blocked = vec![
+            BlockedRequest {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+                timestamp: 200,
+            },
+            BlockedRequest {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                decision: Some("deny".to_string()),
+                source: Some("baseline_policy".to_string()),
+                port: Some(80),
+                timestamp: 201,
+            },
+        ];
+
+        let decision = select_network_policy_decision_from_blocked_entries(blocked)
+            .expect("an ask decision should be selected");
+        assert_eq!(decision.decision, "ask");
+        assert_eq!(decision.source, "decider");
     }
 
     #[tokio::test]

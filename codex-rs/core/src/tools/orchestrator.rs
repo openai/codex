@@ -8,9 +8,9 @@ caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
-use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
-use crate::network_policy_decision::extract_network_policy_decisions;
+use crate::network_policy_decision::NetworkPolicyDecisionPayload;
+use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -22,7 +22,6 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::approvals::NetworkApprovalContext;
-use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -127,14 +126,18 @@ impl ToolOrchestrator {
                 // We have a successful initial result
                 Ok(out)
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                output,
+                network_policy_decision,
+            }))) => {
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
+                        network_policy_decision,
                     })));
                 }
-                let retry_details = build_denial_reason_from_output(
-                    output.as_ref(),
+                let retry_details = build_denial_reason(
+                    network_policy_decision.as_ref(),
                     should_prompt_for_network_approval(turn_ctx),
                 );
 
@@ -149,6 +152,7 @@ impl ToolOrchestrator {
                 ) {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
+                        network_policy_decision,
                     })));
                 }
 
@@ -233,12 +237,12 @@ struct RetryApprovalDetails {
     network_approval_context: Option<NetworkApprovalContext>,
 }
 
-fn build_denial_reason_from_output(
-    output: &ExecToolCallOutput,
+fn build_denial_reason(
+    network_policy_decision: Option<&NetworkPolicyDecisionPayload>,
     network_prompting_enabled: bool,
 ) -> RetryApprovalDetails {
     let network_approval_context = if network_prompting_enabled {
-        extract_network_approval_context(output)
+        network_policy_decision.and_then(network_approval_context_from_payload)
     } else {
         None
     };
@@ -248,8 +252,7 @@ fn build_denial_reason_from_output(
             network_approval_context.host
         )
     } else {
-        // Keep approval reason terse and stable for UX/tests, but accept the
-        // output so we can evolve heuristics later without touching call sites.
+        // Keep approval reason terse and stable for UX/tests.
         "command failed; retry without sandbox?".to_string()
     };
     RetryApprovalDetails {
@@ -259,16 +262,10 @@ fn build_denial_reason_from_output(
 }
 
 fn should_prompt_for_network_approval(turn_ctx: &crate::codex::TurnContext) -> bool {
-    matches!(
-        turn_ctx
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .as_ref()
-            .and_then(|network| network.enabled),
-        Some(true)
-    )
+    // Network retry prompting should follow the active managed proxy at runtime, not only
+    // requirements.toml. This keeps behavior consistent for default sandbox sessions that still
+    // route through a managed proxy.
+    turn_ctx.network.is_some()
 }
 
 fn can_retry_without_sandbox(
@@ -300,62 +297,25 @@ fn should_bypass_retry_approval(
     tool_wants_to_bypass_approval && !has_network_approval_context
 }
 
-fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<NetworkApprovalContext> {
-    [
-        output.stderr.text.as_str(),
-        output.stdout.text.as_str(),
-        output.aggregated_output.text.as_str(),
-    ]
-    .into_iter()
-    .find_map(extract_network_approval_context_from_text)
-}
-
-fn extract_network_approval_context_from_text(text: &str) -> Option<NetworkApprovalContext> {
-    extract_network_policy_decisions(text)
-        .into_iter()
-        .find_map(|payload| {
-            if !payload.is_ask_from_decider() {
-                return None;
-            }
-
-            let protocol = match payload.protocol.as_deref() {
-                Some("http") => NetworkApprovalProtocol::Http,
-                Some("https") | Some("https_connect") => NetworkApprovalProtocol::Https,
-                _ => return None,
-            };
-
-            let host = payload.host.as_deref()?.trim();
-            if host.is_empty() {
-                return None;
-            }
-
-            Some(NetworkApprovalContext {
-                host: host.to_string(),
-                protocol,
-            })
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::StreamOutput;
+    use crate::network_policy_decision::NetworkPolicyDecisionPayload;
+    use codex_protocol::approvals::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
-
-    fn output_with_stderr(stderr: &str) -> ExecToolCallOutput {
-        ExecToolCallOutput {
-            stderr: StreamOutput::new(stderr.to_string()),
-            ..ExecToolCallOutput::default()
-        }
-    }
 
     #[test]
     fn build_denial_reason_extracts_network_context_when_enabled() {
-        let output = output_with_stderr(
-            "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nblocked",
-        );
+        let decision = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("https_connect".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
 
-        let details = build_denial_reason_from_output(&output, true);
+        let details = build_denial_reason(Some(&decision), true);
 
         assert_eq!(
             details.network_approval_context,
@@ -372,39 +332,67 @@ mod tests {
 
     #[test]
     fn build_denial_reason_skips_network_context_when_disabled() {
-        let output = output_with_stderr(
-            "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nblocked",
-        );
+        let decision = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("https_connect".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
 
-        let details = build_denial_reason_from_output(&output, false);
+        let details = build_denial_reason(Some(&decision), false);
 
         assert_eq!(details.network_approval_context, None);
         assert_eq!(details.reason, "command failed; retry without sandbox?");
     }
 
     #[test]
-    fn extract_network_approval_context_ignores_non_ask_payloads() {
-        let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"deny\",\"source\":\"decider\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
+    fn build_denial_reason_ignores_non_ask_payloads() {
+        let decision = NetworkPolicyDecisionPayload {
+            decision: "deny".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
 
-        assert_eq!(extract_network_approval_context_from_text(text), None);
+        let details = build_denial_reason(Some(&decision), true);
+        assert_eq!(details.network_approval_context, None);
     }
 
     #[test]
-    fn extract_network_approval_context_ignores_non_decider_payloads() {
-        let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"baseline_policy\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
+    fn build_denial_reason_ignores_non_decider_payloads() {
+        let decision = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "baseline_policy".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
 
-        assert_eq!(extract_network_approval_context_from_text(text), None);
+        let details = build_denial_reason(Some(&decision), true);
+        assert_eq!(details.network_approval_context, None);
     }
 
     #[test]
-    fn extract_network_approval_context_from_json_blocked_response() {
-        let text = r#"{"status":"blocked","host":"example.com","reason":"not_allowed","policy_decision_prefix":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}","message":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nCodex blocked this request: domain not in allowlist (this is not a denylist block)."}"#;
+    fn build_denial_reason_extracts_http_protocol() {
+        let decision = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
 
         assert_eq!(
-            extract_network_approval_context_from_text(text),
+            build_denial_reason(Some(&decision), true).network_approval_context,
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Https,
+                protocol: NetworkApprovalProtocol::Http,
             })
         );
     }

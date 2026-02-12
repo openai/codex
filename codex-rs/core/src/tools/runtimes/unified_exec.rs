@@ -187,6 +187,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 UnifiedExecError::SandboxDenied { output, .. } => {
                     ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output: Box::new(output),
+                        network_policy_decision: None,
                     }))
                 }
                 other => ToolError::Rejected(other.to_string()),

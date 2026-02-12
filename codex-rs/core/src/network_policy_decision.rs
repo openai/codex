@@ -1,11 +1,10 @@
+use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol;
 use serde::Deserialize;
-use serde_json::Value;
-
-pub(crate) const NETWORK_POLICY_DECISION_PREFIX: &str = "CODEX_NETWORK_POLICY_DECISION ";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct NetworkPolicyDecisionPayload {
+pub struct NetworkPolicyDecisionPayload {
     pub decision: String,
     pub source: String,
     pub protocol: Option<String>,
@@ -18,57 +17,30 @@ impl NetworkPolicyDecisionPayload {
     pub(crate) fn is_ask_from_decider(&self) -> bool {
         self.decision.eq_ignore_ascii_case("ask") && self.source.eq_ignore_ascii_case("decider")
     }
-
-    pub(crate) fn is_blocking_decision(&self) -> bool {
-        !self.decision.eq_ignore_ascii_case("allow")
-    }
 }
 
-pub(crate) fn extract_network_policy_decisions(text: &str) -> Vec<NetworkPolicyDecisionPayload> {
-    text.lines()
-        .flat_map(extract_policy_decisions_from_fragment)
-        .collect()
-}
-
-fn extract_policy_decisions_from_fragment(fragment: &str) -> Vec<NetworkPolicyDecisionPayload> {
-    let mut payloads = Vec::new();
-
-    if let Some(payload) = parse_prefixed_payload(fragment) {
-        payloads.push(payload);
+pub(crate) fn network_approval_context_from_payload(
+    payload: &NetworkPolicyDecisionPayload,
+) -> Option<NetworkApprovalContext> {
+    if !payload.is_ask_from_decider() {
+        return None;
     }
 
-    if let Ok(value) = serde_json::from_str::<Value>(fragment) {
-        extract_policy_decisions_from_json_value(&value, &mut payloads);
+    let protocol = match payload.protocol.as_deref() {
+        Some("http") => NetworkApprovalProtocol::Http,
+        Some("https") | Some("https_connect") => NetworkApprovalProtocol::Https,
+        _ => return None,
+    };
+
+    let host = payload.host.as_deref()?.trim();
+    if host.is_empty() {
+        return None;
     }
 
-    payloads
-}
-
-fn extract_policy_decisions_from_json_value(
-    value: &Value,
-    payloads: &mut Vec<NetworkPolicyDecisionPayload>,
-) {
-    match value {
-        Value::String(text) => {
-            payloads.extend(text.lines().filter_map(parse_prefixed_payload));
-        }
-        Value::Array(values) => {
-            for value in values {
-                extract_policy_decisions_from_json_value(value, payloads);
-            }
-        }
-        Value::Object(map) => {
-            for value in map.values() {
-                extract_policy_decisions_from_json_value(value, payloads);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
-
-fn parse_prefixed_payload(text: &str) -> Option<NetworkPolicyDecisionPayload> {
-    let payload = text.strip_prefix(NETWORK_POLICY_DECISION_PREFIX)?;
-    serde_json::from_str::<NetworkPolicyDecisionPayload>(payload).ok()
+    Some(NetworkApprovalContext {
+        host: host.to_string(),
+        protocol,
+    })
 }
 
 #[cfg(test)]
@@ -77,47 +49,51 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn extracts_payload_from_prefixed_line() {
-        let text = r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","source":"decider","protocol":"http","host":"example.com","port":80}"#;
+    fn network_approval_context_requires_ask_from_decider() {
+        let payload = NetworkPolicyDecisionPayload {
+            decision: "deny".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("https_connect".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
 
-        let payloads = extract_network_policy_decisions(text);
+        assert_eq!(network_approval_context_from_payload(&payload), None);
+    }
+
+    #[test]
+    fn network_approval_context_maps_http_and_https_protocols() {
+        let http_payload = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(80),
+        };
         assert_eq!(
-            payloads,
-            vec![NetworkPolicyDecisionPayload {
-                decision: "ask".to_string(),
-                source: "decider".to_string(),
-                protocol: Some("http".to_string()),
-                host: Some("example.com".to_string()),
-                reason: None,
-                port: Some(80),
-            }]
+            network_approval_context_from_payload(&http_payload),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Http,
+            })
         );
-    }
 
-    #[test]
-    fn extracts_payload_from_generic_json_string_field() {
-        let text = r#"{"unexpected":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"deny\",\"source\":\"baseline_policy\",\"protocol\":\"https_connect\",\"host\":\"google.com\",\"port\":443}"}"#;
-
-        let payloads = extract_network_policy_decisions(text);
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].decision, "deny");
-        assert_eq!(payloads[0].source, "baseline_policy");
-        assert_eq!(payloads[0].host.as_deref(), Some("google.com"));
-    }
-
-    #[test]
-    fn extracts_payload_from_nested_json_values() {
-        let text = r#"{"data":[{"meta":{"message":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"api.example.com\",\"port\":443}\nblocked"}}]}"#;
-
-        let payloads = extract_network_policy_decisions(text);
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].decision, "ask");
-        assert_eq!(payloads[0].host.as_deref(), Some("api.example.com"));
-    }
-
-    #[test]
-    fn ignores_lines_without_policy_prefix() {
-        let text = r#"{"status":"blocked","message":"domain not in allowlist"}"#;
-        assert!(extract_network_policy_decisions(text).is_empty());
+        let https_payload = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("https_connect".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
+        assert_eq!(
+            network_approval_context_from_payload(&https_payload),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
+        );
     }
 }
