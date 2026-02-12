@@ -68,7 +68,6 @@ notify = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }
 rand = { workspace = true }
-regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 rmcp = { workspace = true, default-features = false, features = [

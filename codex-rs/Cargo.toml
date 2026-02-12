@@ -340,7 +340,6 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-utils-sanitizer",
     "codex-secrets",
 ]
 
