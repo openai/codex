@@ -153,7 +153,11 @@ impl ToolOrchestrator {
                 }
 
                 // Ask for approval before retrying with the escalated sandbox.
-                if !tool.should_bypass_approval(approval_policy, already_approved) {
+                let should_bypass_retry_approval = should_bypass_retry_approval(
+                    tool.should_bypass_approval(approval_policy, already_approved),
+                    retry_details.network_approval_context.is_some(),
+                );
+                if !should_bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         turn: turn_ctx,
@@ -258,6 +262,13 @@ fn can_retry_without_sandbox(
         default_exec_approval_requirement(approval_policy, sandbox_policy),
         ExecApprovalRequirement::NeedsApproval { .. }
     )
+}
+
+fn should_bypass_retry_approval(
+    tool_wants_to_bypass_approval: bool,
+    has_network_approval_context: bool,
+) -> bool {
+    tool_wants_to_bypass_approval && !has_network_approval_context
 }
 
 fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<NetworkApprovalContext> {
@@ -417,5 +428,15 @@ mod tests {
             &codex_protocol::protocol::SandboxPolicy::ReadOnly,
             false
         ));
+    }
+
+    #[test]
+    fn retry_approval_not_bypassed_when_network_context_present() {
+        assert!(!should_bypass_retry_approval(true, true));
+    }
+
+    #[test]
+    fn retry_approval_bypassed_without_network_context() {
+        assert!(should_bypass_retry_approval(true, false));
     }
 }
