@@ -66,9 +66,12 @@ fn user_message_item(text: &str) -> ResponseItem {
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
-        .summary_prefix(SUMMARY_PREFIX)
-        .cwd_marker(PRETURN_CONTEXT_DIFF_CWD_MARKER)
-        .tool_call_name(DUMMY_FUNCTION_NAME)
+        .capture_text_suffix_after_prefix(format!("{SUMMARY_PREFIX}\n"), "<SUMMARY:", ">")
+        .replace_cwd_when_contains(
+            PRETURN_CONTEXT_DIFF_CWD_MARKER,
+            PRETURN_CONTEXT_DIFF_CWD_MARKER,
+        )
+        .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
 }
 
 fn request_input_shape(request: &responses::ResponsesRequest) -> String {

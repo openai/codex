@@ -202,10 +202,13 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
-        .summary_prefix(SUMMARY_PREFIX)
-        .summarization_prompt(SUMMARIZATION_PROMPT)
-        .cwd_marker(PRETURN_CONTEXT_DIFF_CWD_MARKER)
-        .tool_call_name(DUMMY_FUNCTION_NAME)
+        .replace_exact_text(SUMMARIZATION_PROMPT, "<SUMMARIZATION_PROMPT>")
+        .capture_text_suffix_after_prefix(format!("{SUMMARY_PREFIX}\n"), "<SUMMARY:", ">")
+        .replace_cwd_when_contains(
+            PRETURN_CONTEXT_DIFF_CWD_MARKER,
+            PRETURN_CONTEXT_DIFF_CWD_MARKER,
+        )
+        .replace_tool_name(DUMMY_FUNCTION_NAME, "<TOOL_CALL>")
 }
 
 fn request_input_shape(request: &core_test_support::responses::ResponsesRequest) -> String {
