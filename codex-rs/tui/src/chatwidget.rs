@@ -4198,7 +4198,7 @@ impl ChatWidget {
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         let remote_image_urls = event.images.unwrap_or_default();
         if !event.message.trim().is_empty()
-            || !event.local_images.is_empty()
+            || !event.text_elements.is_empty()
             || !remote_image_urls.is_empty()
         {
             self.add_to_history(history_cell::new_user_prompt(

@@ -373,6 +373,54 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
 }
 
 #[tokio::test]
+async fn replayed_user_message_with_only_local_images_does_not_render_history_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    let local_images = vec![PathBuf::from("/tmp/replay-local-only.png")];
+
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::ReadOnly,
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: String::new(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images,
+        })]),
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let mut found_user_history_cell = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && cell.as_any().downcast_ref::<UserHistoryCell>().is_some()
+        {
+            found_user_history_cell = true;
+            break;
+        }
+    }
+
+    assert!(!found_user_history_cell);
+}
+
+#[tokio::test]
 async fn forked_thread_history_line_includes_name_and_id_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let mut chat = chat;
