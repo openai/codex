@@ -159,10 +159,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
     .await;
 
     let TestCodex {
-        codex,
-        cwd,
-        config,
-        ..
+        codex, cwd, config, ..
     } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {

@@ -738,15 +738,15 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::FuzzyFileSearchSessionStart { request_id, params } => {
-                self.fuzzy_file_search_session_start(request_id, params)
+                self.fuzzy_file_search_session_start(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::FuzzyFileSearchSessionUpdate { request_id, params } => {
-                self.fuzzy_file_search_session_update(request_id, params)
+                self.fuzzy_file_search_session_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::FuzzyFileSearchSessionStop { request_id, params } => {
-                self.fuzzy_file_search_session_stop(request_id, params)
+                self.fuzzy_file_search_session_stop(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
@@ -5580,7 +5580,7 @@ impl CodexMessageProcessor {
 
     async fn fuzzy_file_search_session_start(
         &mut self,
-        request_id: RequestId,
+        request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStartParams,
     ) {
         let FuzzyFileSearchSessionStartParams { session_id, roots } = params;
@@ -5617,7 +5617,7 @@ impl CodexMessageProcessor {
 
     async fn fuzzy_file_search_session_update(
         &mut self,
-        request_id: RequestId,
+        request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionUpdateParams,
     ) {
         let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
@@ -5647,7 +5647,7 @@ impl CodexMessageProcessor {
 
     async fn fuzzy_file_search_session_stop(
         &mut self,
-        request_id: RequestId,
+        request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStopParams,
     ) {
         let FuzzyFileSearchSessionStopParams { session_id } = params;
