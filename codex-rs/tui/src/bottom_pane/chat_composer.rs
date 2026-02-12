@@ -2443,6 +2443,12 @@ impl ChatComposer {
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
+                if is_probable_spurious_malloc_stacklogging_text(&pasted) {
+                    tracing::debug!(
+                        "dropping probable terminal diagnostic from paste burst: {pasted}"
+                    );
+                    return true;
+                }
                 self.handle_paste(pasted);
                 true
             }
@@ -3196,6 +3202,34 @@ impl ChatComposer {
         self.status_line_enabled = enabled;
         true
     }
+}
+
+fn is_probable_spurious_malloc_stacklogging_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(open_idx) = trimmed.find('(') else {
+        return false;
+    };
+    let Some(close_rel) = trimmed[open_idx + 1..].find(')') else {
+        return false;
+    };
+    let close_idx = open_idx + 1 + close_rel;
+
+    let process_name = &trimmed[..open_idx];
+    if process_name.is_empty()
+        || !process_name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return false;
+    }
+
+    let pid = &trimmed[open_idx + 1..close_idx];
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+
+    let suffix = trimmed[close_idx + 1..].trim_start();
+    suffix.starts_with("MallocStackLogging") || suffix.starts_with("MallocSt")
 }
 
 fn skill_display_name(skill: &SkillMetadata) -> &str {
@@ -7630,6 +7664,58 @@ mod tests {
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
         assert_eq!(composer.pending_pastes[0].1.len(), count);
         assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn burst_paste_drops_spurious_malloc_stacklogging_text() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let message = "codex(11033) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.";
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
+
+        for ch in message.chars() {
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                now,
+            );
+            now += step;
+        }
+
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
+        assert!(flushed, "expected buffered diagnostic text to flush");
+        assert!(
+            composer.textarea.text().is_empty(),
+            "expected diagnostic payload to be dropped"
+        );
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn explicit_paste_keeps_malloc_stacklogging_text() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let message = "codex(11033) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.".to_string();
+        let needs_redraw = composer.handle_paste(message.clone());
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), message);
     }
 
     /// Behavior: human-like typing (with delays between chars) should not be classified as a paste
