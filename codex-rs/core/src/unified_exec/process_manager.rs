@@ -11,8 +11,9 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
-use crate::exec::blocking_network_policy_decision_from_blocked_queue;
+use crate::exec::blocking_network_policy_decision_from_attempt_or_cursor;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::network_policy_decision::NetworkPolicyDecisionPayload;
@@ -202,10 +203,31 @@ impl UnifiedExecProcessManager {
                 None
             };
 
+            let network_attempt_id = request.network.as_ref().map(|_| Uuid::new_v4().to_string());
             let blocked_cursor = match request.network.as_ref() {
-                Some(network) => network.blocked_requests_cursor().await.ok(),
+                Some(network) => match network.blocked_requests_cursor().await {
+                    Ok(cursor) => Some(cursor),
+                    Err(err) => {
+                        tracing::debug!(
+                            "failed to read blocked telemetry cursor before unified exec: {err:#}"
+                        );
+                        None
+                    }
+                },
                 None => None,
             };
+            if let Some(attempt_id) = network_attempt_id.as_ref() {
+                context
+                    .session
+                    .register_network_approval_attempt(
+                        attempt_id.clone(),
+                        context.turn.sub_id.clone(),
+                        context.call_id.clone(),
+                        request.command.clone(),
+                        cwd.clone(),
+                    )
+                    .await;
+            }
 
             let process = self
                 .open_session_with_sandbox(
@@ -213,12 +235,19 @@ impl UnifiedExecProcessManager {
                     cwd.clone(),
                     context,
                     retried_after_network_approval,
+                    network_attempt_id.clone(),
                 )
                 .await;
 
             let process = match process {
                 Ok(process) => Arc::new(process),
                 Err(err) => {
+                    if let Some(attempt_id) = network_attempt_id.as_deref() {
+                        context
+                            .session
+                            .unregister_network_approval_attempt(attempt_id)
+                            .await;
+                    }
                     if let Some((network, host)) = temporary_allowed_host {
                         network.revoke_temporary_allowed_host(&host).await;
                     }
@@ -279,17 +308,24 @@ impl UnifiedExecProcessManager {
                 )
                 .await;
 
-                let network_policy_decision = match (request.network.as_ref(), blocked_cursor) {
-                    (Some(network), Some(cursor)) => {
-                        blocking_network_policy_decision_from_blocked_queue(
+                let network_policy_decision = match request.network.as_ref() {
+                    Some(network) => {
+                        blocking_network_policy_decision_from_attempt_or_cursor(
                             network,
-                            cursor,
+                            network_attempt_id.as_deref(),
+                            blocked_cursor,
                             &context.turn.sandbox_policy,
                         )
                         .await
                     }
-                    _ => None,
+                    None => None,
                 };
+                if let Some(attempt_id) = network_attempt_id.as_deref() {
+                    context
+                        .session
+                        .unregister_network_approval_attempt(attempt_id)
+                        .await;
+                }
 
                 if let Some((network, host)) = temporary_allowed_host {
                     network.revoke_temporary_allowed_host(&host).await;
@@ -369,6 +405,12 @@ impl UnifiedExecProcessManager {
 
             if let Some((network, host)) = temporary_allowed_host {
                 network.revoke_temporary_allowed_host(&host).await;
+            }
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
             }
 
             let original_token_count = approx_token_count(&text);
@@ -641,6 +683,7 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
         skip_command_approval: bool,
+        network_attempt_id: Option<String>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
@@ -674,6 +717,7 @@ impl UnifiedExecProcessManager {
             cwd,
             env,
             network: request.network.clone(),
+            network_attempt_id,
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),

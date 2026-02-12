@@ -28,6 +28,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -168,12 +169,35 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.sandbox_permissions,
             req.justification.clone(),
         )?;
-        let env = attempt
+        let mut env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
+
+        let network_attempt_id = req.network.as_ref().map(|_| Uuid::new_v4().to_string());
+        if let Some(attempt_id) = network_attempt_id.as_ref() {
+            ctx.session
+                .register_network_approval_attempt(
+                    attempt_id.clone(),
+                    ctx.turn.sub_id.clone(),
+                    ctx.call_id.clone(),
+                    req.command.clone(),
+                    req.cwd.clone(),
+                )
+                .await;
+        }
+        env.network_attempt_id = network_attempt_id.clone();
+
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
-            .map_err(ToolError::Codex)?;
+            .map_err(ToolError::Codex);
+
+        if let Some(attempt_id) = network_attempt_id.as_deref() {
+            ctx.session
+                .unregister_network_approval_attempt(attempt_id)
+                .await;
+        }
+
+        let out = out?;
         Ok(out)
     }
 }

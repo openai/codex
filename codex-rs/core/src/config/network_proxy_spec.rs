@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
@@ -97,6 +98,7 @@ impl NetworkProxySpec {
     pub async fn start_proxy(
         &self,
         sandbox_policy: &SandboxPolicy,
+        policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     ) -> std::io::Result<StartedNetworkProxy> {
         let state =
             build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
@@ -106,11 +108,15 @@ impl NetworkProxySpec {
         let state = NetworkProxyState::with_reloader(state, reloader);
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if should_ask_on_allowlist_miss(sandbox_policy) {
-            builder = builder.policy_decider(|_request| async {
-                // In restricted sandbox modes, allowlist misses should ask for
-                // explicit network approval instead of hard-denying.
-                NetworkDecision::ask("not_allowed")
-            });
+            if let Some(policy_decider) = policy_decider {
+                builder = builder.policy_decider_arc(policy_decider);
+            } else {
+                builder = builder.policy_decider(|_request| async {
+                    // In restricted sandbox modes, allowlist misses should ask for
+                    // explicit network approval instead of hard-denying.
+                    NetworkDecision::ask("not_allowed")
+                });
+            }
         }
         let proxy = builder.build().await.map_err(|err| {
             std::io::Error::other(format!("failed to build network proxy: {err}"))

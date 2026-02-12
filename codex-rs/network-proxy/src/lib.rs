@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod admin;
+mod attempt_metadata;
 mod config;
 mod http_proxy;
 mod metadata;

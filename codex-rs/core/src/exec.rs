@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -67,6 +68,7 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub network_attempt_id: Option<String>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
@@ -185,13 +187,14 @@ pub async fn process_exec_tool_call(
         mut env,
         expiration,
         network,
+        network_attempt_id,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
         arg0: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -239,6 +242,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         env,
         network,
+        network_attempt_id,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -247,12 +251,26 @@ pub(crate) async fn execute_exec_env(
         arg0,
     } = env;
 
+    let network_attempt_id =
+        network_attempt_id.or_else(|| network.as_ref().map(|_| Uuid::new_v4().to_string()));
+    let blocked_cursor = match network.as_ref() {
+        Some(network) => match network.blocked_requests_cursor().await {
+            Ok(cursor) => Some(cursor),
+            Err(err) => {
+                tracing::debug!("failed to read blocked telemetry cursor before exec: {err:#}");
+                None
+            }
+        },
+        None => None,
+    };
+
     let params = ExecParams {
         command,
         cwd,
         expiration,
         env,
         network: network.clone(),
+        network_attempt_id: network_attempt_id.clone(),
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -260,35 +278,24 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let blocked_cursor = match network.as_ref() {
-        Some(network) => network.blocked_requests_cursor().await.ok(),
-        None => None,
-    };
-    match (network.as_ref(), blocked_cursor) {
-        (Some(_), Some(cursor)) => {
-            tracing::debug!("captured blocked telemetry cursor before exec: {cursor}");
-        }
-        (Some(_), None) => {
-            tracing::debug!(
-                "managed network is present but failed to capture blocked telemetry cursor"
-            );
-        }
-        (None, _) => {}
-    }
     let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
     let finalized = finalize_exec_result(raw_output_result, sandbox, duration);
-    let telemetry_decision = match (network.as_ref(), blocked_cursor) {
-        (Some(network), Some(cursor)) => {
-            blocking_network_policy_decision_from_blocked_queue(network, cursor, sandbox_policy)
-                .await
+    let network_policy_decision_for_exec = match network.as_ref() {
+        Some(network) => {
+            blocking_network_policy_decision_from_attempt_or_cursor(
+                network,
+                network_attempt_id.as_deref(),
+                blocked_cursor,
+                sandbox_policy,
+            )
+            .await
         }
-        (None, _) => None,
-        (Some(_), None) => None,
+        None => None,
     };
     match finalized {
         Ok(exec_output) => {
-            if let Some(policy_decision) = telemetry_decision {
+            if let Some(policy_decision) = network_policy_decision_for_exec {
                 tracing::debug!(
                     "promoting successful exec result to sandbox denied based on structured network telemetry (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
                     policy_decision.decision,
@@ -308,7 +315,7 @@ pub(crate) async fn execute_exec_env(
             output,
             network_policy_decision,
         })) => {
-            let merged_decision = network_policy_decision.or(telemetry_decision);
+            let merged_decision = network_policy_decision.or(network_policy_decision_for_exec);
             if let Some(payload) = merged_decision.as_ref() {
                 tracing::debug!(
                     "sandbox-denied exec result includes structured network decision (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
@@ -413,12 +420,13 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
+        network_attempt_id,
         expiration,
         windows_sandbox_level,
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
     }
 
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -656,28 +664,26 @@ pub(crate) fn is_likely_sandbox_denied(
     false
 }
 
-pub(crate) async fn blocking_network_policy_decision_from_blocked_queue(
+pub(crate) async fn blocking_network_policy_decision_from_attempt(
     network: &NetworkProxy,
-    blocked_cursor: u64,
+    attempt_id: &str,
     sandbox_policy: &SandboxPolicy,
 ) -> Option<NetworkPolicyDecisionPayload> {
-    let blocked = match network.blocked_requests_since(blocked_cursor).await {
-        Ok(blocked) => blocked,
+    let entry = match network.latest_blocked_request_for_attempt(attempt_id).await {
+        Ok(entry) => entry,
         Err(err) => {
             tracing::debug!(
-                "failed to load blocked telemetry since cursor {blocked_cursor}: {err:#}"
+                "failed to load blocked telemetry for network attempt {attempt_id}: {err:#}"
             );
             return None;
         }
     };
-    tracing::debug!(
-        "loaded {} blocked telemetry entries since cursor {blocked_cursor}",
-        blocked.len()
-    );
-    let selected = select_network_policy_decision_from_blocked_entries(blocked, sandbox_policy);
-    if let Some(payload) = selected.as_ref() {
+    let payload = entry
+        .as_ref()
+        .and_then(|entry| network_policy_decision_from_blocked_entry(entry, sandbox_policy));
+    if let Some(payload) = payload.as_ref() {
         tracing::debug!(
-            "selected telemetry network decision (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
+            "selected telemetry network decision for attempt {attempt_id} (decision={}, source={}, host={:?}, protocol={:?}, port={:?})",
             payload.decision,
             payload.source,
             payload.host,
@@ -685,44 +691,60 @@ pub(crate) async fn blocking_network_policy_decision_from_blocked_queue(
             payload.port
         );
     } else {
-        tracing::debug!("no telemetry network decision selected since cursor {blocked_cursor}");
+        tracing::debug!("no blocked telemetry entry found for network attempt {attempt_id}");
     }
-    selected
+    payload
 }
 
-pub(crate) fn select_network_policy_decision_from_blocked_entries(
-    blocked: Vec<codex_network_proxy::BlockedRequest>,
+pub(crate) async fn blocking_network_policy_decision_from_attempt_or_cursor(
+    network: &NetworkProxy,
+    attempt_id: Option<&str>,
+    blocked_cursor: Option<u64>,
     sandbox_policy: &SandboxPolicy,
 ) -> Option<NetworkPolicyDecisionPayload> {
-    let mut latest_blocking_decision = None;
-
-    for entry in blocked.into_iter().rev() {
-        let Some(payload) = network_policy_decision_from_blocked_entry(&entry, sandbox_policy)
-        else {
-            continue;
-        };
-
-        // If the command produced an ask-from-decider block, prefer that for retry
-        // prompting even if a later deny was also recorded.
-        if payload.is_ask_from_decider() {
-            tracing::debug!(
-                "selected ask-from-decider telemetry decision for host {:?}",
-                payload.host
-            );
-            return Some(payload);
-        }
-        if latest_blocking_decision.is_none() {
-            tracing::debug!(
-                "recorded fallback telemetry decision candidate (decision={}, source={}, host={:?})",
-                payload.decision,
-                payload.source,
-                payload.host
-            );
-            latest_blocking_decision = Some(payload);
-        }
+    if let Some(attempt_id) = attempt_id
+        && let Some(payload) =
+            blocking_network_policy_decision_from_attempt(network, attempt_id, sandbox_policy).await
+    {
+        return Some(payload);
     }
 
-    latest_blocking_decision
+    let blocked_cursor = blocked_cursor?;
+    blocking_network_policy_decision_from_blocked_queue(network, blocked_cursor, sandbox_policy)
+        .await
+}
+
+pub(crate) async fn blocking_network_policy_decision_from_blocked_queue(
+    network: &NetworkProxy,
+    cursor: u64,
+    sandbox_policy: &SandboxPolicy,
+) -> Option<NetworkPolicyDecisionPayload> {
+    let entries = match network.blocked_requests_since(cursor).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            tracing::debug!(
+                "failed to load blocked telemetry entries since cursor {cursor}: {err:#}"
+            );
+            return None;
+        }
+    };
+    select_network_policy_decision_from_blocked_entries(&entries, sandbox_policy)
+}
+
+fn select_network_policy_decision_from_blocked_entries(
+    entries: &[codex_network_proxy::BlockedRequest],
+    sandbox_policy: &SandboxPolicy,
+) -> Option<NetworkPolicyDecisionPayload> {
+    let mapped: Vec<NetworkPolicyDecisionPayload> = entries
+        .iter()
+        .filter_map(|entry| network_policy_decision_from_blocked_entry(entry, sandbox_policy))
+        .collect();
+    mapped
+        .iter()
+        .rev()
+        .find(|payload| payload.is_ask_from_decider())
+        .cloned()
+        .or_else(|| mapped.last().cloned())
 }
 
 fn network_policy_decision_from_blocked_entry(
@@ -902,13 +924,18 @@ async fn exec(
     let ExecParams {
         command,
         cwd,
-        env,
+        mut env,
         network,
+        network_attempt_id,
         arg0,
         expiration,
         windows_sandbox_level: _,
         ..
     } = params;
+
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
+    }
 
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -923,7 +950,7 @@ async fn exec(
         arg0: arg0_ref,
         cwd,
         sandbox_policy,
-        network: network.as_ref(),
+        network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
     })
@@ -1213,6 +1240,7 @@ mod tests {
             method: Some("GET".to_string()),
             mode: None,
             protocol: "http-connect".to_string(),
+            attempt_id: None,
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(443),
@@ -1244,6 +1272,7 @@ mod tests {
             method: Some("GET".to_string()),
             mode: None,
             protocol: "http".to_string(),
+            attempt_id: None,
             decision: Some("allow".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),
@@ -1266,6 +1295,7 @@ mod tests {
             method: Some("GET".to_string()),
             mode: None,
             protocol: "http".to_string(),
+            attempt_id: None,
             decision: Some("ask".to_string()),
             source: None,
             port: Some(80),
@@ -1280,44 +1310,6 @@ mod tests {
     }
 
     #[test]
-    fn select_network_policy_decision_prefers_ask_from_decider_over_newer_deny() {
-        let blocked = vec![
-            BlockedRequest {
-                host: "google.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                decision: Some("ask".to_string()),
-                source: Some("decider".to_string()),
-                port: Some(80),
-                timestamp: 200,
-            },
-            BlockedRequest {
-                host: "google.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                decision: Some("deny".to_string()),
-                source: Some("baseline_policy".to_string()),
-                port: Some(80),
-                timestamp: 201,
-            },
-        ];
-
-        let decision = select_network_policy_decision_from_blocked_entries(
-            blocked,
-            &restricted_sandbox_policy(),
-        )
-        .expect("an ask decision should be selected");
-        assert_eq!(decision.decision, "ask");
-        assert_eq!(decision.source, "decider");
-    }
-
-    #[test]
     fn yolo_sandbox_denies_allowlist_miss() {
         let entry = BlockedRequest {
             host: "google.com".to_string(),
@@ -1326,6 +1318,7 @@ mod tests {
             method: Some("GET".to_string()),
             mode: None,
             protocol: "http".to_string(),
+            attempt_id: None,
             decision: Some("ask".to_string()),
             source: Some("decider".to_string()),
             port: Some(80),
@@ -1346,6 +1339,88 @@ mod tests {
                 port: Some(80),
             }
         );
+    }
+
+    #[test]
+    fn select_network_policy_decision_prefers_ask_from_decider() {
+        let entries = vec![
+            BlockedRequest {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: Some("attempt-1".to_string()),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+                timestamp: 100,
+            },
+            BlockedRequest {
+                host: "example.com".to_string(),
+                reason: "denied".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: Some("attempt-2".to_string()),
+                decision: Some("deny".to_string()),
+                source: Some("baseline_policy".to_string()),
+                port: Some(80),
+                timestamp: 200,
+            },
+        ];
+
+        let selected = select_network_policy_decision_from_blocked_entries(
+            &entries,
+            &restricted_sandbox_policy(),
+        )
+        .expect("expected a structured decision from blocked entries");
+        assert_eq!(selected.decision, "ask");
+        assert_eq!(selected.source, "decider");
+        assert_eq!(selected.host.as_deref(), Some("google.com"));
+    }
+
+    #[test]
+    fn select_network_policy_decision_uses_newest_when_no_ask() {
+        let entries = vec![
+            BlockedRequest {
+                host: "old.example.com".to_string(),
+                reason: "denied".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: None,
+                decision: Some("deny".to_string()),
+                source: Some("baseline_policy".to_string()),
+                port: Some(80),
+                timestamp: 100,
+            },
+            BlockedRequest {
+                host: "new.example.com".to_string(),
+                reason: "method_not_allowed".to_string(),
+                client: None,
+                method: Some("CONNECT".to_string()),
+                mode: None,
+                protocol: "http-connect".to_string(),
+                attempt_id: None,
+                decision: Some("deny".to_string()),
+                source: Some("mode_guard".to_string()),
+                port: Some(443),
+                timestamp: 200,
+            },
+        ];
+
+        let selected = select_network_policy_decision_from_blocked_entries(
+            &entries,
+            &SandboxPolicy::DangerFullAccess,
+        )
+        .expect("expected a structured decision from blocked entries");
+        assert_eq!(selected.decision, "deny");
+        assert_eq!(selected.host.as_deref(), Some("new.example.com"));
+        assert_eq!(selected.protocol.as_deref(), Some("https_connect"));
     }
 
     #[tokio::test]
@@ -1471,6 +1546,7 @@ mod tests {
             expiration: 500.into(),
             env,
             network: None,
+            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
@@ -1524,6 +1600,7 @@ mod tests {
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
             network: None,
+            network_attempt_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,

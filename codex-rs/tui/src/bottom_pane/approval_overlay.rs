@@ -477,6 +477,12 @@ fn exec_options(
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
             },
             ApprovalOption {
+                label: "Yes, and allow this host for this session".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+            },
+            ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
                 display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
@@ -698,6 +704,7 @@ mod tests {
             labels,
             vec![
                 "Yes, proceed".to_string(),
+                "Yes, and allow this host for this session".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
         );
