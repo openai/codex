@@ -818,11 +818,12 @@ fn build_agent_shared_config(
     config.model_reasoning_summary = turn.reasoning_summary;
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
-    config.shell_environment_policy = turn.shell_environment_policy.clone();
+    config.effective_permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
-    config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    config.effective_permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
+        .effective_permissions
         .sandbox_policy
         .set(turn.sandbox_policy.clone())
         .map_err(|err| {
@@ -1717,8 +1718,12 @@ mod tests {
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
         turn.sandbox_policy = pick_allowed_sandbox_policy(
-            &turn.config.sandbox_policy,
-            turn.config.sandbox_policy.get().clone(),
+            &turn.config.effective_permissions.sandbox_policy,
+            turn.config
+                .effective_permissions
+                .sandbox_policy
+                .get()
+                .clone(),
         );
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
@@ -1730,14 +1735,17 @@ mod tests {
         expected.model_reasoning_summary = turn.reasoning_summary;
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
-        expected.shell_environment_policy = turn.shell_environment_policy.clone();
+        expected.effective_permissions.shell_environment_policy =
+            turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
         expected
+            .effective_permissions
             .approval_policy
             .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
+            .effective_permissions
             .sandbox_policy
             .set(turn.sandbox_policy)
             .expect("sandbox policy set");
@@ -1777,14 +1785,17 @@ mod tests {
         expected.model_reasoning_summary = turn.reasoning_summary;
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
-        expected.shell_environment_policy = turn.shell_environment_policy.clone();
+        expected.effective_permissions.shell_environment_policy =
+            turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
         expected
+            .effective_permissions
             .approval_policy
             .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
+            .effective_permissions
             .sandbox_policy
             .set(turn.sandbox_policy)
             .expect("sandbox policy set");

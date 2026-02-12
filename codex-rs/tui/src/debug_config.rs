@@ -33,6 +33,7 @@ pub(crate) fn new_debug_config_output(
             http_addr,
             socks_addr,
             config
+                .effective_permissions
                 .network
                 .as_ref()
                 .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),

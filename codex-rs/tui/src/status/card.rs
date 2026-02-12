@@ -168,10 +168,17 @@ impl StatusHistoryCell {
             ("workdir", config.cwd.display().to_string()),
             ("model", model_name.to_string()),
             ("provider", config.model_provider_id.clone()),
-            ("approval", config.approval_policy.value().to_string()),
+            (
+                "approval",
+                config
+                    .effective_permissions
+                    .approval_policy
+                    .value()
+                    .to_string(),
+            ),
             (
                 "sandbox",
-                summarize_sandbox_policy(config.sandbox_policy.get()),
+                summarize_sandbox_policy(config.effective_permissions.sandbox_policy.get()),
             ),
         ];
         if config.model_provider.wire_api == WireApi::Responses {
@@ -191,7 +198,7 @@ impl StatusHistoryCell {
             .find(|(k, _)| *k == "approval")
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "<unknown>".to_string());
-        let sandbox = match config.sandbox_policy.get() {
+        let sandbox = match config.effective_permissions.sandbox_policy.get() {
             SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
             SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
             SandboxPolicy::WorkspaceWrite {
@@ -207,12 +214,14 @@ impl StatusHistoryCell {
                 }
             }
         };
-        let permissions = if config.approval_policy.value() == AskForApproval::OnRequest
-            && *config.sandbox_policy.get() == SandboxPolicy::new_workspace_write_policy()
+        let permissions = if config.effective_permissions.approval_policy.value()
+            == AskForApproval::OnRequest
+            && *config.effective_permissions.sandbox_policy.get()
+                == SandboxPolicy::new_workspace_write_policy()
         {
             "Default".to_string()
-        } else if config.approval_policy.value() == AskForApproval::Never
-            && *config.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
+        } else if config.effective_permissions.approval_policy.value() == AskForApproval::Never
+            && *config.effective_permissions.sandbox_policy.get() == SandboxPolicy::DangerFullAccess
         {
             "Full Access".to_string()
         } else {
