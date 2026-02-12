@@ -1681,8 +1681,24 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
-        let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec.start_proxy().await {
+        let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
+        let effective_policy = match requested_policy {
+            Some(policy) => match self.config.sandbox_policy.can_set(&policy) {
+                Ok(()) => policy,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid sandbox policy: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            },
+            None => self.config.sandbox_policy.get().clone(),
+        };
+        let started_network_proxy = match self.config.network.as_ref() {
+            Some(spec) => match spec.start_proxy(&effective_policy).await {
                 Ok(started) => Some(started),
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1710,24 +1726,6 @@ impl CodexMessageProcessor {
             justification: None,
             arg0: None,
         };
-
-        let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
-        let effective_policy = match requested_policy {
-            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
-                Ok(()) => policy,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid sandbox policy: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request, error).await;
-                    return;
-                }
-            },
-            None => self.config.permissions.sandbox_policy.get().clone(),
-        };
-
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let request_for_task = request;
