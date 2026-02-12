@@ -1,7 +1,10 @@
+use crate::memories::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT;
+use crate::memories::STAGE_ONE_CONTEXT_WINDOW_PERCENT;
 use crate::memories::memory_root;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use askama::Template;
+use codex_protocol::openai_models::ModelInfo;
 use std::path::Path;
 use tokio::fs;
 use tracing::warn;
@@ -42,15 +45,24 @@ pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
 
 /// Builds the stage-1 user message containing rollout metadata and content.
 ///
-/// Large rollout payloads are truncated to a bounded byte budget while keeping
-/// both head and tail context.
+/// Large rollout payloads are truncated to 70% of the active model context
+/// window token budget while keeping both head and tail context.
 pub(super) fn build_stage_one_input_message(
+    model_info: &ModelInfo,
     rollout_path: &Path,
     rollout_cwd: &Path,
     rollout_contents: &str,
 ) -> anyhow::Result<String> {
-    let truncated_rollout_contents =
-        truncate_text(rollout_contents, TruncationPolicy::Tokens(150_000));
+    let rollout_token_limit = model_info
+        .context_window
+        .and_then(|limit| (limit > 0).then_some(limit))
+        .map(|limit| (limit.saturating_mul(STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).max(1))
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
+    let truncated_rollout_contents = truncate_text(
+        rollout_contents,
+        TruncationPolicy::Tokens(rollout_token_limit),
+    );
 
     let rollout_path = rollout_path.display().to_string();
     let rollout_cwd = rollout_cwd.display().to_string();
@@ -84,12 +96,21 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models_manager::model_info::model_info_from_slug;
 
     #[test]
-    fn build_stage_one_input_message_truncates_rollout_with_standard_policy() {
+    fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
         let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
-        let expected_truncated = truncate_text(&input, TruncationPolicy::Tokens(150_000));
+        let mut model_info = model_info_from_slug("gpt-5.2-codex");
+        model_info.context_window = Some(123_000);
+        let expected_rollout_token_limit =
+            usize::try_from((123_000_i64 * STAGE_ONE_CONTEXT_WINDOW_PERCENT) / 100).unwrap();
+        let expected_truncated = truncate_text(
+            &input,
+            TruncationPolicy::Tokens(expected_rollout_token_limit),
+        );
         let message = build_stage_one_input_message(
+            &model_info,
             Path::new("/tmp/rollout.jsonl"),
             Path::new("/tmp"),
             &input,
@@ -99,6 +120,26 @@ mod tests {
         assert!(expected_truncated.contains("tokens truncated"));
         assert!(expected_truncated.starts_with('a'));
         assert!(expected_truncated.ends_with('z'));
+        assert!(message.contains(&expected_truncated));
+    }
+
+    #[test]
+    fn build_stage_one_input_message_uses_default_limit_when_model_context_window_missing() {
+        let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
+        let mut model_info = model_info_from_slug("gpt-5.2-codex");
+        model_info.context_window = None;
+        let expected_truncated = truncate_text(
+            &input,
+            TruncationPolicy::Tokens(DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),
+        );
+        let message = build_stage_one_input_message(
+            &model_info,
+            Path::new("/tmp/rollout.jsonl"),
+            Path::new("/tmp"),
+            &input,
+        )
+        .unwrap();
+
         assert!(message.contains(&expected_truncated));
     }
 }

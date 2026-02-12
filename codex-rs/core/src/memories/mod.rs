@@ -25,6 +25,14 @@ const MAX_ROLLOUTS_PER_STARTUP: usize = 64;
 const PHASE_ONE_CONCURRENCY_LIMIT: usize = MAX_ROLLOUTS_PER_STARTUP;
 /// Maximum number of recent raw memories retained for global consolidation.
 const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
+/// Fallback stage-1 rollout truncation limit (tokens) when model metadata
+/// does not include a valid context window.
+const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
+/// Portion of the model context window reserved for the stage-1 rollout input.
+///
+/// Keeping this below 100% leaves room for system instructions, prompt framing,
+/// and model output.
+const STAGE_ONE_CONTEXT_WINDOW_PERCENT: i64 = 70;
 /// Maximum rollout age considered for phase-1 extraction.
 const PHASE_ONE_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 /// Minimum rollout idle time required before phase-1 extraction.

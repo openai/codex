@@ -61,8 +61,13 @@ pub(super) async fn extract_stage_one_output(
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: build_stage_one_input_message(rollout_path, rollout_cwd, &rollout_contents)
-                    .map_err(|_e| "error while building the prompt")?,
+                text: build_stage_one_input_message(
+                    &stage_one_context.model_info,
+                    rollout_path,
+                    rollout_cwd,
+                    &rollout_contents,
+                )
+                .map_err(|_e| "error while building the prompt")?,
             }],
             end_turn: None,
             phase: None,
