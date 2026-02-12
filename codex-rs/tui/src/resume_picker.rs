@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::diff_render::display_path_for;
 use crate::key_hint;
-use crate::style::user_message_style;
+use crate::style::user_message_style_for;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -30,6 +30,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -1024,10 +1025,7 @@ fn render_list(
         }
         spans.push(preview.into());
 
-        let mut line: Line = spans.into();
-        if is_sel {
-            line = line.style(user_message_style());
-        }
+        let line = row_line_with_selection_style(spans, is_sel, selected_row_style());
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
@@ -1066,6 +1064,26 @@ fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     }
 
     vec!["No sessions yet".italic().dim()].into()
+}
+
+fn selected_row_style() -> Style {
+    selected_row_style_for_terminal_bg(crate::terminal_palette::default_bg())
+}
+
+fn selected_row_style_for_terminal_bg(terminal_bg: Option<(u8, u8, u8)>) -> Style {
+    user_message_style_for(terminal_bg)
+}
+
+fn row_line_with_selection_style(
+    spans: Vec<Span<'static>>,
+    is_selected: bool,
+    selected_style: Style,
+) -> Line<'static> {
+    let mut line: Line = spans.into();
+    if is_selected {
+        line = line.style(selected_style);
+    }
+    line
 }
 
 fn human_time_ago(ts: DateTime<Utc>) -> String {
@@ -1547,6 +1565,23 @@ mod tests {
 
         assert_eq!(row.created_at, Some(expected_created));
         assert_eq!(row.updated_at, Some(expected_updated));
+    }
+
+    #[test]
+    fn selected_row_style_uses_background_tint_when_terminal_bg_is_known() {
+        let style = selected_row_style_for_terminal_bg(Some((14, 16, 18)));
+        assert!(style.bg.is_some());
+    }
+
+    #[test]
+    fn row_line_with_selection_style_only_styles_selected_rows() {
+        let selected_style = ratatui::style::Style::default().bg(ratatui::style::Color::Blue);
+        let selected = row_line_with_selection_style(vec!["selected".into()], true, selected_style);
+        let unselected =
+            row_line_with_selection_style(vec!["unselected".into()], false, selected_style);
+
+        assert_eq!(selected.style, selected_style);
+        assert_eq!(unselected.style, ratatui::style::Style::default());
     }
 
     #[test]
