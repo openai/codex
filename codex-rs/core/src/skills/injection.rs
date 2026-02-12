@@ -6,6 +6,7 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::SkillInvocation;
 use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
+use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
@@ -78,36 +79,61 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
     );
 }
 
-/// Collect explicitly mentioned skills from `$name` text mentions.
+/// Collect explicitly mentioned skills from structured and text mentions.
 ///
-/// Text inputs are scanned once to extract `$skill-name` tokens, then we iterate `skills`
-/// in their existing order to preserve prior ordering semantics. Explicit links are
-/// resolved by path and plain names are only used when the match is unambiguous.
+/// Structured `UserInput::Skill` selections are resolved first by path against
+/// enabled skills. Text inputs are then scanned to extract `$skill-name` tokens, and we
+/// iterate `skills` in their existing order to preserve prior ordering semantics.
+/// Explicit links are resolved by path and plain names are only used when the match
+/// is unambiguous.
 ///
-/// Complexity: `O(S + T + N_t * S)` time, `O(S)` space, where:
-/// `S` = number of skills, `T` = total text length, `N_t` = number of text inputs.
+/// Complexity: `O(T + (N_s + N_t) * S)` time, `O(S + M)` space, where:
+/// `S` = number of skills, `T` = total text length, `N_s` = number of structured skill inputs,
+/// `N_t` = number of text inputs, `M` = max mentions parsed from a single text input.
 pub(crate) fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
-    skill_name_counts: &HashMap<String, usize>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
+    let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
+
     let selection_context = SkillSelectionContext {
         skills,
         disabled_paths,
-        skill_name_counts,
+        skill_name_counts: &skill_name_counts,
         connector_slug_counts,
     };
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+    let mut blocked_plain_names: HashSet<String> = HashSet::new();
+
+    for input in inputs {
+        if let UserInput::Skill { name, path } = input {
+            blocked_plain_names.insert(name.clone());
+            if selection_context.disabled_paths.contains(path) || seen_paths.contains(path) {
+                continue;
+            }
+
+            if let Some(skill) = selection_context
+                .skills
+                .iter()
+                .find(|skill| skill.path.as_path() == path.as_path())
+            {
+                seen_paths.insert(skill.path.clone());
+                seen_names.insert(skill.name.clone());
+                selected.push(skill.clone());
+            }
+        }
+    }
 
     for input in inputs {
         if let UserInput::Text { text, .. } = input {
             let mentioned_names = extract_tool_mentions(text);
             select_skills_from_mentions(
                 &selection_context,
+                &blocked_plain_names,
                 &mentioned_names,
                 &mut seen_names,
                 &mut seen_paths,
@@ -254,6 +280,7 @@ pub(crate) fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
 /// Select mentioned skills while preserving the order of `skills`.
 fn select_skills_from_mentions(
     selection_context: &SkillSelectionContext<'_>,
+    blocked_plain_names: &HashSet<String>,
     mentions: &ToolMentions<'_>,
     seen_names: &mut HashSet<String>,
     seen_paths: &mut HashSet<PathBuf>,
@@ -296,6 +323,9 @@ fn select_skills_from_mentions(
             continue;
         }
 
+        if blocked_plain_names.contains(skill.name.as_str()) {
+            continue;
+        }
         if !mentions.plain_names.contains(skill.name.as_str()) {
             continue;
         }
@@ -445,6 +475,7 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: None,
+            policy: None,
             path: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,
         }
@@ -460,34 +491,13 @@ mod tests {
         assert_eq!(mentions.paths, set(expected_paths));
     }
 
-    fn build_skill_name_counts(
-        skills: &[SkillMetadata],
-        disabled_paths: &HashSet<PathBuf>,
-    ) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        for skill in skills {
-            if disabled_paths.contains(&skill.path) {
-                continue;
-            }
-            *counts.entry(skill.name.clone()).or_insert(0) += 1;
-        }
-        counts
-    }
-
     fn collect_mentions(
         inputs: &[UserInput],
         skills: &[SkillMetadata],
         disabled_paths: &HashSet<PathBuf>,
         connector_slug_counts: &HashMap<String, usize>,
     ) -> Vec<SkillMetadata> {
-        let skill_name_counts = build_skill_name_counts(skills, disabled_paths);
-        collect_explicit_skill_mentions(
-            inputs,
-            skills,
-            disabled_paths,
-            &skill_name_counts,
-            connector_slug_counts,
-        )
+        collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
     }
 
     #[test]
@@ -586,10 +596,10 @@ mod tests {
     }
 
     #[test]
-    fn collect_explicit_skill_mentions_ignores_structured_inputs() {
+    fn collect_explicit_skill_mentions_prioritizes_structured_inputs() {
         let alpha = make_skill("alpha-skill", "/tmp/alpha");
         let beta = make_skill("beta-skill", "/tmp/beta");
-        let skills = vec![alpha.clone(), beta];
+        let skills = vec![alpha.clone(), beta.clone()];
         let inputs = vec![
             UserInput::Text {
                 text: "please run $alpha-skill".to_string(),
@@ -604,7 +614,50 @@ mod tests {
 
         let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
-        assert_eq!(selected, vec![alpha]);
+        assert_eq!(selected, vec![beta, alpha]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_skips_invalid_structured_and_blocks_plain_fallback() {
+        let alpha = make_skill("alpha-skill", "/tmp/alpha");
+        let skills = vec![alpha];
+        let inputs = vec![
+            UserInput::Text {
+                text: "please run $alpha-skill".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: "alpha-skill".to_string(),
+                path: PathBuf::from("/tmp/missing"),
+            },
+        ];
+        let connector_counts = HashMap::new();
+
+        let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fallback() {
+        let alpha = make_skill("alpha-skill", "/tmp/alpha");
+        let skills = vec![alpha];
+        let inputs = vec![
+            UserInput::Text {
+                text: "please run $alpha-skill".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: "alpha-skill".to_string(),
+                path: PathBuf::from("/tmp/alpha"),
+            },
+        ];
+        let disabled = HashSet::from([PathBuf::from("/tmp/alpha")]);
+        let connector_counts = HashMap::new();
+
+        let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
+
+        assert_eq!(selected, Vec::new());
     }
 
     #[test]

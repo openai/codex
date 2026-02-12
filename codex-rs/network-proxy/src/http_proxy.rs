@@ -1,6 +1,8 @@
 use crate::config::NetworkMode;
 use crate::network_policy::NetworkDecision;
+use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
@@ -9,8 +11,12 @@ use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
+use crate::responses::PolicyDecisionDetails;
 use crate::responses::blocked_header_value;
+use crate::responses::blocked_message_with_policy;
+use crate::responses::blocked_text_response_with_policy;
 use crate::responses::json_response;
+use crate::responses::policy_decision_prefix;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
@@ -53,11 +59,12 @@ use rama_net::stream::SocketInfo;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
-use rama_tls_boring::client::TlsConnectorDataBuilder;
-use rama_tls_boring::client::TlsConnectorLayer;
+use rama_tls_rustls::client::TlsConnectorDataBuilder;
+use rama_tls_rustls::client::TlsConnectorLayer;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use tracing::error;
 use tracing::info;
@@ -78,6 +85,28 @@ pub async fn run_http_proxy(
         .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind HTTP proxy: {addr}"))?;
+
+    run_http_proxy_with_listener(state, listener, policy_decider).await
+}
+
+pub async fn run_http_proxy_with_std_listener(
+    state: Arc<NetworkProxyState>,
+    listener: StdTcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<()> {
+    let listener =
+        TcpListener::try_from(listener).context("convert std listener to HTTP proxy listener")?;
+    run_http_proxy_with_listener(state, listener, policy_decider).await
+}
+
+async fn run_http_proxy_with_listener(
+    state: Arc<NetworkProxyState>,
+    listener: TcpListener,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> Result<()> {
+    let addr = listener
+        .local_addr()
+        .context("read HTTP proxy listener local addr")?;
 
     let http_service = HttpServer::auto(Executor::new()).service(
         (
@@ -141,9 +170,10 @@ async fn http_connect_accept(
         return Err(proxy_disabled_response(
             &app_state,
             host,
+            authority.port,
             client_addr(&req),
             Some("CONNECT".to_string()),
-            "http-connect",
+            NetworkProtocol::HttpsConnect,
         )
         .await);
     }
@@ -159,7 +189,19 @@ async fn http_connect_accept(
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny { reason }) => {
+        Ok(NetworkDecision::Deny {
+            reason,
+            source,
+            decision,
+        }) => {
+            let details = PolicyDecisionDetails {
+                decision,
+                reason: &reason,
+                source,
+                protocol: NetworkProtocol::HttpsConnect,
+                host: &host,
+                port: authority.port,
+            };
             let _ = app_state
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
@@ -172,7 +214,7 @@ async fn http_connect_accept(
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("CONNECT blocked (client={client}, host={host}, reason={reason})");
-            return Err(blocked_text(&reason));
+            return Err(blocked_text_with_details(&reason, &details));
         }
         Ok(NetworkDecision::Allow) => {
             let client = client.as_deref().unwrap_or_default();
@@ -190,6 +232,14 @@ async fn http_connect_accept(
         .map_err(|err| internal_error("failed to read network mode", err))?;
 
     if mode == NetworkMode::Limited {
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_METHOD_NOT_ALLOWED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::HttpsConnect,
+            host: &host,
+            port: authority.port,
+        };
         let _ = app_state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
@@ -202,7 +252,10 @@ async fn http_connect_accept(
             .await;
         let client = client.as_deref().unwrap_or_default();
         warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
-        return Err(blocked_text(REASON_METHOD_NOT_ALLOWED));
+        return Err(blocked_text_with_details(
+            REASON_METHOD_NOT_ALLOWED,
+            &details,
+        ));
     }
 
     req.extensions_mut().insert(ProxyTarget(authority));
@@ -271,7 +324,9 @@ async fn forward_connect_tunnel(
     let req = TcpRequest::new_with_extensions(authority.clone(), extensions)
         .with_protocol(Protocol::HTTPS);
     let proxy_connector = HttpProxyConnector::optional(TcpConnector::new());
-    let tls_config = TlsConnectorDataBuilder::new_http_auto().into_shared_builder();
+    let tls_config = TlsConnectorDataBuilder::new()
+        .with_alpn_protocols_http_auto()
+        .build();
     let connector = TlsConnectorLayer::tunnel(None)
         .with_connector_data(tls_config)
         .into_layer(proxy_connector);
@@ -346,9 +401,10 @@ async fn http_plain_proxy(
             return Ok(proxy_disabled_response(
                 &app_state,
                 socket_path,
+                0,
                 client_addr(&req),
                 Some(req.method().as_str().to_string()),
-                "unix-socket",
+                NetworkProtocol::Http,
             )
             .await);
         }
@@ -358,7 +414,7 @@ async fn http_plain_proxy(
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED));
+            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED, None));
         }
 
         if !unix_socket_permissions_supported() {
@@ -387,7 +443,7 @@ async fn http_plain_proxy(
             Ok(false) => {
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED))
+                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED, None))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
@@ -420,9 +476,10 @@ async fn http_plain_proxy(
         return Ok(proxy_disabled_response(
             &app_state,
             host,
+            port,
             client_addr(&req),
             Some(req.method().as_str().to_string()),
-            "http",
+            NetworkProtocol::Http,
         )
         .await);
     }
@@ -438,7 +495,19 @@ async fn http_plain_proxy(
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
-        Ok(NetworkDecision::Deny { reason }) => {
+        Ok(NetworkDecision::Deny {
+            reason,
+            source,
+            decision,
+        }) => {
+            let details = PolicyDecisionDetails {
+                decision,
+                reason: &reason,
+                source,
+                protocol: NetworkProtocol::Http,
+                host: &host,
+                port,
+            };
             let _ = app_state
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
@@ -451,7 +520,7 @@ async fn http_plain_proxy(
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("request blocked (client={client}, host={host}, reason={reason})");
-            return Ok(json_blocked(&host, &reason));
+            return Ok(json_blocked(&host, &reason, Some(&details)));
         }
         Ok(NetworkDecision::Allow) => {}
         Err(err) => {
@@ -461,6 +530,14 @@ async fn http_plain_proxy(
     }
 
     if !method_allowed {
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_METHOD_NOT_ALLOWED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::Http,
+            host: &host,
+            port,
+        };
         let _ = app_state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
@@ -476,7 +553,11 @@ async fn http_plain_proxy(
         warn!(
             "request blocked by method policy (client={client}, host={host}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
         );
-        return Ok(json_blocked(&host, REASON_METHOD_NOT_ALLOWED));
+        return Ok(json_blocked(
+            &host,
+            REASON_METHOD_NOT_ALLOWED,
+            Some(&details),
+        ));
     }
 
     let client = client.as_deref().unwrap_or_default();
@@ -540,11 +621,21 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .map(|info| info.peer_addr().to_string())
 }
 
-fn json_blocked(host: &str, reason: &str) -> Response {
+fn json_blocked(host: &str, reason: &str, details: Option<&PolicyDecisionDetails<'_>>) -> Response {
+    let (policy_decision_prefix, message) = details
+        .map(|details| {
+            (
+                Some(policy_decision_prefix(details)),
+                Some(blocked_message_with_policy(reason, details)),
+            )
+        })
+        .unwrap_or((None, None));
     let response = BlockedResponse {
         status: "blocked",
         host,
         reason,
+        policy_decision_prefix,
+        message,
     };
     let mut resp = json_response(&response);
     *resp.status_mut() = StatusCode::FORBIDDEN;
@@ -555,28 +646,42 @@ fn json_blocked(host: &str, reason: &str) -> Response {
     resp
 }
 
-fn blocked_text(reason: &str) -> Response {
-    crate::responses::blocked_text_response(reason)
+fn blocked_text_with_details(reason: &str, details: &PolicyDecisionDetails<'_>) -> Response {
+    blocked_text_response_with_policy(reason, details)
 }
 
 async fn proxy_disabled_response(
     app_state: &NetworkProxyState,
     host: String,
+    port: u16,
     client: Option<String>,
     method: Option<String>,
-    protocol: &str,
+    protocol: NetworkProtocol,
 ) -> Response {
+    let blocked_host = host.clone();
     let _ = app_state
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-            host,
+            host: blocked_host,
             reason: REASON_PROXY_DISABLED.to_string(),
             client,
             method,
             mode: None,
-            protocol: protocol.to_string(),
+            protocol: protocol.as_policy_protocol().to_string(),
         }))
         .await;
-    text_response(StatusCode::SERVICE_UNAVAILABLE, "proxy disabled")
+
+    let details = PolicyDecisionDetails {
+        decision: NetworkPolicyDecision::Deny,
+        reason: REASON_PROXY_DISABLED,
+        source: NetworkDecisionSource::ProxyState,
+        protocol,
+        host: &host,
+        port,
+    };
+    text_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        &blocked_message_with_policy(REASON_PROXY_DISABLED, &details),
+    )
 }
 
 fn internal_error(context: &str, err: impl std::fmt::Display) -> Response {
@@ -597,6 +702,10 @@ struct BlockedResponse<'a> {
     status: &'static str,
     host: &'a str,
     reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_decision_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 #[cfg(test)]
@@ -604,7 +713,7 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkMode;
-    use crate::config::NetworkPolicy;
+    use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
@@ -613,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkPolicy {
+        let policy = NetworkProxySettings {
             allowed_domains: vec!["example.com".to_string()],
             ..Default::default()
         };

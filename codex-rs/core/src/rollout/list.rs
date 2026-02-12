@@ -15,9 +15,7 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
-use crate::instructions::UserInstructions;
 use crate::protocol::EventMsg;
-use crate::session_prefix::is_session_prefix_content;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
@@ -25,6 +23,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 /// Returned page of thread (thread) summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -44,8 +43,24 @@ pub struct ThreadsPage {
 pub struct ThreadItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
-    /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
-    pub head: Vec<serde_json::Value>,
+    /// Thread ID from session metadata.
+    pub thread_id: Option<ThreadId>,
+    /// First user message captured for this thread, if any.
+    pub first_user_message: Option<String>,
+    /// Working directory from session metadata.
+    pub cwd: Option<PathBuf>,
+    /// Git branch from session metadata.
+    pub git_branch: Option<String>,
+    /// Git commit SHA from session metadata.
+    pub git_sha: Option<String>,
+    /// Git origin URL from session metadata.
+    pub git_origin_url: Option<String>,
+    /// Session source from session metadata.
+    pub source: Option<SessionSource>,
+    /// Model provider from session metadata.
+    pub model_provider: Option<String>,
+    /// CLI version from session metadata.
+    pub cli_version: Option<String>,
     /// RFC3339 timestamp string for when the session was created, if available.
     /// created_at comes from the filename timestamp with second precision.
     pub created_at: Option<String>,
@@ -63,11 +78,17 @@ pub type ConversationsPage = ThreadsPage;
 
 #[derive(Default)]
 struct HeadTailSummary {
-    head: Vec<serde_json::Value>,
     saw_session_meta: bool,
     saw_user_event: bool,
+    thread_id: Option<ThreadId>,
+    first_user_message: Option<String>,
+    cwd: Option<PathBuf>,
+    git_branch: Option<String>,
+    git_sha: Option<String>,
+    git_origin_url: Option<String>,
     source: Option<SessionSource>,
     model_provider: Option<String>,
+    cli_version: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -674,7 +695,8 @@ async fn build_thread_item(
     if !allowed_sources.is_empty()
         && !summary
             .source
-            .is_some_and(|source| allowed_sources.contains(&source))
+            .as_ref()
+            .is_some_and(|source| allowed_sources.contains(source))
     {
         return None;
     }
@@ -686,7 +708,15 @@ async fn build_thread_item(
     // Apply filters: must have session meta and at least one user message event
     if summary.saw_session_meta && summary.saw_user_event {
         let HeadTailSummary {
-            head,
+            thread_id,
+            first_user_message,
+            cwd,
+            git_branch,
+            git_sha,
+            git_origin_url,
+            source,
+            model_provider,
+            cli_version,
             created_at,
             updated_at: mut summary_updated_at,
             ..
@@ -696,7 +726,15 @@ async fn build_thread_item(
         }
         return Some(ThreadItem {
             path,
-            head,
+            thread_id,
+            first_user_message,
+            cwd,
+            git_branch,
+            git_sha,
+            git_origin_url,
+            source,
+            model_provider,
+            cli_version,
             created_at,
             updated_at: summary_updated_at,
         });
@@ -977,33 +1015,33 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                summary.source = Some(session_meta_line.meta.source.clone());
-                summary.model_provider = session_meta_line.meta.model_provider.clone();
-                summary.created_at = Some(session_meta_line.meta.timestamp.clone());
-                summary.saw_session_meta = true;
-                if summary.head.len() < head_limit
-                    && let Ok(val) = serde_json::to_value(session_meta_line)
-                {
-                    summary.head.push(val);
+                if !summary.saw_session_meta {
+                    summary.source = Some(session_meta_line.meta.source.clone());
+                    summary.model_provider = session_meta_line.meta.model_provider.clone();
+                    summary.thread_id = Some(session_meta_line.meta.id);
+                    summary.cwd = Some(session_meta_line.meta.cwd.clone());
+                    summary.git_branch = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.branch.clone());
+                    summary.git_sha = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.commit_hash.clone());
+                    summary.git_origin_url = session_meta_line
+                        .git
+                        .as_ref()
+                        .and_then(|git| git.repository_url.clone());
+                    summary.cli_version = Some(session_meta_line.meta.cli_version);
+                    summary.created_at = Some(session_meta_line.meta.timestamp.clone());
+                    summary.saw_session_meta = true;
                 }
             }
-            RolloutItem::ResponseItem(item) => {
+            RolloutItem::ResponseItem(_) => {
                 summary.created_at = summary
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let codex_protocol::models::ResponseItem::Message { role, content, .. } = &item
-                    && role == "user"
-                    && !UserInstructions::is_user_instructions(content.as_slice())
-                    && !is_session_prefix_content(content.as_slice())
-                {
-                    summary.saw_user_event = true;
-                }
-                if summary.head.len() < head_limit
-                    && let Ok(val) = serde_json::to_value(item)
-                {
-                    summary.head.push(val);
-                }
             }
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
@@ -1012,8 +1050,14 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                 // Not included in `head`; skip.
             }
             RolloutItem::EventMsg(ev) => {
-                if matches!(ev, EventMsg::UserMessage(_)) {
+                if let EventMsg::UserMessage(user) = ev {
                     summary.saw_user_event = true;
+                    if summary.first_user_message.is_none() {
+                        let message = strip_user_message_prefix(user.message.as_str()).to_string();
+                        if !message.is_empty() {
+                            summary.first_user_message = Some(message);
+                        }
+                    }
                 }
             }
         }
@@ -1029,8 +1073,48 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 /// Read up to `HEAD_RECORD_LIMIT` records from the start of the rollout file at `path`.
 /// This should be enough to produce a summary including the session meta line.
 pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
-    let summary = read_head_summary(path, HEAD_RECORD_LIMIT).await?;
-    Ok(summary.head)
+    use tokio::io::AsyncBufReadExt;
+
+    let file = tokio::fs::File::open(path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    let mut head = Vec::new();
+
+    while head.len() < HEAD_RECORD_LIMIT {
+        let Some(line) = lines.next_line().await? else {
+            break;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) {
+            match rollout_line.item {
+                RolloutItem::SessionMeta(session_meta_line) => {
+                    if let Ok(value) = serde_json::to_value(session_meta_line) {
+                        head.push(value);
+                    }
+                }
+                RolloutItem::ResponseItem(item) => {
+                    if let Ok(value) = serde_json::to_value(item) {
+                        head.push(value);
+                    }
+                }
+                RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => {}
+            }
+        }
+    }
+
+    Ok(head)
+}
+
+fn strip_user_message_prefix(text: &str) -> &str {
+    match text.find(USER_MESSAGE_BEGIN) {
+        Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim(),
+        None => text.trim(),
+    }
 }
 
 /// Read the SessionMetaLine from the head of a rollout file for reuse by
@@ -1088,9 +1172,10 @@ async fn find_thread_path_by_id_str_in_subdir(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
+    let thread_id = ThreadId::from_string(id_str).ok();
     let state_db_ctx = state_db::open_if_present(codex_home, "").await;
     if let Some(state_db_ctx) = state_db_ctx.as_deref()
-        && let Ok(thread_id) = ThreadId::from_string(id_str)
+        && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
             Some(state_db_ctx),
             thread_id,
@@ -1128,9 +1213,16 @@ async fn find_thread_path_by_id_str_in_subdir(
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());
-    if found.is_some() {
+    if let Some(found_path) = found.as_ref() {
         tracing::error!("state db missing rollout path for thread {id_str}");
         state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
+        state_db::read_repair_rollout_path(
+            state_db_ctx.as_deref(),
+            thread_id,
+            archived_only,
+            found_path.as_path(),
+        )
+        .await;
     }
 
     Ok(found)

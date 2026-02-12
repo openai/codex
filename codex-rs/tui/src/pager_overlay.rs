@@ -539,6 +539,26 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Replace committed transcript cells while keeping any cached in-progress output that is
+    /// currently shown at the end of the overlay.
+    ///
+    /// This is used when existing history is trimmed (for example after rollback) so the
+    /// transcript overlay immediately reflects the same committed cells as the main transcript.
+    pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        self.cells = cells;
+        if self
+            .highlight_cell
+            .is_some_and(|idx| idx >= self.cells.len())
+        {
+            self.highlight_cell = None;
+        }
+        self.rebuild_renderables();
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
     /// Sync the active-cell live tail with the current width and cell state.
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll
@@ -679,6 +699,11 @@ impl TranscriptOverlay {
     }
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed_cell_count(&self) -> usize {
+        self.cells.len()
     }
 }
 

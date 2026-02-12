@@ -1,7 +1,6 @@
-use codex_app_server_protocol::AuthMode;
-use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::AuthMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
@@ -10,6 +9,7 @@ use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_utils_cli::CliConfigOverrides;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -225,7 +225,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
-        Ok(Some(auth)) => match auth.api_auth_mode() {
+        Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
@@ -238,10 +238,6 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             },
             AuthMode::Chatgpt => {
                 eprintln!("Logged in using ChatGPT");
-                std::process::exit(0);
-            }
-            AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT (external tokens)");
                 std::process::exit(0);
             }
         },

@@ -7,15 +7,13 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
-use codex_app_server_protocol::AuthMode;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_common::oss::ensure_oss_provider_ready;
-use codex_common::oss::get_default_model_for_oss_provider;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -41,6 +39,8 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_oss::ensure_oss_provider_ready;
+use codex_utils_oss::get_default_model_for_oss_provider;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
@@ -67,6 +67,7 @@ mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod cwd_prompt;
+mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
@@ -81,6 +82,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod mention_codec;
 mod model_migration;
 mod notifications;
 pub mod onboarding;
@@ -154,7 +156,7 @@ pub async fn run_main(
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     // `oss` model provider.
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let overrides_cli = codex_utils_cli::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         // Parse `-c` overrides from the CLI.
         Ok(v) => v,
@@ -223,7 +225,11 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url);
+    let cloud_requirements = cloud_requirements_loader(
+        cloud_auth_manager,
+        chatgpt_base_url,
+        codex_home.to_path_buf(),
+    );
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -412,7 +418,7 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
-    cloud_requirements: CloudRequirementsLoader,
+    mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
@@ -467,11 +473,13 @@ async fn run_ratatui_app(
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
+    let mut trust_decision_was_made = false;
 
     let config = if should_show_onboarding {
+        let show_login_screen = should_show_login_screen(login_status, &initial_config);
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
@@ -492,9 +500,21 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        // If the user made an explicit trust decision, reload config so current
-        // process state reflects what was persisted to config.toml.
-        if onboarding_result.directory_trust_decision.is_some() {
+        trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
+        // If this onboarding run included the login step, always refresh cloud requirements and
+        // rebuild config. This avoids missing newly available cloud requirements due to login
+        // status detection edge cases.
+        if show_login_screen {
+            cloud_requirements = cloud_requirements_loader(
+                auth_manager.clone(),
+                initial_config.chatgpt_base_url.clone(),
+                initial_config.codex_home.clone(),
+            );
+        }
+
+        // If the user made an explicit trust decision, or we showed the login flow, reload config
+        // so current process state reflects persisted trust/auth changes.
+        if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -539,7 +559,7 @@ async fn run_ratatui_app(
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
             match RolloutRecorder::list_threads(
-                &config.codex_home,
+                &config,
                 1,
                 None,
                 ThreadSortKey::UpdatedAt,
@@ -557,14 +577,7 @@ async fn run_ratatui_app(
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            match resume_picker::run_fork_picker(
-                &mut tui,
-                &config.codex_home,
-                &config.model_provider_id,
-                cli.fork_show_all,
-            )
-            .await?
-            {
+            match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
                 resume_picker::SessionSelection::Exit => {
                     restore();
                     session_log::log_session_end();
@@ -600,7 +613,7 @@ async fn run_ratatui_app(
             Some(config.cwd.as_path())
         };
         match RolloutRecorder::find_latest_thread_path(
-            &config.codex_home,
+            &config,
             1,
             None,
             ThreadSortKey::UpdatedAt,
@@ -615,14 +628,7 @@ async fn run_ratatui_app(
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(
-            &mut tui,
-            &config.codex_home,
-            &config.model_provider_id,
-            cli.resume_show_all,
-        )
-        .await?
-        {
+        match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
             resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();
@@ -667,8 +673,12 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
+    set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
+    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
+        && trust_decision_was_made
+        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
 
     let Cli {
         prompt,
@@ -692,6 +702,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        should_prompt_windows_sandbox_nux_at_startup,
     )
     .await;
 
@@ -828,7 +839,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.api_auth_mode()),
+            Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");
@@ -876,12 +887,6 @@ async fn load_config_or_exit_with_fallback_cwd(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows")
-        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
-    {
-        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
-        return false;
-    }
     if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
@@ -936,7 +941,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
+    async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
@@ -944,17 +949,10 @@ mod tests {
         config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
-        if cfg!(target_os = "windows") {
-            assert!(
-                !should_show,
-                "Windows trust prompt should always be skipped on native Windows"
-            );
-        } else {
-            assert!(
-                should_show,
-                "Non-Windows should still show trust prompt when project is untrusted"
-            );
-        }
+        assert!(
+            should_show,
+            "Trust prompt should be shown when project trust is undecided"
+        );
         Ok(())
     }
     #[tokio::test]
@@ -1004,6 +1002,7 @@ mod tests {
             .clone()
             .unwrap_or_else(|| "gpt-5.1".to_string());
         TurnContextItem {
+            turn_id: None,
             cwd,
             approval_policy: config.approval_policy.value(),
             sandbox_policy: config.sandbox_policy.get().clone(),

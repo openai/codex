@@ -1,5 +1,3 @@
-use codex_common::elapsed::format_duration;
-use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
@@ -36,6 +34,8 @@ use codex_core::protocol::WebSearchEndEvent;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::items::TurnItem;
 use codex_protocol::num_format::format_with_separators;
+use codex_utils_elapsed::format_duration;
+use codex_utils_elapsed::format_elapsed;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -46,9 +46,9 @@ use std::time::Instant;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use codex_common::create_config_summary_entries;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_utils_sandbox_summary::create_config_summary_entries;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -264,7 +264,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
                 let last_message = last_agent_message
                     .as_deref()
                     .or(self.last_proposed_plan.as_deref());
@@ -796,6 +798,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
+            | EventMsg::CollabResumeBegin(_)
+            | EventMsg::CollabResumeEnd(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
         }
         CodexStatus::Running

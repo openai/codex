@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
@@ -52,6 +53,7 @@ impl ShellHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -80,6 +82,7 @@ impl ShellCommandHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
+            network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -297,7 +300,6 @@ impl ShellHandler {
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                features: &features,
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy,
                 sandbox_policy: &turn.sandbox_policy,
@@ -311,6 +313,7 @@ impl ShellHandler {
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
+            network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
@@ -329,8 +332,7 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
-            content,
-            content_items: None,
+            body: FunctionCallOutputBody::Text(content),
             success: Some(true),
         })
     }
@@ -442,6 +444,7 @@ mod tests {
         assert_eq!(exec_params.command, expected_command);
         assert_eq!(exec_params.cwd, expected_cwd);
         assert_eq!(exec_params.env, expected_env);
+        assert_eq!(exec_params.network, turn_context.network);
         assert_eq!(exec_params.expiration.timeout_ms(), timeout_ms);
         assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
         assert_eq!(exec_params.justification, justification);
@@ -452,6 +455,7 @@ mod tests {
     fn shell_command_handler_respects_explicit_login_flag() {
         let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
             path: PathBuf::from("/tmp/snapshot.sh"),
+            cwd: PathBuf::from("/tmp"),
         })));
         let shell = Shell {
             shell_type: ShellType::Bash,

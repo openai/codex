@@ -21,6 +21,7 @@
       "type": "object"
     },
     "AppsListParams": {
+      "description": "EXPERIMENTAL - list available apps/connectors.",
       "properties": {
         "cursor": {
           "description": "Opaque pagination cursor returned by a previous call.",
@@ -29,12 +30,23 @@
             "null"
           ]
         },
+        "forceRefetch": {
+          "description": "When true, bypass app caches and fetch the latest data from sources.",
+          "type": "boolean"
+        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",
           "minimum": 0.0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -422,6 +434,27 @@
       ],
       "type": "object"
     },
+    "ExperimentalFeatureListParams": {
+      "properties": {
+        "cursor": {
+          "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional page size; defaults to a reasonable server-side value.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -480,6 +513,19 @@
       },
       "type": "object"
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -526,19 +572,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses API understands.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -548,7 +585,7 @@
         }
       },
       "required": [
-        "content"
+        "body"
       ],
       "type": "object"
     },
@@ -681,6 +718,16 @@
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -968,12 +1015,19 @@
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
-              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
+              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
               "type": "string"
             },
-            "idToken": {
-              "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
+            "chatgptAccountId": {
+              "description": "Workspace/account identifier supplied by the client.",
               "type": "string"
+            },
+            "chatgptPlanType": {
+              "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -985,7 +1039,7 @@
           },
           "required": [
             "accessToken",
-            "idToken",
+            "chatgptAccountId",
             "type"
           ],
           "title": "ChatgptAuthTokensLoginAccountParams",
@@ -1039,11 +1093,23 @@
       "type": "string"
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -1171,10 +1237,109 @@
     },
     "Personality": {
       "enum": [
+        "none",
         "friendly",
         "pragmatic"
       ],
       "type": "string"
+    },
+    "ReadOnlyAccess": {
+      "oneOf": [
+        {
+          "properties": {
+            "includePlatformDefaults": {
+              "default": true,
+              "type": "boolean"
+            },
+            "readableRoots": {
+              "default": [],
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "fullAccess"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
+    },
+    "ReadOnlyAccess2": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccess2Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess2",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccess2Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess2",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -1855,6 +2020,16 @@
         },
         {
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -1907,6 +2082,16 @@
               "default": false,
               "type": "boolean"
             },
+            "readOnlyAccess": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "default": {
+                "type": "fullAccess"
+              }
+            },
             "type": {
               "enum": [
                 "workspaceWrite"
@@ -1951,8 +2136,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess2"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -2010,6 +2203,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess2"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -2167,6 +2368,24 @@
       ],
       "type": "object"
     },
+    "SkillsListExtraRootsForCwd": {
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "extraUserRoots": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cwd",
+        "extraUserRoots"
+      ],
+      "type": "object"
+    },
     "SkillsListParams": {
       "properties": {
         "cwds": {
@@ -2179,6 +2398,17 @@
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
           "type": "boolean"
+        },
+        "perCwdExtraUserRoots": {
+          "default": null,
+          "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+          "items": {
+            "$ref": "#/definitions/SkillsListExtraRootsForCwd"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -2292,13 +2522,6 @@
           ]
         },
         "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
-          "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
           "type": [
             "string",
             "null"
@@ -2460,16 +2683,6 @@
             "null"
           ]
         },
-        "history": {
-          "description": "[UNSTABLE] FOR CODEX CLOUD - DO NOT USE. If specified, the thread will be resumed with the provided history instead of loaded from disk.",
-          "items": {
-            "$ref": "#/definitions/ResponseItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -2478,13 +2691,6 @@
           ]
         },
         "modelProvider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "path": {
-          "description": "[UNSTABLE] Specify the rollout path to resume from. If specified, the thread_id param will be ignored.",
           "type": [
             "string",
             "null"
@@ -2617,11 +2823,6 @@
             "null"
           ]
         },
-        "experimentalRawEvents": {
-          "default": false,
-          "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
-          "type": "boolean"
-        },
         "model": {
           "type": [
             "string",
@@ -2696,17 +2897,6 @@
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
         },
-        "collaborationMode": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/CollaborationMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
-        },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
           "type": [
@@ -2779,6 +2969,29 @@
         }
       },
       "required": [
+        "input",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "TurnSteerParams": {
+      "properties": {
+        "expectedTurnId": {
+          "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expectedTurnId",
         "input",
         "threadId"
       ],
@@ -3492,6 +3705,30 @@
         },
         "method": {
           "enum": [
+            "turn/steer"
+          ],
+          "title": "Turn/steerRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/TurnSteerParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Turn/steerRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "turn/interrupt"
           ],
           "title": "Turn/interruptRequestMethod",
@@ -3555,6 +3792,30 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "experimentalFeature/list"
+          ],
+          "title": "ExperimentalFeature/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExperimentalFeatureListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExperimentalFeature/listRequest",
       "type": "object"
     },
     {

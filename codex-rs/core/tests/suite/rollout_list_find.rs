@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use codex_core::EventPersistenceMode;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
@@ -59,6 +60,7 @@ async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_
     let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string(), None)
         .await
         .unwrap();
+    runtime.mark_backfill_complete(None).await.unwrap();
     let mut builder = ThreadMetadataBuilder::new(
         thread_id,
         rollout_path,
@@ -170,11 +172,13 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
+            EventPersistenceMode::Limited,
         ),
         None,
         None,
     )
     .await?;
+    recorder.persist().await?;
     recorder.flush().await?;
 
     let index_path = home.path().join("session_index.jsonl");

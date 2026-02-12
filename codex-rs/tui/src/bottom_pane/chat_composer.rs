@@ -25,8 +25,14 @@
 //!
 //! When recalling a local entry, the composer rehydrates text elements and image attachments.
 //! When recalling a persistent entry, only the text is restored.
+//! Recalled entries move the cursor to end-of-line so repeated Up/Down presses keep shell-like
+//! history traversal semantics instead of dropping to column 0.
 //!
 //! # Submission and Prompt Expansion
+//!
+//! When steer is enabled, `Enter` submits immediately. `Tab` requests queuing while a task is
+//! running; if no task is running, `Tab` submits just like Enter so input is never dropped.
+//! `Tab` does not submit when entering a `!` shell command.
 //!
 //! On submit/queue paths, the composer:
 //!
@@ -82,9 +88,12 @@
 //! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
+use crate::bottom_pane::footer::mode_indicator_line;
+use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -118,6 +127,7 @@ use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
+use super::footer::max_left_width_for_right;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
@@ -142,17 +152,18 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_utils_fuzzy_match::fuzzy_match;
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
@@ -286,7 +297,8 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
-    mention_paths: HashMap<String, String>,
+    mention_bindings: HashMap<u64, ComposerMentionBinding>,
+    recent_submission_mention_bindings: Vec<MentionBinding>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
@@ -295,12 +307,20 @@ pub(crate) struct ChatComposer {
     connectors_enabled: bool,
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    status_line_value: Option<Line<'static>>,
+    status_line_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
 struct FooterFlash {
     line: Line<'static>,
     expires_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct ComposerMentionBinding {
+    mention: String,
+    path: String,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -376,7 +396,8 @@ impl ChatComposer {
             skills: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
-            mention_paths: HashMap::new(),
+            mention_bindings: HashMap::new(),
+            recent_submission_mention_bindings: Vec::new(),
             steer_enabled: false,
             collaboration_modes_enabled: false,
             config,
@@ -384,6 +405,8 @@ impl ChatComposer {
             connectors_enabled: false,
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
+            status_line_value: None,
+            status_line_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -404,16 +427,31 @@ impl ChatComposer {
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
+        self.sync_popups();
     }
 
-    pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
-        std::mem::take(&mut self.mention_paths)
+    pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        let elements = self.current_mention_elements();
+        let mut ordered = Vec::new();
+        for (id, mention) in elements {
+            if let Some(binding) = self.mention_bindings.remove(&id)
+                && binding.mention == mention
+            {
+                ordered.push(MentionBinding {
+                    mention: binding.mention,
+                    path: binding.path,
+                });
+            }
+        }
+        self.mention_bindings.clear();
+        ordered
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
     ///
     /// When steer is enabled, `Enter` produces [`InputResult::Submitted`] (send immediately) and
-    /// `Tab` produces [`InputResult::Queued`] (eligible to queue if a task is running).
+    /// `Tab` produces [`InputResult::Queued`] when a task is running; otherwise it submits
+    /// immediately. `Tab` does not submit when the input is a `!` shell command.
     /// When steer is disabled, `Enter` produces [`InputResult::Queued`], preserving the default
     /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
@@ -458,7 +496,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -496,9 +534,12 @@ impl ChatComposer {
         self.history.set_metadata(log_id, entry_count);
     }
 
-    /// Integrate an asynchronous response to an on-demand history lookup. If
-    /// the entry is present and the offset matches the current cursor we
-    /// immediately populate the textarea.
+    /// Integrate an asynchronous response to an on-demand history lookup.
+    ///
+    /// If the entry is present and the offset still matches the active history cursor, the
+    /// composer rehydrates the entry immediately. This path intentionally routes through
+    /// [`Self::apply_history_entry`] so cursor placement remains aligned with keyboard history
+    /// recall semantics.
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,
@@ -510,7 +551,7 @@ impl ChatComposer {
         };
         // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
         // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
-        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
+        self.apply_history_entry(entry);
         true
     }
 
@@ -724,41 +765,45 @@ impl ChatComposer {
     /// This is the "fresh draft" path: it clears pending paste payloads and
     /// mention link targets. Callers restoring a previously submitted draft
     /// that must keep `$name -> path` resolution should use
-    /// [`Self::set_text_content_with_mention_paths`] instead.
+    /// [`Self::set_text_content_with_mention_bindings`] instead.
     pub(crate) fn set_text_content(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
     ) {
-        self.set_text_content_with_mention_paths(
+        self.set_text_content_with_mention_bindings(
             text,
             text_elements,
             local_image_paths,
-            HashMap::new(),
+            Vec::new(),
         );
     }
 
     /// Replace the entire composer content while restoring mention link targets.
     ///
     /// Mention popup insertion stores both visible text (for example `$file`)
-    /// and hidden `mention_paths` used to resolve the canonical target during
+    /// and hidden mention bindings used to resolve the canonical target during
     /// submission. Use this method when restoring an interrupted or blocked
     /// draft; if callers restore only text and images, mentions can appear
     /// intact to users while resolving to the wrong target or dropping on
     /// retry.
-    pub(crate) fn set_text_content_with_mention_paths(
+    ///
+    /// This helper intentionally places the cursor at the start of the restored text. Callers
+    /// that need end-of-line restore behavior (for example shell-style history recall) should call
+    /// [`Self::move_cursor_to_end`] after this method.
+    pub(crate) fn set_text_content_with_mention_bindings(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
         local_image_paths: Vec<PathBuf>,
-        mention_paths: HashMap<String, String>,
+        mention_bindings: Vec<MentionBinding>,
     ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
-        self.mention_paths = mention_paths;
+        self.mention_bindings.clear();
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
@@ -773,6 +818,8 @@ impl ChatComposer {
                     .push(AttachedImage { placeholder, path });
             }
         }
+
+        self.bind_mentions_from_snapshot(mention_bindings);
 
         self.textarea.set_cursor(0);
         self.sync_popups();
@@ -800,12 +847,16 @@ impl ChatComposer {
             .iter()
             .map(|img| img.path.clone())
             .collect();
+        let pending_pastes = std::mem::take(&mut self.pending_pastes);
+        let mention_bindings = self.snapshot_mention_bindings();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
         self.history.record_local_submission(HistoryEntry {
             text: previous.clone(),
             text_elements,
             local_image_paths,
+            mention_bindings,
+            pending_pastes,
         });
         Some(previous)
     }
@@ -813,6 +864,31 @@ impl ChatComposer {
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
+    }
+
+    /// Rehydrate a history entry into the composer with shell-like cursor placement.
+    ///
+    /// This path restores text, elements, images, mention bindings, and pending paste payloads,
+    /// then moves the cursor to end-of-line. If a caller reused
+    /// [`Self::set_text_content_with_mention_bindings`] directly for history recall and forgot the
+    /// final cursor move, repeated Up/Down would stop navigating history because cursor-gating
+    /// treats interior positions as normal editing mode.
+    fn apply_history_entry(&mut self, entry: HistoryEntry) {
+        let HistoryEntry {
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+            pending_pastes,
+        } = entry;
+        self.set_text_content_with_mention_bindings(
+            text,
+            text_elements,
+            local_image_paths,
+            mention_bindings,
+        );
+        self.set_pending_pastes(pending_pastes);
+        self.move_cursor_to_end();
     }
 
     pub(crate) fn text_elements(&self) -> Vec<TextElement> {
@@ -835,6 +911,14 @@ impl ChatComposer {
                 path: img.path.clone(),
             })
             .collect()
+    }
+
+    pub(crate) fn mention_bindings(&self) -> Vec<MentionBinding> {
+        self.snapshot_mention_bindings()
+    }
+
+    pub(crate) fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
+        std::mem::take(&mut self.recent_submission_mention_bindings)
     }
 
     fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
@@ -1468,10 +1552,7 @@ impl ChatComposer {
 
         if close_popup {
             if let Some((insert_text, path)) = selected_mention {
-                if let Some(path) = path.as_deref() {
-                    self.record_mention_path(&insert_text, path);
-                }
-                self.insert_selected_mention(&insert_text);
+                self.insert_selected_mention(&insert_text, path.as_deref());
             }
             self.active_popup = ActivePopup::None;
         }
@@ -1481,7 +1562,11 @@ impl ChatComposer {
 
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
-        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
+        lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".jpeg")
+            || lower.ends_with(".gif")
+            || lower.ends_with(".webp")
     }
 
     fn trim_text_elements(
@@ -1778,7 +1863,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_mention(&mut self, insert_text: &str) {
+    fn insert_selected_mention(&mut self, insert_text: &str, path: Option<&str>) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
@@ -1799,26 +1884,28 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
-        let inserted = insert_text.to_string();
+        // Remove the active token and insert the selected mention as an atomic element.
+        self.textarea.replace_range(start_idx..end_idx, "");
+        self.textarea.set_cursor(start_idx);
+        let id = self.textarea.insert_element(insert_text);
 
-        let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
-        new_text.push_str(&text[..start_idx]);
-        new_text.push_str(&inserted);
-        new_text.push(' ');
-        new_text.push_str(&text[end_idx..]);
+        if let (Some(path), Some(mention)) =
+            (path, Self::mention_name_from_insert_text(insert_text))
+        {
+            self.mention_bindings.insert(
+                id,
+                ComposerMentionBinding {
+                    mention,
+                    path: path.to_string(),
+                },
+            );
+        }
 
-        // Mention insertion rebuilds plain text, so drop existing elements.
-        self.textarea.set_text_clearing_elements(&new_text);
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.insert_str(" ");
+        let new_cursor = start_idx
+            .saturating_add(insert_text.len())
+            .saturating_add(1);
         self.textarea.set_cursor(new_cursor);
-    }
-
-    fn record_mention_path(&mut self, insert_text: &str, path: &str) {
-        let Some(name) = Self::mention_name_from_insert_text(insert_text) else {
-            return;
-        };
-        self.mention_paths.insert(name, path.to_string());
     }
 
     fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
@@ -1837,6 +1924,67 @@ impl ChatComposer {
         }
     }
 
+    fn current_mention_elements(&self) -> Vec<(u64, String)> {
+        self.textarea
+            .text_element_snapshots()
+            .into_iter()
+            .filter_map(|snapshot| {
+                Self::mention_name_from_insert_text(snapshot.text.as_str())
+                    .map(|mention| (snapshot.id, mention))
+            })
+            .collect()
+    }
+
+    fn snapshot_mention_bindings(&self) -> Vec<MentionBinding> {
+        let mut ordered = Vec::new();
+        for (id, mention) in self.current_mention_elements() {
+            if let Some(binding) = self.mention_bindings.get(&id)
+                && binding.mention == mention
+            {
+                ordered.push(MentionBinding {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                });
+            }
+        }
+        ordered
+    }
+
+    fn bind_mentions_from_snapshot(&mut self, mention_bindings: Vec<MentionBinding>) {
+        self.mention_bindings.clear();
+        if mention_bindings.is_empty() {
+            return;
+        }
+
+        let text = self.textarea.text().to_string();
+        let mut scan_from = 0usize;
+        for binding in mention_bindings {
+            let token = format!("${}", binding.mention);
+            let Some(range) =
+                find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
+            else {
+                continue;
+            };
+
+            let id = if let Some(id) = self.textarea.add_element_range(range.clone()) {
+                Some(id)
+            } else {
+                self.textarea.element_id_for_exact_range(range.clone())
+            };
+
+            if let Some(id) = id {
+                self.mention_bindings.insert(
+                    id,
+                    ComposerMentionBinding {
+                        mention: binding.mention,
+                        path: binding.path,
+                    },
+                );
+                scan_from = range.end;
+            }
+        }
+    }
+
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     /// On success, clears pending paste payloads because placeholders have been expanded.
     ///
@@ -1848,6 +1996,7 @@ impl ChatComposer {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
+        let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
             .iter()
@@ -1856,6 +2005,7 @@ impl ChatComposer {
         let original_pending_pastes = self.pending_pastes.clone();
         let mut text_elements = original_text_elements.clone();
         let input_starts_with_space = original_input.starts_with(' ');
+        self.recent_submission_mention_bindings.clear();
         self.textarea.set_text_clearing_elements("");
 
         if !self.pending_pastes.is_empty() {
@@ -1901,10 +2051,11 @@ impl ChatComposer {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_info_event(message, None),
                     )));
-                    self.set_text_content(
+                    self.set_text_content_with_mention_bindings(
                         original_input.clone(),
                         original_text_elements,
                         original_local_image_paths,
+                        original_mention_bindings,
                     );
                     self.pending_pastes.clone_from(&original_pending_pastes);
                     self.textarea.set_cursor(original_input.len());
@@ -1921,10 +2072,11 @@ impl ChatComposer {
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                             history_cell::new_error_event(err.user_message()),
                         )));
-                        self.set_text_content(
+                        self.set_text_content_with_mention_bindings(
                             original_input.clone(),
                             original_text_elements,
                             original_local_image_paths,
+                            original_mention_bindings,
                         );
                         self.pending_pastes.clone_from(&original_pending_pastes);
                         self.textarea.set_cursor(original_input.len());
@@ -1942,6 +2094,7 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
+        self.recent_submission_mention_bindings = original_mention_bindings.clone();
         if record_history && (!text.is_empty() || !self.attached_images.is_empty()) {
             let local_image_paths = self
                 .attached_images
@@ -1952,6 +2105,8 @@ impl ChatComposer {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
                 local_image_paths,
+                mention_bindings: original_mention_bindings,
+                pending_pastes: Vec::new(),
             });
         }
         self.pending_pastes.clear();
@@ -2014,6 +2169,7 @@ impl ChatComposer {
 
         let original_input = self.textarea.text().to_string();
         let original_text_elements = self.textarea.text_elements();
+        let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
             .iter()
@@ -2045,10 +2201,11 @@ impl ChatComposer {
             }
         } else {
             // Restore text if submission was suppressed.
-            self.set_text_content(
+            self.set_text_content_with_mention_bindings(
                 original_input,
                 original_text_elements,
                 original_local_image_paths,
+                original_mention_bindings,
             );
             self.pending_pastes = original_pending_pastes;
             (InputResult::None, true)
@@ -2237,11 +2394,7 @@ impl ChatComposer {
                         _ => unreachable!(),
                     };
                     if let Some(entry) = replace_entry {
-                        self.set_text_content(
-                            entry.text,
-                            entry.text_elements,
-                            entry.local_image_paths,
-                        );
+                        self.apply_history_entry(entry);
                         return (InputResult::None, true);
                     }
                 }
@@ -2252,7 +2405,17 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.is_task_running => self.handle_submission(true),
+            } if self.steer_enabled && !self.is_bang_shell_command() => {
+                self.handle_submission(self.is_task_running)
+            }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_task_running && !self.is_bang_shell_command() => {
+                self.handle_submission(true)
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -2263,6 +2426,10 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn is_bang_shell_command(&self) -> bool {
+        self.textarea.text().trim_start().starts_with('!')
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -2524,6 +2691,8 @@ impl ChatComposer {
             is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            status_line_value: self.status_line_value.clone(),
+            status_line_enabled: self.status_line_enabled,
         }
     }
 
@@ -2920,6 +3089,8 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path.to_string_lossy().into_owned()),
+                    category_tag: (skill.scope == codex_core::protocol::SkillScope::Repo)
+                        .then(|| "[Repo]".to_string()),
                 });
             }
         }
@@ -2942,7 +3113,18 @@ impl ChatComposer {
                     insert_text: format!("${slug}"),
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
+                    category_tag: Some("[App]".to_string()),
                 });
+            }
+        }
+
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for mention in &mentions {
+            *counts.entry(mention.insert_text.clone()).or_insert(0) += 1;
+        }
+        for mention in &mut mentions {
+            if counts.get(&mention.insert_text).copied().unwrap_or(0) <= 1 {
+                mention.category_tag = None;
             }
         }
 
@@ -2950,15 +3132,7 @@ impl ChatComposer {
     }
 
     fn connector_brief_description(connector: &AppInfo) -> String {
-        let status_label = if connector.is_accessible {
-            "Connected"
-        } else {
-            "Can be installed"
-        };
-        match Self::connector_description(connector) {
-            Some(description) => format!("{status_label} - {description}"),
-            None => status_label.to_string(),
-        }
+        Self::connector_description(connector).unwrap_or_default()
     }
 
     fn connector_description(connector: &AppInfo) -> Option<String> {
@@ -3006,6 +3180,22 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {
+        if self.status_line_value == status_line {
+            return false;
+        }
+        self.status_line_value = status_line;
+        true
+    }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) -> bool {
+        if self.status_line_enabled == enabled {
+            return false;
+        }
+        self.status_line_enabled = enabled;
+        true
+    }
 }
 
 fn skill_display_name(skill: &SkillMetadata) -> &str {
@@ -3031,6 +3221,42 @@ fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
+fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option<Range<usize>> {
+    if token.is_empty() || from >= text.len() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let token_bytes = token.as_bytes();
+    let mut index = from;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+
+        let end = index.saturating_add(token_bytes.len());
+        if end > bytes.len() {
+            return None;
+        }
+        if &bytes[index..end] != token_bytes {
+            index += 1;
+            continue;
+        }
+
+        if bytes
+            .get(end)
+            .is_none_or(|byte| !is_mention_name_char(*byte))
+        {
+            return Some(index..end);
+        }
+
+        index = end;
+    }
+
+    None
+}
+
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if !self.input_enabled {
@@ -3046,7 +3272,7 @@ impl Renderable for ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
@@ -3099,14 +3325,9 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let context_line = context_window_line(
-                    footer_props.context_window_percent,
-                    footer_props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(&footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -3118,24 +3339,80 @@ impl ChatComposer {
                 } else {
                     popup_rect
                 };
-                let left_width = if self.footer_flash_visible() {
+                let available_width =
+                    hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                let status_line = footer_props
+                    .status_line_value
+                    .as_ref()
+                    .map(|line| line.clone().dim());
+                let status_line_candidate = footer_props.status_line_enabled
+                    && matches!(
+                        footer_props.mode,
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                    );
+                let mut truncated_status_line = if status_line_candidate {
+                    status_line.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
+                    })
+                } else {
+                    None
+                };
+                let status_line_active = status_line_candidate && truncated_status_line.is_some();
+                let left_mode_indicator = if status_line_active {
+                    None
+                } else {
+                    self.collaboration_mode_indicator
+                };
+                let mut left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
                         .map(|flash| flash.line.width() as u16)
                         .unwrap_or(0)
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     footer_hint_items_width(items)
+                } else if status_line_active {
+                    truncated_status_line
+                        .as_ref()
+                        .map(|line| line.width() as u16)
+                        .unwrap_or(0)
                 } else {
                     footer_line_width(
-                        footer_props,
-                        self.collaboration_mode_indicator,
+                        &footer_props,
+                        left_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
                     )
                 };
+                let right_line = if status_line_active {
+                    let full =
+                        mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
+                    let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
+                    let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                    if can_show_left_with_context(hint_rect, left_width, full_width) {
+                        full
+                    } else {
+                        compact
+                    }
+                } else {
+                    Some(context_window_line(
+                        footer_props.context_window_percent,
+                        footer_props.context_window_used_tokens,
+                    ))
+                };
+                let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                if status_line_active
+                    && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
+                    && left_width > max_left
+                    && let Some(line) = status_line.as_ref().map(|line| {
+                        truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
+                    })
+                {
+                    left_width = line.width() as u16;
+                    truncated_status_line = Some(line);
+                }
                 let can_show_left_and_context =
-                    can_show_left_with_context(hint_rect, left_width, context_width);
+                    can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
                 let single_line_layout = if has_override {
@@ -3149,8 +3426,8 @@ impl ChatComposer {
                             // the context indicator on narrow widths.
                             Some(single_line_footer_layout(
                                 hint_rect,
-                                context_width,
-                                self.collaboration_mode_indicator,
+                                right_width,
+                                left_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -3161,7 +3438,7 @@ impl ChatComposer {
                         | FooterMode::ShortcutOverlay => None,
                     }
                 };
-                let show_context = if matches!(
+                let show_right = if matches!(
                     footer_props.mode,
                     FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
@@ -3178,15 +3455,31 @@ impl ChatComposer {
                 if let Some((summary_left, _)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer_from_props(
-                                hint_rect,
-                                buf,
-                                footer_props,
-                                self.collaboration_mode_indicator,
-                                show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
-                            );
+                            if status_line_active {
+                                if let Some(line) = truncated_status_line.clone() {
+                                    render_footer_line(hint_rect, buf, line);
+                                } else {
+                                    render_footer_from_props(
+                                        hint_rect,
+                                        buf,
+                                        &footer_props,
+                                        left_mode_indicator,
+                                        show_cycle_hint,
+                                        show_shortcuts_hint,
+                                        show_queue_hint,
+                                    );
+                                }
+                            } else {
+                                render_footer_from_props(
+                                    hint_rect,
+                                    buf,
+                                    &footer_props,
+                                    left_mode_indicator,
+                                    show_cycle_hint,
+                                    show_shortcuts_hint,
+                                    show_queue_hint,
+                                );
+                            }
                         }
                         SummaryLeft::Custom(line) => {
                             render_footer_line(hint_rect, buf, line);
@@ -3199,11 +3492,15 @@ impl ChatComposer {
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
+                } else if status_line_active {
+                    if let Some(line) = truncated_status_line {
+                        render_footer_line(hint_rect, buf, line);
+                    }
                 } else {
                     render_footer_from_props(
                         hint_rect,
                         buf,
-                        footer_props,
+                        &footer_props,
                         self.collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
@@ -3211,8 +3508,8 @@ impl ChatComposer {
                     );
                 }
 
-                if show_context {
-                    render_context_right(hint_rect, buf, &context_line);
+                if show_right && let Some(line) = &right_line {
+                    render_context_right(hint_rect, buf, line);
                 }
             }
         }
@@ -3488,7 +3785,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(footer_props);
+        let footer_lines = footer_height(&footer_props);
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -3819,8 +4116,118 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some(HistoryEntry::from_text("draft text".to_string()))
+            Some(HistoryEntry::new("draft text".to_string()))
         );
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_pending_paste_history_entry() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large.clone());
+        let char_count = large.chars().count();
+        let placeholder = format!("[Pasted Content {char_count} chars]");
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(
+            composer.pending_pastes,
+            vec![(placeholder.clone(), large.clone())]
+        );
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                Vec::new(),
+                vec![(placeholder.clone(), large.clone())]
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.pending_pastes, vec![(placeholder.clone(), large)]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
+
+        composer.set_steer_enabled(true);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5));
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn clear_for_ctrl_c_preserves_image_draft_state() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let path = PathBuf::from("example.png");
+        composer.attach_image(path.clone());
+        let placeholder = local_image_label_text(1);
+
+        composer.clear_for_ctrl_c();
+        assert!(composer.is_empty());
+
+        let history_entry = composer
+            .history
+            .navigate_up(&composer.app_event_tx)
+            .expect("expected history entry");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.clone()),
+        )];
+        assert_eq!(
+            history_entry,
+            HistoryEntry::with_pending(
+                placeholder.clone(),
+                text_elements,
+                vec![path.clone()],
+                Vec::new()
+            )
+        );
+
+        composer.apply_history_entry(history_entry);
+        assert_eq!(composer.textarea.text(), placeholder);
+        assert_eq!(composer.local_image_paths(), vec![path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder]);
     }
 
     /// Behavior: `?` toggles the shortcut overlay only when the composer is otherwise empty. After
@@ -3909,6 +4316,43 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "hi?there");
         assert_ne!(composer.footer_mode, FooterMode::ShortcutOverlay);
+    }
+
+    #[test]
+    fn set_connector_mentions_refreshes_open_mention_popup() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let connectors = vec![AppInfo {
+            id: "connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+        }];
+        composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected mention popup to open after connectors update");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected connector mention to be selected");
+        assert_eq!(mention.insert_text, "$notion".to_string());
+        assert_eq!(mention.path, Some("app://connector_1".to_string()));
     }
 
     #[test]
@@ -5020,6 +5464,65 @@ mod tests {
     }
 
     #[test]
+    fn tab_submits_when_no_task_running_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['h', 'i']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "hi"
+        ));
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn tab_does_not_submit_for_bang_shell_command_in_steer_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.set_task_running(false);
+
+        type_chars_humanlike(&mut composer, &['!', 'l', 's']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(
+            composer.textarea.text().starts_with("!ls"),
+            "expected Tab not to submit or clear a `!` command"
+        );
+    }
+
+    #[test]
     fn slash_mention_dispatches_command_and_inserts_at() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -5425,6 +5928,40 @@ mod tests {
     }
 
     #[test]
+    fn submit_captures_recent_mention_bindings_before_clearing_textarea() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let mention_bindings = vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "/tmp/user/figma/SKILL.md".to_string(),
+        }];
+        composer.set_text_content_with_mention_bindings(
+            "$figma please".to_string(),
+            Vec::new(),
+            Vec::new(),
+            mention_bindings.clone(),
+        );
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert_eq!(
+            composer.take_recent_submission_mention_bindings(),
+            mention_bindings
+        );
+        assert!(composer.take_mention_bindings().is_empty());
+    }
+
+    #[test]
     fn history_navigation_restores_image_attachments() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -5453,6 +5990,51 @@ mod tests {
         assert_eq!(text_elements.len(), 1);
         assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
         assert_eq!(composer.local_image_paths(), vec![path]);
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_navigation_leaves_cursor_at_end_of_line() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        type_chars_humanlike(&mut composer, &['s', 'e', 'c', 'o', 'n', 'd']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "first");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "second");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(composer.textarea.is_empty());
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 
     #[test]
@@ -7207,6 +7789,34 @@ mod tests {
 
         assert_eq!(composer.current_text(), "No images here".to_string());
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn apply_external_edit_renumbers_image_placeholders() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let first_path = PathBuf::from("img1.png");
+        let second_path = PathBuf::from("img2.png");
+        composer.attach_image(first_path);
+        composer.attach_image(second_path.clone());
+
+        let placeholder2 = local_image_label_text(2);
+        composer.apply_external_edit(format!("Keep {placeholder2}"));
+
+        let placeholder1 = local_image_label_text(1);
+        assert_eq!(composer.current_text(), format!("Keep {placeholder1}"));
+        assert_eq!(composer.attached_images.len(), 1);
+        assert_eq!(composer.attached_images[0].placeholder, placeholder1);
+        assert_eq!(composer.local_image_paths(), vec![second_path]);
+        assert_eq!(composer.textarea.element_payloads(), vec![placeholder1]);
     }
 
     #[test]

@@ -20,8 +20,8 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
-codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-utils-cli = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
@@ -33,6 +33,9 @@ codex-rmcp-client = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -45,6 +48,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
@@ -59,6 +63,7 @@ axum = { workspace = true, default-features = false, features = [
 base64 = { workspace = true }
 codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
@@ -66,5 +71,6 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tokio-tungstenite = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

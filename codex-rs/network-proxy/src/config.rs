@@ -8,13 +8,14 @@ use std::net::SocketAddr;
 use tracing::warn;
 use url::Url;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkProxyConfig {
     #[serde(default)]
-    pub network_proxy: NetworkProxySettings,
+    pub network: NetworkProxySettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
@@ -22,13 +23,10 @@ pub struct NetworkProxySettings {
     pub proxy_url: String,
     #[serde(default = "default_admin_url")]
     pub admin_url: String,
-    #[serde(default)]
     pub enable_socks5: bool,
     #[serde(default = "default_socks_url")]
     pub socks_url: String,
-    #[serde(default)]
     pub enable_socks5_udp: bool,
-    #[serde(default)]
     pub allow_upstream_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
@@ -37,7 +35,12 @@ pub struct NetworkProxySettings {
     #[serde(default)]
     pub mode: NetworkMode,
     #[serde(default)]
-    pub policy: NetworkPolicy,
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub denied_domains: Vec<String>,
+    #[serde(default)]
+    pub allow_unix_sockets: Vec<String>,
+    pub allow_local_binding: bool,
 }
 
 impl Default for NetworkProxySettings {
@@ -46,28 +49,19 @@ impl Default for NetworkProxySettings {
             enabled: false,
             proxy_url: default_proxy_url(),
             admin_url: default_admin_url(),
-            enable_socks5: false,
+            enable_socks5: true,
             socks_url: default_socks_url(),
-            enable_socks5_udp: false,
-            allow_upstream_proxy: false,
+            enable_socks5_udp: true,
+            allow_upstream_proxy: true,
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_non_loopback_admin: false,
             mode: NetworkMode::default(),
-            policy: NetworkPolicy::default(),
+            allowed_domains: Vec::new(),
+            denied_domains: Vec::new(),
+            allow_unix_sockets: Vec::new(),
+            allow_local_binding: true,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NetworkPolicy {
-    #[serde(default)]
-    pub allowed_domains: Vec<String>,
-    #[serde(default)]
-    pub denied_domains: Vec<String>,
-    #[serde(default)]
-    pub allow_unix_sockets: Vec<String>,
-    #[serde(default)]
-    pub allow_local_binding: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -142,7 +136,7 @@ pub(crate) fn clamp_bind_addrs(
         cfg.dangerously_allow_non_loopback_admin,
         "admin API",
     );
-    if cfg.policy.allow_unix_sockets.is_empty() {
+    if cfg.allow_unix_sockets.is_empty() {
         return (http_addr, socks_addr, admin_addr);
     }
 
@@ -179,26 +173,14 @@ pub struct RuntimeConfig {
 }
 
 pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
-    let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128).with_context(|| {
-        format!(
-            "invalid network_proxy.proxy_url: {}",
-            cfg.network_proxy.proxy_url
-        )
-    })?;
-    let socks_addr = resolve_addr(&cfg.network_proxy.socks_url, 8081).with_context(|| {
-        format!(
-            "invalid network_proxy.socks_url: {}",
-            cfg.network_proxy.socks_url
-        )
-    })?;
-    let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080).with_context(|| {
-        format!(
-            "invalid network_proxy.admin_url: {}",
-            cfg.network_proxy.admin_url
-        )
-    })?;
+    let http_addr = resolve_addr(&cfg.network.proxy_url, 3128)
+        .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
+    let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
+        .with_context(|| format!("invalid network.socks_url: {}", cfg.network.socks_url))?;
+    let admin_addr = resolve_addr(&cfg.network.admin_url, 8080)
+        .with_context(|| format!("invalid network.admin_url: {}", cfg.network.admin_url))?;
     let (http_addr, socks_addr, admin_addr) =
-        clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg.network_proxy);
+        clamp_bind_addrs(http_addr, socks_addr, admin_addr, &cfg.network);
 
     Ok(RuntimeConfig {
         http_addr,
@@ -217,6 +199,30 @@ fn resolve_addr(url: &str, default_port: u16) -> Result<SocketAddr> {
     match host.parse::<IpAddr>() {
         Ok(ip) => Ok(SocketAddr::new(ip, addr_parts.port)),
         Err(_) => Ok(SocketAddr::from(([127, 0, 0, 1], addr_parts.port))),
+    }
+}
+
+pub fn host_and_port_from_network_addr(value: &str, default_port: u16) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<missing>".to_string();
+    }
+
+    let parts = match parse_host_port(trimmed, default_port) {
+        Ok(parts) => parts,
+        Err(_) => {
+            return format_host_and_port(trimmed, default_port);
+        }
+    };
+
+    format_host_and_port(&parts.host, parts.port)
+}
+
+fn format_host_and_port(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
     }
 }
 
@@ -295,14 +301,13 @@ fn parse_host_port_fallback(input: &str, default_port: u16) -> Result<SocketAddr
     // accidentally interpreting unbracketed IPv6 addresses as `host:port`.
     if host_port.bytes().filter(|b| *b == b':').count() == 1
         && let Some((host, port)) = host_port.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
     {
         if host.is_empty() {
             bail!("missing host in network proxy address: {input}");
         }
         return Ok(SocketAddressParts {
             host: host.to_string(),
-            port,
+            port: port.parse::<u16>().ok().unwrap_or(default_port),
         });
     }
 
@@ -320,6 +325,47 @@ mod tests {
     use super::*;
 
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn network_proxy_settings_default_matches_local_use_baseline() {
+        assert_eq!(
+            NetworkProxySettings::default(),
+            NetworkProxySettings {
+                enabled: false,
+                proxy_url: "http://127.0.0.1:3128".to_string(),
+                admin_url: "http://127.0.0.1:8080".to_string(),
+                enable_socks5: true,
+                socks_url: "http://127.0.0.1:8081".to_string(),
+                enable_socks5_udp: true,
+                allow_upstream_proxy: true,
+                dangerously_allow_non_loopback_proxy: false,
+                dangerously_allow_non_loopback_admin: false,
+                mode: NetworkMode::Full,
+                allowed_domains: Vec::new(),
+                denied_domains: Vec::new(),
+                allow_unix_sockets: Vec::new(),
+                allow_local_binding: true,
+            }
+        );
+    }
+
+    #[test]
+    fn partial_network_config_uses_struct_defaults_for_missing_fields() {
+        let config: NetworkProxyConfig = serde_json::from_str(
+            r#"{
+                "network": {
+                    "enabled": true
+                }
+            }"#,
+        )
+        .unwrap();
+        let expected = NetworkProxySettings {
+            enabled: true,
+            ..NetworkProxySettings::default()
+        };
+
+        assert_eq!(config.network, expected);
+    }
 
     #[test]
     fn parse_host_port_defaults_for_empty_string() {
@@ -391,9 +437,22 @@ mod tests {
         assert_eq!(
             parse_host_port("example.com:notaport", 3128).unwrap(),
             SocketAddressParts {
-                host: "example.com:notaport".to_string(),
+                host: "example.com".to_string(),
                 port: 3128,
             }
+        );
+    }
+
+    #[test]
+    fn host_and_port_from_network_addr_defaults_for_empty_string() {
+        assert_eq!(host_and_port_from_network_addr("", 1234), "<missing>");
+    }
+
+    #[test]
+    fn host_and_port_from_network_addr_formats_ipv6() {
+        assert_eq!(
+            host_and_port_from_network_addr("http://[::1]:8080", 3128),
+            "[::1]:8080"
         );
     }
 
@@ -453,10 +512,7 @@ mod tests {
         let cfg = NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: true,
             dangerously_allow_non_loopback_admin: true,
-            policy: NetworkPolicy {
-                allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
-                ..Default::default()
-            },
+            allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
             ..Default::default()
         };
         let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();

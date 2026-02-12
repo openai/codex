@@ -2,7 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
-use codex_common::CliConfigOverrides;
+use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -38,7 +38,7 @@ pub struct Cli {
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
-    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+    pub sandbox_mode: Option<codex_utils_cli::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -70,6 +70,10 @@ pub struct Cli {
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
+
+    /// Run without persisting session files to disk.
+    #[arg(long = "ephemeral", global = true, default_value_t = false)]
+    pub ephemeral: bool,
 
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
@@ -262,9 +266,11 @@ mod tests {
             "gpt-5.2-codex",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
+            "--ephemeral",
             PROMPT,
         ]);
 
+        assert!(cli.ephemeral);
         let Some(Command::Resume(args)) = cli.command else {
             panic!("expected resume command");
         };

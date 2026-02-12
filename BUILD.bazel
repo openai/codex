@@ -6,13 +6,21 @@ xcode_config(name = "disable_xcode")
 # TODO(zbarsky): Upstream a better libc constraint into rules_rust.
 # We only enable this on linux though for sanity, and because it breaks remote execution.
 platform(
-    name = "local",
+    name = "local_linux",
     constraint_values = [
+        # We mark the local platform as glibc-compatible because musl-built rust cannot dlopen proc macros.
         "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
     ],
-    parents = [
-        "@platforms//host",
+    parents = ["@platforms//host"],
+)
+
+platform(
+    name = "local_windows",
+    constraint_values = [
+        # We just need to pick one of the ABIs. Do the same one we target.
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
     ],
+    parents = ["@platforms//host"],
 )
 
 alias(

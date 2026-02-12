@@ -230,7 +230,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     fixture
         .submit_turn_with_policy(
             "run a command that should be denied by the read-only sandbox",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 

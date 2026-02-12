@@ -30,7 +30,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use codex_app_server_protocol::AuthMode;
+use codex_core::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use std::sync::RwLock;
 
@@ -661,10 +661,7 @@ impl AuthModeWidget {
     }
 
     fn handle_existing_chatgpt_login(&mut self) -> bool {
-        if matches!(
-            self.login_status,
-            LoginStatus::AuthMode(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
-        ) {
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::Chatgpt)) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
             true

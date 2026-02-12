@@ -18,7 +18,6 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -29,67 +28,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
-
-// Verifies byte-truncation formatting for function error output (RespondToModel errors)
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn truncate_function_error_trims_respond_to_model() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("test-gpt-5.1-codex");
-    let test = builder.build(&server).await?;
-
-    // Construct a very long, non-existent path to force a RespondToModel error with a large message
-    let long_path = "long path text should trigger truncation".repeat(8_000);
-    let call_id = "grep-huge-error";
-    let args = json!({
-        "pattern": "alpha",
-        "path": long_path,
-        "limit": 10
-    });
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "grep_files", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
-    test.submit_turn_with_policy(
-        "trigger grep_files with long path to test truncation",
-        SandboxPolicy::DangerFullAccess,
-    )
-    .await?;
-
-    let output = mock
-        .function_call_output_text(call_id)
-        .context("function error output present")?;
-
-    tracing::debug!(output = %output, "truncated function error output");
-
-    // Expect plaintext with token-based truncation marker and no omitted-lines marker
-    assert!(
-        serde_json::from_str::<serde_json::Value>(&output).is_err(),
-        "expected error output to be plain text",
-    );
-    assert!(
-        !output.contains("Total output lines:"),
-        "error output should not include line-based truncation header: {output}",
-    );
-    let truncated_pattern = r"(?s)^unable to access `.*tokens truncated.*$";
-    assert_regex_match(truncated_pattern, &output);
-    assert!(
-        !output.contains("omitted"),
-        "line omission marker should not appear when no lines were dropped: {output}"
-    );
-
-    Ok(())
-}
 
 // Verifies that a standard tool call (shell_command) exceeding the model formatting
 // limits is truncated before being sent back to the model.
@@ -426,6 +364,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
@@ -445,7 +384,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     fixture
         .submit_turn_with_policy(
             "call the rmcp echo tool with a very large message",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 
@@ -519,6 +458,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
@@ -545,7 +485,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -783,6 +723,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
@@ -801,7 +742,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
     fixture
         .submit_turn_with_policy(
             "call the rmcp echo tool with a very large message",
-            SandboxPolicy::ReadOnly,
+            SandboxPolicy::new_read_only_policy(),
         )
         .await?;
 

@@ -26,12 +26,14 @@ use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
-use crate::sandboxing::ExecEnv;
+use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
+use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
+use codex_network_proxy::NetworkProxy;
 use codex_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
@@ -63,6 +65,7 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
@@ -128,6 +131,17 @@ pub enum SandboxType {
     WindowsRestrictedToken,
 }
 
+impl SandboxType {
+    pub(crate) fn as_metric_tag(self) -> &'static str {
+        match self {
+            SandboxType::None => "none",
+            SandboxType::MacosSeatbelt => "seatbelt",
+            SandboxType::LinuxSeccomp => "seccomp",
+            SandboxType::WindowsRestrictedToken => "windows_sandbox",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,
@@ -144,9 +158,18 @@ pub async fn process_exec_tool_call(
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
+    let enforce_managed_network = params.network.is_some();
     let sandbox_type = match &sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            SandboxType::None
+            if enforce_managed_network {
+                get_platform_sandbox(
+                    windows_sandbox_level
+                        != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+                )
+                .unwrap_or(SandboxType::None)
+            } else {
+                SandboxType::None
+            }
         }
         _ => get_platform_sandbox(
             windows_sandbox_level != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
@@ -158,14 +181,17 @@ pub async fn process_exec_tool_call(
     let ExecParams {
         command,
         cwd,
+        mut env,
         expiration,
-        env,
+        network,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
         arg0: _,
     } = params;
-
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -184,11 +210,13 @@ pub async fn process_exec_tool_call(
     };
 
     let manager = SandboxManager::new();
-    let exec_env = manager
+    let exec_req = manager
         .transform(crate::sandboxing::SandboxTransformRequest {
             spec,
             policy: sandbox_policy,
             sandbox: sandbox_type,
+            enforce_managed_network,
+            network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,
@@ -197,18 +225,19 @@ pub async fn process_exec_tool_call(
         .map_err(CodexErr::from)?;
 
     // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_env, sandbox_policy, stdout_stream).await
+    crate::sandboxing::execute_env(exec_req, sandbox_policy, stdout_stream).await
 }
 
 pub(crate) async fn execute_exec_env(
-    env: ExecEnv,
+    env: ExecRequest,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
-    let ExecEnv {
+    let ExecRequest {
         command,
         cwd,
         env,
+        network,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -222,6 +251,7 @@ pub(crate) async fn execute_exec_env(
         cwd,
         expiration,
         env,
+        network,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -313,11 +343,16 @@ async fn exec_windows_sandbox(
     let ExecParams {
         command,
         cwd,
-        env,
+        mut env,
+        network,
         expiration,
         windows_sandbox_level,
         ..
     } = params;
+    if let Some(network) = network.as_ref() {
+        network.apply_to_env(&mut env);
+    }
+
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
     // variants of ExecExpiration, not just timeout.
     let timeout_ms = expiration.timeout_ms();
@@ -667,6 +702,7 @@ async fn exec(
         command,
         cwd,
         env,
+        network,
         arg0,
         expiration,
         windows_sandbox_level: _,
@@ -680,15 +716,16 @@ async fn exec(
         ))
     })?;
     let arg0_ref = arg0.as_deref();
-    let child = spawn_child_async(
-        PathBuf::from(program),
-        args.into(),
-        arg0_ref,
+    let child = spawn_child_async(SpawnChildRequest {
+        program: PathBuf::from(program),
+        args: args.into(),
+        arg0: arg0_ref,
         cwd,
         sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
+        network: network.as_ref(),
+        stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
-    )
+    })
     .await?;
     consume_truncated_output(child, expiration, stdout_stream).await
 }
@@ -1050,13 +1087,20 @@ mod tests {
             cwd: std::env::current_dir()?,
             expiration: 500.into(),
             env,
+            network: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,
             arg0: None,
         };
 
-        let output = exec(params, SandboxType::None, &SandboxPolicy::ReadOnly, None).await?;
+        let output = exec(
+            params,
+            SandboxType::None,
+            &SandboxPolicy::new_read_only_policy(),
+            None,
+        )
+        .await?;
         assert!(output.timed_out);
 
         let stdout = output.stdout.from_utf8_lossy().text;
@@ -1096,6 +1140,7 @@ mod tests {
             cwd: cwd.clone(),
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
+            network: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             justification: None,

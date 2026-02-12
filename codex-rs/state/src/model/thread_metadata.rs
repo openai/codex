@@ -66,6 +66,8 @@ pub struct ThreadMetadata {
     pub model_provider: String,
     /// The working directory for the thread.
     pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
     /// A best-effort thread title.
     pub title: String,
     /// The sandbox policy (stringified enum).
@@ -74,8 +76,8 @@ pub struct ThreadMetadata {
     pub approval_mode: String,
     /// The last observed token usage.
     pub tokens_used: i64,
-    /// Whether the thread has observed a user message.
-    pub has_user_event: bool,
+    /// First user message observed for this thread, if any.
+    pub first_user_message: Option<String>,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -103,6 +105,8 @@ pub struct ThreadMetadataBuilder {
     pub model_provider: Option<String>,
     /// The working directory for the thread.
     pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: Option<String>,
     /// The sandbox policy.
     pub sandbox_policy: SandboxPolicy,
     /// The approval mode.
@@ -133,7 +137,8 @@ impl ThreadMetadataBuilder {
             source,
             model_provider: None,
             cwd: PathBuf::new(),
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            cli_version: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             approval_mode: AskForApproval::OnRequest,
             archived_at: None,
             git_sha: None,
@@ -163,11 +168,12 @@ impl ThreadMetadataBuilder {
                 .clone()
                 .unwrap_or_else(|| default_provider.to_string()),
             cwd: self.cwd.clone(),
+            cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
-            has_user_event: false,
+            first_user_message: None,
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -201,6 +207,9 @@ impl ThreadMetadata {
         if self.cwd != other.cwd {
             diffs.push("cwd");
         }
+        if self.cli_version != other.cli_version {
+            diffs.push("cli_version");
+        }
         if self.title != other.title {
             diffs.push("title");
         }
@@ -213,8 +222,8 @@ impl ThreadMetadata {
         if self.tokens_used != other.tokens_used {
             diffs.push("tokens_used");
         }
-        if self.has_user_event != other.has_user_event {
-            diffs.push("has_user_event");
+        if self.first_user_message != other.first_user_message {
+            diffs.push("first_user_message");
         }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
@@ -245,11 +254,12 @@ pub(crate) struct ThreadRow {
     source: String,
     model_provider: String,
     cwd: String,
+    cli_version: String,
     title: String,
     sandbox_policy: String,
     approval_mode: String,
     tokens_used: i64,
-    has_user_event: bool,
+    first_user_message: String,
     archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
@@ -266,11 +276,12 @@ impl ThreadRow {
             source: row.try_get("source")?,
             model_provider: row.try_get("model_provider")?,
             cwd: row.try_get("cwd")?,
+            cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
             sandbox_policy: row.try_get("sandbox_policy")?,
             approval_mode: row.try_get("approval_mode")?,
             tokens_used: row.try_get("tokens_used")?,
-            has_user_event: row.try_get("has_user_event")?,
+            first_user_message: row.try_get("first_user_message")?,
             archived_at: row.try_get("archived_at")?,
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
@@ -291,11 +302,12 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd,
+            cli_version,
             title,
             sandbox_policy,
             approval_mode,
             tokens_used,
-            has_user_event,
+            first_user_message,
             archived_at,
             git_sha,
             git_branch,
@@ -309,11 +321,12 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             model_provider,
             cwd: PathBuf::from(cwd),
+            cli_version,
             title,
             sandbox_policy,
             approval_mode,
             tokens_used,
-            has_user_event,
+            first_user_message: (!first_user_message.is_empty()).then_some(first_user_message),
             archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,

@@ -5,8 +5,6 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
-use codex_common::CliConfigOverrides;
-use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
@@ -19,6 +17,8 @@ use codex_core::mcp::auth::oauth_login_support;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
+use codex_utils_cli::CliConfigOverrides;
+use codex_utils_cli::format_env_display::format_env_display;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -243,6 +243,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let new_entry = McpServerConfig {
         transport: transport.clone(),
         enabled: true,
+        required: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,

@@ -17,9 +17,12 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::TurnItem;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -109,6 +112,78 @@ fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider
+}
+
+fn model_info_with_context_window(slug: &str, context_window: i64) -> ModelInfo {
+    let models_response: ModelsResponse =
+        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let mut model_info = models_response
+        .models
+        .into_iter()
+        .find(|model| model.slug == slug)
+        .unwrap_or_else(|| panic!("model `{slug}` missing from models.json"));
+    model_info.context_window = Some(context_window);
+    model_info
+}
+
+fn assert_pre_sampling_switch_compaction_requests(
+    first: &serde_json::Value,
+    compact: &serde_json::Value,
+    follow_up: &serde_json::Value,
+    previous_model: &str,
+    next_model: &str,
+) {
+    assert_eq!(first["model"].as_str(), Some(previous_model));
+    assert_eq!(compact["model"].as_str(), Some(previous_model));
+    assert_eq!(follow_up["model"].as_str(), Some(next_model));
+
+    let compact_body = compact.to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "pre-sampling compact request should include summarization prompt"
+    );
+}
+
+async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_core::CodexThread>) {
+    let mut turn_started_id = None;
+    let mut turn_completed_id = None;
+    let mut compact_started_id = None;
+    let mut compact_completed_id = None;
+
+    while turn_completed_id.is_none() {
+        let event = codex.next_event().await.expect("next event");
+        match event.msg {
+            EventMsg::TurnStarted(_) => turn_started_id = Some(event.id.clone()),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            }) => compact_started_id = Some(event.id.clone()),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(_),
+                ..
+            }) => compact_completed_id = Some(event.id.clone()),
+            EventMsg::TurnComplete(_) => turn_completed_id = Some(event.id.clone()),
+            _ => {}
+        }
+    }
+
+    let turn_started_id = turn_started_id.expect("turn started id");
+    let turn_completed_id = turn_completed_id.expect("turn complete id");
+
+    assert_eq!(
+        turn_completed_id, turn_started_id,
+        "turn start and complete should use the same event id"
+    );
+    assert_eq!(
+        compact_started_id,
+        Some(turn_started_id.clone()),
+        "compaction item start should use the turn event id"
+    );
+    assert_eq!(
+        compact_completed_id,
+        Some(turn_started_id),
+        "compaction item completion should use the turn event id"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1464,7 +1539,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let mut builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
-        config.features.enable(Feature::RemoteCompaction);
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
@@ -1493,7 +1567,6 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     let mut resume_builder = test_codex().with_config(move |config| {
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(limit);
-        config.features.enable(Feature::RemoteCompaction);
     });
     let resumed = resume_builder
         .resume(&server, home, rollout_path)
@@ -1551,6 +1624,257 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         compact_requests[0].path(),
         "/v1/responses/compact",
         "remote compaction should hit the compact endpoint"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.2-codex";
+    let next_model = "gpt-5.1-codex-max";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, 273_000),
+                model_info_with_context_window(next_model, 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", 120_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
+                ev_completed_with_tokens("r2", 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "before switch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "after switch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit second user turn");
+    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, compact, and follow-up requests"
+    );
+    assert_pre_sampling_switch_compaction_requests(
+        &requests[0].body_json(),
+        &requests[1].body_json(),
+        &requests[2].body_json(),
+        previous_model,
+        next_model,
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.2-codex";
+    let next_model = "gpt-5.1-codex-max";
+
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, 273_000),
+                model_info_with_context_window(next_model, 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before resume"),
+                ev_completed_with_tokens("r1", 120_000),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "PRE_SAMPLING_SUMMARY"),
+                ev_completed_with_tokens("r2", 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "after resume"),
+                ev_completed_with_tokens("r3", 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut initial_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
+    let initial = initial_builder
+        .build(&server)
+        .await
+        .expect("build initial test codex");
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    initial
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "before resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: initial.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: previous_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit pre-resume turn");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    initial
+        .codex
+        .submit(Op::Shutdown)
+        .await
+        .expect("shutdown initial session");
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut resumed_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.features.enable(Feature::RemoteModels);
+        });
+    let resumed = resumed_builder
+        .resume(&server, home, rollout_path)
+        .await
+        .expect("resume codex");
+
+    resumed
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "after resume".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: resumed.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: next_model.to_string(),
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .expect("submit resumed user turn");
+    assert_compaction_uses_turn_lifecycle_id(&resumed.codex).await;
+
+    let requests = request_log.requests();
+    assert_eq!(models_mock.requests().len(), 1);
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, compact, and follow-up requests"
+    );
+    assert_pre_sampling_switch_compaction_requests(
+        &requests[0].body_json(),
+        &requests[1].body_json(),
+        &requests[2].body_json(),
+        previous_model,
+        next_model,
     );
 }
 
@@ -2230,6 +2554,64 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_clamps_config_limit_to_context_window() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let config_limit = 200;
+    let over_limit_tokens = context_window * 90 / 100 + 1;
+
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", over_limit_tokens),
+    ]);
+    let auto_summary_payload = auto_summary(AUTO_SUMMARY_TEXT);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m2", &auto_summary_payload),
+        ev_completed_with_tokens("r2", 10),
+    ]);
+    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r3", 10)]);
+
+    let first_turn_mock = mount_sse_once(&server, first_turn).await;
+    let auto_compact_mock = mount_sse_once(&server, auto_compact_turn).await;
+    mount_sse_once(&server, post_auto_compact_turn).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_context_window = Some(context_window);
+        config.model_auto_compact_token_limit = Some(config_limit);
+    });
+    let codex = builder.build(&server).await.unwrap();
+
+    codex.submit_turn("OVER_LIMIT_TURN").await.unwrap();
+    codex.submit_turn("FOLLOW_UP_AFTER_CLAMP").await.unwrap();
+
+    assert!(
+        first_turn_mock.single_request().input().iter().any(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|entries| entries.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|value| value.as_str())
+                    == Some("OVER_LIMIT_TURN")
+        }),
+        "first request should contain the over-limit user input"
+    );
+
+    let auto_compact_body = auto_compact_mock.single_request().body_json().to_string();
+    assert!(
+        body_contains_text(&auto_compact_body, SUMMARIZATION_PROMPT),
+        "auto compact should run with the summarization prompt when config limit exceeds context"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     skip_if_no_network!();
 
@@ -2290,7 +2672,6 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
-            config.features.enable(Feature::RemoteCompaction);
         })
         .build(&server)
         .await
@@ -2411,7 +2792,6 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
         .with_config(|config| {
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
-            config.features.enable(Feature::RemoteCompaction);
         })
         .build(&server)
         .await

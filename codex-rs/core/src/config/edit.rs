@@ -55,6 +55,24 @@ pub enum ConfigEdit {
     ClearPath { segments: Vec<String> },
 }
 
+pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
+    if items.is_empty() {
+        return ConfigEdit::ClearPath {
+            segments: vec!["tui".to_string(), "status_line".to_string()],
+        };
+    }
+
+    let mut array = toml_edit::Array::new();
+    for item in items {
+        array.push(item.clone());
+    }
+
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "status_line".to_string()],
+        value: TomlItem::Value(array.into()),
+    }
+}
+
 // TODO(jif) move to a dedicated file
 mod document_helpers {
     use crate::config::types::McpServerConfig;
@@ -150,6 +168,9 @@ mod document_helpers {
 
         if !config.enabled {
             entry["enabled"] = value(false);
+        }
+        if config.required {
+            entry["required"] = value(true);
         }
         if let Some(timeout) = config.startup_timeout_sec {
             entry["startup_timeout_sec"] = value(timeout.as_secs_f64());
@@ -798,6 +819,44 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_windows_sandbox_mode(mut self, mode: &str) -> Self {
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "windows".to_string(),
+                "sandbox".to_string(),
+            ]
+        } else {
+            vec!["windows".to_string(), "sandbox".to_string()]
+        };
+        self.edits.push(ConfigEdit::SetPath {
+            segments,
+            value: value(mode),
+        });
+        self
+    }
+
+    pub fn clear_legacy_windows_sandbox_keys(mut self) -> Self {
+        for key in [
+            "experimental_windows_sandbox",
+            "elevated_windows_sandbox",
+            "enable_experimental_windows_sandbox",
+        ] {
+            let mut segments = vec!["features".to_string(), key.to_string()];
+            if let Some(profile) = self.profile.as_ref() {
+                segments = vec![
+                    "profiles".to_string(),
+                    profile.clone(),
+                    "features".to_string(),
+                    key.to_string(),
+                ];
+            }
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
+        self
+    }
+
     pub fn with_edits<I>(mut self, edits: I) -> Self
     where
         I: IntoIterator<Item = ConfigEdit>,
@@ -1373,6 +1432,7 @@ gpt-5 = "gpt-5.1"
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1396,6 +1456,7 @@ gpt-5 = "gpt-5.1"
                     env_http_headers: None,
                 },
                 enabled: false,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
                 tool_timeout_sec: None,
@@ -1462,6 +1523,7 @@ foo = { command = "cmd" }
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1507,6 +1569,7 @@ foo = { command = "cmd" } # keep me
                     cwd: None,
                 },
                 enabled: false,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1551,6 +1614,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                     cwd: None,
                 },
                 enabled: true,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1596,6 +1660,7 @@ foo = { command = "cmd" }
                     cwd: None,
                 },
                 enabled: false,
+                required: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,

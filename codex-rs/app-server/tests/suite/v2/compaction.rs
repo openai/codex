@@ -29,7 +29,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use core_test_support::responses;
@@ -106,6 +105,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    const REMOTE_AUTO_COMPACT_LIMIT: i64 = 200_000;
 
     let server = responses::start_mock_server().await;
     let sse1 = responses::sse(vec![
@@ -143,13 +143,11 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut features = BTreeMap::default();
-    features.insert(Feature::RemoteCompaction, true);
     write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
-        &features,
-        AUTO_COMPACT_LIMIT,
+        &BTreeMap::default(),
+        REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
         "openai",
         COMPACT_PROMPT,

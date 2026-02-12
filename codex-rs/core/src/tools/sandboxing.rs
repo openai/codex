@@ -12,6 +12,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
+use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -271,6 +272,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
+    pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
@@ -282,12 +284,15 @@ impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
         spec: CommandSpec,
-    ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
+        network: Option<&NetworkProxy>,
+    ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
                 sandbox: self.sandbox,
+                enforce_managed_network: self.enforce_managed_network,
+                network,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
@@ -321,7 +326,10 @@ mod tests {
     #[test]
     fn restricted_sandbox_requires_exec_approval_on_request() {
         assert_eq!(
-            default_exec_approval_requirement(AskForApproval::OnRequest, &SandboxPolicy::ReadOnly),
+            default_exec_approval_requirement(
+                AskForApproval::OnRequest,
+                &SandboxPolicy::new_read_only_policy()
+            ),
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: None,

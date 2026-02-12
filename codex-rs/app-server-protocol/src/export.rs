@@ -238,7 +238,10 @@ fn filter_client_request_ts(out_dir: &Path, experimental_methods: &[&str]) -> Re
         .collect();
     let new_body = filtered_arms.join(" | ");
     content = format!("{prefix}{new_body}{suffix}");
-    content = prune_unused_type_imports(content, &new_body);
+    let import_usage_scope = split_type_alias(&content)
+        .map(|(_, body, _)| body)
+        .unwrap_or_else(|| new_body.clone());
+    content = prune_unused_type_imports(content, &import_usage_scope);
 
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
@@ -296,7 +299,10 @@ fn filter_experimental_fields_in_ts_file(
     let prefix = &content[..open_brace + 1];
     let suffix = &content[close_brace..];
     content = format!("{prefix}{new_inner}{suffix}");
-    content = prune_unused_type_imports(content, &new_inner);
+    let import_usage_scope = split_type_alias(&content)
+        .map(|(_, body, _)| body)
+        .unwrap_or_else(|| new_inner.clone());
+    content = prune_unused_type_imports(content, &import_usage_scope);
     fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
@@ -1468,7 +1474,9 @@ mod tests {
                     let allow_optional_nullable = path
                         .file_stem()
                         .and_then(|stem| stem.to_str())
-                        .is_some_and(|stem| stem.ends_with("Params"));
+                        .is_some_and(|stem| {
+                            stem.ends_with("Params") || stem == "InitializeCapabilities"
+                        });
 
                     let contents = fs::read_to_string(&path)?;
                     if contents.contains("| undefined") {
@@ -1742,6 +1750,50 @@ mod tests {
         assert_eq!(filtered.contains("unstableField"), false);
         assert_eq!(filtered.contains("stableField"), true);
         assert_eq!(filtered.contains("otherStableField"), true);
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_type_fields_ts_filter_keeps_imports_used_in_intersection_suffix() -> Result<()>
+    {
+        let output_dir = std::env::temp_dir().join(format!("codex_ts_filter_{}", Uuid::now_v7()));
+        fs::create_dir_all(&output_dir)?;
+
+        struct TempDirGuard(PathBuf);
+
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let _guard = TempDirGuard(output_dir.clone());
+        let path = output_dir.join("Config.ts");
+        let content = r#"import type { JsonValue } from "../serde_json/JsonValue";
+import type { Keep } from "./Keep";
+
+export type Config = { stableField: Keep, unstableField: string | null } & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });
+"#;
+        fs::write(&path, content)?;
+
+        static CUSTOM_FIELD: crate::experimental_api::ExperimentalField =
+            crate::experimental_api::ExperimentalField {
+                type_name: "Config",
+                field_name: "unstableField",
+                reason: "custom/unstableField",
+            };
+        filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
+
+        let filtered = fs::read_to_string(&path)?;
+        assert_eq!(filtered.contains("unstableField"), false);
+        assert_eq!(
+            filtered.contains(r#"import type { JsonValue } from "../serde_json/JsonValue";"#),
+            true
+        );
+        assert_eq!(
+            filtered.contains(r#"import type { Keep } from "./Keep";"#),
+            true
+        );
         Ok(())
     }
 

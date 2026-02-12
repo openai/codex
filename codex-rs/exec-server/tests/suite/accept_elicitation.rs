@@ -15,9 +15,9 @@ use exec_server_test_support::write_default_execpolicy;
 use maplit::hashset;
 use pretty_assertions::assert_eq;
 use rmcp::ServiceExt;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::EmptyResult;
 use rmcp::model::ServerResult;
 use rmcp::model::object;
@@ -64,7 +64,7 @@ prefix_rule(
         git_path,
         project_root_path.display()
     );
-    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParam>>> = Default::default();
+    let elicitation_requests: Arc<Mutex<Vec<CreateElicitationRequestParams>>> = Default::default();
     let client = InteractiveClient {
         elicitations_to_accept: hashset! { expected_elicitation_message.clone() },
         elicitation_requests: elicitation_requests.clone(),
@@ -96,7 +96,8 @@ prefix_rule(
     let CallToolResult {
         content, is_error, ..
     } = service
-        .call_tool(CallToolRequestParam {
+        .call_tool(CallToolRequestParams {
+            meta: None,
             name: Cow::Borrowed("shell"),
             arguments: Some(object(json!(
                 {
@@ -105,6 +106,7 @@ prefix_rule(
                     "workdir": project_root_path.to_string_lossy(),
                 }
             ))),
+            task: None,
         })
         .await?;
     let tool_call_content = content
@@ -136,7 +138,14 @@ prefix_rule(
         .lock()
         .unwrap()
         .iter()
-        .map(|r| r.message.clone())
+        .map(|r| match r {
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                message, ..
+            }
+            | rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                message, ..
+            } => message.clone(),
+        })
         .collect::<Vec<_>>();
     assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 

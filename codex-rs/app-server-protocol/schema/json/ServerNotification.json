@@ -165,6 +165,71 @@
         }
       ]
     },
+    "AppInfo": {
+      "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "distributionChannel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isAccessible": {
+          "default": false,
+          "type": "boolean"
+        },
+        "logoUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "AppListUpdatedNotification": {
+      "description": "EXPERIMENTAL - notification emitted when the app list changes.",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/AppInfo"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "AskForApproval": {
       "description": "Determines the conditions under which the user is consulted to approve running the command proposed by Codex.",
       "oneOf": [
@@ -308,6 +373,7 @@
           "enum": [
             "contextWindowExceeded",
             "usageLimitExceeded",
+            "serverOverloaded",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -316,35 +382,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "modelCap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "modelCap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -450,6 +487,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -458,35 +496,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo2",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -617,6 +626,7 @@
       "enum": [
         "spawnAgent",
         "sendInput",
+        "resumeAgent",
         "wait",
         "closeAgent"
       ],
@@ -1138,6 +1148,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -1147,6 +1160,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -1161,6 +1175,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -1170,6 +1187,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -1464,6 +1482,17 @@
             },
             "model_provider_id": {
               "type": "string"
+            },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
             },
             "reasoning_effort": {
               "anyOf": [
@@ -1936,6 +1965,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -1964,6 +2001,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -2392,6 +2430,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PatchApplyStatus2"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -2419,6 +2465,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -2695,6 +2742,12 @@
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -3353,6 +3406,95 @@
           ],
           "title": "CollabCloseEndEventMsg",
           "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume begin.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_begin"
+              ],
+              "title": "CollabResumeBeginEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "type"
+          ],
+          "title": "CollabResumeBeginEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Collab interaction: resume end.",
+          "properties": {
+            "call_id": {
+              "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "receiver_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the receiver."
+            },
+            "sender_thread_id": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              ],
+              "description": "Thread ID of the sender."
+            },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AgentStatus"
+                }
+              ],
+              "description": "Last known status of the receiver agent reported to the sender agent after resume."
+            },
+            "type": {
+              "enum": [
+                "collab_resume_end"
+              ],
+              "title": "CollabResumeEndEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "receiver_thread_id",
+            "sender_thread_id",
+            "status",
+            "type"
+          ],
+          "title": "CollabResumeEndEventMsg",
+          "type": "object"
         }
       ]
     },
@@ -3362,6 +3504,14 @@
         "user_shell",
         "unified_exec_startup",
         "unified_exec_interaction"
+      ],
+      "type": "string"
+    },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
       ],
       "type": "string"
     },
@@ -3484,6 +3634,19 @@
       ],
       "type": "object"
     },
+    "FunctionCallOutputBody": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/definitions/FunctionCallOutputContentItem"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "FunctionCallOutputContentItem": {
       "description": "Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
       "oneOf": [
@@ -3530,19 +3693,10 @@
       ]
     },
     "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`content` preserves the historical plain-string payload so downstream integrations (tests, logging, etc.) can keep treating tool output as `String`. When an MCP server returns richer data we additionally populate `content_items` with the structured form that the Responses API understands.",
+      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
       "properties": {
-        "content": {
-          "type": "string"
-        },
-        "content_items": {
-          "items": {
-            "$ref": "#/definitions/FunctionCallOutputContentItem"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
+        "body": {
+          "$ref": "#/definitions/FunctionCallOutputBody"
         },
         "success": {
           "type": [
@@ -3552,7 +3706,66 @@
         }
       },
       "required": [
-        "content"
+        "body"
+      ],
+      "type": "object"
+    },
+    "FuzzyFileSearchResult": {
+      "description": "Superset of [`codex_file_search::FileMatch`]",
+      "properties": {
+        "file_name": {
+          "type": "string"
+        },
+        "indices": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "score": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file_name",
+        "path",
+        "root",
+        "score"
+      ],
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "query",
+        "sessionId"
       ],
       "type": "object"
     },
@@ -3944,11 +4157,23 @@
       "type": "string"
     },
     "MessagePhase": {
-      "enum": [
-        "commentary",
-        "final_answer"
-      ],
-      "type": "string"
+      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "oneOf": [
+        {
+          "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
+          "enum": [
+            "commentary"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's terminal answer text for the current turn.",
+          "enum": [
+            "final_answer"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
@@ -4086,6 +4311,14 @@
       ],
       "type": "string"
     },
+    "PatchApplyStatus2": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "PatchChangeKind": {
       "oneOf": [
         {
@@ -4210,6 +4443,18 @@
             }
           ]
         },
+        "limitId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -4253,6 +4498,18 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "plan_type": {
@@ -4361,6 +4618,57 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -5279,8 +5587,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -5338,6 +5654,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -5409,6 +5733,25 @@
         "model",
         "rolloutPath",
         "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
       ],
       "type": "object"
     },
@@ -6682,6 +7025,7 @@
           "type": "object"
         },
         {
+          "description": "Assistant-authored message payload used in turn-item streams.\n\n`phase` is optional because not all providers/models emit it. Consumers should use it when present, but retain legacy completion semantics when it is `None`.",
           "properties": {
             "content": {
               "items": {
@@ -6691,6 +7035,17 @@
             },
             "id": {
               "type": "string"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MessagePhase"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter."
             },
             "type": {
               "enum": [
@@ -7772,6 +8127,26 @@
       "properties": {
         "method": {
           "enum": [
+            "app/list/updated"
+          ],
+          "title": "App/list/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AppListUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "item/reasoning/summaryTextDelta"
           ],
           "title": "Item/reasoning/summaryTextDeltaNotificationMethod",
@@ -7887,6 +8262,26 @@
         "params"
       ],
       "title": "ConfigWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "fuzzyFileSearch/sessionUpdated"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FuzzyFileSearchSessionUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "FuzzyFileSearch/sessionUpdatedNotification",
       "type": "object"
     },
     {

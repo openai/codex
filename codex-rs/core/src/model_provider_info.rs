@@ -8,7 +8,6 @@
 use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
-use codex_api::is_azure_responses_wire_base_url;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
 use http::HeaderMap;
 use http::header::HeaderName;
@@ -17,7 +16,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::env::VarError;
 use std::time::Duration;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
@@ -117,7 +115,9 @@ pub struct ModelProviderInfo {
 
 impl ModelProviderInfo {
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
+        let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
+            + self.env_http_headers.as_ref().map_or(0, HashMap::len);
+        let mut headers = HeaderMap::with_capacity(capacity);
         if let Some(extra) = &self.http_headers {
             for (k, v) in extra {
                 if let (Ok(name), Ok(value)) = (HeaderName::try_from(k), HeaderValue::try_from(v)) {
@@ -174,31 +174,22 @@ impl ModelProviderInfo {
         })
     }
 
-    pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
-        is_azure_responses_wire_base_url(&self.name, self.base_url.as_deref())
-    }
-
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
     pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
-                let env_value = std::env::var(env_key);
-                env_value
-                    .and_then(|v| {
-                        if v.trim().is_empty() {
-                            Err(VarError::NotPresent)
-                        } else {
-                            Ok(Some(v))
-                        }
-                    })
-                    .map_err(|_| {
+                let api_key = std::env::var(env_key)
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .ok_or_else(|| {
                         crate::error::CodexErr::EnvVar(EnvVarError {
                             var: env_key.clone(),
                             instructions: self.env_key_instructions.clone(),
                         })
-                    })
+                    })?;
+                Ok(Some(api_key))
             }
             None => Ok(None),
         }
@@ -303,20 +294,19 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
 pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> ModelProviderInfo {
     // These CODEX_OSS_ environment variables are experimental: we may
     // switch to reading values from config.toml instead.
-    let codex_oss_base_url = match std::env::var("CODEX_OSS_BASE_URL")
+    let default_codex_oss_base_url = format!(
+        "http://localhost:{codex_oss_port}/v1",
+        codex_oss_port = std::env::var("CODEX_OSS_PORT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(default_provider_port)
+    );
+
+    let codex_oss_base_url = std::env::var("CODEX_OSS_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
-    {
-        Some(url) => url,
-        None => format!(
-            "http://localhost:{port}/v1",
-            port = std::env::var("CODEX_OSS_PORT")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(default_provider_port)
-        ),
-    };
+        .unwrap_or(default_codex_oss_base_url);
     create_oss_provider_with_base_url(&codex_oss_base_url, wire_api)
 }
 

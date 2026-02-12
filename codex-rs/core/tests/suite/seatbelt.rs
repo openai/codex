@@ -77,6 +77,7 @@ async fn if_parent_of_repo_is_writable_then_dot_git_folder_is_writable() {
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![test_scenario.repo_parent.as_path().try_into().unwrap()],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -103,6 +104,7 @@ async fn if_git_repo_is_writable_root_then_dot_git_folder_is_read_only() {
     let test_scenario = create_test_scenario(&tmp);
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![test_scenario.repo_root.as_path().try_into().unwrap()],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -145,7 +147,7 @@ async fn danger_full_access_allows_all_writes() {
 async fn read_only_forbids_all_writes() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let test_scenario = create_test_scenario(&tmp);
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
 
     test_scenario
         .run_test(
@@ -171,7 +173,7 @@ async fn openpty_works_under_seatbelt() {
         return;
     }
 
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
     let command_cwd = std::env::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
 
@@ -190,6 +192,7 @@ assert os.read(master, 4) == b"ping""#
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
+        None,
         HashMap::new(),
     )
     .await
@@ -228,7 +231,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
         return;
     }
 
-    let policy = SandboxPolicy::ReadOnly;
+    let policy = SandboxPolicy::new_read_only_policy();
     let command_cwd = std::env::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
 
@@ -242,6 +245,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
         &policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
+        None,
         env,
     )
     .await
@@ -298,6 +302,7 @@ async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
         policy,
         sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
+        None,
         HashMap::new(),
     )
     .await

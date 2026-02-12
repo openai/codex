@@ -238,7 +238,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
-    /// from `context_window` (90%).
+    /// from `context_window` (90%). When provided, core clamps it to 90% of the
+    /// context window when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<i64>,
     /// Percentage of the context window considered usable for inputs, after
@@ -249,14 +250,23 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
+    /// When true, this model should use websocket transport even when websocket features are off.
+    #[serde(default)]
+    pub prefer_websockets: bool,
 }
 
 impl ModelInfo {
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
-        self.auto_compact_token_limit.or_else(|| {
-            self.context_window
-                .map(|context_window| (context_window * 9) / 10)
-        })
+        let context_limit = self
+            .context_window
+            .map(|context_window| (context_window * 9) / 10);
+        let config_limit = self.auto_compact_token_limit;
+        if let Some(context_limit) = context_limit {
+            return Some(
+                config_limit.map_or(context_limit, |limit| std::cmp::min(limit, context_limit)),
+            );
+        }
+        config_limit
     }
 
     pub fn supports_personality(&self) -> bool {
@@ -335,6 +345,7 @@ impl ModelInstructionsVariables {
     pub fn get_personality_message(&self, personality: Option<Personality>) -> Option<String> {
         if let Some(personality) = personality {
             match personality {
+                Personality::None => Some(String::new()),
                 Personality::Friendly => self.personality_friendly.clone(),
                 Personality::Pragmatic => self.personality_pragmatic.clone(),
             }
@@ -505,6 +516,7 @@ mod tests {
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
+            prefer_websockets: false,
         }
     }
 
@@ -546,6 +558,10 @@ mod tests {
             model.get_model_instructions(Some(Personality::Pragmatic)),
             "Hello\n"
         );
+        assert_eq!(
+            model.get_model_instructions(Some(Personality::None)),
+            "Hello\n"
+        );
         assert_eq!(model.get_model_instructions(None), "Hello\n");
 
         let model_no_personality = test_model(Some(ModelMessages {
@@ -562,6 +578,10 @@ mod tests {
         );
         assert_eq!(
             model_no_personality.get_model_instructions(Some(Personality::Pragmatic)),
+            "Hello\n"
+        );
+        assert_eq!(
+            model_no_personality.get_model_instructions(Some(Personality::None)),
             "Hello\n"
         );
         assert_eq!(model_no_personality.get_model_instructions(None), "Hello\n");
@@ -604,6 +624,10 @@ mod tests {
             Some("pragmatic".to_string())
         );
         assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
+        );
+        assert_eq!(
             personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
@@ -622,6 +646,10 @@ mod tests {
             None
         );
         assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
+        );
+        assert_eq!(
             personality_variables.get_personality_message(None),
             Some("default".to_string())
         );
@@ -638,6 +666,10 @@ mod tests {
         assert_eq!(
             personality_variables.get_personality_message(Some(Personality::Pragmatic)),
             Some("pragmatic".to_string())
+        );
+        assert_eq!(
+            personality_variables.get_personality_message(Some(Personality::None)),
+            Some(String::new())
         );
         assert_eq!(personality_variables.get_personality_message(None), None);
     }

@@ -37,7 +37,6 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
-use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
@@ -57,6 +56,7 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
+use codex_utils_cli::format_env_display::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
 use ratatui::prelude::*;
@@ -2172,7 +2172,7 @@ impl HistoryCell for FinalMessageSeparator {
     }
 }
 
-fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
+pub(crate) fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
     let mut parts = Vec::new();
     if summary.tool_calls.count > 0 {
         let duration = format_duration_ms(summary.tool_calls.duration_ms);
@@ -2220,6 +2220,34 @@ fn runtime_metrics_label(summary: RuntimeMetricsSummary) -> Option<String> {
     if summary.responses_api_inference_time_ms > 0 {
         let duration = format_duration_ms(summary.responses_api_inference_time_ms);
         parts.push(format!("Responses API inference: {duration}"));
+    }
+    if summary.responses_api_engine_iapi_ttft_ms > 0
+        || summary.responses_api_engine_service_ttft_ms > 0
+    {
+        let mut ttft_parts = Vec::new();
+        if summary.responses_api_engine_iapi_ttft_ms > 0 {
+            let duration = format_duration_ms(summary.responses_api_engine_iapi_ttft_ms);
+            ttft_parts.push(format!("{duration} (iapi)"));
+        }
+        if summary.responses_api_engine_service_ttft_ms > 0 {
+            let duration = format_duration_ms(summary.responses_api_engine_service_ttft_ms);
+            ttft_parts.push(format!("{duration} (service)"));
+        }
+        parts.push(format!("TTFT: {}", ttft_parts.join(" ")));
+    }
+    if summary.responses_api_engine_iapi_tbt_ms > 0
+        || summary.responses_api_engine_service_tbt_ms > 0
+    {
+        let mut tbt_parts = Vec::new();
+        if summary.responses_api_engine_iapi_tbt_ms > 0 {
+            let duration = format_duration_ms(summary.responses_api_engine_iapi_tbt_ms);
+            tbt_parts.push(format!("{duration} (iapi)"));
+        }
+        if summary.responses_api_engine_service_tbt_ms > 0 {
+            let duration = format_duration_ms(summary.responses_api_engine_service_tbt_ms);
+            tbt_parts.push(format!("{duration} (service)"));
+        }
+        parts.push(format!("TBT: {}", tbt_parts.join(" ")));
     }
     if parts.is_empty() {
         None
@@ -2391,9 +2419,13 @@ mod tests {
             },
             responses_api_overhead_ms: 650,
             responses_api_inference_time_ms: 1_940,
+            responses_api_engine_iapi_ttft_ms: 410,
+            responses_api_engine_service_ttft_ms: 460,
+            responses_api_engine_iapi_tbt_ms: 1_180,
+            responses_api_engine_service_tbt_ms: 1_240,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
-        let rendered = render_lines(&cell.display_lines(300));
+        let rendered = render_lines(&cell.display_lines(600));
 
         assert_eq!(rendered.len(), 1);
         assert!(!rendered[0].contains("Worked for"));
@@ -2404,6 +2436,8 @@ mod tests {
         assert!(rendered[0].contains("4 events received (1.2s)"));
         assert!(rendered[0].contains("Responses API overhead: 650ms"));
         assert!(rendered[0].contains("Responses API inference: 1.9s"));
+        assert!(rendered[0].contains("TTFT: 410ms (iapi) 460ms (service)"));
+        assert!(rendered[0].contains("TBT: 1.2s (iapi) 1.2s (service)"));
     }
 
     #[test]
@@ -2491,6 +2525,7 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            required: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -2513,6 +2548,7 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            required: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
