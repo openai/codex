@@ -1769,6 +1769,21 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         previous_model,
         next_model,
     );
+
+    insta::assert_snapshot!(
+        "pre_sampling_model_switch_compaction_shapes",
+        format_labeled_requests_snapshot(
+            "Pre-sampling compaction on model switch to a smaller context window: current behavior compacts using prior-turn history only (incoming user message excluded), and the follow-up request carries compacted history plus the new user message.",
+            &[
+                ("Initial Request (Previous Model)", &requests[0]),
+                ("Pre-sampling Compaction Request", &requests[1]),
+                (
+                    "Post-Compaction Follow-up Request (Next Model)",
+                    &requests[2]
+                ),
+            ]
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
