@@ -668,6 +668,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn default_enabled_features_are_stable() {
+        for spec in FEATURES {
+            if spec.default_enabled {
+                assert_eq!(
+                    spec.stage,
+                    Stage::Stable,
+                    "feature `{}` is enabled by default but is not stable ({:?})",
+                    spec.key,
+                    spec.stage
+                );
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
