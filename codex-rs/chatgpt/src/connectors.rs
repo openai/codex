@@ -19,6 +19,7 @@ pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
+pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 use codex_core::connectors::merge_connectors;
 pub use codex_core::connectors::with_app_enabled_state;
 
@@ -81,6 +82,22 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     list_all_connectors_with_options(config, false).await
+}
+
+pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Some(Vec::new());
+    }
+
+    if init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await
+        .is_err()
+    {
+        return None;
+    }
+    let token_data = get_chatgpt_token_data()?;
+    let cache_key = all_connectors_cache_key(config, &token_data);
+    read_cached_all_connectors(&cache_key)
 }
 
 pub async fn list_all_connectors_with_options(
