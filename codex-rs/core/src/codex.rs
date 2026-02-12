@@ -2178,12 +2178,12 @@ impl Session {
             tracing::debug!(
                 "inline network approval decider did not find attempt context for {attempt_id}"
             );
-        } else {
-            tracing::debug!(
-                "inline network approval decider received request without attempt_id for host {}",
-                request.host
-            );
+            return None;
         }
+        tracing::debug!(
+            "inline network approval decider received request without attempt_id for host {}",
+            request.host
+        );
 
         if attempts.len() == 1 {
             tracing::debug!(
@@ -2215,7 +2215,7 @@ impl Session {
         }
 
         let Some(attempt) = self.resolve_network_approval_attempt(&request).await else {
-            return NetworkDecision::ask(REASON_NOT_ALLOWED);
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
 
         {
@@ -2238,7 +2238,7 @@ impl Session {
                 "inline network approval decider could not resolve turn context for {}",
                 attempt.turn_id
             );
-            return NetworkDecision::ask(REASON_NOT_ALLOWED);
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
 
         let approval_decision = self
@@ -7348,6 +7348,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_network_approval_attempt_returns_none_for_unknown_attempt_id() {
+        let (session, _turn_context) = make_session_and_context().await;
+        session
+            .register_network_approval_attempt(
+                "attempt-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "google.com".to_string()],
+                std::env::temp_dir(),
+            )
+            .await;
+
+        let request = codex_network_proxy::NetworkPolicyRequest::new(
+            codex_network_proxy::NetworkPolicyRequestArgs {
+                protocol: codex_network_proxy::NetworkProtocol::Http,
+                host: "google.com".to_string(),
+                port: 80,
+                client_addr: None,
+                method: Some("GET".to_string()),
+                command: None,
+                exec_policy_hint: None,
+                attempt_id: Some("attempt-unknown".to_string()),
+            },
+        );
+
+        let resolved = session.resolve_network_approval_attempt(&request).await;
+        assert!(resolved.is_none());
+
+        session
+            .unregister_network_approval_attempt("attempt-1")
+            .await;
+    }
+
+    #[tokio::test]
     async fn resolve_network_approval_attempt_returns_none_when_ambiguous() {
         let (session, _turn_context) = make_session_and_context().await;
         session
@@ -7417,6 +7451,30 @@ mod tests {
             .await;
 
         assert_eq!(decision, codex_network_proxy::NetworkDecision::Allow);
+    }
+
+    #[tokio::test]
+    async fn inline_network_decider_denies_when_attempt_context_missing() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let decision = session
+            .handle_inline_network_policy_request(codex_network_proxy::NetworkPolicyRequest::new(
+                codex_network_proxy::NetworkPolicyRequestArgs {
+                    protocol: codex_network_proxy::NetworkProtocol::Http,
+                    host: "google.com".to_string(),
+                    port: 80,
+                    client_addr: None,
+                    method: Some("GET".to_string()),
+                    command: None,
+                    exec_policy_hint: None,
+                    attempt_id: Some("missing-attempt".to_string()),
+                },
+            ))
+            .await;
+
+        assert_eq!(
+            decision,
+            codex_network_proxy::NetworkDecision::deny("not_allowed")
+        );
     }
 
     #[tokio::test]

@@ -153,8 +153,25 @@ impl UnifiedExecProcessManager {
     }
 
     pub(crate) async fn release_process_id(&self, process_id: &str) {
-        let mut store = self.process_store.lock().await;
-        store.remove(process_id);
+        let removed = {
+            let mut store = self.process_store.lock().await;
+            store.remove(process_id)
+        };
+        if let Some(entry) = removed {
+            Self::unregister_network_attempt_for_entry(&entry).await;
+        }
+    }
+
+    async fn unregister_network_attempt_for_entry(entry: &ProcessEntry) {
+        let Some(attempt_id) = entry.network_attempt_id.as_deref() else {
+            return;
+        };
+        let Some(session) = entry.session.upgrade() else {
+            return;
+        };
+        session
+            .unregister_network_approval_attempt(attempt_id)
+            .await;
     }
 
     pub(crate) async fn exec_command(
@@ -326,14 +343,14 @@ impl UnifiedExecProcessManager {
         } else {
             None
         };
-        if let Some(attempt_id) = network_attempt_id.as_deref() {
-            context
-                .session
-                .unregister_network_approval_attempt(attempt_id)
-                .await;
-        }
         if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
             process.terminate();
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
+            }
             self.release_process_id(&request.process_id).await;
             return Err(UnifiedExecError::create_process(
                 "rejected by user".to_string(),
@@ -346,6 +363,12 @@ impl UnifiedExecProcessManager {
         .await
         {
             process.terminate();
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
+            }
             self.release_process_id(&request.process_id).await;
             return Err(UnifiedExecError::create_process(message));
         }
@@ -362,6 +385,7 @@ impl UnifiedExecProcessManager {
             start,
             process_id,
             request.tty,
+            network_attempt_id.clone(),
             Arc::clone(&transcript),
         )
         .await;
@@ -476,29 +500,41 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: &str) -> ProcessStatus {
-        let mut store = self.process_store.lock().await;
-        let Some(entry) = store.processes.get(process_id) else {
-            return ProcessStatus::Unknown;
-        };
-
-        let exit_code = entry.process.exit_code();
-        let process_id = entry.process_id.clone();
-
-        if entry.process.has_exited() {
-            let Some(entry) = store.remove(&process_id) else {
+        let (status, removed_entry) = {
+            let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(process_id) else {
                 return ProcessStatus::Unknown;
             };
-            ProcessStatus::Exited {
-                exit_code,
-                entry: Box::new(entry),
+
+            let exit_code = entry.process.exit_code();
+            let process_id = entry.process_id.clone();
+
+            if entry.process.has_exited() {
+                let Some(entry) = store.remove(&process_id) else {
+                    return ProcessStatus::Unknown;
+                };
+                (
+                    ProcessStatus::Exited {
+                        exit_code,
+                        entry: Box::new(entry),
+                    },
+                    true,
+                )
+            } else {
+                (
+                    ProcessStatus::Alive {
+                        exit_code,
+                        call_id: entry.call_id.clone(),
+                        process_id,
+                    },
+                    false,
+                )
             }
-        } else {
-            ProcessStatus::Alive {
-                exit_code,
-                call_id: entry.call_id.clone(),
-                process_id,
-            }
+        };
+        if removed_entry && let ProcessStatus::Exited { entry, .. } = &status {
+            Self::unregister_network_attempt_for_entry(entry).await;
         }
+        status
     }
 
     async fn prepare_process_handles(
@@ -555,6 +591,7 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: String,
         tty: bool,
+        network_attempt_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
@@ -563,14 +600,20 @@ impl UnifiedExecProcessManager {
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
+            network_attempt_id,
+            session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
-        let number_processes = {
+        let (number_processes, pruned_entry) = {
             let mut store = self.process_store.lock().await;
-            Self::prune_processes_if_needed(&mut store);
+            let pruned_entry = Self::prune_processes_if_needed(&mut store);
             store.processes.insert(process_id.clone(), entry);
-            store.processes.len()
+            (store.processes.len(), pruned_entry)
         };
+        if let Some(pruned_entry) = pruned_entry {
+            Self::unregister_network_attempt_for_entry(&pruned_entry).await;
+            pruned_entry.process.terminate();
+        }
 
         if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
             context
@@ -773,9 +816,9 @@ impl UnifiedExecProcessManager {
         collected
     }
 
-    fn prune_processes_if_needed(store: &mut ProcessStore) -> bool {
+    fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
         if store.processes.len() < MAX_UNIFIED_EXEC_PROCESSES {
-            return false;
+            return None;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -785,13 +828,10 @@ impl UnifiedExecProcessManager {
             .collect();
 
         if let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
-            if let Some(entry) = store.remove(&process_id) {
-                entry.process.terminate();
-            }
-            return true;
+            return store.remove(&process_id);
         }
 
-        false
+        None
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
@@ -836,6 +876,7 @@ impl UnifiedExecProcessManager {
         };
 
         for entry in entries {
+            Self::unregister_network_attempt_for_entry(&entry).await;
             entry.process.terminate();
         }
     }
