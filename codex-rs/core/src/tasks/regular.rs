@@ -8,6 +8,7 @@ use crate::codex::run_turn;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_otel::OtelManager;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::user_input::UserInput;
 use futures::future::BoxFuture;
@@ -24,12 +25,14 @@ type PrewarmedSessionTask = JoinHandle<Option<ModelClientSession>>;
 
 pub(crate) struct RegularTask {
     prewarmed_session_task: Mutex<Option<PrewarmedSessionTask>>,
+    pre_turn_context_items: Vec<ResponseItem>,
 }
 
 impl Default for RegularTask {
     fn default() -> Self {
         Self {
             prewarmed_session_task: Mutex::new(None),
+            pre_turn_context_items: Vec::new(),
         }
     }
 }
@@ -58,7 +61,13 @@ impl RegularTask {
 
         Self {
             prewarmed_session_task: Mutex::new(Some(prewarmed_session_task)),
+            pre_turn_context_items: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_pre_turn_context_items(mut self, items: Vec<ResponseItem>) -> Self {
+        self.pre_turn_context_items = items;
+        self
     }
 
     async fn take_prewarmed_session(&self) -> Option<ModelClientSession> {
@@ -104,6 +113,7 @@ impl SessionTask for RegularTask {
             sess,
             ctx,
             input,
+            self.pre_turn_context_items.clone(),
             prewarmed_client_session,
             cancellation_token,
         )

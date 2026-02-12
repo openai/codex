@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\",\nresponses_mock.requests().last().expect(\"follow-up request missing\")),])"
+expression: "format_labeled_requests_snapshot(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", follow_up_request),])"
 ---
 Scenario: Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.
 
@@ -12,9 +12,9 @@ Scenario: Remote manual /compact with prior user history compacts existing histo
 04:message/assistant:FIRST_REMOTE_REPLY
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:REMOTE_COMPACTED_SUMMARY
-04:compaction:encrypted=true
+00:message/user:REMOTE_COMPACTED_SUMMARY
+01:compaction:encrypted=true
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 05:message/user:after compact

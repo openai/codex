@@ -1,12 +1,13 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.\",\n&[(\"Remote Compaction Request (Incoming User Excluded)\",\n&first_compact_mock.single_request()),])"
+expression: "format_labeled_requests_snapshot(\"Remote pre-turn auto-compaction parse failure: compaction request includes incoming user content and the turn stops.\",\n&[(\"Remote Compaction Request (Incoming User Included)\",\n&first_compact_mock.single_request()),])"
 ---
-Scenario: Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.
+Scenario: Remote pre-turn auto-compaction parse failure: compaction request includes incoming user content and the turn stops.
 
-## Remote Compaction Request (Incoming User Excluded)
+## Remote Compaction Request (Incoming User Included)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<AGENTS_MD>
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:turn that exceeds token threshold
 04:message/assistant:initial turn complete
+05:message/user:turn that triggers auto compact
