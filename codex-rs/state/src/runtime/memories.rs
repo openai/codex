@@ -178,6 +178,7 @@ LEFT JOIN jobs
     ///
     /// Query behavior:
     /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
+    /// - joins `threads` to include thread `cwd`
     /// - orders by `source_updated_at DESC, thread_id DESC`
     /// - applies `LIMIT n`
     pub async fn list_stage1_outputs_for_global(
@@ -191,7 +192,10 @@ LEFT JOIN jobs
         let rows = sqlx::query(
             r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
+     , COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
 WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?

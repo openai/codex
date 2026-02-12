@@ -11,6 +11,7 @@ use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[test]
@@ -97,6 +98,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
+        cwd: PathBuf::from("/tmp/workspace"),
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
@@ -115,4 +117,5 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         .expect("read raw memories");
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
+    assert!(raw_memories.contains("cwd: /tmp/workspace"));
 }

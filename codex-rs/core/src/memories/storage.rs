@@ -82,6 +82,8 @@ async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> st
             memory.source_updated_at.to_rfc3339()
         )
         .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
+        writeln!(body, "cwd: {}", memory.cwd.display())
+            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
         writeln!(body)
             .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
         body.push_str(memory.raw_memory.trim());
@@ -136,6 +138,8 @@ async fn write_rollout_summary_for_thread(
         memory.source_updated_at.to_rfc3339()
     )
     .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
+    writeln!(body, "cwd: {}", memory.cwd.display())
+        .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
     writeln!(body)
         .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
     body.push_str(&memory.rollout_summary);
