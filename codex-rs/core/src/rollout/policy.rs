@@ -37,8 +37,8 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
 #[inline]
 pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     match item {
-        ResponseItem::Message { .. }
-        | ResponseItem::LocalShellCall { .. }
+        ResponseItem::Message { role, .. } => role != "developer",
+        ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }

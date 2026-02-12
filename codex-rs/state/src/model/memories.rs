@@ -4,6 +4,7 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
+use std::path::PathBuf;
 
 use super::ThreadMetadata;
 
@@ -14,6 +15,7 @@ pub struct Stage1Output {
     pub source_updated_at: DateTime<Utc>,
     pub raw_memory: String,
     pub rollout_summary: String,
+    pub cwd: PathBuf,
     pub generated_at: DateTime<Utc>,
 }
 
@@ -23,6 +25,7 @@ pub(crate) struct Stage1OutputRow {
     source_updated_at: i64,
     raw_memory: String,
     rollout_summary: String,
+    cwd: String,
     generated_at: i64,
 }
 
@@ -33,6 +36,7 @@ impl Stage1OutputRow {
             source_updated_at: row.try_get("source_updated_at")?,
             raw_memory: row.try_get("raw_memory")?,
             rollout_summary: row.try_get("rollout_summary")?,
+            cwd: row.try_get("cwd")?,
             generated_at: row.try_get("generated_at")?,
         })
     }
@@ -47,6 +51,7 @@ impl TryFrom<Stage1OutputRow> for Stage1Output {
             source_updated_at: epoch_seconds_to_datetime(row.source_updated_at)?,
             raw_memory: row.raw_memory,
             rollout_summary: row.rollout_summary,
+            cwd: PathBuf::from(row.cwd),
             generated_at: epoch_seconds_to_datetime(row.generated_at)?,
         })
     }

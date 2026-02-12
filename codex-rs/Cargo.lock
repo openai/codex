@@ -1692,6 +1692,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-pty",
  "codex-utils-readiness",
+ "codex-utils-sanitizer",
  "codex-utils-string",
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
@@ -1720,7 +1721,6 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
- "regex",
  "regex-lite",
  "reqwest",
  "rmcp",
@@ -2483,6 +2483,13 @@ dependencies = [
  "codex-core",
  "codex-utils-absolute-path",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-utils-sanitizer"
+version = "0.0.0"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
