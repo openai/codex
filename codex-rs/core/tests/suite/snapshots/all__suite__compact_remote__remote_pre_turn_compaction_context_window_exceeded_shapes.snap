@@ -10,3 +10,4 @@ Scenario: Remote pre-turn auto-compaction context-window failure: compaction req
 02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 03:message/user:USER_ONE
 04:message/assistant:REMOTE_FIRST_REPLY
+05:message/user:USER_TWO

@@ -13,9 +13,9 @@ Scenario: Remote manual /compact where remote compact output is summary-only: fo
 04:message/assistant:FIRST_REMOTE_REPLY
 
 ## Remote Post-Compaction History Layout
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<AGENTS_MD>
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-03:message/user:REMOTE_COMPACTED_SUMMARY
-04:compaction:encrypted=true
+00:message/user:REMOTE_COMPACTED_SUMMARY
+01:compaction:encrypted=true
+02:message/developer:<PERMISSIONS_INSTRUCTIONS>
+03:message/user:<AGENTS_MD>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 05:message/user:after compact
