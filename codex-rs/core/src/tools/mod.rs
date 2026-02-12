@@ -8,7 +8,6 @@ pub mod registry;
 pub mod router;
 pub mod runtimes;
 pub mod sandboxing;
-pub(crate) mod skill_mention_propagation;
 pub mod spec;
 
 use crate::exec::ExecToolCallOutput;

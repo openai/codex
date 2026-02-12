@@ -3,8 +3,6 @@
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -33,8 +31,6 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
-    pub(crate) explicitly_mentioned_skill_md_paths: HashSet<PathBuf>,
-    pub(crate) explicitly_mentioned_skill_dirs: HashSet<PathBuf>,
 }
 
 impl SessionState {
@@ -53,8 +49,6 @@ impl SessionState {
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
-            explicitly_mentioned_skill_md_paths: HashSet::new(),
-            explicitly_mentioned_skill_dirs: HashSet::new(),
         }
     }
 
@@ -202,50 +196,6 @@ impl SessionState {
     pub(crate) fn clear_connector_selection(&mut self) {
         self.active_connector_selection.clear();
     }
-
-    // Records an explicitly mentioned SKILL.md path and remembers its parent directory.
-    pub(crate) fn record_explicitly_mentioned_skill_md_path(&mut self, path: &Path) {
-        let normalized = normalize_path(path);
-        self.explicitly_mentioned_skill_md_paths
-            .insert(normalized.clone());
-        if let Some(parent) = normalized.parent() {
-            self.explicitly_mentioned_skill_dirs
-                .insert(parent.to_path_buf());
-        }
-    }
-
-    // Checks whether the given path points at an explicitly mentioned skill file.
-    pub(crate) fn is_explicitly_mentioned_skill_md_path(&self, path: &Path) -> bool {
-        if !is_skill_md_path(path) {
-            return false;
-        }
-
-        let normalized = normalize_path(path);
-        if self
-            .explicitly_mentioned_skill_md_paths
-            .contains(&normalized)
-        {
-            return true;
-        }
-
-        normalized
-            .parent()
-            .is_some_and(|parent| self.explicitly_mentioned_skill_dirs.contains(parent))
-    }
-}
-
-const SKILL_FILENAME: &str = "SKILL.md";
-
-// Canonicalizes a path when possible, falling back to the original on error.
-fn normalize_path(path: &Path) -> PathBuf {
-    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-// Returns true when the path filename matches SKILL.md (case-insensitive).
-fn is_skill_md_path(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILENAME))
 }
 
 // Merge partial rate-limit updates: new fields overwrite existing values;
@@ -375,31 +325,6 @@ mod tests {
         state.clear_connector_selection();
 
         assert_eq!(state.get_connector_selection(), HashSet::new());
-    }
-
-    #[tokio::test]
-    // Verifies explicit mentions match both canonical SKILL.md paths and sibling casing.
-    async fn explicitly_mentioned_skill_paths_match_by_file_and_directory() {
-        let session_configuration = make_session_configuration_for_tests().await;
-        let mut state = SessionState::new(session_configuration);
-        state.record_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md"));
-
-        assert_eq!(
-            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/SKILL.md")),
-            true
-        );
-        assert_eq!(
-            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/skill.md")),
-            true
-        );
-        assert_eq!(
-            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/alpha/README.md")),
-            false
-        );
-        assert_eq!(
-            state.is_explicitly_mentioned_skill_md_path(Path::new("/tmp/skills/beta/SKILL.md")),
-            false
-        );
     }
 
     #[tokio::test]
