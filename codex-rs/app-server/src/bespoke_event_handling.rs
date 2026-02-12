@@ -717,6 +717,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             };
 
+            if !ev.affects_turn_status() {
+                return;
+            }
+
             let turn_error = TurnError {
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
@@ -887,11 +891,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
             let item_id = patch_end_event.call_id.clone();
 
-            let status = if patch_end_event.success {
-                PatchApplyStatus::Completed
-            } else {
-                PatchApplyStatus::Failed
-            };
+            let status: PatchApplyStatus = (&patch_end_event.status).into();
             let changes = convert_patch_changes(&patch_end_event.changes);
             complete_file_change_item(
                 conversation_id,
@@ -998,14 +998,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code,
                 duration,
+                status,
                 ..
             } = exec_command_end_event;
 
-            let status = if exit_code == 0 {
-                CommandExecutionStatus::Completed
-            } else {
-                CommandExecutionStatus::Failed
-            };
+            let status: CommandExecutionStatus = (&status).into();
             let command_actions = parsed_cmd
                 .into_iter()
                 .map(V2ParsedCommand::from)

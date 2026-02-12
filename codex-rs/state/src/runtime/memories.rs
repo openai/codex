@@ -18,6 +18,53 @@ const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
 impl StateRuntime {
+    /// Deletes all persisted memory state in one transaction.
+    ///
+    /// This removes every `stage1_outputs` row and all `jobs` rows for the
+    /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
+    /// memory pipelines.
+    pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+            "#,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"
+DELETE FROM jobs
+WHERE kind = ? OR kind = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Selects and claims stage-1 startup jobs for stale threads.
+    ///
+    /// Query behavior:
+    /// - starts from `threads` filtered to active threads and allowed sources
+    ///   (`push_thread_filters`)
+    /// - excludes the current thread id
+    /// - keeps only threads in the age window:
+    ///   `updated_at >= now - max_age_days` and `updated_at <= now - min_rollout_idle_hours`
+    /// - keeps only threads whose memory is stale:
+    ///   `COALESCE(stage1_outputs.source_updated_at, -1) < threads.updated_at` and
+    ///   `COALESCE(jobs.last_success_watermark, -1) < threads.updated_at`
+    /// - orders by `updated_at DESC, id DESC` and applies `scan_limit`
+    ///
+    /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
+    /// with `source_updated_at = thread.updated_at.timestamp()` and returns up to
+    /// `max_claimed` successful claims.
     pub async fn claim_stage1_jobs_for_startup(
         &self,
         current_thread_id: ThreadId,
@@ -61,6 +108,16 @@ SELECT
     git_branch,
     git_origin_url
 FROM threads
+LEFT JOIN stage1_outputs
+    ON stage1_outputs.thread_id = threads.id
+LEFT JOIN jobs
+    ON jobs.kind = 
+            "#,
+        );
+        builder.push_bind(JOB_KIND_MEMORY_STAGE1);
+        builder.push(
+            r#"
+   AND jobs.job_key = threads.id
             "#,
         );
         push_thread_filters(
@@ -78,6 +135,8 @@ FROM threads
             .push(" AND updated_at >= ")
             .push_bind(max_age_cutoff);
         builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
+        builder.push(" AND COALESCE(stage1_outputs.source_updated_at, -1) < updated_at");
+        builder.push(" AND COALESCE(jobs.last_success_watermark, -1) < updated_at");
         push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
 
         let items = builder
@@ -115,25 +174,13 @@ FROM threads
         Ok(claimed)
     }
 
-    pub async fn get_stage1_output(
-        &self,
-        thread_id: ThreadId,
-    ) -> anyhow::Result<Option<Stage1Output>> {
-        let row = sqlx::query(
-            r#"
-SELECT thread_id, source_updated_at, raw_memory, rollout_summary, generated_at
-FROM stage1_outputs
-WHERE thread_id = ?
-            "#,
-        )
-        .bind(thread_id.to_string())
-        .fetch_optional(self.pool.as_ref())
-        .await?;
-
-        row.map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
-            .transpose()
-    }
-
+    /// Lists the most recent non-empty stage-1 outputs for global consolidation.
+    ///
+    /// Query behavior:
+    /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
+    /// - joins `threads` to include thread `cwd`
+    /// - orders by `source_updated_at DESC, thread_id DESC`
+    /// - applies `LIMIT n`
     pub async fn list_stage1_outputs_for_global(
         &self,
         n: usize,
@@ -145,7 +192,10 @@ WHERE thread_id = ?
         let rows = sqlx::query(
             r#"
 SELECT so.thread_id, so.source_updated_at, so.raw_memory, so.rollout_summary, so.generated_at
+     , COALESCE(t.cwd, '') AS cwd
 FROM stage1_outputs AS so
+LEFT JOIN threads AS t
+    ON t.id = so.thread_id
 WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
 LIMIT ?
@@ -160,6 +210,22 @@ LIMIT ?
             .collect::<Result<Vec<_>, _>>()
     }
 
+    /// Attempts to claim a stage-1 job for a thread at `source_updated_at`.
+    ///
+    /// Claim semantics:
+    /// - skips as up-to-date when either:
+    ///   - `stage1_outputs.source_updated_at >= source_updated_at`, or
+    ///   - `jobs.last_success_watermark >= source_updated_at`
+    /// - inserts or updates a `jobs` row to `running` only when:
+    ///   - global running job count for `memory_stage1` is below `max_running_jobs`
+    ///   - existing row is not actively running with a valid lease
+    ///   - retry backoff (if present) has elapsed, or `source_updated_at` advanced
+    ///   - retries remain, or `source_updated_at` advanced (which resets retries)
+    ///
+    /// The update path refreshes ownership token, lease, and `input_watermark`.
+    /// If claiming fails, a follow-up read maps current row state to a precise
+    /// skip outcome (`SkippedRunning`, `SkippedRetryBackoff`, or
+    /// `SkippedRetryExhausted`).
     pub async fn try_claim_stage1_job(
         &self,
         thread_id: ThreadId,
@@ -248,12 +314,23 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
     finished_at = NULL,
     lease_until = excluded.lease_until,
     retry_at = NULL,
+    retry_remaining = CASE
+        WHEN excluded.input_watermark > COALESCE(jobs.input_watermark, -1) THEN ?
+        ELSE jobs.retry_remaining
+    END,
     last_error = NULL,
     input_watermark = excluded.input_watermark
 WHERE
     (jobs.status != 'running' OR jobs.lease_until IS NULL OR jobs.lease_until <= excluded.started_at)
-    AND (jobs.retry_at IS NULL OR jobs.retry_at <= excluded.started_at)
-    AND jobs.retry_remaining > 0
+    AND (
+        jobs.retry_at IS NULL
+        OR jobs.retry_at <= excluded.started_at
+        OR excluded.input_watermark > COALESCE(jobs.input_watermark, -1)
+    )
+    AND (
+        jobs.retry_remaining > 0
+        OR excluded.input_watermark > COALESCE(jobs.input_watermark, -1)
+    )
     AND (
         SELECT COUNT(*)
         FROM jobs AS running_jobs
@@ -276,6 +353,7 @@ WHERE
         .bind(JOB_KIND_MEMORY_STAGE1)
         .bind(now)
         .bind(max_running_jobs)
+        .bind(DEFAULT_RETRY_REMAINING)
         .bind(max_running_jobs)
         .execute(&mut *tx)
         .await?
@@ -322,6 +400,15 @@ WHERE kind = ? AND job_key = ?
         Ok(Stage1JobClaimOutcome::SkippedRunning)
     }
 
+    /// Marks a claimed stage-1 job successful and upserts generated output.
+    ///
+    /// Transaction behavior:
+    /// - updates `jobs` only for the currently owned running row
+    /// - sets `status='done'` and `last_success_watermark = input_watermark`
+    /// - upserts `stage1_outputs` for the thread, replacing existing output only
+    ///   when `source_updated_at` is newer or equal
+    /// - enqueues/advances the global phase-2 job watermark using
+    ///   `source_updated_at`
     pub async fn mark_stage1_job_succeeded(
         &self,
         thread_id: ThreadId,
@@ -391,6 +478,14 @@ WHERE excluded.source_updated_at >= stage1_outputs.source_updated_at
         Ok(true)
     }
 
+    /// Marks a claimed stage-1 job successful when extraction produced no output.
+    ///
+    /// Transaction behavior:
+    /// - updates `jobs` only for the currently owned running row
+    /// - sets `status='done'` and `last_success_watermark = input_watermark`
+    /// - deletes any existing `stage1_outputs` row for the thread
+    /// - enqueues/advances the global phase-2 job watermark using the claimed
+    ///   `input_watermark`
     pub async fn mark_stage1_job_succeeded_no_output(
         &self,
         thread_id: ThreadId,
@@ -456,6 +551,13 @@ WHERE thread_id = ?
         Ok(true)
     }
 
+    /// Marks a claimed stage-1 job as failed and schedules retry backoff.
+    ///
+    /// Query behavior:
+    /// - updates only the owned running row for `(kind='memory_stage1', job_key)`
+    /// - sets `status='error'`, clears lease, writes `last_error`
+    /// - decrements `retry_remaining`
+    /// - sets `retry_at = now + retry_delay_seconds`
     pub async fn mark_stage1_job_failed(
         &self,
         thread_id: ThreadId,
@@ -494,11 +596,25 @@ WHERE kind = ? AND job_key = ?
         Ok(rows_affected > 0)
     }
 
+    /// Enqueues or advances the global phase-2 consolidation job watermark.
+    ///
+    /// The underlying upsert keeps the job `running` when already running, resets
+    /// `pending/error` jobs to `pending`, and advances `input_watermark` so each
+    /// enqueue marks new consolidation work even when `source_updated_at` is
+    /// older than prior maxima.
     pub async fn enqueue_global_consolidation(&self, input_watermark: i64) -> anyhow::Result<()> {
         enqueue_global_consolidation_with_executor(self.pool.as_ref(), input_watermark).await
     }
 
-    /// Try to claim the global phase-2 consolidation job.
+    /// Attempts to claim the global phase-2 consolidation job.
+    ///
+    /// Claim semantics:
+    /// - reads the singleton global job row (`kind='memory_consolidate_global'`)
+    /// - returns `SkippedNotDirty` when `input_watermark <= last_success_watermark`
+    /// - returns `SkippedNotDirty` when retries are exhausted or retry backoff is active
+    /// - returns `SkippedRunning` when an active running lease exists
+    /// - otherwise updates the row to `running`, sets ownership + lease, and
+    ///   returns `Claimed`
     pub async fn try_claim_global_phase2_job(
         &self,
         worker_id: ThreadId,
@@ -597,6 +713,11 @@ WHERE kind = ? AND job_key = ?
         }
     }
 
+    /// Extends the lease for an owned running phase-2 global job.
+    ///
+    /// Query behavior:
+    /// - `UPDATE jobs SET lease_until = ?` for the singleton global row
+    /// - requires `status='running'` and matching `ownership_token`
     pub async fn heartbeat_global_phase2_job(
         &self,
         ownership_token: &str,
@@ -623,6 +744,13 @@ WHERE kind = ? AND job_key = ?
         Ok(rows_affected > 0)
     }
 
+    /// Marks the owned running global phase-2 job as succeeded.
+    ///
+    /// Query behavior:
+    /// - updates only the owned running singleton global row
+    /// - sets `status='done'`, clears lease/errors
+    /// - advances `last_success_watermark` to
+    ///   `max(existing_last_success_watermark, completed_watermark)`
     pub async fn mark_global_phase2_job_succeeded(
         &self,
         ownership_token: &str,
@@ -654,6 +782,13 @@ WHERE kind = ? AND job_key = ?
         Ok(rows_affected > 0)
     }
 
+    /// Marks the owned running global phase-2 job as failed and schedules retry.
+    ///
+    /// Query behavior:
+    /// - updates only the owned running singleton global row
+    /// - sets `status='error'`, clears lease
+    /// - writes failure reason and retry time
+    /// - decrements `retry_remaining`
     pub async fn mark_global_phase2_job_failed(
         &self,
         ownership_token: &str,
@@ -689,6 +824,12 @@ WHERE kind = ? AND job_key = ?
         Ok(rows_affected > 0)
     }
 
+    /// Fallback failure finalization when ownership may have been lost.
+    ///
+    /// Query behavior:
+    /// - same state transition as [`Self::mark_global_phase2_job_failed`]
+    /// - matches rows where `ownership_token = ? OR ownership_token IS NULL`
+    /// - allows recovering a stuck unowned running row
     pub async fn mark_global_phase2_job_failed_if_unowned(
         &self,
         ownership_token: &str,
@@ -760,7 +901,11 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
         ELSE NULL
     END,
     retry_remaining = max(jobs.retry_remaining, excluded.retry_remaining),
-    input_watermark = max(COALESCE(jobs.input_watermark, 0), excluded.input_watermark)
+    input_watermark = CASE
+        WHEN excluded.input_watermark > COALESCE(jobs.input_watermark, 0)
+            THEN excluded.input_watermark
+        ELSE COALESCE(jobs.input_watermark, 0) + 1
+    END
         "#,
     )
     .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
