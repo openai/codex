@@ -7,6 +7,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_otel::OtelManager;
@@ -18,6 +19,13 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PhaseOneJobOutcome {
+    SucceededWithOutput,
+    SucceededNoOutput,
+    Failed,
+}
 
 pub(super) const PHASE_ONE_THREAD_SCAN_LIMIT: usize = 5_000;
 
@@ -79,8 +87,19 @@ pub(super) async fn run_memories_startup_pipeline(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> CodexResult<()> {
+    let otel_manager = &session.services.otel_manager;
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable for memories startup pipeline; skipping");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            1,
+            &[("status", "skipped_state_db_unavailable")],
+        );
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            1,
+            &[("status", "skipped_state_db_unavailable")],
+        );
         return Ok(());
     };
 
@@ -106,12 +125,24 @@ pub(super) async fn run_memories_startup_pipeline(
         Ok(claims) => claims,
         Err(err) => {
             warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_ONE_JOBS,
+                1,
+                &[("status", "failed_claim")],
+            );
             Vec::new()
         }
     };
 
     let claimed_count = claimed_candidates.len();
-    let mut succeeded_count = 0;
+    if claimed_count == 0 {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            1,
+            &[("status", "skipped_no_candidates")],
+        );
+    }
+    let mut phase_one_outcomes = Vec::new();
     if claimed_count > 0 {
         let turn_context = session.new_default_turn().await;
         let stage_one_context = StageOneRequestContext::from_turn_context(
@@ -119,7 +150,7 @@ pub(super) async fn run_memories_startup_pipeline(
             turn_context.resolve_turn_metadata_header().await,
         );
 
-        succeeded_count = futures::stream::iter(claimed_candidates.into_iter())
+        phase_one_outcomes = futures::stream::iter(claimed_candidates.into_iter())
             .map(|claim| {
                 let session = Arc::clone(session);
                 let stage_one_context = stage_one_context.clone();
@@ -145,24 +176,29 @@ pub(super) async fn run_memories_startup_pipeline(
                                     )
                                     .await;
                             }
-                            return false;
+                            return PhaseOneJobOutcome::Failed;
                         }
                     };
 
                     let Some(state_db) = session.services.state_db.as_deref() else {
-                        return false;
+                        return PhaseOneJobOutcome::Failed;
                     };
 
                     if stage_one_output.raw_memory.is_empty()
                         && stage_one_output.rollout_summary.is_empty()
                     {
-                        return state_db
+                        return if state_db
                             .mark_stage1_job_succeeded_no_output(thread.id, &claim.ownership_token)
                             .await
-                            .unwrap_or(false);
+                            .unwrap_or(false)
+                        {
+                            PhaseOneJobOutcome::SucceededNoOutput
+                        } else {
+                            PhaseOneJobOutcome::Failed
+                        };
                     }
 
-                    state_db
+                    if state_db
                         .mark_stage1_job_succeeded(
                             thread.id,
                             &claim.ownership_token,
@@ -172,19 +208,73 @@ pub(super) async fn run_memories_startup_pipeline(
                         )
                         .await
                         .unwrap_or(false)
+                    {
+                        PhaseOneJobOutcome::SucceededWithOutput
+                    } else {
+                        PhaseOneJobOutcome::Failed
+                    }
                 }
             })
             .buffer_unordered(phase_one::CONCURRENCY_LIMIT)
-            .collect::<Vec<bool>>()
-            .await
-            .into_iter()
-            .filter(|ok| *ok)
-            .count();
+            .collect::<Vec<PhaseOneJobOutcome>>()
+            .await;
+    }
+
+    let succeeded_with_output_count = phase_one_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::SucceededWithOutput))
+        .count();
+    let succeeded_no_output_count = phase_one_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::SucceededNoOutput))
+        .count();
+    let failed_count = phase_one_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::Failed))
+        .count();
+    let succeeded_count = succeeded_with_output_count + succeeded_no_output_count;
+
+    if claimed_count > 0 {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            claimed_count as i64,
+            &[("status", "claimed")],
+        );
+    }
+    if succeeded_with_output_count > 0 {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            succeeded_with_output_count as i64,
+            &[("status", "succeeded")],
+        );
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_OUTPUT,
+            succeeded_with_output_count as i64,
+            &[],
+        );
+    }
+    if succeeded_no_output_count > 0 {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            succeeded_no_output_count as i64,
+            &[("status", "succeeded_no_output")],
+        );
+    }
+    if failed_count > 0 {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_ONE_JOBS,
+            failed_count as i64,
+            &[("status", "failed")],
+        );
     }
 
     info!(
-        "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded",
-        claimed_count, succeeded_count
+        "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded ({} with output, {} no output), {} failed",
+        claimed_count,
+        succeeded_count,
+        succeeded_with_output_count,
+        succeeded_no_output_count,
+        failed_count
     );
 
     let consolidation_job_count =

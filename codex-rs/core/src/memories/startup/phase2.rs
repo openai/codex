@@ -1,6 +1,7 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
+use crate::memories::metrics;
 use crate::memories::phase_two;
 use codex_protocol::ThreadId;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub(super) fn spawn_phase2_completion_task(
 ) {
     let state_db = session.services.state_db.clone();
     let agent_control = session.services.agent_control.clone();
+    let otel_manager = session.services.otel_manager.clone();
 
     tokio::spawn(async move {
         let Some(state_db) = state_db else {
@@ -29,6 +31,11 @@ pub(super) fn spawn_phase2_completion_task(
             Err(err) => {
                 warn!(
                     "failed to subscribe to global memory consolidation agent {consolidation_agent_id}: {err}"
+                );
+                otel_manager.counter(
+                    metrics::MEMORY_PHASE_TWO_JOBS,
+                    1,
+                    &[("status", "failed_subscribe_status")],
                 );
                 mark_phase2_failed_with_recovery(
                     state_db.as_ref(),
@@ -49,7 +56,21 @@ pub(super) fn spawn_phase2_completion_task(
         )
         .await;
         if matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_agent_unavailable")],
+            );
             return;
+        }
+        if is_phase2_success(&final_status) {
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "succeeded")],
+            );
+        } else {
+            otel_manager.counter(metrics::MEMORY_PHASE_TWO_JOBS, 1, &[("status", "failed")]);
         }
 
         tokio::spawn(async move {

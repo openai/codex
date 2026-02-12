@@ -2,6 +2,7 @@ use crate::codex::Session;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::memories::memory_root;
+use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::startup::phase2::spawn_phase2_completion_task;
@@ -34,8 +35,14 @@ pub(super) async fn run_global_memory_consolidation(
     session: &Arc<Session>,
     config: Arc<Config>,
 ) -> bool {
+    let otel_manager = &session.services.otel_manager;
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable; skipping global memory consolidation");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "skipped_state_db_unavailable")],
+        );
         return false;
     };
 
@@ -46,6 +53,11 @@ pub(super) async fn run_global_memory_consolidation(
         Ok(claim) => claim,
         Err(err) => {
             warn!("state db try_claim_global_phase2_job failed during memories startup: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_claim")],
+            );
             return false;
         }
     };
@@ -53,13 +65,26 @@ pub(super) async fn run_global_memory_consolidation(
         codex_state::Phase2JobClaimOutcome::Claimed {
             ownership_token,
             input_watermark,
-        } => (ownership_token, input_watermark),
+        } => {
+            otel_manager.counter(metrics::MEMORY_PHASE_TWO_JOBS, 1, &[("status", "claimed")]);
+            (ownership_token, input_watermark)
+        }
         codex_state::Phase2JobClaimOutcome::SkippedNotDirty => {
             debug!("memory phase-2 global lock is up-to-date; skipping consolidation");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "skipped_not_dirty")],
+            );
             return false;
         }
         codex_state::Phase2JobClaimOutcome::SkippedRunning => {
             debug!("memory phase-2 global consolidation already running; skipping");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "skipped_running")],
+            );
             return false;
         }
     };
@@ -89,6 +114,11 @@ pub(super) async fn run_global_memory_consolidation(
             .set(consolidation_sandbox_policy)
         {
             warn!("memory phase-2 consolidation sandbox policy was rejected by constraints: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_sandbox_policy")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,
@@ -108,6 +138,11 @@ pub(super) async fn run_global_memory_consolidation(
         Ok(memories) => memories,
         Err(err) => {
             warn!("state db list_stage1_outputs_for_global failed during consolidation: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_load_stage1_outputs")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,
@@ -118,9 +153,21 @@ pub(super) async fn run_global_memory_consolidation(
             return false;
         }
     };
+    if !latest_memories.is_empty() {
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_INPUT,
+            latest_memories.len() as i64,
+            &[],
+        );
+    }
     let completion_watermark = completion_watermark(claimed_watermark, &latest_memories);
     if let Err(err) = sync_rollout_summaries_from_memories(&root, &latest_memories).await {
         warn!("failed syncing local memory artifacts for global consolidation: {err}");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "failed_sync_artifacts")],
+        );
         let _ = state_db
             .mark_global_phase2_job_failed(
                 &ownership_token,
@@ -133,6 +180,11 @@ pub(super) async fn run_global_memory_consolidation(
 
     if let Err(err) = rebuild_raw_memories_file_from_memories(&root, &latest_memories).await {
         warn!("failed rebuilding raw memories aggregate for global consolidation: {err}");
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "failed_rebuild_raw_memories")],
+        );
         let _ = state_db
             .mark_global_phase2_job_failed(
                 &ownership_token,
@@ -147,6 +199,11 @@ pub(super) async fn run_global_memory_consolidation(
         let _ = state_db
             .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await;
+        otel_manager.counter(
+            metrics::MEMORY_PHASE_TWO_JOBS,
+            1,
+            &[("status", "succeeded_no_input")],
+        );
         return false;
     }
 
@@ -169,6 +226,11 @@ pub(super) async fn run_global_memory_consolidation(
             info!(
                 "memory phase-2 global consolidation agent started: agent_id={consolidation_agent_id}"
             );
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "agent_spawned")],
+            );
             spawn_phase2_completion_task(
                 session.as_ref(),
                 ownership_token,
@@ -179,6 +241,11 @@ pub(super) async fn run_global_memory_consolidation(
         }
         Err(err) => {
             warn!("failed to spawn global memory consolidation agent: {err}");
+            otel_manager.counter(
+                metrics::MEMORY_PHASE_TWO_JOBS,
+                1,
+                &[("status", "failed_spawn_agent")],
+            );
             let _ = state_db
                 .mark_global_phase2_job_failed(
                     &ownership_token,

@@ -63,6 +63,17 @@ mod phase_two {
     pub(super) const JOB_HEARTBEAT_SECONDS: u64 = 30;
 }
 
+mod metrics {
+    /// Number of phase-1 startup jobs grouped by status.
+    pub(super) const MEMORY_PHASE_ONE_JOBS: &str = "codex.memory.phase1";
+    /// Number of raw memories produced by phase-1 startup extraction.
+    pub(super) const MEMORY_PHASE_ONE_OUTPUT: &str = "codex.memory.phase1.output";
+    /// Number of phase-2 startup jobs grouped by status.
+    pub(super) const MEMORY_PHASE_TWO_JOBS: &str = "codex.memory.phase2";
+    /// Number of stage-1 memories included in each phase-2 consolidation step.
+    pub(super) const MEMORY_PHASE_TWO_INPUT: &str = "codex.memory.phase2.input";
+}
+
 pub fn memory_root(codex_home: &Path) -> PathBuf {
     codex_home.join("memories")
 }
