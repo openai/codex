@@ -3323,7 +3323,12 @@ impl ChatWidget {
                         return;
                     };
 
-                    if let Err(err) = self.config.approval_policy.can_set(&preset.approval) {
+                    if let Err(err) = self
+                        .config
+                        .effective_permissions
+                        .approval_policy
+                        .can_set(&preset.approval)
+                    {
                         self.add_error_message(err.to_string());
                         return;
                     }
@@ -3791,8 +3796,13 @@ impl ChatWidget {
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
-            approval_policy: self.config.approval_policy.value(),
-            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            approval_policy: self.config.effective_permissions.approval_policy.value(),
+            sandbox_policy: self
+                .config
+                .effective_permissions
+                .sandbox_policy
+                .get()
+                .clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
@@ -5249,8 +5259,8 @@ impl ChatWidget {
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
-        let current_approval = self.config.approval_policy.value();
-        let current_sandbox = self.config.sandbox_policy.get();
+        let current_approval = self.config.effective_permissions.approval_policy.value();
+        let current_sandbox = self.config.effective_permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -5278,7 +5288,12 @@ impl ChatWidget {
                 preset.label.to_string()
             };
             let description = Some(preset.description.replace(" (Identical to Agent mode)", ""));
-            let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
+            let disabled_reason = match self
+                .config
+                .effective_permissions
+                .approval_policy
+                .can_set(&preset.approval)
+            {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
             };
@@ -5439,7 +5454,7 @@ impl ChatWidget {
             self.config.codex_home.as_path(),
             cwd.as_path(),
             &env_map,
-            self.config.sandbox_policy.get(),
+            self.config.effective_permissions.sandbox_policy.get(),
             Some(self.config.codex_home.as_path()),
         ) {
             Ok(_) => None,
@@ -5546,7 +5561,9 @@ impl ChatWidget {
         let mode_label = preset
             .as_ref()
             .map(|p| describe_policy(&p.sandbox))
-            .unwrap_or_else(|| describe_policy(self.config.sandbox_policy.get()));
+            .unwrap_or_else(|| {
+                describe_policy(self.config.effective_permissions.sandbox_policy.get())
+            });
         let info_line = if failed_scan {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
@@ -5889,7 +5906,12 @@ impl ChatWidget {
 
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
-        if let Err(err) = self.config.approval_policy.set(policy) {
+        if let Err(err) = self
+            .config
+            .effective_permissions
+            .approval_policy
+            .set(policy)
+        {
             tracing::warn!(%err, "failed to set approval_policy on chat config");
         }
     }
@@ -5897,13 +5919,16 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
-        self.config.sandbox_policy.set(policy)?;
+        self.config
+            .effective_permissions
+            .sandbox_policy
+            .set(policy)?;
         Ok(())
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
-        self.config.windows_sandbox_mode = mode;
+        self.config.effective_permissions.windows_sandbox_mode = mode;
         #[cfg(target_os = "windows")]
         self.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED

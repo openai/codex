@@ -165,8 +165,13 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: test.config.cwd.clone(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: test.config.sandbox_policy.get().clone(),
+            approval_policy: test.config.effective_permissions.approval_policy.value(),
+            sandbox_policy: test
+                .config
+                .effective_permissions
+                .sandbox_policy
+                .get()
+                .clone(),
             model: test.session_configured.model.clone(),
             effort: None,
             summary: test.config.model_reasoning_summary,
@@ -271,8 +276,13 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
                 text_elements: Vec::new(),
             }],
             cwd: test.config.cwd.clone(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: test.config.sandbox_policy.get().clone(),
+            approval_policy: test.config.effective_permissions.approval_policy.value(),
+            sandbox_policy: test
+                .config
+                .effective_permissions
+                .sandbox_policy
+                .get()
+                .clone(),
             model: test.session_configured.model.clone(),
             effort: None,
             summary: test.config.model_reasoning_summary,

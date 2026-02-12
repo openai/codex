@@ -1466,8 +1466,9 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model = model_override.unwrap_or("gpt-5.1");
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(approval_policy);
-        config.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
+        config.effective_permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.effective_permissions.sandbox_policy =
+            Constrained::allow_any(sandbox_policy.clone());
         for feature in features {
             config.features.enable(feature);
         }
@@ -1583,8 +1584,9 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let mut builder = test_codex()
         .with_model("gpt-5.1-codex")
         .with_config(move |config| {
-            config.approval_policy = Constrained::allow_any(approval_policy);
-            config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config.effective_permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.effective_permissions.sandbox_policy =
+                Constrained::allow_any(sandbox_policy_for_config);
         });
     let test = builder.build(&server).await?;
 
@@ -1690,8 +1692,9 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let sandbox_policy = SandboxPolicy::ReadOnly;
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(approval_policy);
-        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.effective_permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.effective_permissions.sandbox_policy =
+            Constrained::allow_any(sandbox_policy_for_config);
     });
     let test = builder.build(&server).await?;
     let allow_prefix_path = test.cwd.path().join("allow-prefix.txt");
