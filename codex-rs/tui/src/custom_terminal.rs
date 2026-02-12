@@ -147,7 +147,12 @@ where
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
-        let cursor_pos = backend.get_cursor_position()?;
+        let cursor_pos = backend.get_cursor_position().unwrap_or_else(|err| {
+            // Some PTYs do not answer CPR (`ESC[6n`); continue with a safe default instead
+            // of failing TUI startup.
+            tracing::warn!("failed to read initial cursor position; defaulting to origin: {err}");
+            Position { x: 0, y: 0 }
+        });
         Ok(Self {
             backend,
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
