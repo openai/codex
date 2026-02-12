@@ -72,8 +72,19 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
     }
 }
 
-/// Generic command hook that passes the full HookPayload as JSON as the final argument.
-/// This is the new-style hook that supports all event types.
+/// Generic command hook that passes the full HookPayload as JSON via stdin.
+/// This is the new-style hook that supports all event types and bi-directional communication.
+///
+/// The hook script receives JSON on stdin and can return JSON on stdout with the format:
+/// ```json
+/// {
+///   "hookSpecificOutput": {
+///     "hookEventName": "SessionStart",
+///     "additionalContext": "Context to inject into the session"
+///   }
+/// }
+/// ```
+/// This format is compatible with Claude's hook response format.
 pub fn command_hook(argv: Vec<String>) -> Hook {
     let argv = Arc::new(argv);
     Hook {
@@ -85,18 +96,55 @@ pub fn command_hook(argv: Vec<String>) -> Hook {
                     None => return HookOutcome::Continue,
                 };
 
-                // Serialize the full payload as JSON and pass as final argument
-                if let Ok(json_payload) = serde_json::to_string(payload) {
-                    command.arg(json_payload);
-                }
+                // Serialize the payload to JSON
+                let json_payload = match serde_json::to_string(payload) {
+                    Ok(json) => json,
+                    Err(_) => return HookOutcome::Continue,
+                };
 
-                // Fire-and-forget style
+                // Set up pipes for bi-directional communication
                 command
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
                     .stderr(Stdio::null());
 
-                let _ = command.spawn();
+                // Spawn the process
+                let mut child = match command.spawn() {
+                    Ok(child) => child,
+                    Err(_) => return HookOutcome::Continue,
+                };
+
+                // Write JSON payload to stdin
+                if let Some(mut stdin) = child.stdin.take() {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(json_payload.as_bytes()).await;
+                    let _ = stdin.shutdown().await;
+                }
+
+                // Wait for the process with a timeout (5 seconds)
+                let output = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    child.wait_with_output()
+                ).await {
+                    Ok(Ok(output)) => output,
+                    _ => return HookOutcome::Continue,
+                };
+
+                // Parse stdout as JSON response
+                if output.status.success() && !output.stdout.is_empty() {
+                    if let Ok(response) = serde_json::from_slice::<crate::HookResponse>(&output.stdout) {
+                        if let Some(hook_output) = response.hook_specific_output {
+                            if let Some(context) = hook_output.additional_context {
+                                if !context.is_empty() {
+                                    return HookOutcome::ContinueWithContext {
+                                        additional_context: context,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+
                 HookOutcome::Continue
             })
         }),

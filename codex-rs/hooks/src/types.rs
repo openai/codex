@@ -150,11 +150,35 @@ pub enum HookEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookOutcome {
+    /// Continue execution, no additional context
     Continue,
+    /// Continue execution with additional context to inject into the session
+    ContinueWithContext {
+        additional_context: String,
+    },
+    /// Stop executing further hooks in the chain
     #[allow(dead_code)]
     Stop,
+}
+
+/// Response structure that hooks can return via stdout (JSON)
+/// Compatible with Claude's hook response format
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HookResponse {
+    #[serde(default)]
+    pub hook_specific_output: Option<HookSpecificOutput>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookSpecificOutput {
+    #[serde(default)]
+    pub hook_event_name: Option<String>,
+    #[serde(default)]
+    pub additional_context: Option<String>,
 }
 
 #[cfg(test)]

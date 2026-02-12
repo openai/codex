@@ -13,6 +13,8 @@ pub use types::HookEventPreCompact;
 pub use types::HookEventSessionStart;
 pub use types::HookOutcome;
 pub use types::HookPayload;
+pub use types::HookResponse;
+pub use types::HookSpecificOutput;
 pub use types::HookToolInput;
 pub use types::HookToolInputLocalShell;
 pub use types::HookToolKind;

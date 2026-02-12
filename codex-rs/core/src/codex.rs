@@ -1272,7 +1272,9 @@ impl Session {
         }
 
         // Dispatch SessionStart hook to notify external scripts that a session has begun.
-        sess.hooks()
+        // Hooks can return additional context to inject into the session.
+        let hook_context = sess
+            .hooks()
             .dispatch(HookPayload {
                 session_id: conversation_id,
                 cwd: session_configuration.cwd.clone(),
@@ -1285,6 +1287,18 @@ impl Session {
                 },
             })
             .await;
+
+        // If hook returned additional context, emit it as a background event
+        if let Some(context) = hook_context {
+            use crate::protocol::BackgroundEventEvent;
+            sess.send_event_raw(Event {
+                id: format!("{}-hook-context", conversation_id),
+                msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                    message: context,
+                }),
+            })
+            .await;
+        }
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_file_watcher_listener();

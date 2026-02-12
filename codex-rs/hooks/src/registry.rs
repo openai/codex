@@ -68,13 +68,28 @@ impl Hooks {
         }
     }
 
-    pub async fn dispatch(&self, hook_payload: HookPayload) {
-        // TODO(gt): support interrupting program execution by returning a result here.
+    /// Dispatch hooks for the given event and collect any additional context returned.
+    /// Returns combined additional context from all hooks, or None if no context was provided.
+    pub async fn dispatch(&self, hook_payload: HookPayload) -> Option<String> {
+        let mut collected_context: Vec<String> = Vec::new();
+
         for hook in self.hooks_for_event(&hook_payload.hook_event) {
             let outcome = hook.execute(&hook_payload).await;
-            if matches!(outcome, HookOutcome::Stop) {
-                break;
+            match outcome {
+                HookOutcome::Continue => {}
+                HookOutcome::ContinueWithContext { additional_context } => {
+                    if !additional_context.is_empty() {
+                        collected_context.push(additional_context);
+                    }
+                }
+                HookOutcome::Stop => break,
             }
+        }
+
+        if collected_context.is_empty() {
+            None
+        } else {
+            Some(collected_context.join("\n\n"))
         }
     }
 }
@@ -141,6 +156,7 @@ mod tests {
         Hook {
             func: Arc::new(move |_| {
                 let calls = Arc::clone(&calls);
+                let outcome = outcome.clone();
                 Box::pin(async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     outcome
