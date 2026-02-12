@@ -10,6 +10,7 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::network_policy_decision::extract_network_policy_decisions;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -24,13 +25,10 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
-use serde::Deserialize;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
 }
-
-const NETWORK_POLICY_DECISION_PREFIX: &str = "CODEX_NETWORK_POLICY_DECISION ";
 
 impl ToolOrchestrator {
     pub fn new() -> Self {
@@ -273,21 +271,20 @@ fn extract_network_approval_context(output: &ExecToolCallOutput) -> Option<Netwo
 }
 
 fn extract_network_approval_context_from_text(text: &str) -> Option<NetworkApprovalContext> {
-    text.lines()
-        .find_map(|line| line.strip_prefix(NETWORK_POLICY_DECISION_PREFIX))
-        .and_then(|payload| serde_json::from_str::<NetworkPolicyDecisionPayload>(payload).ok())
-        .and_then(|payload| {
-            if payload.decision != "ask" || payload.source != "decider" {
+    extract_network_policy_decisions(text)
+        .into_iter()
+        .find_map(|payload| {
+            if !payload.is_ask_from_decider() {
                 return None;
             }
 
-            let protocol = match payload.protocol.as_str() {
-                "http" => NetworkApprovalProtocol::Http,
-                "https" | "https_connect" => NetworkApprovalProtocol::Https,
+            let protocol = match payload.protocol.as_deref() {
+                Some("http") => NetworkApprovalProtocol::Http,
+                Some("https") | Some("https_connect") => NetworkApprovalProtocol::Https,
                 _ => return None,
             };
 
-            let host = payload.host.trim();
+            let host = payload.host.as_deref()?.trim();
             if host.is_empty() {
                 return None;
             }
@@ -297,15 +294,6 @@ fn extract_network_approval_context_from_text(text: &str) -> Option<NetworkAppro
                 protocol,
             })
         })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct NetworkPolicyDecisionPayload {
-    decision: String,
-    source: String,
-    protocol: String,
-    host: String,
 }
 
 #[cfg(test)]
@@ -366,6 +354,19 @@ mod tests {
         let text = "CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"source\":\"baseline_policy\",\"protocol\":\"http\",\"host\":\"example.com\",\"port\":80}";
 
         assert_eq!(extract_network_approval_context_from_text(text), None);
+    }
+
+    #[test]
+    fn extract_network_approval_context_from_json_blocked_response() {
+        let text = r#"{"status":"blocked","host":"example.com","reason":"not_allowed","policy_decision_prefix":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}","message":"CODEX_NETWORK_POLICY_DECISION {\"decision\":\"ask\",\"reason\":\"not_allowed\",\"source\":\"decider\",\"protocol\":\"https_connect\",\"host\":\"example.com\",\"port\":443}\nCodex blocked this request: domain not in allowlist (this is not a denylist block)."}"#;
+
+        assert_eq!(
+            extract_network_approval_context_from_text(text),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
+        );
     }
 
     #[test]
