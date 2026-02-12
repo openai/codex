@@ -507,4 +507,39 @@ mod tests {
             format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}")
         );
     }
+
+    #[test]
+    fn with_codex_apps_mcp_uses_apps_gateway_only_with_apps_enabled() {
+        let mut config = crate::config::test_config();
+        config.chatgpt_base_url = "https://chatgpt.com".to_string();
+
+        let mut servers = with_codex_apps_mcp(HashMap::new(), false, None, &config);
+        assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+
+        config.features.enable(Feature::Apps);
+
+        servers = with_codex_apps_mcp(servers, true, None, &config);
+        let server = servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .expect("codex apps should be present when apps is enabled");
+        let url = match &server.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => url,
+            _ => panic!("expected streamable http transport for codex apps"),
+        };
+
+        assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+
+        config.features.enable(Feature::AppsMcpGateway);
+        servers = with_codex_apps_mcp(servers, true, None, &config);
+        let server = servers
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .expect("codex apps should remain present when apps stays enabled");
+        let url = match &server.transport {
+            McpServerTransportConfig::StreamableHttp { url, .. } => url,
+            _ => panic!("expected streamable http transport for codex apps"),
+        };
+
+        let expected_url = format!("{OPENAI_API_BASE_URL}{CONNECTORS_MCP_PATH}");
+        assert_eq!(url, &expected_url);
+    }
 }

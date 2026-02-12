@@ -1463,6 +1463,29 @@ mod tests {
     }
 
     #[test]
+    fn codex_apps_tools_cache_is_cleared_when_expired() {
+        with_clean_codex_apps_tools_cache(|| {
+            let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "stale_tool")];
+            write_cached_codex_apps_tools(&tools);
+
+            {
+                let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cache_guard.as_mut().expect("cache exists").expires_at =
+                    Instant::now() - Duration::from_secs(1);
+            }
+
+            assert!(read_cached_codex_apps_tools().is_none());
+
+            let cache_guard = CODEX_APPS_TOOLS_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(cache_guard.is_none());
+        });
+    }
+
+    #[test]
     fn mcp_init_error_display_prompts_for_github_pat() {
         let server_name = "github";
         let entry = McpAuthStatusEntry {
