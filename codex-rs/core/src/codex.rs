@@ -1176,6 +1176,9 @@ impl Session {
             ),
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
+                session_start: config.hooks.as_ref().and_then(|h| h.session_start.clone()),
+                pre_compact: config.hooks.as_ref().and_then(|h| h.pre_compact.clone()),
+                after_tool_use: config.hooks.as_ref().and_then(|h| h.after_tool_use.clone()),
             }),
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),

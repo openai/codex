@@ -210,6 +210,9 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// Hook configuration for lifecycle events.
+    pub hooks: Option<HooksTomlConfig>,
+
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -847,6 +850,28 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
         .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
+/// Hook configuration for lifecycle events.
+/// Each field is an array of strings representing a command and its arguments.
+/// The hook receives a JSON payload as the final argument.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct HooksTomlConfig {
+    /// Command to run when a session starts.
+    /// Example: `session_start = ["bash", "~/.codex/hooks/session-start.sh"]`
+    #[serde(default)]
+    pub session_start: Option<Vec<String>>,
+
+    /// Command to run before context compaction occurs.
+    /// Example: `pre_compact = ["bash", "~/.codex/hooks/pre-compact.sh"]`
+    #[serde(default)]
+    pub pre_compact: Option<Vec<String>>,
+
+    /// Command to run after each tool execution.
+    /// Example: `after_tool_use = ["bash", "~/.codex/hooks/post-tool.sh"]`
+    #[serde(default)]
+    pub after_tool_use: Option<Vec<String>>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -880,6 +905,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Hook configuration for lifecycle events.
+    #[serde(default)]
+    pub hooks: Option<HooksTomlConfig>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1733,6 +1762,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             personality,
