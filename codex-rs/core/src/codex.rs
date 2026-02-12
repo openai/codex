@@ -564,6 +564,80 @@ impl TurnContext {
         })
     }
 
+    pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
+        let mut config = (*self.config).clone();
+        config.model = Some(model.clone());
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let truncation_policy = model_info.truncation_policy.into();
+        let supported_reasoning_levels = model_info
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>();
+        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
+            if supported_reasoning_levels.contains(&current_reasoning_effort) {
+                Some(current_reasoning_effort)
+            } else {
+                supported_reasoning_levels
+                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                    .copied()
+                    .or(model_info.default_reasoning_level)
+            }
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        };
+        config.model_reasoning_effort = reasoning_effort;
+
+        let collaboration_mode =
+            self.collaboration_mode
+                .with_updates(Some(model.clone()), Some(reasoning_effort), None);
+        let features = self.features.clone();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: self.tools_config.web_search_mode,
+        });
+
+        Self {
+            sub_id: self.sub_id.clone(),
+            config: Arc::new(config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: model_info.clone(),
+            otel_manager: self
+                .otel_manager
+                .clone()
+                .with_model(model.as_str(), model_info.slug.as_str()),
+            provider: self.provider.clone(),
+            reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            cwd: self.cwd.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode,
+            personality: self.personality,
+            approval_policy: self.approval_policy,
+            sandbox_policy: self.sandbox_policy.clone(),
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            tools_config,
+            features,
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_policy,
+            js_repl: Arc::clone(&self.js_repl),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_header: self.turn_metadata_header.clone(),
+        }
+    }
+
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
@@ -3892,7 +3966,6 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
-    let total_usage_tokens = sess.get_total_token_usage().await;
 
     let event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
@@ -3900,9 +3973,11 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
-    if total_usage_tokens >= auto_compact_limit
-        && run_auto_compact(&sess, &turn_context).await.is_err()
+    if run_pre_sampling_compact(&sess, &turn_context)
+        .await
+        .is_err()
     {
+        error!("Failed to run pre-sampling compact");
         return None;
     }
 
@@ -4139,6 +4214,62 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn run_pre_sampling_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> CodexResult<()> {
+    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
+    maybe_run_previous_model_inline_compact(
+        sess,
+        turn_context,
+        total_usage_tokens_before_compaction,
+    )
+    .await?;
+    let total_usage_tokens = sess.get_total_token_usage().await;
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    // Compact if the total usage tokens are greater than the auto compact limit
+    if total_usage_tokens >= auto_compact_limit {
+        run_auto_compact(sess, turn_context).await?;
+    }
+    Ok(())
+}
+
+async fn maybe_run_previous_model_inline_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    total_usage_tokens: i64,
+) -> CodexResult<()> {
+    let Some(previous_model) = sess.previous_model().await else {
+        return Ok(());
+    };
+    let previous_turn_context = Arc::new(
+        turn_context
+            .with_model(previous_model, &sess.services.models_manager)
+            .await,
+    );
+
+    let Some(old_context_window) = previous_turn_context.model_context_window() else {
+        return Ok(());
+    };
+    let Some(new_context_window) = turn_context.model_context_window() else {
+        return Ok(());
+    };
+    let new_auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    let should_run = total_usage_tokens > new_auto_compact_limit
+        && previous_turn_context.model_info.slug != turn_context.model_info.slug
+        && old_context_window > new_context_window;
+    if should_run {
+        run_auto_compact(sess, &previous_turn_context).await?;
+    }
+    Ok(())
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
@@ -4400,7 +4531,7 @@ async fn built_tools(
         None
     };
 
-    if turn_context.config.features.enabled(Feature::SearchTool) {
+    if turn_context.config.features.enabled(Feature::Apps) {
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
                 filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
@@ -6110,6 +6241,44 @@ mod tests {
             out,
             "command timed out after 1000 milliseconds\nCommand output"
         );
+    }
+
+    #[tokio::test]
+    async fn turn_context_with_model_updates_model_fields() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
+        let updated = turn_context
+            .with_model("gpt-5.1".to_string(), &session.services.models_manager)
+            .await;
+        let expected_model_info = session
+            .services
+            .models_manager
+            .get_model_info("gpt-5.1", updated.config.as_ref())
+            .await;
+
+        assert_eq!(updated.config.model.as_deref(), Some("gpt-5.1"));
+        assert_eq!(updated.collaboration_mode.model(), "gpt-5.1");
+        assert_eq!(updated.model_info, expected_model_info);
+        assert_eq!(
+            updated.reasoning_effort,
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.collaboration_mode.reasoning_effort(),
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::Medium)
+        );
+        assert_eq!(
+            updated.truncation_policy,
+            expected_model_info.truncation_policy.into()
+        );
+        assert!(!Arc::ptr_eq(
+            &updated.tool_call_gate,
+            &turn_context.tool_call_gate
+        ));
     }
 
     #[test]

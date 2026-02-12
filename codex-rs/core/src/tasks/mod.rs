@@ -153,7 +153,7 @@ impl Session {
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         let sess = session_ctx.clone_session();
-                        sess.on_task_finished(ctx_for_finish, last_agent_message)
+                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
                     // Set previous model regardless of completion or interruption for model-switch handling.

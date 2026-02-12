@@ -58,7 +58,7 @@ impl ToolsConfig {
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
-        let include_search_tool = features.enabled(Feature::SearchTool);
+        let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
