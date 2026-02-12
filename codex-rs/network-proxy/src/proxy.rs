@@ -386,6 +386,20 @@ impl NetworkProxy {
         self.admin_addr
     }
 
+    /// Temporarily allows a host for a single retried command execution.
+    ///
+    /// Returns the normalized host token that should be passed to
+    /// `revoke_temporary_allowed_host` when the retry finishes.
+    pub async fn grant_temporary_allowed_host(&self, host: &str) -> Option<String> {
+        self.state.grant_temporary_allowed_host(host).await
+    }
+
+    /// Revokes a temporary host allowance created with
+    /// `grant_temporary_allowed_host`.
+    pub async fn revoke_temporary_allowed_host(&self, host: &str) {
+        self.state.revoke_temporary_allowed_host(host).await;
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::info;
@@ -129,6 +131,7 @@ pub trait ConfigReloader: Send + Sync {
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
+    temporary_allowed_hosts: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -144,6 +147,7 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
+            temporary_allowed_hosts: self.temporary_allowed_hosts.clone(),
         }
     }
 }
@@ -153,6 +157,31 @@ impl NetworkProxyState {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
+            temporary_allowed_hosts: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Temporarily allow a host for one retried command execution.
+    ///
+    /// This does not persist to config and is revoked explicitly by the caller.
+    pub async fn grant_temporary_allowed_host(&self, host: &str) -> Option<String> {
+        let host = Host::parse(host).ok()?.as_str().to_string();
+        let mut guard = self.temporary_allowed_hosts.lock().await;
+        let count = guard.entry(host.clone()).or_default();
+        *count = count.saturating_add(1);
+        Some(host)
+    }
+
+    /// Revoke a previously granted temporary host allowance.
+    pub async fn revoke_temporary_allowed_host(&self, host: &str) {
+        let mut guard = self.temporary_allowed_hosts.lock().await;
+        let Some(count) = guard.get_mut(host) else {
+            return;
+        };
+        if *count <= 1 {
+            guard.remove(host);
+        } else {
+            *count -= 1;
         }
     }
 
@@ -267,7 +296,14 @@ impl NetworkProxyState {
             }
         }
 
-        if allowed_domains_empty || !is_allowlisted {
+        let is_temporarily_allowed = {
+            let guard = self.temporary_allowed_hosts.lock().await;
+            guard.contains_key(host_str)
+        };
+
+        if is_temporarily_allowed {
+            Ok(HostBlockDecision::Allowed)
+        } else if allowed_domains_empty || !is_allowlisted {
             Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed))
         } else {
             Ok(HostBlockDecision::Allowed)
@@ -564,6 +600,54 @@ mod tests {
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
+    }
+
+    #[tokio::test]
+    async fn temporary_host_allowance_allows_host_until_revoked() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*.openai.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+
+        let granted_host = state
+            .grant_temporary_allowed_host("google.com")
+            .await
+            .expect("host should parse");
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+
+        state.revoke_temporary_allowed_host(&granted_host).await;
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn temporary_host_allowance_does_not_bypass_denylist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*".to_string()],
+            denied_domains: vec!["google.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        let granted_host = state
+            .grant_temporary_allowed_host("google.com")
+            .await
+            .expect("host should parse");
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+
+        state.revoke_temporary_allowed_host(&granted_host).await;
     }
 
     #[tokio::test]

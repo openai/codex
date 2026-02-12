@@ -163,7 +163,7 @@ impl ToolOrchestrator {
                         turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(retry_details.reason),
-                        network_approval_context: retry_details.network_approval_context,
+                        network_approval_context: retry_details.network_approval_context.clone(),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
@@ -179,6 +179,31 @@ impl ToolOrchestrator {
                     }
                 }
 
+                let temporary_allowed_host = if let Some(network_approval_context) =
+                    retry_details.network_approval_context.as_ref()
+                {
+                    if let Some(network) = turn_ctx.network.as_ref() {
+                        let granted_host = network
+                            .grant_temporary_allowed_host(&network_approval_context.host)
+                            .await;
+                        if granted_host.is_none() {
+                            tracing::warn!(
+                                host = %network_approval_context.host,
+                                "failed to grant temporary network host allowance; retry may remain blocked"
+                            );
+                        }
+                        granted_host.map(|host| (network.clone(), host))
+                    } else {
+                        tracing::warn!(
+                            host = %network_approval_context.host,
+                            "network approval context is present but no managed network proxy is available"
+                        );
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
@@ -191,7 +216,11 @@ impl ToolOrchestrator {
                 };
 
                 // Second attempt.
-                (*tool).run(req, &escalated_attempt, tool_ctx).await
+                let second_attempt = (*tool).run(req, &escalated_attempt, tool_ctx).await;
+                if let Some((network, host)) = temporary_allowed_host {
+                    network.revoke_temporary_allowed_host(&host).await;
+                }
+                second_attempt
             }
             other => other,
         }
