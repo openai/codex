@@ -15,6 +15,9 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+codex-otel = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 globset = { workspace = true }
@@ -24,6 +27,8 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+toml = { workspace = true }
 url = { workspace = true }
 rama-core = { version = "=0.3.0-alpha.4" }
 rama-http = { version = "=0.3.0-alpha.4" }

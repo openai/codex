@@ -114,6 +114,19 @@ pub struct ConfigState {
     pub blocked: VecDeque<BlockedRequest>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkProxyAuditMetadata {
+    pub conversation_id: Option<String>,
+    pub app_version: Option<String>,
+    pub auth_mode: Option<String>,
+    pub originator: Option<String>,
+    pub account_id: Option<String>,
+    pub account_email: Option<String>,
+    pub terminal_type: Option<String>,
+    pub model: Option<String>,
+    pub slug: Option<String>,
+}
+
 #[async_trait]
 pub trait ConfigReloader: Send + Sync {
     /// Human-readable description of where config is loaded from, for logs.
@@ -129,6 +142,7 @@ pub trait ConfigReloader: Send + Sync {
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
+    audit_metadata: NetworkProxyAuditMetadata,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -144,16 +158,34 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
+            audit_metadata: self.audit_metadata.clone(),
         }
     }
 }
 
 impl NetworkProxyState {
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+        Self::with_reloader_and_audit_metadata(
+            state,
+            reloader,
+            NetworkProxyAuditMetadata::default(),
+        )
+    }
+
+    pub fn with_reloader_and_audit_metadata(
+        state: ConfigState,
+        reloader: Arc<dyn ConfigReloader>,
+        audit_metadata: NetworkProxyAuditMetadata,
+    ) -> Self {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
+            audit_metadata,
         }
+    }
+
+    pub fn audit_metadata(&self) -> &NetworkProxyAuditMetadata {
+        &self.audit_metadata
     }
 
     pub async fn current_cfg(&self) -> Result<NetworkProxyConfig> {
