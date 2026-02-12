@@ -39,10 +39,12 @@ struct ExecCommandArgs {
     login: bool,
 }
 
+// Keeps exec-command login behavior aligned with the tool default.
 fn default_login() -> bool {
     true
 }
 
+// Propagates connector selections from trusted skill file reads and tool mentions.
 pub(crate) async fn maybe_update_tool_selections_from_skill_read(
     session: &Session,
     turn: &TurnContext,
@@ -125,6 +127,7 @@ pub(crate) async fn maybe_update_tool_selections_from_skill_read(
     maybe_merge_connector_selection(session, connector_ids).await;
 }
 
+// Returns text output only when a function call completed without explicit failure.
 fn successful_tool_output_text(response: &ResponseInputItem) -> Option<&str> {
     if let ResponseInputItem::FunctionCallOutput { output, .. } = response
         && output.success != Some(false)
@@ -135,6 +138,7 @@ fn successful_tool_output_text(response: &ResponseInputItem) -> Option<&str> {
     None
 }
 
+// Resolves read paths from supported tool-call payload shapes.
 fn read_paths_for_tool_call(
     session: &Session,
     turn: &TurnContext,
@@ -161,6 +165,7 @@ fn read_paths_for_tool_call(
     }
 }
 
+// Extracts the absolute file path from a read_file tool call.
 fn read_paths_for_read_file(arguments: &str) -> Vec<PathBuf> {
     let Some(args) = parse_tool_arguments::<ReadFileArgs>(arguments) else {
         return Vec::new();
@@ -174,6 +179,7 @@ fn read_paths_for_read_file(arguments: &str) -> Vec<PathBuf> {
     }
 }
 
+// Parses shell tool parameters and returns paths read by the resulting command.
 fn read_paths_for_shell_tool(arguments: &str, turn: &TurnContext) -> Vec<PathBuf> {
     let Some(params) = parse_tool_arguments::<ShellToolCallParams>(arguments) else {
         return Vec::new();
@@ -183,6 +189,7 @@ fn read_paths_for_shell_tool(arguments: &str, turn: &TurnContext) -> Vec<PathBuf
     command_read_paths(&params.command, cwd.as_path())
 }
 
+// Parses shell_command payloads and returns files read by the derived shell command.
 fn read_paths_for_shell_command(
     arguments: &str,
     session: &Session,
@@ -198,6 +205,7 @@ fn read_paths_for_shell_command(
     command_read_paths(&command, cwd.as_path())
 }
 
+// Parses exec_command payloads and returns files read by the derived command vector.
 fn read_paths_for_exec_command(
     arguments: &str,
     session: &Session,
@@ -214,6 +222,7 @@ fn read_paths_for_exec_command(
     command_read_paths(&command, cwd.as_path())
 }
 
+// Deserializes tool-call JSON arguments into a typed payload.
 fn parse_tool_arguments<T>(arguments: &str) -> Option<T>
 where
     T: for<'de> Deserialize<'de>,
@@ -221,6 +230,7 @@ where
     serde_json::from_str(arguments).ok()
 }
 
+// Builds the command vector used by exec_command, honoring model-provided shell overrides.
 fn exec_command_vector(args: &ExecCommandArgs, session_shell: &Shell) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
@@ -232,6 +242,7 @@ fn exec_command_vector(args: &ExecCommandArgs, session_shell: &Shell) -> Vec<Str
     shell.derive_exec_args(&args.cmd, args.login)
 }
 
+// Extracts read operations from a parsed command and resolves paths against cwd.
 fn command_read_paths(command: &[String], cwd: &Path) -> Vec<PathBuf> {
     parse_command(command)
         .into_iter()
@@ -248,6 +259,7 @@ fn command_read_paths(command: &[String], cwd: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+// Merges connector selection only when at least one connector ID was discovered.
 async fn maybe_merge_connector_selection(session: &Session, connector_ids: HashSet<String>) {
     if !connector_ids.is_empty() {
         session.merge_connector_selection(connector_ids).await;
@@ -271,6 +283,7 @@ mod tests {
     use crate::skills::SkillMetadata;
     use crate::tools::context::ToolPayload;
 
+    // Builds minimal skill metadata for skill mention propagation tests.
     fn skill(path: &str) -> SkillMetadata {
         SkillMetadata {
             name: "alpha".to_string(),
@@ -284,6 +297,7 @@ mod tests {
         }
     }
 
+    // Builds a successful function-call output item with plain text content.
     fn output(text: &str) -> ResponseInputItem {
         ResponseInputItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -292,6 +306,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies explicit skill reads can promote mentioned app connectors into selection state.
     async fn explicitly_mentioned_read_file_output_updates_connector_selection() {
         let (session, turn) = make_session_and_context().await;
         session
@@ -323,6 +338,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies non-explicit skill reads do not affect connector selection.
     async fn non_explicitly_mentioned_read_file_output_is_ignored() {
         let (session, turn) = make_session_and_context().await;
         let payload = ToolPayload::Function {
@@ -347,6 +363,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies nested skill references are ignored unless that nested skill was explicitly mentioned.
     async fn nested_skill_read_output_is_ignored_without_explicit_user_mention() {
         let (session, turn) = make_session_and_context().await;
         session
@@ -391,6 +408,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies shell_command payload parsing captures SKILL.md read paths.
     async fn shell_command_read_path_is_detected() {
         let (session, turn) = make_session_and_context().await;
         let payload = ToolPayload::Function {

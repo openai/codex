@@ -184,6 +184,7 @@ impl SessionState {
         self.active_mcp_tool_selection = None;
     }
 
+    // Adds connector IDs to the active set and returns the merged selection.
     pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
     where
         I: IntoIterator<Item = String>,
@@ -192,14 +193,17 @@ impl SessionState {
         self.active_connector_selection.clone()
     }
 
+    // Returns the current connector selection tracked on session state.
     pub(crate) fn get_connector_selection(&self) -> HashSet<String> {
         self.active_connector_selection.clone()
     }
 
+    // Removes all currently tracked connector selections.
     pub(crate) fn clear_connector_selection(&mut self) {
         self.active_connector_selection.clear();
     }
 
+    // Records an explicitly mentioned SKILL.md path and remembers its parent directory.
     pub(crate) fn record_explicitly_mentioned_skill_md_path(&mut self, path: &Path) {
         let normalized = normalize_path(path);
         self.explicitly_mentioned_skill_md_paths
@@ -210,6 +214,7 @@ impl SessionState {
         }
     }
 
+    // Checks whether the given path points at an explicitly mentioned skill file.
     pub(crate) fn is_explicitly_mentioned_skill_md_path(&self, path: &Path) -> bool {
         if !is_skill_md_path(path) {
             return false;
@@ -231,10 +236,12 @@ impl SessionState {
 
 const SKILL_FILENAME: &str = "SKILL.md";
 
+// Canonicalizes a path when possible, falling back to the original on error.
 fn normalize_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+// Returns true when the path filename matches SKILL.md (case-insensitive).
 fn is_skill_md_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -342,6 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies connector merging deduplicates repeated IDs.
     async fn merge_connector_selection_deduplicates_entries() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);
@@ -358,6 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies clearing connector selection removes all saved IDs.
     async fn clear_connector_selection_removes_entries() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);
@@ -369,6 +378,7 @@ mod tests {
     }
 
     #[tokio::test]
+    // Verifies explicit mentions match both canonical SKILL.md paths and sibling casing.
     async fn explicitly_mentioned_skill_paths_match_by_file_and_directory() {
         let session_configuration = make_session_configuration_for_tests().await;
         let mut state = SessionState::new(session_configuration);

@@ -1411,6 +1411,7 @@ impl Session {
         state.clear_mcp_tool_selection();
     }
 
+    // Merges connector IDs into the session-level explicit connector selection.
     pub(crate) async fn merge_connector_selection(
         &self,
         connector_ids: HashSet<String>,
@@ -1419,16 +1420,19 @@ impl Session {
         state.merge_connector_selection(connector_ids)
     }
 
+    // Returns the connector IDs currently selected for this session.
     pub(crate) async fn get_connector_selection(&self) -> HashSet<String> {
         let state = self.state.lock().await;
         state.get_connector_selection()
     }
 
+    // Clears connector IDs that were accumulated for explicit selection.
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
     }
 
+    // Stores explicitly mentioned skill sources for later trust-gated propagation.
     pub(crate) async fn record_explicitly_mentioned_skill_sources(&self, skills: &[SkillMetadata]) {
         let mut state = self.state.lock().await;
         for skill in skills {
@@ -1436,6 +1440,7 @@ impl Session {
         }
     }
 
+    // Returns whether this path resolves to a skill file explicitly mentioned by the user.
     pub(crate) async fn is_explicitly_mentioned_skill_md_path(&self, path: &Path) -> bool {
         let state = self.state.lock().await;
         state.is_explicitly_mentioned_skill_md_path(path)
