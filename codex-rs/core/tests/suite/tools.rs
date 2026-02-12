@@ -416,6 +416,7 @@ async fn shell_timeout_handles_background_grandchild_stdout() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config
+            .permissions
             .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
@@ -511,7 +512,8 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|cfg| {
-        cfg.sandbox_policy
+        cfg.permissions
+            .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("set sandbox policy");
     });

@@ -389,8 +389,8 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -932,7 +932,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
-            shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
+            shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             tools_config,
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
@@ -1099,7 +1099,7 @@ impl Session {
             });
         }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
-        if config.approval_policy.value() == AskForApproval::OnFailure {
+        if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
             post_session_configured_events.push(Event {
                 id: "".to_owned(),
                 msg: EventMsg::Warning(WarningEvent {
@@ -1142,8 +1142,8 @@ impl Session {
             config.model_reasoning_summary,
             config.model_context_window,
             config.model_auto_compact_token_limit,
-            config.approval_policy.value(),
-            config.sandbox_policy.get().clone(),
+            config.permissions.approval_policy.value(),
+            config.permissions.sandbox_policy.get().clone(),
             mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
@@ -1175,7 +1175,7 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
         let network_proxy =
-            match config.network.as_ref() {
+            match config.permissions.network.as_ref() {
                 Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
                     anyhow::anyhow!("failed to start managed network proxy: {err}")
                 })?),
@@ -1697,7 +1697,7 @@ impl Session {
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
+                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
                 use_linux_sandbox_bwrap: per_turn_config
@@ -6312,8 +6312,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6403,8 +6403,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6713,8 +6713,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6766,8 +6766,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6912,8 +6912,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
