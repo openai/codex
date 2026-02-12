@@ -26,7 +26,6 @@ use uuid::Uuid;
 
 /// Core-facing handle to the optional SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
-const MAX_FEEDBACK_LOG_BYTES: usize = 10 * 1024 * 1024;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
@@ -94,46 +93,6 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     .await
     .ok()?;
     require_backfill_complete(runtime, config.codex_home.as_path()).await
-}
-
-pub async fn read_feedback_logs(config: &Config, thread_id: Option<ThreadId>) -> Option<Vec<u8>> {
-    let state_db_ctx = get_state_db(config, None).await;
-    read_feedback_logs_from_state_db(state_db_ctx.as_ref(), thread_id).await
-}
-
-pub async fn read_feedback_logs_from_state_db(
-    state_db_ctx: Option<&StateDbHandle>,
-    thread_id: Option<ThreadId>,
-) -> Option<Vec<u8>> {
-    let state_db_ctx = state_db_ctx?;
-    let thread_id = thread_id?.to_string();
-    let process_log_uuid = codex_state::current_process_log_uuid().to_string();
-    let rows = state_db_ctx
-        .query_feedback_logs(
-            thread_id.as_str(),
-            process_log_uuid.as_str(),
-            MAX_FEEDBACK_LOG_BYTES,
-        )
-        .await
-        .ok()?;
-    if rows.is_empty() {
-        return None;
-    }
-    let mut lines = rows
-        .into_iter()
-        .filter_map(|row| row.message)
-        .map(|mut line| {
-            if !line.ends_with('\n') {
-                line.push('\n');
-            }
-            line
-        })
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
-    lines.reverse();
-    Some(lines.concat().into_bytes())
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.

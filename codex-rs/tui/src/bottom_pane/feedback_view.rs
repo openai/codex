@@ -47,7 +47,6 @@ pub(crate) enum FeedbackAudience {
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::CodexLogSnapshot,
-    sqlite_feedback_logs: Option<Vec<u8>>,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -67,12 +66,10 @@ impl FeedbackNoteView {
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
-        sqlite_feedback_logs: Option<Vec<u8>>,
     ) -> Self {
         Self {
             category,
             snapshot,
-            sqlite_feedback_logs,
             rollout_path,
             app_event_tx,
             include_logs,
@@ -92,15 +89,10 @@ impl FeedbackNoteView {
         };
         let rollout_path_ref = self.rollout_path.as_deref();
         let classification = feedback_classification(self.category);
-        let sqlite_feedback_logs = if self.include_logs {
-            self.sqlite_feedback_logs.take()
-        } else {
-            None
-        };
 
         let mut thread_id = self.snapshot.thread_id.clone();
 
-        let result = self.snapshot.upload_feedback_with_logs(
+        let result = self.snapshot.upload_feedback(
             classification,
             reason_opt,
             self.include_logs,
@@ -110,7 +102,6 @@ impl FeedbackNoteView {
                 None
             },
             Some(SessionSource::Cli),
-            sqlite_feedback_logs,
         );
 
         match result {
@@ -593,7 +584,6 @@ mod tests {
             tx,
             true,
             FeedbackAudience::External,
-            None,
         )
     }
 

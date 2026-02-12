@@ -303,7 +303,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
         if let Some(row) = rows.into_iter().find(|row| {
             row.message
                 .as_deref()
-                .is_some_and(|m| m.contains("ToolCall:"))
+                .is_some_and(|m| m.starts_with("ToolCall:"))
         }) {
             let thread_id = row.thread_id;
             let message = row.message;
@@ -318,7 +318,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     assert!(
         message
             .as_deref()
-            .is_some_and(|text| text.contains("ToolCall:")),
+            .is_some_and(|text| text.starts_with("ToolCall:")),
         "expected ToolCall message, got {message:?}"
     );
 

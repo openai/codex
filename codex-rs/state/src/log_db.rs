@@ -20,127 +20,44 @@
 
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 use tracing::Event;
-use tracing::Level;
 use tracing::field::Field;
 use tracing::field::Visit;
 use tracing::span::Attributes;
 use tracing::span::Id;
 use tracing::span::Record;
-use tracing::warn;
 use tracing_subscriber::Layer;
-use tracing_subscriber::fmt::FormattedFields;
-use tracing_subscriber::fmt::format::DefaultFields;
-use tracing_subscriber::fmt::format::FormatFields;
-use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::fmt::time::FormatTime;
-use tracing_subscriber::fmt::time::SystemTime as FmtSystemTime;
 use tracing_subscriber::registry::LookupSpan;
+use uuid::Uuid;
 
 use crate::LogEntry;
 use crate::StateRuntime;
-use crate::current_process_log_uuid;
 
 const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 64;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const LOG_RETENTION_DAYS: i64 = 90;
-// Per-scope sqlite feedback log retention policy:
-// - We track bytes separately for each session scope (`thread_id`) and for
-//   process-scoped threadless logs (`thread_id IS NULL` + `process_uuid`,
-//   persisted in sqlite column `process_uuid`).
-// - On insert, we lazily initialize a scope's byte count once from sqlite and
-//   then update it incrementally from appended lines.
-// - If a scope exceeds the trigger, we delete oldest rows in that same scope
-//   until only the newest target bytes remain.
-// This keeps `/feedback` log storage bounded without a full startup scan.
-const LOG_SCOPE_TRIM_TRIGGER_BYTES: usize = 20 * 1024 * 1024;
-const LOG_SCOPE_TRIM_TARGET_BYTES: usize = 10 * 1024 * 1024;
-const LOG_DB_TARGET: &str = "codex_state::log_db";
-const CONVERSATION_ID_FIELD: &str = "conversation.id";
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogEntry>,
-    fmt_fields: DefaultFields,
-    fmt_timer: FmtSystemTime,
-    dropped_log_entries: AtomicUsize,
     process_uuid: String,
-}
-
-#[derive(Default)]
-struct LogScopeByteState {
-    process_threadless_initialized: bool,
-    process_threadless_bytes: usize,
-    thread_bytes: HashMap<String, usize>,
 }
 
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     let process_uuid = current_process_log_uuid().to_string();
     let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
-    tokio::spawn(run_inserter(
-        std::sync::Arc::clone(&state_db),
-        receiver,
-        process_uuid.clone(),
-    ));
+    tokio::spawn(run_inserter(std::sync::Arc::clone(&state_db), receiver));
     tokio::spawn(run_retention_cleanup(state_db));
 
     LogDbLayer {
         sender,
-        fmt_fields: DefaultFields::new(),
-        fmt_timer: FmtSystemTime,
-        dropped_log_entries: AtomicUsize::new(0),
         process_uuid,
-    }
-}
-
-impl LogDbLayer {
-    fn enqueue_entry(&self, entry: LogEntry) {
-        let resume_thread_id = entry.thread_id.clone();
-        match self.sender.try_send(entry) {
-            Ok(()) => {
-                let dropped = self.dropped_log_entries.swap(0, Ordering::Relaxed);
-                if dropped == 0 {
-                    return;
-                }
-
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_else(|_| Duration::from_secs(0));
-                let summary = LogEntry {
-                    ts: now.as_secs() as i64,
-                    ts_nanos: now.subsec_nanos() as i64,
-                    level: Level::WARN.as_str().to_string(),
-                    target: LOG_DB_TARGET.to_string(),
-                    message: Some(format!(
-                        "Dropped {dropped} log entries because sqlite log queue was full; logging resumed."
-                    )),
-                    thread_id: resume_thread_id,
-                    process_uuid: Some(self.process_uuid.clone()),
-                    module_path: None,
-                    file: None,
-                    line: None,
-                };
-
-                if let Err(TrySendError::Full(_)) = self.sender.try_send(summary) {
-                    self.dropped_log_entries
-                        .fetch_add(dropped, Ordering::Relaxed);
-                }
-            }
-            Err(TrySendError::Full(_)) => {
-                self.dropped_log_entries.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(TrySendError::Closed(_)) => {}
-        }
     }
 }
 
@@ -158,23 +75,9 @@ where
         attrs.record(&mut visitor);
 
         if let Some(span) = ctx.span(id) {
-            let mut extensions = span.extensions_mut();
-            extensions.insert(SpanLogContext {
+            span.extensions_mut().insert(SpanLogContext {
                 thread_id: visitor.thread_id,
             });
-            if extensions
-                .get_mut::<FormattedFields<DefaultFields>>()
-                .is_none()
-            {
-                let mut fields = FormattedFields::<DefaultFields>::new(String::new());
-                if self
-                    .fmt_fields
-                    .format_fields(fields.as_writer(), attrs)
-                    .is_ok()
-                {
-                    extensions.insert(fields);
-                }
-            }
         }
     }
 
@@ -187,29 +90,18 @@ where
         let mut visitor = SpanFieldVisitor::default();
         values.record(&mut visitor);
 
+        if visitor.thread_id.is_none() {
+            return;
+        }
+
         if let Some(span) = ctx.span(id) {
             let mut extensions = span.extensions_mut();
-            if visitor.thread_id.is_some() {
-                if let Some(log_context) = extensions.get_mut::<SpanLogContext>() {
-                    log_context.thread_id = visitor.thread_id;
-                } else {
-                    extensions.insert(SpanLogContext {
-                        thread_id: visitor.thread_id,
-                    });
-                }
-            }
-
-            if let Some(fields) = extensions.get_mut::<FormattedFields<DefaultFields>>() {
-                let _ = self.fmt_fields.add_fields(fields, values);
+            if let Some(log_context) = extensions.get_mut::<SpanLogContext>() {
+                log_context.thread_id = visitor.thread_id;
             } else {
-                let mut fields = FormattedFields::<DefaultFields>::new(String::new());
-                if self
-                    .fmt_fields
-                    .format_fields(fields.as_writer(), values)
-                    .is_ok()
-                {
-                    extensions.insert(fields);
-                }
+                extensions.insert(SpanLogContext {
+                    thread_id: visitor.thread_id,
+                });
             }
         }
     }
@@ -222,9 +114,6 @@ where
             .thread_id
             .clone()
             .or_else(|| event_thread_id(event, &ctx));
-        let message = format_feedback_line(&self.fmt_fields, self.fmt_timer, event, &ctx)
-            .ok()
-            .or(visitor.message);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -234,7 +123,7 @@ where
             ts_nanos: now.subsec_nanos() as i64,
             level: metadata.level().as_str().to_string(),
             target: metadata.target().to_string(),
-            message,
+            message: visitor.message,
             thread_id,
             process_uuid: Some(self.process_uuid.clone()),
             module_path: metadata.module_path().map(ToString::to_string),
@@ -242,7 +131,7 @@ where
             line: metadata.line().map(|line| line as i64),
         };
 
-        self.enqueue_entry(entry);
+        let _ = self.sender.try_send(entry);
     }
 }
 
@@ -258,9 +147,7 @@ struct SpanFieldVisitor {
 
 impl SpanFieldVisitor {
     fn record_field(&mut self, field: &Field, value: String) {
-        if (field.name() == "thread_id" || field.name() == CONVERSATION_ID_FIELD)
-            && self.thread_id.is_none()
-        {
+        if field.name() == "thread_id" && self.thread_id.is_none() {
             self.thread_id = Some(value);
         }
     }
@@ -317,65 +204,19 @@ where
     thread_id
 }
 
-fn format_feedback_line<S>(
-    fmt_fields: &DefaultFields,
-    fmt_timer: FmtSystemTime,
-    event: &Event<'_>,
-    ctx: &tracing_subscriber::layer::Context<'_, S>,
-) -> Result<String, fmt::Error>
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-{
-    let mut line = String::new();
-    let mut writer = Writer::new(&mut line);
-    if fmt_timer.format_time(&mut writer).is_err() {
-        writer.write_str("<unknown time>")?;
-    }
-    writer.write_char(' ')?;
-    writer.write_str(feedback_level(*event.metadata().level()))?;
-    writer.write_char(' ')?;
-
-    let mut saw_spans = false;
-    if let Some(scope) = ctx.event_scope(event) {
-        for span in scope.from_root() {
-            writer.write_str(span.metadata().name())?;
-            saw_spans = true;
-
-            let extensions = span.extensions();
-            if let Some(fields) = extensions.get::<FormattedFields<DefaultFields>>()
-                && !fields.is_empty()
-            {
-                writer.write_char('{')?;
-                writer.write_str(fields)?;
-                writer.write_char('}')?;
-            }
-            writer.write_char(':')?;
-        }
-    }
-    if saw_spans {
-        writer.write_char(' ')?;
-    }
-
-    fmt_fields.format_fields(writer.by_ref(), event)?;
-    Ok(line)
-}
-
-fn feedback_level(level: Level) -> &'static str {
-    match level {
-        Level::TRACE => "TRACE",
-        Level::DEBUG => "DEBUG",
-        Level::INFO => " INFO",
-        Level::WARN => " WARN",
-        Level::ERROR => "ERROR",
-    }
+fn current_process_log_uuid() -> &'static str {
+    static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
+    PROCESS_LOG_UUID.get_or_init(|| {
+        let pid = std::process::id();
+        let process_uuid = Uuid::new_v4();
+        format!("pid:{pid}:{process_uuid}")
+    })
 }
 
 async fn run_inserter(
     state_db: std::sync::Arc<StateRuntime>,
     mut receiver: mpsc::Receiver<LogEntry>,
-    process_uuid: String,
 ) {
-    let mut scope_bytes = LogScopeByteState::default();
     let mut buffer = Vec::with_capacity(LOG_BATCH_SIZE);
     let mut ticker = tokio::time::interval(LOG_FLUSH_INTERVAL);
     loop {
@@ -385,160 +226,28 @@ async fn run_inserter(
                     Some(entry) => {
                         buffer.push(entry);
                         if buffer.len() >= LOG_BATCH_SIZE {
-                            flush(
-                                &state_db,
-                                &mut buffer,
-                                process_uuid.as_str(),
-                                &mut scope_bytes,
-                            ).await;
+                            flush(&state_db, &mut buffer).await;
                         }
                     }
                     None => {
-                        flush(
-                            &state_db,
-                            &mut buffer,
-                            process_uuid.as_str(),
-                            &mut scope_bytes,
-                        ).await;
+                        flush(&state_db, &mut buffer).await;
                         break;
                     }
                 }
             }
             _ = ticker.tick() => {
-                flush(
-                    &state_db,
-                    &mut buffer,
-                    process_uuid.as_str(),
-                    &mut scope_bytes,
-                ).await;
+                flush(&state_db, &mut buffer).await;
             }
         }
     }
 }
 
-async fn flush(
-    state_db: &std::sync::Arc<StateRuntime>,
-    buffer: &mut Vec<LogEntry>,
-    process_uuid: &str,
-    scope_bytes: &mut LogScopeByteState,
-) {
+async fn flush(state_db: &std::sync::Arc<StateRuntime>, buffer: &mut Vec<LogEntry>) {
     if buffer.is_empty() {
         return;
     }
-
-    // Drain the current batch so producers can keep writing into a fresh buffer
-    // while this flush works against an owned vector.
     let entries = buffer.split_off(0);
-
-    // Aggregate the byte delta contributed by this batch, keyed by feedback
-    // scope. We use the same newline-normalized byte accounting as `/feedback`.
-    let mut thread_added_bytes = HashMap::new();
-    let mut process_threadless_added_bytes = 0usize;
-    for entry in &entries {
-        let Some(message) = entry.message.as_deref() else {
-            continue;
-        };
-        let line_bytes = feedback_line_bytes(message);
-        if let Some(thread_id) = entry.thread_id.as_ref() {
-            let total = thread_added_bytes
-                .entry(thread_id.clone())
-                .or_insert(0usize);
-            *total = total.saturating_add(line_bytes);
-        } else {
-            // `entries` comes from this process-local channel, so a threadless
-            // row in this batch always belongs to the current process scope.
-            process_threadless_added_bytes =
-                process_threadless_added_bytes.saturating_add(line_bytes);
-        }
-    }
-
-    // Persist first; all in-memory counters below are derived from committed DB
-    // state plus this batch.
-    if let Err(err) = state_db.insert_logs(entries.as_slice()).await {
-        warn!("failed to insert sqlite logs batch: {err}");
-        return;
-    }
-
-    // Process threadless scope:
-    // only touch this scope when the current batch actually contains threadless
-    // rows. This avoids a process-scope SUM query on unrelated flushes.
-    if process_threadless_added_bytes > 0 {
-        // Initialize once from DB (already includes this batch because we
-        // insert first), then increment using per-batch deltas.
-        if !scope_bytes.process_threadless_initialized {
-            match state_db.process_threadless_log_bytes(process_uuid).await {
-                Ok(total) => {
-                    scope_bytes.process_threadless_bytes = total;
-                    scope_bytes.process_threadless_initialized = true;
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to initialize process threadless log bytes ({process_uuid}): {err}"
-                    );
-                    scope_bytes.process_threadless_bytes = scope_bytes
-                        .process_threadless_bytes
-                        .saturating_add(process_threadless_added_bytes);
-                }
-            }
-        } else {
-            scope_bytes.process_threadless_bytes = scope_bytes
-                .process_threadless_bytes
-                .saturating_add(process_threadless_added_bytes);
-        }
-        if scope_bytes.process_threadless_bytes > LOG_SCOPE_TRIM_TRIGGER_BYTES {
-            match state_db
-                .trim_process_threadless_logs_to_target(process_uuid, LOG_SCOPE_TRIM_TARGET_BYTES)
-                .await
-            {
-                Ok(bytes) => {
-                    scope_bytes.process_threadless_bytes = bytes;
-                }
-                Err(err) => {
-                    warn!("failed to trim process threadless logs ({process_uuid}): {err}");
-                }
-            }
-        }
-    }
-
-    // Session scopes:
-    // - initialize unseen sessions once from DB,
-    // - otherwise add this flush's delta,
-    // - trim touched sessions that exceed trigger.
-    for (thread_id, added_bytes) in thread_added_bytes {
-        let total = if let Some(total) = scope_bytes.thread_bytes.get_mut(&thread_id) {
-            *total = total.saturating_add(added_bytes);
-            *total
-        } else {
-            match state_db.thread_log_bytes(thread_id.as_str()).await {
-                Ok(total) => {
-                    scope_bytes.thread_bytes.insert(thread_id.clone(), total);
-                    total
-                }
-                Err(err) => {
-                    warn!("failed to initialize session log bytes ({thread_id}): {err}");
-                    scope_bytes
-                        .thread_bytes
-                        .insert(thread_id.clone(), added_bytes);
-                    added_bytes
-                }
-            }
-        };
-
-        if total <= LOG_SCOPE_TRIM_TRIGGER_BYTES {
-            continue;
-        }
-        match state_db
-            .trim_thread_logs_to_target(thread_id.as_str(), LOG_SCOPE_TRIM_TARGET_BYTES)
-            .await
-        {
-            Ok(bytes) => {
-                scope_bytes.thread_bytes.insert(thread_id, bytes);
-            }
-            Err(err) => {
-                warn!("failed to trim session logs ({thread_id}): {err}");
-            }
-        }
-    }
+    let _ = state_db.insert_logs(entries.as_slice()).await;
 }
 
 async fn run_retention_cleanup(state_db: std::sync::Arc<StateRuntime>) {
@@ -547,14 +256,6 @@ async fn run_retention_cleanup(state_db: std::sync::Arc<StateRuntime>) {
         return;
     };
     let _ = state_db.delete_logs_before(cutoff.timestamp()).await;
-}
-
-fn feedback_line_bytes(message: &str) -> usize {
-    if message.ends_with('\n') {
-        message.len()
-    } else {
-        message.len() + 1
-    }
 }
 
 #[derive(Default)]
@@ -568,9 +269,7 @@ impl MessageVisitor {
         if field.name() == "message" && self.message.is_none() {
             self.message = Some(value.clone());
         }
-        if (field.name() == "thread_id" || field.name() == CONVERSATION_ID_FIELD)
-            && self.thread_id.is_none()
-        {
+        if field.name() == "thread_id" && self.thread_id.is_none() {
             self.thread_id = Some(value);
         }
     }
@@ -603,84 +302,5 @@ impl Visit for MessageVisitor {
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         self.record_field(field, format!("{value:?}"));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    fn log_entry(message: &str) -> LogEntry {
-        LogEntry {
-            ts: 0,
-            ts_nanos: 0,
-            level: Level::INFO.as_str().to_string(),
-            target: "test".to_string(),
-            message: Some(message.to_string()),
-            thread_id: None,
-            process_uuid: None,
-            module_path: None,
-            file: None,
-            line: None,
-        }
-    }
-
-    #[test]
-    fn emits_drop_summary_after_queue_recovers() {
-        let (sender, mut receiver) = mpsc::channel(2);
-        let layer = LogDbLayer {
-            sender,
-            fmt_fields: DefaultFields::new(),
-            fmt_timer: FmtSystemTime,
-            dropped_log_entries: AtomicUsize::new(0),
-            process_uuid: "test-process".to_string(),
-        };
-
-        layer.enqueue_entry(log_entry("first"));
-        layer.enqueue_entry(log_entry("second"));
-        layer.enqueue_entry(log_entry("third"));
-        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
-
-        let _ = receiver.try_recv().expect("first log should be queued");
-        let _ = receiver.try_recv().expect("second log should be queued");
-
-        layer.enqueue_entry(log_entry("fourth"));
-
-        let resumed = receiver.try_recv().expect("recovery log should be queued");
-        assert_eq!(resumed.message.as_deref(), Some("fourth"));
-
-        let summary = receiver.try_recv().expect("drop summary should be queued");
-        assert_eq!(summary.level, Level::WARN.as_str());
-        assert_eq!(summary.target, LOG_DB_TARGET);
-        assert_eq!(
-            summary.message.as_deref(),
-            Some("Dropped 1 log entries because sqlite log queue was full; logging resumed.")
-        );
-        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn preserves_drop_count_when_summary_send_is_still_full() {
-        let (sender, mut receiver) = mpsc::channel(1);
-        let layer = LogDbLayer {
-            sender,
-            fmt_fields: DefaultFields::new(),
-            fmt_timer: FmtSystemTime,
-            dropped_log_entries: AtomicUsize::new(0),
-            process_uuid: "test-process".to_string(),
-        };
-
-        layer.enqueue_entry(log_entry("first"));
-        layer.enqueue_entry(log_entry("second"));
-        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
-
-        let _ = receiver.try_recv().expect("first log should be queued");
-        layer.enqueue_entry(log_entry("third"));
-
-        // Queue is full with "third", so summary cannot be queued yet and count is retained.
-        assert_eq!(layer.dropped_log_entries.load(Ordering::Relaxed), 1);
-        let third = receiver.try_recv().expect("third log should be queued");
-        assert_eq!(third.message.as_deref(), Some("third"));
     }
 }

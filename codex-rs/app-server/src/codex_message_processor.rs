@@ -211,7 +211,6 @@ use codex_core::skills::remote::download_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
-use codex_core::state_db::read_feedback_logs_from_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -5962,23 +5961,16 @@ impl CodexMessageProcessor {
         } else {
             None
         };
-        let sqlite_feedback_logs = if include_logs {
-            let state_db_ctx = get_state_db(&self.config, None).await;
-            read_feedback_logs_from_state_db(state_db_ctx.as_ref(), conversation_id).await
-        } else {
-            None
-        };
         let session_source = self.thread_manager.session_source();
 
         let upload_result = tokio::task::spawn_blocking(move || {
             let rollout_path_ref = validated_rollout_path.as_deref();
-            snapshot.upload_feedback_with_logs(
+            snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),
                 include_logs,
                 rollout_path_ref,
                 Some(session_source),
-                sqlite_feedback_logs,
             )
         })
         .await;

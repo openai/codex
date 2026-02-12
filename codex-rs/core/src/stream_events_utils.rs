@@ -3,8 +3,6 @@ use std::sync::Arc;
 
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
-use codex_protocol::logging::TOOL_CALL_LOG_PREFIX;
-use codex_protocol::logging::TOOL_CALL_LOG_TARGET;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -58,9 +56,8 @@ pub(crate) async fn handle_output_item_done(
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!(
-                target: TOOL_CALL_LOG_TARGET,
                 thread_id = %ctx.sess.conversation_id,
-                "{TOOL_CALL_LOG_PREFIX} {} {}",
+                "ToolCall: {} {}",
                 call.tool_name,
                 payload_preview
             );

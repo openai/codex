@@ -22,7 +22,6 @@ use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-const MAX_FEEDBACK_LOG_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024; // 10 MiB hard cap
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
@@ -228,27 +227,6 @@ impl CodexLogSnapshot {
         rollout_path: Option<&std::path::Path>,
         session_source: Option<SessionSource>,
     ) -> Result<()> {
-        self.upload_feedback_with_logs(
-            classification,
-            reason,
-            include_logs,
-            rollout_path,
-            session_source,
-            None,
-        )
-    }
-
-    /// Upload feedback to Sentry with optional attachments and an optional
-    /// override for the `codex-logs.log` attachment bytes.
-    pub fn upload_feedback_with_logs(
-        &self,
-        classification: &str,
-        reason: Option<&str>,
-        include_logs: bool,
-        rollout_path: Option<&std::path::Path>,
-        session_source: Option<SessionSource>,
-        logs_override: Option<Vec<u8>>,
-    ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
         use std::str::FromStr;
@@ -331,12 +309,8 @@ impl CodexLogSnapshot {
         envelope.add_item(EnvelopeItem::Event(event));
 
         if include_logs {
-            let logs = clamp_feedback_log_attachment_bytes(
-                logs_override.unwrap_or_else(|| self.bytes.clone()),
-                MAX_FEEDBACK_LOG_ATTACHMENT_BYTES,
-            );
             envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: logs,
+                buffer: self.bytes.clone(),
                 filename: String::from("codex-logs.log"),
                 content_type: Some("text/plain".to_string()),
                 ty: None,
@@ -361,14 +335,6 @@ impl CodexLogSnapshot {
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
         Ok(())
     }
-}
-
-fn clamp_feedback_log_attachment_bytes(mut logs: Vec<u8>, max_bytes: usize) -> Vec<u8> {
-    if logs.len() <= max_bytes {
-        return logs;
-    }
-    let start = logs.len() - max_bytes;
-    logs.split_off(start)
 }
 
 fn display_classification(classification: &str) -> String {
@@ -480,11 +446,5 @@ mod tests {
         let snap = fb.snapshot(None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
-    }
-
-    #[test]
-    fn clamp_feedback_log_attachment_bytes_keeps_trailing_bytes() {
-        let capped = clamp_feedback_log_attachment_bytes(vec![1, 2, 3, 4, 5], 3);
-        pretty_assertions::assert_eq!(capped, vec![3, 4, 5]);
     }
 }
