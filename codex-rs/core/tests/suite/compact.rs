@@ -2261,12 +2261,7 @@ async fn auto_compact_clamps_config_limit_to_context_window() {
     let codex = builder.build(&server).await.unwrap();
 
     codex.submit_turn("OVER_LIMIT_TURN").await.unwrap();
-
-    wait_for_event(&codex.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
-
     codex.submit_turn("FOLLOW_UP_AFTER_CLAMP").await.unwrap();
-
-    wait_for_event(&codex.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
     assert!(
         first_turn_mock.single_request().input().iter().any(|item| {
