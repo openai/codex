@@ -170,7 +170,6 @@ pub(crate) struct ToolInfo {
 
 #[derive(Clone)]
 struct CachedCodexAppsTools {
-    cache_key: String,
     expires_at: Instant,
     tools: Vec<ToolInfo>,
 }
@@ -253,7 +252,6 @@ struct ManagedClient {
     tools: Vec<ToolInfo>,
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
-    codex_apps_tools_cache_key: Option<String>,
     server_supports_sandbox_state_capability: bool,
 }
 
@@ -289,8 +287,6 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
     ) -> Self {
-        let codex_apps_tools_cache_key =
-            codex_apps_tools_cache_key_for_transport(&server_name, &config.transport);
         let tool_filter = ToolFilter::from_config(&config);
         let fut = async move {
             if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -305,7 +301,6 @@ impl AsyncManagedClient {
                 config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
                 config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
                 tool_filter,
-                codex_apps_tools_cache_key,
                 tx_event,
                 elicitation_requests,
             )
@@ -526,18 +521,10 @@ impl McpConnectionManager {
                 let rmcp_client = client.client;
                 let tool_timeout = client.tool_timeout;
                 let tool_filter = client.tool_filter;
-                let codex_apps_tools_cache_key = client.codex_apps_tools_cache_key;
                 let mut server_tools = client.tools;
 
                 if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                    match list_tools_for_client(
-                        server_name,
-                        &rmcp_client,
-                        tool_timeout,
-                        codex_apps_tools_cache_key.as_deref(),
-                    )
-                    .await
-                    {
+                    match list_tools_for_client(server_name, &rmcp_client, tool_timeout).await {
                         Ok(fresh_or_cached_tools) => {
                             server_tools = fresh_or_cached_tools;
                         }
@@ -578,9 +565,7 @@ impl McpConnectionManager {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
 
-        if let Some(cache_key) = managed_client.codex_apps_tools_cache_key.as_deref() {
-            write_cached_codex_apps_tools(cache_key, &tools);
-        }
+        write_cached_codex_apps_tools(&tools);
         Ok(())
     }
 
@@ -953,19 +938,6 @@ fn normalize_codex_apps_tool_title(
     value.to_string()
 }
 
-fn codex_apps_tools_cache_key_for_transport(
-    server_name: &str,
-    transport: &McpServerTransportConfig,
-) -> Option<String> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-    match transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => Some(url.clone()),
-        _ => None,
-    }
-}
-
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
@@ -1017,7 +989,6 @@ async fn start_server_task(
     startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
     tool_timeout: Duration,
     tool_filter: ToolFilter,
-    codex_apps_tools_cache_key: Option<String>,
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
 ) -> Result<ManagedClient, StartupOutcomeError> {
@@ -1056,14 +1027,9 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
-    let tools = list_tools_for_client(
-        &server_name,
-        &client,
-        startup_timeout,
-        codex_apps_tools_cache_key.as_deref(),
-    )
-    .await
-    .map_err(StartupOutcomeError::from)?;
+    let tools = list_tools_for_client(&server_name, &client, startup_timeout)
+        .await
+        .map_err(StartupOutcomeError::from)?;
 
     let server_supports_sandbox_state_capability = initialize_result
         .capabilities
@@ -1077,7 +1043,6 @@ async fn start_server_task(
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
-        codex_apps_tools_cache_key,
         server_supports_sandbox_state_capability,
     };
 
@@ -1132,25 +1097,21 @@ async fn list_tools_for_client(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
-    cache_key: Option<&str>,
 ) -> Result<Vec<ToolInfo>> {
     if server_name == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(cache_key) = cache_key
-        && let Some(cached_tools) = read_cached_codex_apps_tools(cache_key)
+        && let Some(cached_tools) = read_cached_codex_apps_tools()
     {
         return Ok(cached_tools);
     }
 
     let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
-    if server_name == CODEX_APPS_MCP_SERVER_NAME
-        && let Some(cache_key) = cache_key
-    {
-        write_cached_codex_apps_tools(cache_key, &tools);
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        write_cached_codex_apps_tools(&tools);
     }
     Ok(tools)
 }
 
-fn read_cached_codex_apps_tools(cache_key: &str) -> Option<Vec<ToolInfo>> {
+fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
     let mut cache_guard = CODEX_APPS_TOOLS_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1158,7 +1119,6 @@ fn read_cached_codex_apps_tools(cache_key: &str) -> Option<Vec<ToolInfo>> {
 
     if let Some(cached) = cache_guard.as_ref()
         && now < cached.expires_at
-        && cached.cache_key == cache_key
     {
         return Some(cached.tools.clone());
     }
@@ -1172,12 +1132,11 @@ fn read_cached_codex_apps_tools(cache_key: &str) -> Option<Vec<ToolInfo>> {
     None
 }
 
-fn write_cached_codex_apps_tools(cache_key: &str, tools: &[ToolInfo]) {
+fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
     let mut cache_guard = CODEX_APPS_TOOLS_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *cache_guard = Some(CachedCodexAppsTools {
-        cache_key: cache_key.to_string(),
         expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
         tools: tools.to_vec(),
     });
@@ -1486,37 +1445,19 @@ mod tests {
     }
 
     #[test]
-    fn codex_apps_tools_cache_key_uses_streamable_http_url() {
-        let transport = McpServerTransportConfig::StreamableHttp {
-            url: "https://chatgpt.com/backend-api/wham/apps".to_string(),
-            http_headers: None,
-            env_http_headers: None,
-            bearer_token_env_var: None,
-        };
-
-        assert_eq!(
-            codex_apps_tools_cache_key_for_transport(CODEX_APPS_MCP_SERVER_NAME, &transport),
-            Some("https://chatgpt.com/backend-api/wham/apps".to_string())
-        );
-    }
-
-    #[test]
-    fn codex_apps_tools_cache_is_partitioned_by_cache_key() {
+    fn codex_apps_tools_cache_is_overwritten_by_last_write() {
         with_clean_codex_apps_tools_cache(|| {
             let tools_gateway_1 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "one")];
             let tools_gateway_2 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "two")];
 
-            write_cached_codex_apps_tools("https://one.example/apps", &tools_gateway_1);
-            let cached_gateway_1 = read_cached_codex_apps_tools("https://one.example/apps")
-                .expect("cache entry exists for first gateway");
-            assert_eq!(cached_gateway_1.len(), 1);
+            write_cached_codex_apps_tools(&tools_gateway_1);
+            let cached_gateway_1 =
+                read_cached_codex_apps_tools().expect("cache entry exists for first write");
             assert_eq!(cached_gateway_1[0].tool_name, "one");
-            assert!(read_cached_codex_apps_tools("https://two.example/apps").is_none());
 
-            write_cached_codex_apps_tools("https://two.example/apps", &tools_gateway_2);
-            let cached_gateway_2 = read_cached_codex_apps_tools("https://two.example/apps")
-                .expect("cache entry exists for second gateway");
-            assert_eq!(cached_gateway_2.len(), 1);
+            write_cached_codex_apps_tools(&tools_gateway_2);
+            let cached_gateway_2 =
+                read_cached_codex_apps_tools().expect("cache entry exists for second write");
             assert_eq!(cached_gateway_2[0].tool_name, "two");
         });
     }

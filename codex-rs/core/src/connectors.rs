@@ -19,7 +19,6 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::codex_apps_mcp_url;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -30,7 +29,6 @@ pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 #[derive(Clone, PartialEq, Eq)]
 struct AccessibleConnectorsCacheKey {
     chatgpt_base_url: String,
-    apps_mcp_cache_key: String,
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
     is_workspace_account: bool,
@@ -144,7 +142,6 @@ fn accessible_connectors_cache_key(
         .is_some_and(|token_data| token_data.id_token.is_workspace_account());
     AccessibleConnectorsCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
-        apps_mcp_cache_key: codex_apps_mcp_url(config),
         account_id,
         chatgpt_user_id,
         is_workspace_account,
