@@ -331,7 +331,7 @@ mod tests {
         let base_instructions = BaseInstructions {
             text: String::new(),
         };
-        let incoming_items = vec![user_message(
+        let incoming_items = [user_message(
             "INCOMING_USER_MESSAGE_THAT_TIPS_OVER_THE_WINDOW",
         )];
         let incoming_items_tokens = incoming_items
@@ -344,7 +344,7 @@ mod tests {
         );
 
         let mut history = ContextManager::new();
-        let history_items = vec![
+        let history_items = [
             user_message("USER_ONE"),
             developer_message("TRAILING_CODEX_GENERATED_CONTEXT"),
         ];
