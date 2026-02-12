@@ -29,9 +29,9 @@ mod phase_one {
     /// Prompt used for phase 1.
     pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
     /// Maximum number of rollout candidates processed per startup pass.
-    pub(super) const MAX_ROLLOUTS_PER_STARTUP: usize = 8;
+    pub(super) const MAX_ROLLOUTS_PER_STARTUP: usize = 128;
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
-    pub(super) const CONCURRENCY_LIMIT: usize = 8;
+    pub(super) const CONCURRENCY_LIMIT: usize = 64;
     /// Fallback stage-1 rollout truncation limit (tokens) when model metadata
     /// does not include a valid context window.
     pub(super) const DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT: usize = 150_000;
@@ -45,7 +45,7 @@ mod phase_one {
     /// framing, and model output.
     pub(super) const CONTEXT_WINDOW_PERCENT: i64 = 70;
     /// Maximum rollout age considered for phase-1 extraction.
-    pub(super) const MAX_ROLLOUT_AGE_DAYS: i64 = 30;
+    pub(super) const MAX_ROLLOUT_AGE_DAYS: i64 = 90;
     /// Minimum rollout idle time required before phase-1 extraction.
     pub(super) const MIN_ROLLOUT_IDLE_HOURS: i64 = 12;
     /// Lease duration (seconds) for phase-1 job ownership.
