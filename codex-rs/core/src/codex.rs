@@ -1326,6 +1326,7 @@ impl Session {
             &sess,
             Arc::clone(&config),
             &session_configuration.session_source,
+            Some(sess.conversation_id.to_string()),
         );
 
         Ok(sess)
@@ -3639,10 +3640,15 @@ mod handlers {
             state.session_configuration.session_source.clone()
         };
 
-        crate::memories::start_memories_startup_task(sess, Arc::clone(config), &session_source);
+        crate::memories::start_memories_startup_task(
+            sess,
+            Arc::clone(config),
+            &session_source,
+            Some(sub_id.clone()),
+        );
 
         sess.send_event_raw(Event {
-            id: sub_id.clone(),
+            id: sub_id,
             msg: EventMsg::Warning(WarningEvent {
                 message: "Memory update triggered.".to_string(),
             }),

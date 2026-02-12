@@ -12,18 +12,26 @@ use tracing::warn;
 use super::super::PHASE_TWO_JOB_HEARTBEAT_SECONDS;
 use super::super::PHASE_TWO_JOB_LEASE_SECONDS;
 use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
+use super::emit_memory_progress;
 
 pub(super) fn spawn_phase2_completion_task(
-    session: &Session,
+    session: Arc<Session>,
     ownership_token: String,
     completion_watermark: i64,
     consolidation_agent_id: ThreadId,
+    progress_sub_id: Option<String>,
 ) {
     let state_db = session.services.state_db.clone();
     let agent_control = session.services.agent_control.clone();
 
     tokio::spawn(async move {
         let Some(state_db) = state_db else {
+            emit_memory_progress(
+                session.as_ref(),
+                &progress_sub_id,
+                "phase 2 failed (state db unavailable)",
+            )
+            .await;
             return;
         };
 
@@ -39,6 +47,12 @@ pub(super) fn spawn_phase2_completion_task(
                     "failed to subscribe to consolidation agent status",
                 )
                 .await;
+                emit_memory_progress(
+                    session.as_ref(),
+                    &progress_sub_id,
+                    "phase 2 failed (status subscription unavailable)",
+                )
+                .await;
                 return;
             }
         };
@@ -51,6 +65,13 @@ pub(super) fn spawn_phase2_completion_task(
             status_rx,
         )
         .await;
+        let progress = match &final_status {
+            AgentStatus::Completed(_) => "phase 2 complete",
+            AgentStatus::Errored(_) | AgentStatus::NotFound => "phase 2 failed",
+            AgentStatus::Shutdown => "phase 2 cancelled",
+            AgentStatus::PendingInit | AgentStatus::Running => "phase 2 failed",
+        };
+        emit_memory_progress(session.as_ref(), &progress_sub_id, progress).await;
         if matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
             return;
         }

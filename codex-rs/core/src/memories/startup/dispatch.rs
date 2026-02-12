@@ -20,6 +20,7 @@ use super::super::PHASE_TWO_JOB_RETRY_DELAY_SECONDS;
 use super::super::prompts::build_consolidation_prompt;
 use super::super::storage::rebuild_raw_memories_file_from_memories;
 use super::super::storage::sync_rollout_summaries_from_memories;
+use super::emit_memory_progress;
 use super::phase2::spawn_phase2_completion_task;
 
 fn completion_watermark(
@@ -37,9 +38,16 @@ fn completion_watermark(
 pub(super) async fn run_global_memory_consolidation(
     session: &Arc<Session>,
     config: Arc<Config>,
+    progress_sub_id: &Option<String>,
 ) -> bool {
     let Some(state_db) = session.services.state_db.as_deref() else {
         warn!("state db unavailable; skipping global memory consolidation");
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 skipped (state db unavailable)",
+        )
+        .await;
         return false;
     };
 
@@ -50,6 +58,12 @@ pub(super) async fn run_global_memory_consolidation(
         Ok(claim) => claim,
         Err(err) => {
             warn!("state db try_claim_global_phase2_job failed during memories startup: {err}");
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed to claim global job",
+            )
+            .await;
             return false;
         }
     };
@@ -60,10 +74,13 @@ pub(super) async fn run_global_memory_consolidation(
         } => (ownership_token, input_watermark),
         codex_state::Phase2JobClaimOutcome::SkippedNotDirty => {
             debug!("memory phase-2 global lock is up-to-date; skipping consolidation");
+            emit_memory_progress(session.as_ref(), progress_sub_id, "phase 2 up to date").await;
             return false;
         }
         codex_state::Phase2JobClaimOutcome::SkippedRunning => {
             debug!("memory phase-2 global consolidation already running; skipping");
+            emit_memory_progress(session.as_ref(), progress_sub_id, "phase 2 already running")
+                .await;
             return false;
         }
     };
@@ -100,6 +117,12 @@ pub(super) async fn run_global_memory_consolidation(
                     PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed (sandbox policy rejected)",
+            )
+            .await;
             return false;
         }
         consolidation_config
@@ -119,6 +142,12 @@ pub(super) async fn run_global_memory_consolidation(
                     PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed (could not load stage-1 outputs)",
+            )
+            .await;
             return false;
         }
     };
@@ -132,6 +161,12 @@ pub(super) async fn run_global_memory_consolidation(
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
             )
             .await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 failed (could not sync local artifacts)",
+        )
+        .await;
         return false;
     }
 
@@ -144,6 +179,12 @@ pub(super) async fn run_global_memory_consolidation(
                 PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
             )
             .await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 failed (could not rebuild raw memories)",
+        )
+        .await;
         return false;
     }
     if latest_memories.is_empty() {
@@ -151,6 +192,12 @@ pub(super) async fn run_global_memory_consolidation(
         let _ = state_db
             .mark_global_phase2_job_succeeded(&ownership_token, completion_watermark)
             .await;
+        emit_memory_progress(
+            session.as_ref(),
+            progress_sub_id,
+            "phase 2 complete (no stage-1 outputs)",
+        )
+        .await;
         return false;
     }
 
@@ -173,11 +220,13 @@ pub(super) async fn run_global_memory_consolidation(
             info!(
                 "memory phase-2 global consolidation agent started: agent_id={consolidation_agent_id}"
             );
+            emit_memory_progress(session.as_ref(), progress_sub_id, "phase 2 running").await;
             spawn_phase2_completion_task(
-                session.as_ref(),
+                Arc::clone(session),
                 ownership_token,
                 completion_watermark,
                 consolidation_agent_id,
+                progress_sub_id.clone(),
             );
             true
         }
@@ -190,6 +239,12 @@ pub(super) async fn run_global_memory_consolidation(
                     PHASE_TWO_JOB_RETRY_DELAY_SECONDS,
                 )
                 .await;
+            emit_memory_progress(
+                session.as_ref(),
+                progress_sub_id,
+                "phase 2 failed (could not spawn consolidation agent)",
+            )
+            .await;
             false
         }
     }
@@ -361,7 +416,8 @@ mod tests {
         );
 
         let scheduled =
-            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config), &None)
+                .await;
         assert!(
             scheduled,
             "dispatch should reclaim stale lock and spawn one agent"
@@ -407,9 +463,11 @@ mod tests {
         harness.seed_stage1_output(200).await;
 
         let first_run =
-            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config), &None)
+                .await;
         let second_run =
-            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config), &None)
+                .await;
 
         assert!(first_run, "first dispatch should schedule consolidation");
         assert!(
@@ -433,7 +491,8 @@ mod tests {
             .expect("enqueue global consolidation");
 
         let scheduled =
-            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config), &None)
+                .await;
         assert!(
             !scheduled,
             "dispatch should not spawn when no stage-1 outputs are available"
@@ -498,7 +557,8 @@ mod tests {
             .expect("enqueue global consolidation");
 
         let scheduled =
-            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config)).await;
+            run_global_memory_consolidation(&harness.session, Arc::clone(&harness.config), &None)
+                .await;
         assert!(
             !scheduled,
             "dispatch should skip subagent spawn when no stage-1 outputs are available"
@@ -600,7 +660,7 @@ mod tests {
             "stage-1 success should enqueue global consolidation"
         );
 
-        let scheduled = run_global_memory_consolidation(&session, Arc::clone(&config)).await;
+        let scheduled = run_global_memory_consolidation(&session, Arc::clone(&config), &None).await;
         assert!(
             !scheduled,
             "dispatch should return false when consolidation subagent cannot be spawned"
