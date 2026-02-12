@@ -3983,6 +3983,90 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
 }
 
 #[tokio::test]
+async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.features.enable(Feature::Apps);
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let full_connectors = vec![
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        },
+        codex_chatgpt::connectors::AppInfo {
+            id: "unit_test_connector_2".to_string(),
+            name: "Linear".to_string(),
+            description: Some("Project tracking".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://example.test/linear".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: full_connectors.clone(),
+        }),
+        true,
+    );
+    chat.add_connectors_output();
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                codex_chatgpt::connectors::AppInfo {
+                    id: "unit_test_connector_1".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "connector_openai_hidden".to_string(),
+                    name: "Hidden OpenAI".to_string(),
+                    description: Some("Should be filtered".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    install_url: Some("https://example.test/hidden-openai".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                },
+            ],
+        }),
+        false,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors == full_connectors
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 1 available apps."),
+        "expected partial refresh popup to use filtered connectors, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("Hidden OpenAI"),
+        "expected disallowed connector to be filtered from partial refresh popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Apps);

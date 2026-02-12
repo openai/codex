@@ -6695,6 +6695,12 @@ impl ChatWidget {
 
         match result {
             Ok(mut snapshot) => {
+                if !is_final {
+                    snapshot.connectors = connectors::merge_connectors_with_accessible(
+                        Vec::new(),
+                        snapshot.connectors,
+                    );
+                }
                 snapshot.connectors =
                     connectors::with_app_enabled_state(snapshot.connectors, &self.config);
                 if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors_cache {
