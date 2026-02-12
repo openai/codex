@@ -554,6 +554,8 @@ pub(crate) struct App {
     /// Ignore the next ShutdownComplete event when we're intentionally
     /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
+    /// Active thread that should trigger app exit when its shutdown completes.
+    pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
 
@@ -927,6 +929,9 @@ impl App {
         }
         let active_thread_id = self.active_thread_id?;
         let primary_thread_id = self.primary_thread_id?;
+        if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
+            return None;
+        }
         (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
     }
 
@@ -1150,6 +1155,7 @@ impl App {
             feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -1579,8 +1585,13 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::ShutdownFirst => {
+                    self.pending_shutdown_exit_thread_id =
+                        self.active_thread_id.or(self.chat_widget.thread_id());
+                    self.chat_widget.submit_op(Op::Shutdown);
+                }
                 ExitMode::Immediate => {
+                    self.pending_shutdown_exit_thread_id = None;
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
             },
@@ -2367,6 +2378,9 @@ impl App {
     }
 
     async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
+            && self.pending_shutdown_exit_thread_id == self.active_thread_id;
+
         if let Some((closed_thread_id, primary_thread_id)) =
             self.active_non_primary_shutdown_target(&event.msg)
         {
@@ -2388,6 +2402,9 @@ impl App {
             return Ok(());
         }
 
+        if pending_shutdown_exit_completed {
+            self.pending_shutdown_exit_thread_id = None;
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -2820,6 +2837,40 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_when_shutdown_exit_is_pending()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(active_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_still_switches_for_other_pending_exit_thread()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2862,6 +2913,7 @@ mod tests {
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -2919,6 +2971,7 @@ mod tests {
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 active_thread_id: None,
