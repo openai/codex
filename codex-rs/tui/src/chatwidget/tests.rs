@@ -1030,6 +1030,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -1086,6 +1087,7 @@ async fn make_chatwidget_manual(
         skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,

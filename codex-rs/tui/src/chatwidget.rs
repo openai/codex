@@ -131,6 +131,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -520,6 +521,7 @@ pub(crate) struct ChatWidget {
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
+    turn_sleep_inhibitor: SleepInhibitor,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
@@ -1275,6 +1277,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.plan_delta_buffer.clear();
@@ -1332,6 +1335,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1568,6 +1572,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
+        self.turn_sleep_inhibitor.set_turn_running(false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2548,6 +2553,7 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
@@ -2615,6 +2621,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
@@ -2714,6 +2721,7 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
@@ -2780,6 +2788,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
@@ -2866,6 +2875,7 @@ impl ChatWidget {
             otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
+        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
@@ -2934,6 +2944,7 @@ impl ChatWidget {
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
             unified_exec_wait_streak: None,
+            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
@@ -5953,6 +5964,11 @@ impl ChatWidget {
         }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
+        }
+        if feature == Feature::PreventIdleSleep {
+            self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
+            self.turn_sleep_inhibitor
+                .set_turn_running(self.agent_turn_running);
         }
         #[cfg(target_os = "windows")]
         if matches!(
