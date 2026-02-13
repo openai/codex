@@ -1235,33 +1235,33 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let (inline_network_decider_session, inline_network_decider): (
-            Option<Arc<RwLock<std::sync::Weak<Session>>>>,
-            Option<Arc<dyn NetworkPolicyDecider>>,
-        ) = if config.permissions.network.is_some() {
-            let inline_network_decider_session =
-                Arc::new(RwLock::new(std::sync::Weak::<Session>::new()));
-            let inline_network_decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
-                let inline_network_decider_session = Arc::clone(&inline_network_decider_session);
-                move |request: NetworkPolicyRequest| {
+        let (inline_network_decider_session, inline_network_decider) =
+            if config.permissions.network.is_some() {
+                let inline_network_decider_session =
+                    Arc::new(RwLock::new(std::sync::Weak::<Session>::new()));
+                let inline_network_decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
                     let inline_network_decider_session =
                         Arc::clone(&inline_network_decider_session);
-                    async move {
-                        let Some(session) = inline_network_decider_session.read().await.upgrade()
-                        else {
-                            return NetworkDecision::ask("not_allowed");
-                        };
-                        session.handle_inline_network_policy_request(request).await
+                    move |request: NetworkPolicyRequest| {
+                        let inline_network_decider_session =
+                            Arc::clone(&inline_network_decider_session);
+                        async move {
+                            let Some(session) =
+                                inline_network_decider_session.read().await.upgrade()
+                            else {
+                                return NetworkDecision::ask("not_allowed");
+                            };
+                            session.handle_inline_network_policy_request(request).await
+                        }
                     }
-                }
-            });
-            (
-                Some(inline_network_decider_session),
-                Some(inline_network_decider),
-            )
-        } else {
-            (None, None)
-        };
+                });
+                (
+                    Some(inline_network_decider_session),
+                    Some(inline_network_decider),
+                )
+            } else {
+                (None, None)
+            };
         let network_proxy = match config.permissions.network.as_ref() {
             Some(spec) => Some(
                 spec.start_proxy(

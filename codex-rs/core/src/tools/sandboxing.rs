@@ -12,6 +12,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
+use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
@@ -254,6 +255,7 @@ pub(crate) struct ToolCtx<'a> {
     pub turn: &'a TurnContext,
     pub call_id: String,
     pub tool_name: String,
+    pub network_attempt_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -263,6 +265,10 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    fn network_approval_spec(&self, _req: &Req, _ctx: &ToolCtx<'_>) -> Option<NetworkApprovalSpec> {
+        None
+    }
+
     async fn run(
         &mut self,
         req: &Req,

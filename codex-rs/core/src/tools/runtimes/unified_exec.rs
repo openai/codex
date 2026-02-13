@@ -12,6 +12,8 @@ use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::network_approval::NetworkApprovalMode;
+use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -40,7 +42,6 @@ pub struct UnifiedExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
-    pub network_attempt_id: Option<String>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -147,6 +148,20 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+    fn network_approval_spec(
+        &self,
+        req: &UnifiedExecRequest,
+        _ctx: &ToolCtx<'_>,
+    ) -> Option<NetworkApprovalSpec> {
+        req.network.as_ref()?;
+        Some(NetworkApprovalSpec {
+            command: req.command.clone(),
+            cwd: req.cwd.clone(),
+            network: req.network.clone(),
+            mode: NetworkApprovalMode::Deferred,
+        })
+    }
+
     async fn run(
         &mut self,
         req: &UnifiedExecRequest,
@@ -167,7 +182,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env_for_attempt(&mut env, req.network_attempt_id.as_deref());
+            network.apply_to_env_for_attempt(&mut env, ctx.network_attempt_id.as_deref());
         }
         let spec = build_command_spec(
             &command,

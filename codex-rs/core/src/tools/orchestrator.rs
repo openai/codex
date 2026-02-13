@@ -12,6 +12,11 @@ use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
+use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::tools::network_approval::NetworkApprovalMode;
+use crate::tools::network_approval::begin_network_approval;
+use crate::tools::network_approval::finish_deferred_network_approval;
+use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -28,10 +33,69 @@ pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
 }
 
+pub(crate) struct OrchestratorRunResult<Out> {
+    pub output: Out,
+    pub deferred_network_approval: Option<DeferredNetworkApproval>,
+}
+
 impl ToolOrchestrator {
     pub fn new() -> Self {
         Self {
             sandbox: SandboxManager::new(),
+        }
+    }
+
+    async fn run_attempt<Rq, Out, T>(
+        tool: &mut T,
+        req: &Rq,
+        tool_ctx: &ToolCtx<'_>,
+        attempt: &SandboxAttempt<'_>,
+        has_managed_network_requirements: bool,
+    ) -> (Result<Out, ToolError>, Option<DeferredNetworkApproval>)
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
+        let network_approval = begin_network_approval(
+            tool_ctx.session,
+            &tool_ctx.turn.sub_id,
+            &tool_ctx.call_id,
+            has_managed_network_requirements,
+            tool.network_approval_spec(req, tool_ctx),
+        )
+        .await;
+
+        let attempt_tool_ctx = ToolCtx {
+            session: tool_ctx.session,
+            turn: tool_ctx.turn,
+            call_id: tool_ctx.call_id.clone(),
+            tool_name: tool_ctx.tool_name.clone(),
+            network_attempt_id: network_approval.as_ref().and_then(|network_approval| {
+                network_approval.attempt_id().map(ToString::to_string)
+            }),
+        };
+        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+
+        let Some(network_approval) = network_approval else {
+            return (run_result, None);
+        };
+
+        match network_approval.mode() {
+            NetworkApprovalMode::Immediate => {
+                let finalize_result =
+                    finish_immediate_network_approval(tool_ctx.session, network_approval).await;
+                if let Err(err) = finalize_result {
+                    return (Err(err), None);
+                }
+                (run_result, None)
+            }
+            NetworkApprovalMode::Deferred => {
+                let deferred = network_approval.into_deferred();
+                if run_result.is_err() {
+                    finish_deferred_network_approval(tool_ctx.session, deferred).await;
+                    return (run_result, None);
+                }
+                (run_result, deferred)
+            }
         }
     }
 
@@ -42,7 +106,7 @@ impl ToolOrchestrator {
         tool_ctx: &ToolCtx<'_>,
         turn_ctx: &crate::codex::TurnContext,
         approval_policy: AskForApproval,
-    ) -> Result<Out, ToolError>
+    ) -> Result<OrchestratorRunResult<Out>, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
@@ -120,10 +184,21 @@ impl ToolOrchestrator {
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
-        match tool.run(req, &initial_attempt, tool_ctx).await {
+        let (first_result, first_deferred_network_approval) = Self::run_attempt(
+            tool,
+            req,
+            tool_ctx,
+            &initial_attempt,
+            has_managed_network_requirements,
+        )
+        .await;
+        match first_result {
             Ok(out) => {
                 // We have a successful initial result
-                Ok(out)
+                Ok(OrchestratorRunResult {
+                    output: out,
+                    deferred_network_approval: first_deferred_network_approval,
+                })
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output,
@@ -216,9 +291,20 @@ impl ToolOrchestrator {
                 };
 
                 // Second attempt.
-                (*tool).run(req, &escalated_attempt, tool_ctx).await
+                let (retry_result, retry_deferred_network_approval) = Self::run_attempt(
+                    tool,
+                    req,
+                    tool_ctx,
+                    &escalated_attempt,
+                    has_managed_network_requirements,
+                )
+                .await;
+                retry_result.map(|output| OrchestratorRunResult {
+                    output,
+                    deferred_network_approval: retry_deferred_network_approval,
+                })
             }
-            other => other,
+            Err(err) => Err(err),
         }
     }
 }
