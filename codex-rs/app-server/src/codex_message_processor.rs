@@ -4610,6 +4610,11 @@ impl CodexMessageProcessor {
             None => 0,
         };
 
+        let (mut accessible_connectors, mut all_connectors) = tokio::join!(
+            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
+            connectors::list_cached_all_connectors(&config)
+        );
+
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let accessible_config = config.clone();
@@ -4632,9 +4637,9 @@ impl CodexMessageProcessor {
             let _ = tx.send(AppListLoadResult::Directory(result));
         });
 
-        let mut accessible_connectors: Option<Vec<AppInfo>> = None;
-        let mut all_connectors: Option<Vec<AppInfo>> = None;
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
+        let mut accessible_loaded = false;
+        let mut all_loaded = false;
 
         loop {
             let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
@@ -4665,6 +4670,7 @@ impl CodexMessageProcessor {
             match result {
                 AppListLoadResult::Accessible(Ok(connectors)) => {
                     accessible_connectors = Some(connectors);
+                    accessible_loaded = true;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
                     let error = JSONRPCErrorError {
@@ -4677,6 +4683,7 @@ impl CodexMessageProcessor {
                 }
                 AppListLoadResult::Directory(Ok(connectors)) => {
                     all_connectors = Some(connectors);
+                    all_loaded = true;
                 }
                 AppListLoadResult::Directory(Err(err)) => {
                     let error = JSONRPCErrorError {
@@ -4698,7 +4705,7 @@ impl CodexMessageProcessor {
             );
             Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
 
-            if accessible_connectors.is_some() && all_connectors.is_some() {
+            if accessible_loaded && all_loaded {
                 match Self::paginate_apps(merged.as_slice(), start, limit) {
                     Ok(response) => {
                         outgoing.send_response(request_id, response).await;
