@@ -144,6 +144,7 @@ pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
+pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
 pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
