@@ -109,8 +109,67 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod voice;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+mod voice {
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU16;
+
+    pub struct RecordedAudio {
+        pub data: Vec<i16>,
+        pub sample_rate: u32,
+        pub channels: u16,
+    }
+
+    pub struct VoiceCapture;
+
+    impl VoiceCapture {
+        pub fn start() -> Result<Self, String> {
+            Err("voice input is unavailable in this build".to_string())
+        }
+
+        pub fn stop(self) -> Result<RecordedAudio, String> {
+            Err("voice input is unavailable in this build".to_string())
+        }
+
+        pub fn data_arc(&self) -> Arc<Mutex<Vec<i16>>> {
+            Arc::new(Mutex::new(Vec::new()))
+        }
+
+        pub fn stopped_flag(&self) -> Arc<AtomicBool> {
+            Arc::new(AtomicBool::new(true))
+        }
+
+        pub fn sample_rate(&self) -> u32 {
+            0
+        }
+
+        pub fn channels(&self) -> u16 {
+            0
+        }
+
+        pub fn last_peak_arc(&self) -> Arc<AtomicU16> {
+            Arc::new(AtomicU16::new(0))
+        }
+    }
+
+    pub fn transcribe_async(
+        id: String,
+        _audio: RecordedAudio,
+        _context: Option<String>,
+        tx: AppEventSender,
+    ) {
+        tx.send(AppEvent::TranscriptionFailed {
+            id,
+            error: "voice input is unavailable in this build".to_string(),
+        });
+    }
+}
 mod wrapping;
 
 #[cfg(test)]
