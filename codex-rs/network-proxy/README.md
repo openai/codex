@@ -35,6 +35,13 @@ dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
+[network.mitm]
+# When enabled, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+enabled = false
+# CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
+# Maximum size of request/response bodies MITM will buffer for inspection.
+max_body_bytes = 1048576
+
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
@@ -80,8 +87,9 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
-blocked because they would bypass method enforcement.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
+MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
+limited mode.
 
 ## Library API
 
