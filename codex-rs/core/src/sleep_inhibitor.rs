@@ -166,17 +166,19 @@ type IOPMAssertionCreateWithNameFn = unsafe extern "C" fn(
 type IOPMAssertionReleaseFn = unsafe extern "C" fn(assertion_id: IOPMAssertionID) -> IOReturn;
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy)]
 struct MacSleepApi {
+    // Keep the dlopen handle alive for the lifetime of the loaded symbols.
+    // This prevents accidental dlclose while function pointers are in use.
+    _iokit_handle: usize,
     create_with_name: IOPMAssertionCreateWithNameFn,
     release: IOPMAssertionReleaseFn,
 }
 
 #[cfg(target_os = "macos")]
 impl MacSleepApi {
-    fn get() -> Option<Self> {
+    fn get() -> Option<&'static Self> {
         static API: OnceLock<Option<MacSleepApi>> = OnceLock::new();
-        *API.get_or_init(Self::load)
+        API.get_or_init(Self::load).as_ref()
     }
 
     fn load() -> Option<Self> {
@@ -221,6 +223,7 @@ impl MacSleepApi {
         let release: IOPMAssertionReleaseFn = unsafe { std::mem::transmute(release) };
 
         Some(Self {
+            _iokit_handle: handle as usize,
             create_with_name,
             release,
         })
