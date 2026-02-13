@@ -8868,6 +8868,7 @@
             "cli",
             "vscode",
             "exec",
+            "desktop_app",
             "mcp",
             "unknown"
           ],

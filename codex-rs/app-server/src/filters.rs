@@ -55,7 +55,7 @@ pub(crate) fn source_kind_matches(source: &CoreSessionSource, filter: &[ThreadSo
         ThreadSourceKind::Cli => matches!(source, CoreSessionSource::Cli),
         ThreadSourceKind::VsCode => matches!(source, CoreSessionSource::VSCode),
         ThreadSourceKind::Exec => matches!(source, CoreSessionSource::Exec),
-        ThreadSourceKind::AppServer => matches!(source, CoreSessionSource::Mcp),
+        ThreadSourceKind::AppServer => matches!(source, CoreSessionSource::DesktopApp),
         ThreadSourceKind::SubAgent => matches!(source, CoreSessionSource::SubAgent(_)),
         ThreadSourceKind::SubAgentReview => {
             matches!(
@@ -150,6 +150,18 @@ mod tests {
         assert!(!source_kind_matches(
             &spawn,
             &[ThreadSourceKind::SubAgentReview]
+        ));
+    }
+
+    #[test]
+    fn source_kind_matches_app_server_for_desktop_app_only() {
+        assert!(!source_kind_matches(
+            &CoreSessionSource::Mcp,
+            &[ThreadSourceKind::AppServer]
+        ));
+        assert!(source_kind_matches(
+            &CoreSessionSource::DesktopApp,
+            &[ThreadSourceKind::AppServer]
         ));
     }
 }
