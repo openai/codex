@@ -380,7 +380,8 @@ mod tests {
 
         let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path());
 
-        assert!(!rewritten[2].contains("/tmp/"));
         assert!(!rewritten[2].contains("codex-restore-env-"));
+        assert!(!rewritten[2].contains("export -p >"));
+        assert!(!rewritten[2].contains("rm -f \"$__codex_restore_env_file\""));
     }
 }
