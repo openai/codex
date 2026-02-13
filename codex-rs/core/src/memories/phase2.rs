@@ -33,6 +33,8 @@ struct Counters {
     input: i64,
 }
 
+/// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
+/// flow of the consolidation phase.
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let Some(db) = session.services.state_db.as_deref() else {
         // This should not happen.
@@ -44,7 +46,6 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let claim = match job::claim(session, db).await {
         Ok(claim) => claim,
         Err(e) => {
-            tracing::error!("failed to claim job: {}", e);
             session.services.otel_manager.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
                 1,
@@ -75,10 +76,6 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
-    let counters = Counters {
-        input: raw_memories.len() as i64,
-    };
-    emit_metrics(session, counters);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
@@ -119,6 +116,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 6. Spawn the agent handler.
     agent::handle(session, claim, new_watermark, thread_id);
+
+    // 7. Metrics and logs.
+    let counters = Counters {
+        input: raw_memories.len() as i64,
+    };
+    emit_metrics(session, counters);
 }
 
 mod job {
@@ -132,7 +135,10 @@ mod job {
         let claim = db
             .try_claim_global_phase2_job(session.conversation_id, phase_two::JOB_LEASE_SECONDS)
             .await
-            .map_err(|_| "failed_claim")?;
+            .map_err(|e| {
+                tracing::error!("failed to claim job: {}", e);
+                "failed_claim"
+            })?;
         let (token, watermark) = match claim {
             codex_state::Phase2JobClaimOutcome::Claimed {
                 ownership_token,
