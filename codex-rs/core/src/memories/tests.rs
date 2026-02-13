@@ -103,6 +103,7 @@ mod phase2 {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_state::Phase2JobClaimOutcome;
@@ -111,7 +112,6 @@ mod phase2 {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
-    use codex_protocol::protocol::Op;
 
     struct DispatchHarness {
         _codex_home: TempDir,
