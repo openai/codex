@@ -451,7 +451,7 @@ mod phase2 {
             .await
             .expect("enqueue global consolidation");
         let mut constrained_config = harness.config.as_ref().clone();
-        constrained_config.sandbox_policy =
+        constrained_config.permissions.sandbox_policy =
             Constrained::allow_only(SandboxPolicy::DangerFullAccess);
 
         phase2::run(&harness.session, Arc::new(constrained_config)).await;
