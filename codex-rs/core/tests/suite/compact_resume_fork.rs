@@ -932,9 +932,16 @@ async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
     ]);
     let sse7 = sse(vec![ev_completed("r7")]);
 
+    // Keep this matcher broad enough to survive prompt-shape differences across
+    // platforms/config (history may include either marker text or compact prompt
+    // fragments), but explicitly exclude the final resume turn so these two
+    // one-shot mocks cannot race for the same request.
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("AFTER_FORK")
+        (body.contains("AFTER_FORK")
+            || body_contains_text(body, SUMMARIZATION_PROMPT)
+            || body.contains(&json_fragment(FIRST_REPLY)))
+            && !body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
     let second_compact = mount_sse_once_match(server, match_second_compact, sse6).await;
 
@@ -984,7 +991,13 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
         .submit(Op::Compact)
         .await
         .expect("compact conversation");
-    let warning_event = wait_for_event(conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let warning_event = wait_for_event(conversation, |ev| {
+        matches!(
+            ev,
+            EventMsg::Warning(WarningEvent { message }) if message == COMPACT_WARNING_MESSAGE
+        )
+    })
+    .await;
     let EventMsg::Warning(WarningEvent { message }) = warning_event else {
         panic!("expected warning event after compact");
     };
