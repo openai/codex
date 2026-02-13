@@ -36,11 +36,16 @@ impl SleepInhibitor {
 
     /// Update the active turn state; turns sleep prevention on/off as needed.
     pub fn set_turn_running(&mut self, turn_running: bool) {
-        if !self.enabled || !turn_running {
+        if !self.enabled {
             self.release();
             return;
         }
-        self.acquire();
+
+        if turn_running {
+            self.acquire();
+        } else {
+            self.release();
+        }
     }
 
     fn acquire(&mut self) {
@@ -145,6 +150,31 @@ mod tests {
     #[test]
     fn sleep_inhibitor_toggles_without_panicking() {
         let mut inhibitor = SleepInhibitor::new(true);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(false);
+    }
+
+    #[test]
+    fn sleep_inhibitor_disabled_does_not_panic() {
+        let mut inhibitor = SleepInhibitor::new(false);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(false);
+    }
+
+    #[test]
+    fn sleep_inhibitor_multiple_true_calls_are_idempotent() {
+        let mut inhibitor = SleepInhibitor::new(true);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(false);
+    }
+
+    #[test]
+    fn sleep_inhibitor_can_toggle_multiple_times() {
+        let mut inhibitor = SleepInhibitor::new(true);
+        inhibitor.set_turn_running(true);
+        inhibitor.set_turn_running(false);
         inhibitor.set_turn_running(true);
         inhibitor.set_turn_running(false);
     }
