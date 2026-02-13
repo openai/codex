@@ -39,6 +39,7 @@ impl Drop for CallbackServerGuard {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login(
     server_name: &str,
     server_url: &str,
