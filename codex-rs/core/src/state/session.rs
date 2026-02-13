@@ -31,7 +31,6 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<RegularTask>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
-    warned_unknown_models: HashSet<String>,
 }
 
 impl SessionState {
@@ -50,7 +49,6 @@ impl SessionState {
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
-            warned_unknown_models: HashSet::new(),
         }
     }
 
@@ -198,13 +196,6 @@ impl SessionState {
     pub(crate) fn clear_connector_selection(&mut self) {
         self.active_connector_selection.clear();
     }
-
-    /// Marks an unknown model warning as emitted for the provided slug.
-    ///
-    /// Returns `true` only the first time a slug is marked during this session.
-    pub(crate) fn mark_unknown_model_warning_emitted(&mut self, model_slug: &str) -> bool {
-        self.warned_unknown_models.insert(model_slug.to_string())
-    }
 }
 
 // Sometimes new snapshots don't include credits or plan information.
@@ -329,16 +320,6 @@ mod tests {
         state.clear_connector_selection();
 
         assert_eq!(state.get_connector_selection(), HashSet::new());
-    }
-
-    #[tokio::test]
-    async fn unknown_model_warning_tracking_deduplicates_by_slug() {
-        let session_configuration = make_session_configuration_for_tests().await;
-        let mut state = SessionState::new(session_configuration);
-
-        assert!(state.mark_unknown_model_warning_emitted("gpt-alpha"));
-        assert!(!state.mark_unknown_model_warning_emitted("gpt-alpha"));
-        assert!(state.mark_unknown_model_warning_emitted("gpt-beta"));
     }
 
     #[tokio::test]

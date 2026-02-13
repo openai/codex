@@ -1654,34 +1654,6 @@ impl Session {
         state.set_previous_model(previous_model);
     }
 
-    async fn should_emit_unknown_model_warning(&self, model_slug: &str) -> bool {
-        let mut state = self.state.lock().await;
-        state.mark_unknown_model_warning_emitted(model_slug)
-    }
-
-    async fn maybe_warn_for_unknown_model(
-        &self,
-        turn_context: &TurnContext,
-        model_slug: &str,
-        used_fallback_model_metadata: bool,
-    ) {
-        if !used_fallback_model_metadata
-            || !self.should_emit_unknown_model_warning(model_slug).await
-        {
-            return;
-        }
-
-        self.send_event(
-            turn_context,
-            EventMsg::Warning(WarningEvent {
-                message: format!(
-                    "Defaulting to fallback model metadata for `{model_slug}`. This can degrade performance and cause issues."
-                ),
-            }),
-        )
-        .await;
-    }
-
     fn maybe_refresh_shell_snapshot_for_cwd(
         &self,
         previous_cwd: &Path,
@@ -1809,10 +1781,10 @@ impl Session {
         }
 
         let resolved_model_slug = session_configuration.collaboration_mode.model().to_string();
-        let model_resolution = self
+        let model_info = self
             .services
             .models_manager
-            .get_model_info_resolution(resolved_model_slug.as_str(), &per_turn_config)
+            .get_model_info(resolved_model_slug.as_str(), &per_turn_config)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -1820,7 +1792,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_resolution.model_info,
+            model_info.clone(),
             self.services
                 .network_proxy
                 .as_ref()
@@ -1833,12 +1805,17 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        self.maybe_warn_for_unknown_model(
-            turn_context.as_ref(),
-            resolved_model_slug.as_str(),
-            model_resolution.used_fallback_model_metadata,
-        )
-        .await;
+        if model_info.used_fallback_model_metadata {
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Defaulting to fallback model metadata for `{resolved_model_slug}`. This can degrade performance and cause issues."
+                    ),
+                }),
+            )
+            .await;
+        }
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
     }
