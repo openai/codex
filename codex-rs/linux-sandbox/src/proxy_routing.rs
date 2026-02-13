@@ -520,7 +520,8 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
         ifreq.ifr_name[index] = byte as libc::c_char;
     }
 
-    let read_flags_result = unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut ifreq) };
+    let read_flags_result =
+        unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS as libc::Ioctl, &mut ifreq) };
     if read_flags_result < 0 {
         let err = io::Error::last_os_error();
         let _ = close_fd(fd);
@@ -534,7 +535,7 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
     }
 
     ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
-    let set_flags_result = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifreq) };
+    let set_flags_result = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &ifreq) };
     if set_flags_result < 0 {
         let err = io::Error::last_os_error();
         let _ = close_fd(fd);
