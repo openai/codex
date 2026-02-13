@@ -1935,6 +1935,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -1979,6 +1980,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -2029,6 +2031,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: None,
         parsed_cmd: vec![],
     };
@@ -4636,6 +4639,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello".into(),
@@ -4692,6 +4696,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello".into(),
@@ -4739,6 +4744,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         command: command.clone(),
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         parsed_cmd: vec![],
     };
@@ -5098,6 +5104,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
+        network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
             "echo".into(),
             "hello world".into(),
