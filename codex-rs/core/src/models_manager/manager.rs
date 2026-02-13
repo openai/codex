@@ -43,6 +43,13 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// Result of resolving model metadata for a requested model slug.
+#[derive(Debug, Clone)]
+pub(crate) struct ModelInfoResolution {
+    pub(crate) model_info: ModelInfo,
+    pub(crate) used_fallback_model_metadata: bool,
+}
+
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
@@ -137,18 +144,35 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        self.get_model_info_resolution(model, config)
+            .await
+            .model_info
+    }
+
+    /// Look up model metadata, returning whether fallback metadata was used.
+    pub(crate) async fn get_model_info_resolution(
+        &self,
+        model: &str,
+        config: &Config,
+    ) -> ModelInfoResolution {
         let remote = self
             .find_remote_model_by_longest_prefix(model, config)
             .await;
-        let model = if let Some(remote) = remote {
-            ModelInfo {
-                slug: model.to_string(),
-                ..remote
-            }
+        let (model_info, used_fallback_model_metadata) = if let Some(remote) = remote {
+            (
+                ModelInfo {
+                    slug: model.to_string(),
+                    ..remote
+                },
+                false,
+            )
         } else {
-            model_info::model_info_from_slug(model)
+            (model_info::model_info_from_slug(model), true)
         };
-        model_info::with_config_overrides(model, config)
+        ModelInfoResolution {
+            model_info: model_info::with_config_overrides(model_info, config),
+            used_fallback_model_metadata,
+        }
     }
 
     async fn find_remote_model_by_longest_prefix(
@@ -470,6 +494,39 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: false,
         }
+    }
+
+    #[tokio::test]
+    async fn get_model_info_resolution_tracks_fallback_usage() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+        let known_slug = manager
+            .get_remote_models(&config)
+            .await
+            .first()
+            .expect("bundled models should include at least one model")
+            .slug
+            .clone();
+
+        let known = manager
+            .get_model_info_resolution(known_slug.as_str(), &config)
+            .await;
+        assert!(!known.used_fallback_model_metadata);
+        assert_eq!(known.model_info.slug, known_slug);
+
+        let unknown = manager
+            .get_model_info_resolution("model-that-does-not-exist", &config)
+            .await;
+        assert!(unknown.used_fallback_model_metadata);
+        assert_eq!(unknown.model_info.slug, "model-that-does-not-exist");
     }
 
     #[tokio::test]
