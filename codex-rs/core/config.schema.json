@@ -239,6 +239,9 @@
             "powershell_utf8": {
               "type": "boolean"
             },
+            "prevent_idle_sleep": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -1327,6 +1330,9 @@
           "type": "boolean"
         },
         "powershell_utf8": {
+          "type": "boolean"
+        },
+        "prevent_idle_sleep": {
           "type": "boolean"
         },
         "remote_models": {
