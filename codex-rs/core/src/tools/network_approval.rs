@@ -2,7 +2,9 @@ use crate::codex::Session;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkDecision;
+use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
@@ -14,6 +16,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,6 +263,35 @@ impl NetworkApprovalService {
             }
         }
     }
+}
+
+pub(crate) fn build_blocked_request_observer(
+    network_approval: Arc<NetworkApprovalService>,
+) -> Arc<dyn BlockedRequestObserver> {
+    Arc::new(move |blocked: BlockedRequest| {
+        let network_approval = Arc::clone(&network_approval);
+        async move {
+            network_approval.record_blocked_request(blocked).await;
+        }
+    })
+}
+
+pub(crate) fn build_network_policy_decider(
+    network_approval: Arc<NetworkApprovalService>,
+    network_policy_decider_session: Arc<RwLock<std::sync::Weak<Session>>>,
+) -> Arc<dyn NetworkPolicyDecider> {
+    Arc::new(move |request: NetworkPolicyRequest| {
+        let network_approval = Arc::clone(&network_approval);
+        let network_policy_decider_session = Arc::clone(&network_policy_decider_session);
+        async move {
+            let Some(session) = network_policy_decider_session.read().await.upgrade() else {
+                return NetworkDecision::ask("not_allowed");
+            };
+            network_approval
+                .handle_inline_policy_request(session.as_ref(), request)
+                .await
+        }
+    })
 }
 
 pub(crate) async fn begin_network_approval(

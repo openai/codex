@@ -570,9 +570,6 @@ impl UnifiedExecProcessManager {
                                 .await
                                 == Some(NetworkApprovalOutcome::DeniedByUser)
                             {
-                                tracing::debug!(
-                                    "terminating unified exec process {process_id} after delayed network denial for attempt {network_attempt_id}"
-                                );
                                 process.terminate();
                                 session
                                     .services

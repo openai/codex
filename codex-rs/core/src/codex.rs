@@ -47,11 +47,6 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
-use codex_network_proxy::BlockedRequest;
-use codex_network_proxy::BlockedRequestObserver;
-use codex_network_proxy::NetworkDecision;
-use codex_network_proxy::NetworkPolicyDecider;
-use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -232,6 +227,8 @@ use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::network_approval::NetworkApprovalService;
+use crate::tools::network_approval::build_blocked_request_observer;
+use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -1222,7 +1219,7 @@ impl Session {
             .is_some();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let inline_network_decider_session = if managed_network_requirements_enabled {
+        let network_policy_decider_session = if managed_network_requirements_enabled {
             config
                 .permissions
                 .network
@@ -1232,45 +1229,28 @@ impl Session {
             None
         };
         let blocked_request_observer = if managed_network_requirements_enabled {
-            config.permissions.network.as_ref().map(|_| {
-                let network_approval = Arc::clone(&network_approval);
-                Arc::new(move |blocked: BlockedRequest| {
-                    let network_approval = Arc::clone(&network_approval);
-                    async move {
-                        network_approval.record_blocked_request(blocked).await;
-                    }
-                }) as Arc<dyn BlockedRequestObserver>
-            })
+            config
+                .permissions
+                .network
+                .as_ref()
+                .map(|_| build_blocked_request_observer(Arc::clone(&network_approval)))
         } else {
             None
         };
-        let inline_network_decider =
-            inline_network_decider_session
+        let network_policy_decider =
+            network_policy_decider_session
                 .as_ref()
-                .map(|inline_network_decider_session| {
-                    let inline_network_decider_session = Arc::clone(inline_network_decider_session);
-                    let network_approval = Arc::clone(&network_approval);
-                    Arc::new(move |request: NetworkPolicyRequest| {
-                        let inline_network_decider_session =
-                            Arc::clone(&inline_network_decider_session);
-                        let network_approval = Arc::clone(&network_approval);
-                        async move {
-                            let Some(session) =
-                                inline_network_decider_session.read().await.upgrade()
-                            else {
-                                return NetworkDecision::ask("not_allowed");
-                            };
-                            network_approval
-                                .handle_inline_policy_request(session.as_ref(), request)
-                                .await
-                        }
-                    }) as Arc<dyn NetworkPolicyDecider>
+                .map(|network_policy_decider_session| {
+                    build_network_policy_decider(
+                        Arc::clone(&network_approval),
+                        Arc::clone(network_policy_decider_session),
+                    )
                 });
         let network_proxy = match config.permissions.network.as_ref() {
             Some(spec) => Some(
                 spec.start_proxy(
                     config.permissions.sandbox_policy.get(),
-                    inline_network_decider.as_ref().map(Arc::clone),
+                    network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
                     managed_network_requirements_enabled,
                 )
@@ -1362,8 +1342,8 @@ impl Session {
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
-        if let Some(inline_network_decider_session) = inline_network_decider_session {
-            let mut guard = inline_network_decider_session.write().await;
+        if let Some(network_policy_decider_session) = network_policy_decider_session {
+            let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
 
