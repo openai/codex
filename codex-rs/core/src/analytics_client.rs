@@ -84,7 +84,7 @@ impl AnalyticsEventsQueue {
     fn try_send(&self, job: TrackEventsJob) {
         if self.sender.try_send(job).is_err() {
             //TODO: add a metric for this
-            tracing::warn!("dropping skill analytics events: queue is full");
+            tracing::warn!("dropping analytics events: queue is full");
         }
     }
 
