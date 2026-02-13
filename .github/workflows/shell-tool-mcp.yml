@@ -444,7 +444,7 @@ jobs:
           chmod +x "$tmpdir/exec-wrapper"
 
           CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
-          BASH_EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
@@ -523,7 +523,7 @@ jobs:
           chmod +x "$tmpdir/exec-wrapper"
 
           CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
-          BASH_EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
           /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
 
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"

@@ -18,7 +18,7 @@ index 27bca11..baea760 100644
      if (newenvp == NULL)
  	    newenvp = environ;
 +    exec_argv = argv;
-+    if ((exec_wrapper = getenv("BASH_EXEC_WRAPPER")) &&
++    if ((exec_wrapper = getenv("EXEC_WRAPPER")) &&
 +	*exec_wrapper && !inblank(*exec_wrapper)) {
 +	exec_argv = argv - 2;
 +	exec_argv[0] = exec_wrapper;
