@@ -16,10 +16,12 @@ osx.framework(name = "CoreFoundation")
 osx.framework(name = "CoreGraphics")
 osx.framework(name = "CoreServices")
 osx.framework(name = "CoreText")
+osx.framework(name = "AudioToolbox")
 osx.framework(name = "CFNetwork")
 osx.framework(name = "FontServices")
 osx.framework(name = "AudioUnit")
 osx.framework(name = "CoreAudio")
+osx.framework(name = "CoreAudioTypes")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
 osx.framework(name = "Kernel")
@@ -144,6 +146,18 @@ inject_repo(crate, "openssl")
 crate.annotation(
     crate = "runfiles",
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
+)
+
+# coreaudio-sys falls back to `xcrun --show-sdk-path` in build.rs.
+# In remote mac builds xcrun is unavailable, so provide the hermetic SDK path.
+crate.annotation(
+    crate = "coreaudio-sys",
+    build_script_data = [
+        "@@toolchains_llvm_bootstrapped++osx+macosx15.4.sdk//sysroot",
+    ],
+    build_script_env = {
+        "COREAUDIO_SDK_PATH": "$(execpath @@toolchains_llvm_bootstrapped++osx+macosx15.4.sdk//sysroot)",
+    },
 )
 
 # Fix readme inclusions
