@@ -445,6 +445,8 @@ impl UnifiedExecProcessManager {
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
+            network_attempt_id: None,
+            session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
         let number_processes = {
