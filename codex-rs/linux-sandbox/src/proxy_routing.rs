@@ -38,6 +38,7 @@ const PROXY_ENV_KEYS: &[&str] = &[
 
 const PROXY_SOCKET_DIR_PREFIX: &str = "codex-linux-sandbox-proxy-";
 const HOST_BRIDGE_READY: u8 = 1;
+const LOOPBACK_INTERFACE_NAME: &[u8] = b"lo";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ProxyRouteSpec {
@@ -469,7 +470,7 @@ fn spawn_local_bridge(uds_path: &Path) -> io::Result<u16> {
 
 fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
     set_parent_death_signal()?;
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let listener = bind_local_loopback_listener()?;
     let port = listener.local_addr()?.port();
 
     let mut ready_file = unsafe { File::from_raw_fd(ready_fd) };
@@ -488,6 +489,61 @@ fn run_local_bridge(uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
             let _ = proxy_bidirectional(tcp_stream, unix_stream);
         });
     }
+}
+
+fn bind_local_loopback_listener() -> io::Result<TcpListener> {
+    match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
+        Ok(listener) => Ok(listener),
+        Err(bind_err) => {
+            let should_retry_after_lo_up = matches!(
+                bind_err.raw_os_error(),
+                Some(errno) if errno == libc::EADDRNOTAVAIL || errno == libc::ENETUNREACH
+            );
+            if !should_retry_after_lo_up {
+                return Err(bind_err);
+            }
+
+            ensure_loopback_interface_up()?;
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        }
+    }
+}
+
+fn ensure_loopback_interface_up() -> io::Result<()> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut ifreq = unsafe { std::mem::zeroed::<libc::ifreq>() };
+    for (index, byte) in LOOPBACK_INTERFACE_NAME.iter().copied().enumerate() {
+        ifreq.ifr_name[index] = byte as libc::c_char;
+    }
+
+    let read_flags_result = unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut ifreq) };
+    if read_flags_result < 0 {
+        let err = io::Error::last_os_error();
+        let _ = close_fd(fd);
+        return Err(err);
+    }
+
+    let current_flags = unsafe { ifreq.ifr_ifru.ifru_flags };
+    let up_flag = libc::IFF_UP as libc::c_short;
+    if (current_flags & up_flag) == up_flag {
+        return close_fd(fd);
+    }
+
+    unsafe {
+        ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
+    }
+    let set_flags_result = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifreq) };
+    if set_flags_result < 0 {
+        let err = io::Error::last_os_error();
+        let _ = close_fd(fd);
+        return Err(err);
+    }
+
+    close_fd(fd)
 }
 
 fn set_parent_death_signal() -> io::Result<()> {
