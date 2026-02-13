@@ -422,6 +422,34 @@ jobs:
           mkdir -p "$dest"
           cp Src/zsh "$dest/zsh"
 
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          BASH_EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
+
       - uses: actions/upload-artifact@v6
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
@@ -444,6 +472,14 @@ jobs:
             target: aarch64-apple-darwin
             variant: macos-14
     steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v autoconf >/dev/null 2>&1; then
+            brew install autoconf
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
@@ -464,6 +500,34 @@ jobs:
           dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/zsh/${{ matrix.variant }}"
           mkdir -p "$dest"
           cp Src/zsh "$dest/zsh"
+
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          BASH_EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
       - uses: actions/upload-artifact@v6
         with:
