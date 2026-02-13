@@ -133,6 +133,8 @@ pub enum Feature {
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Prevent idle system sleep while a turn is actively running.
+    PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -605,6 +607,19 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        #[cfg(target_os = "macos")]
+        stage: Stage::Experimental {
+            name: "Prevent idle sleep",
+            menu_description: "Keep macOS awake during active turns (display may still sleep).",
+            announcement: "NEW: Keep macOS awake while Codex is running an active turn. Toggle it in /experimental.",
+        },
+        #[cfg(not(target_os = "macos"))]
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
         stage: Stage::UnderDevelopment,
@@ -721,5 +736,22 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prevent_idle_sleep_is_experimental_on_macos() {
+        assert!(matches!(
+            Feature::PreventIdleSleep.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::PreventIdleSleep.default_enabled(), false);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn prevent_idle_sleep_is_under_development_off_macos() {
+        assert_eq!(Feature::PreventIdleSleep.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::PreventIdleSleep.default_enabled(), false);
     }
 }
