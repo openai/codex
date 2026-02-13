@@ -68,6 +68,25 @@ impl ShellRuntime {
     }
 }
 
+async fn network_policy_denial_message_for_attempt(
+    network: Option<&NetworkProxy>,
+    attempt_id: Option<&str>,
+) -> Option<String> {
+    let (Some(network), Some(attempt_id)) = (network, attempt_id) else {
+        return None;
+    };
+    match network.latest_blocked_request_for_attempt(attempt_id).await {
+        Ok(Some(blocked)) => denied_network_policy_message(&blocked),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::debug!(
+                "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
+            );
+            None
+        }
+    }
+}
+
 impl Sandboxable for ShellRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
         SandboxablePreference::Auto
@@ -197,22 +216,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         } else {
             None
         };
-        let network_policy_denial_message = if let (Some(network), Some(attempt_id)) =
-            (req.network.as_ref(), network_attempt_id.as_deref())
-        {
-            match network.latest_blocked_request_for_attempt(attempt_id).await {
-                Ok(Some(blocked)) => denied_network_policy_message(&blocked),
-                Ok(None) => None,
-                Err(err) => {
-                    tracing::debug!(
-                        "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let network_policy_denial_message = network_policy_denial_message_for_attempt(
+            req.network.as_ref(),
+            network_attempt_id.as_deref(),
+        )
+        .await;
 
         if let Some(attempt_id) = network_attempt_id.as_deref() {
             ctx.session
