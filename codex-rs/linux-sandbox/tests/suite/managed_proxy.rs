@@ -188,7 +188,14 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
     )
     .await;
 
-    assert_eq!(routed_output.status.success(), true);
+    assert_eq!(
+        routed_output.status.success(),
+        true,
+        "expected routed command to execute successfully; status={:?}; stdout={}; stderr={}",
+        routed_output.status.code(),
+        String::from_utf8_lossy(&routed_output.stdout),
+        String::from_utf8_lossy(&routed_output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&routed_output.stdout);
     assert!(
         stdout.contains("HTTP/1.1 200 OK"),
@@ -250,5 +257,12 @@ async fn managed_proxy_mode_denies_af_unix_creation_for_user_command() {
     )
     .await;
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected AF_UNIX creation to be denied cleanly for user command; status={:?}; stdout={}; stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
