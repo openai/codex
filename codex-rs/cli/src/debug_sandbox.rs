@@ -225,6 +225,7 @@ async fn run_command_under_sandbox(
             spec.start_proxy(
                 config.permissions.sandbox_policy.get(),
                 None,
+                None,
                 managed_network_requirements_enabled,
             )
             .await

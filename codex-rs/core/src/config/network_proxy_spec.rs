@@ -1,6 +1,7 @@
 use crate::config;
 use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
@@ -99,6 +100,7 @@ impl NetworkProxySpec {
         &self,
         sandbox_policy: &SandboxPolicy,
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
     ) -> std::io::Result<StartedNetworkProxy> {
         let state =
@@ -122,6 +124,9 @@ impl NetworkProxySpec {
                     NetworkDecision::ask("not_allowed")
                 }),
             };
+        }
+        if let Some(blocked_request_observer) = blocked_request_observer {
+            builder = builder.blocked_request_observer_arc(blocked_request_observer);
         }
         let proxy = builder.build().await.map_err(|err| {
             std::io::Error::other(format!("failed to build network proxy: {err}"))

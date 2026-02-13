@@ -36,6 +36,8 @@ pub use proxy::PROXY_URL_ENV_KEYS;
 pub use proxy::has_proxy_url_env_vars;
 pub use proxy::proxy_url_env_value;
 pub use runtime::BlockedRequest;
+pub use runtime::BlockedRequestArgs;
+pub use runtime::BlockedRequestObserver;
 pub use runtime::ConfigReloader;
 pub use runtime::ConfigState;
 pub use runtime::NetworkProxyState;

@@ -1699,6 +1699,7 @@ impl CodexMessageProcessor {
                 .start_proxy(
                     self.config.permissions.sandbox_policy.get(),
                     None,
+                    None,
                     managed_network_requirements_enabled,
                 )
                 .await

@@ -12,7 +12,6 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::NetworkApprovalOutcome;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
@@ -21,6 +20,7 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
 use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::tools::network_approval::NetworkApprovalOutcome;
 use crate::tools::network_approval::deferred_rejection_message;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
@@ -151,7 +151,9 @@ impl UnifiedExecProcessManager {
             return;
         };
         session
-            .unregister_network_approval_attempt(attempt_id)
+            .services
+            .network_approval
+            .unregister_attempt(attempt_id)
             .await;
     }
 
@@ -561,7 +563,11 @@ impl UnifiedExecProcessManager {
                             break;
                         }
                         _ = poll.tick() => {
-                            if session.take_network_approval_outcome(&network_attempt_id).await
+                            if session
+                                .services
+                                .network_approval
+                                .take_outcome(&network_attempt_id)
+                                .await
                                 == Some(NetworkApprovalOutcome::DeniedByUser)
                             {
                                 tracing::debug!(
@@ -572,9 +578,6 @@ impl UnifiedExecProcessManager {
                                     .services
                                     .unified_exec_manager
                                     .release_process_id(&process_id)
-                                    .await;
-                                session
-                                    .unregister_network_approval_attempt(&network_attempt_id)
                                     .await;
                                 break;
                             }

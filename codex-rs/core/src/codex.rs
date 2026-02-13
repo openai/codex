@@ -47,10 +47,11 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
-use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -177,7 +178,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::NetworkApprovalContext;
-use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
@@ -231,6 +231,7 @@ use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
+use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -522,26 +523,10 @@ pub(crate) struct Session {
     /// session.
     features: Features,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
-    network_approval_attempts: Mutex<HashMap<String, Arc<NetworkApprovalAttempt>>>,
-    network_session_approved_hosts: Mutex<HashSet<String>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
-}
-
-struct NetworkApprovalAttempt {
-    turn_id: String,
-    call_id: String,
-    command: Vec<String>,
-    cwd: PathBuf,
-    approved_hosts: Mutex<HashSet<String>>,
-    outcome: Mutex<Option<NetworkApprovalOutcome>>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum NetworkApprovalOutcome {
-    DeniedByUser,
 }
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
@@ -1235,6 +1220,7 @@ impl Session {
             .requirements_toml()
             .network
             .is_some();
+        let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
         let inline_network_decider_session = if managed_network_requirements_enabled {
             config
@@ -1245,21 +1231,38 @@ impl Session {
         } else {
             None
         };
+        let blocked_request_observer = if managed_network_requirements_enabled {
+            config.permissions.network.as_ref().map(|_| {
+                let network_approval = Arc::clone(&network_approval);
+                Arc::new(move |blocked: BlockedRequest| {
+                    let network_approval = Arc::clone(&network_approval);
+                    async move {
+                        network_approval.record_blocked_request(blocked).await;
+                    }
+                }) as Arc<dyn BlockedRequestObserver>
+            })
+        } else {
+            None
+        };
         let inline_network_decider =
             inline_network_decider_session
                 .as_ref()
                 .map(|inline_network_decider_session| {
                     let inline_network_decider_session = Arc::clone(inline_network_decider_session);
+                    let network_approval = Arc::clone(&network_approval);
                     Arc::new(move |request: NetworkPolicyRequest| {
                         let inline_network_decider_session =
                             Arc::clone(&inline_network_decider_session);
+                        let network_approval = Arc::clone(&network_approval);
                         async move {
                             let Some(session) =
                                 inline_network_decider_session.read().await.upgrade()
                             else {
                                 return NetworkDecision::ask("not_allowed");
                             };
-                            session.handle_inline_network_policy_request(request).await
+                            network_approval
+                                .handle_inline_policy_request(session.as_ref(), request)
+                                .await
                         }
                     }) as Arc<dyn NetworkPolicyDecider>
                 });
@@ -1268,6 +1271,7 @@ impl Session {
                 spec.start_proxy(
                     config.permissions.sandbox_policy.get(),
                     inline_network_decider.as_ref().map(Arc::clone),
+                    blocked_request_observer.as_ref().map(Arc::clone),
                     managed_network_requirements_enabled,
                 )
                 .await
@@ -1308,6 +1312,7 @@ impl Session {
             file_watcher,
             agent_control,
             network_proxy,
+            network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -1352,8 +1357,6 @@ impl Session {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            network_approval_attempts: Mutex::new(HashMap::new()),
-            network_session_approved_hosts: Mutex::new(HashSet::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -2172,7 +2175,7 @@ impl Session {
         Ok(())
     }
 
-    async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
+    pub(crate) async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
         let active = self.active_turn.lock().await;
         active
             .as_ref()
@@ -2218,137 +2221,6 @@ impl Session {
             .is_err()
         {
             warn!("no active turn found to record execpolicy amendment message for {sub_id}");
-        }
-    }
-
-    pub(crate) async fn register_network_approval_attempt(
-        &self,
-        attempt_id: String,
-        turn_id: String,
-        call_id: String,
-        command: Vec<String>,
-        cwd: PathBuf,
-    ) {
-        let mut attempts = self.network_approval_attempts.lock().await;
-        attempts.insert(
-            attempt_id,
-            Arc::new(NetworkApprovalAttempt {
-                turn_id,
-                call_id,
-                command,
-                cwd,
-                approved_hosts: Mutex::new(HashSet::new()),
-                outcome: Mutex::new(None),
-            }),
-        );
-    }
-
-    pub(crate) async fn unregister_network_approval_attempt(&self, attempt_id: &str) {
-        let mut attempts = self.network_approval_attempts.lock().await;
-        attempts.remove(attempt_id);
-    }
-
-    pub(crate) async fn take_network_approval_outcome(
-        &self,
-        attempt_id: &str,
-    ) -> Option<NetworkApprovalOutcome> {
-        let attempt = {
-            let attempts = self.network_approval_attempts.lock().await;
-            attempts.get(attempt_id).cloned()
-        }?;
-        let mut outcome = attempt.outcome.lock().await;
-        outcome.take()
-    }
-
-    async fn resolve_network_approval_attempt(
-        &self,
-        request: &NetworkPolicyRequest,
-    ) -> Option<Arc<NetworkApprovalAttempt>> {
-        let attempts = self.network_approval_attempts.lock().await;
-
-        if let Some(attempt_id) = request.attempt_id.as_deref() {
-            if let Some(attempt) = attempts.get(attempt_id).cloned() {
-                return Some(attempt);
-            }
-            return None;
-        }
-
-        if attempts.len() == 1 {
-            return attempts.values().next().cloned();
-        }
-
-        None
-    }
-
-    async fn handle_inline_network_policy_request(
-        &self,
-        request: NetworkPolicyRequest,
-    ) -> NetworkDecision {
-        const REASON_NOT_ALLOWED: &str = "not_allowed";
-
-        {
-            let approved_hosts = self.network_session_approved_hosts.lock().await;
-            if approved_hosts.contains(request.host.as_str()) {
-                return NetworkDecision::Allow;
-            }
-        }
-
-        let Some(attempt) = self.resolve_network_approval_attempt(&request).await else {
-            return NetworkDecision::deny(REASON_NOT_ALLOWED);
-        };
-
-        {
-            let approved_hosts = attempt.approved_hosts.lock().await;
-            if approved_hosts.contains(request.host.as_str()) {
-                return NetworkDecision::Allow;
-            }
-        }
-
-        let protocol = match request.protocol {
-            NetworkProtocol::Http => NetworkApprovalProtocol::Http,
-            NetworkProtocol::HttpsConnect => NetworkApprovalProtocol::Https,
-            NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
-            NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
-        };
-
-        let Some(turn_context) = self.turn_context_for_sub_id(&attempt.turn_id).await else {
-            return NetworkDecision::deny(REASON_NOT_ALLOWED);
-        };
-
-        let approval_decision = self
-            .request_command_approval(
-                turn_context.as_ref(),
-                attempt.call_id.clone(),
-                attempt.command.clone(),
-                attempt.cwd.clone(),
-                Some(format!(
-                    "Network access to \"{}\" is blocked by policy.",
-                    request.host
-                )),
-                Some(NetworkApprovalContext {
-                    host: request.host.clone(),
-                    protocol,
-                }),
-                None,
-            )
-            .await;
-
-        match approval_decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                let mut approved_hosts = attempt.approved_hosts.lock().await;
-                approved_hosts.insert(request.host);
-                NetworkDecision::Allow
-            }
-            ReviewDecision::ApprovedForSession => {
-                let mut approved_hosts = self.network_session_approved_hosts.lock().await;
-                approved_hosts.insert(request.host);
-                NetworkDecision::Allow
-            }
-            ReviewDecision::Denied | ReviewDecision::Abort => {
-                let mut outcome = attempt.outcome.lock().await;
-                *outcome = Some(NetworkApprovalOutcome::DeniedByUser);
-                NetworkDecision::deny(REASON_NOT_ALLOWED)
-            }
         }
     }
 
@@ -7136,6 +7008,7 @@ mod tests {
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let network_approval = Arc::new(NetworkApprovalService::default());
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
@@ -7162,6 +7035,7 @@ mod tests {
             file_watcher,
             agent_control,
             network_proxy: None,
+            network_approval: Arc::clone(&network_approval),
             state_db: None,
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
@@ -7202,8 +7076,6 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            network_approval_attempts: Mutex::new(HashMap::new()),
-            network_session_approved_hosts: Mutex::new(HashSet::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -7284,6 +7156,7 @@ mod tests {
         let mut state = SessionState::new(session_configuration.clone());
         mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
+        let network_approval = Arc::new(NetworkApprovalService::default());
 
         let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
@@ -7310,6 +7183,7 @@ mod tests {
             file_watcher,
             agent_control,
             network_proxy: None,
+            network_approval: Arc::clone(&network_approval),
             state_db: None,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
@@ -7350,8 +7224,6 @@ mod tests {
             state: Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
-            network_approval_attempts: Mutex::new(HashMap::new()),
-            network_session_approved_hosts: Mutex::new(HashSet::new()),
             active_turn: Mutex::new(None),
             services,
             js_repl,
@@ -7405,257 +7277,6 @@ mod tests {
         );
         let new_token = session.mcp_startup_cancellation_token().await;
         assert!(!new_token.is_cancelled());
-    }
-
-    #[tokio::test]
-    async fn resolve_network_approval_attempt_falls_back_to_single_active_attempt() {
-        let (session, _turn_context) = make_session_and_context().await;
-        session
-            .register_network_approval_attempt(
-                "attempt-1".to_string(),
-                "turn-1".to_string(),
-                "call-1".to_string(),
-                vec!["curl".to_string(), "example.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-
-        let request = codex_network_proxy::NetworkPolicyRequest::new(
-            codex_network_proxy::NetworkPolicyRequestArgs {
-                protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "example.com".to_string(),
-                port: 80,
-                client_addr: None,
-                method: Some("GET".to_string()),
-                command: None,
-                exec_policy_hint: None,
-                attempt_id: None,
-            },
-        );
-
-        let resolved = session.resolve_network_approval_attempt(&request).await;
-        let resolved = resolved.expect("single active attempt should be used as fallback");
-        assert_eq!(resolved.call_id, "call-1");
-
-        session
-            .unregister_network_approval_attempt("attempt-1")
-            .await;
-    }
-
-    #[tokio::test]
-    async fn resolve_network_approval_attempt_returns_exact_attempt_match() {
-        let (session, _turn_context) = make_session_and_context().await;
-        session
-            .register_network_approval_attempt(
-                "attempt-1".to_string(),
-                "turn-1".to_string(),
-                "call-1".to_string(),
-                vec!["curl".to_string(), "example.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-        session
-            .register_network_approval_attempt(
-                "attempt-2".to_string(),
-                "turn-2".to_string(),
-                "call-2".to_string(),
-                vec!["curl".to_string(), "openai.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-
-        let request = codex_network_proxy::NetworkPolicyRequest::new(
-            codex_network_proxy::NetworkPolicyRequestArgs {
-                protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "openai.com".to_string(),
-                port: 80,
-                client_addr: None,
-                method: Some("GET".to_string()),
-                command: None,
-                exec_policy_hint: None,
-                attempt_id: Some("attempt-2".to_string()),
-            },
-        );
-
-        let resolved = session.resolve_network_approval_attempt(&request).await;
-        let resolved = resolved.expect("attempt-2 should resolve");
-        assert_eq!(resolved.call_id, "call-2");
-
-        session
-            .unregister_network_approval_attempt("attempt-1")
-            .await;
-        session
-            .unregister_network_approval_attempt("attempt-2")
-            .await;
-    }
-
-    #[tokio::test]
-    async fn resolve_network_approval_attempt_returns_none_for_unknown_attempt_id() {
-        let (session, _turn_context) = make_session_and_context().await;
-        session
-            .register_network_approval_attempt(
-                "attempt-1".to_string(),
-                "turn-1".to_string(),
-                "call-1".to_string(),
-                vec!["curl".to_string(), "example.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-
-        let request = codex_network_proxy::NetworkPolicyRequest::new(
-            codex_network_proxy::NetworkPolicyRequestArgs {
-                protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "example.com".to_string(),
-                port: 80,
-                client_addr: None,
-                method: Some("GET".to_string()),
-                command: None,
-                exec_policy_hint: None,
-                attempt_id: Some("attempt-unknown".to_string()),
-            },
-        );
-
-        let resolved = session.resolve_network_approval_attempt(&request).await;
-        assert!(resolved.is_none());
-
-        session
-            .unregister_network_approval_attempt("attempt-1")
-            .await;
-    }
-
-    #[tokio::test]
-    async fn resolve_network_approval_attempt_returns_none_when_ambiguous() {
-        let (session, _turn_context) = make_session_and_context().await;
-        session
-            .register_network_approval_attempt(
-                "attempt-1".to_string(),
-                "turn-1".to_string(),
-                "call-1".to_string(),
-                vec!["curl".to_string(), "example.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-        session
-            .register_network_approval_attempt(
-                "attempt-2".to_string(),
-                "turn-2".to_string(),
-                "call-2".to_string(),
-                vec!["curl".to_string(), "robinhood.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-
-        let request = codex_network_proxy::NetworkPolicyRequest::new(
-            codex_network_proxy::NetworkPolicyRequestArgs {
-                protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "example.com".to_string(),
-                port: 80,
-                client_addr: None,
-                method: Some("GET".to_string()),
-                command: None,
-                exec_policy_hint: None,
-                attempt_id: None,
-            },
-        );
-
-        let resolved = session.resolve_network_approval_attempt(&request).await;
-        assert!(resolved.is_none());
-
-        session
-            .unregister_network_approval_attempt("attempt-1")
-            .await;
-        session
-            .unregister_network_approval_attempt("attempt-2")
-            .await;
-    }
-
-    #[tokio::test]
-    async fn inline_network_decider_allows_session_approved_host_without_attempt() {
-        let (session, _turn_context) = make_session_and_context().await;
-        {
-            let mut approved_hosts = session.network_session_approved_hosts.lock().await;
-            approved_hosts.insert("openai.com".to_string());
-        }
-
-        let decision = session
-            .handle_inline_network_policy_request(codex_network_proxy::NetworkPolicyRequest::new(
-                codex_network_proxy::NetworkPolicyRequestArgs {
-                    protocol: codex_network_proxy::NetworkProtocol::Http,
-                    host: "openai.com".to_string(),
-                    port: 80,
-                    client_addr: None,
-                    method: Some("GET".to_string()),
-                    command: None,
-                    exec_policy_hint: None,
-                    attempt_id: None,
-                },
-            ))
-            .await;
-
-        assert_eq!(decision, codex_network_proxy::NetworkDecision::Allow);
-    }
-
-    #[tokio::test]
-    async fn inline_network_decider_denies_when_attempt_context_missing() {
-        let (session, _turn_context) = make_session_and_context().await;
-        let decision = session
-            .handle_inline_network_policy_request(codex_network_proxy::NetworkPolicyRequest::new(
-                codex_network_proxy::NetworkPolicyRequestArgs {
-                    protocol: codex_network_proxy::NetworkProtocol::Http,
-                    host: "example.com".to_string(),
-                    port: 80,
-                    client_addr: None,
-                    method: Some("GET".to_string()),
-                    command: None,
-                    exec_policy_hint: None,
-                    attempt_id: Some("missing-attempt".to_string()),
-                },
-            ))
-            .await;
-
-        assert_eq!(
-            decision,
-            codex_network_proxy::NetworkDecision::deny("not_allowed")
-        );
-    }
-
-    #[tokio::test]
-    async fn take_network_approval_outcome_clears_stored_value() {
-        let (session, _turn_context) = make_session_and_context().await;
-        session
-            .register_network_approval_attempt(
-                "attempt-1".to_string(),
-                "turn-1".to_string(),
-                "call-1".to_string(),
-                vec!["curl".to_string(), "example.com".to_string()],
-                std::env::temp_dir(),
-            )
-            .await;
-
-        let attempt = {
-            let attempts = session.network_approval_attempts.lock().await;
-            attempts
-                .get("attempt-1")
-                .cloned()
-                .expect("attempt should exist")
-        };
-        {
-            let mut outcome = attempt.outcome.lock().await;
-            *outcome = Some(NetworkApprovalOutcome::DeniedByUser);
-        }
-
-        assert_eq!(
-            session.take_network_approval_outcome("attempt-1").await,
-            Some(NetworkApprovalOutcome::DeniedByUser)
-        );
-        assert_eq!(
-            session.take_network_approval_outcome("attempt-1").await,
-            None
-        );
-
-        session
-            .unregister_network_approval_attempt("attempt-1")
-            .await;
     }
 
     #[tokio::test]
