@@ -1420,6 +1420,8 @@ dependencies = [
  "codex-protocol",
  "serde",
  "serde_json",
+ "tungstenite",
+ "url",
  "uuid",
 ]
 
