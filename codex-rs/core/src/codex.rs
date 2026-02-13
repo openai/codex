@@ -1211,10 +1211,10 @@ impl Session {
                 }
             }
         });
-        let network_proxy = match config.network.as_ref() {
+        let network_proxy = match config.permissions.network.as_ref() {
             Some(spec) => Some(
                 spec.start_proxy(
-                    config.sandbox_policy.get(),
+                    config.permissions.sandbox_policy.get(),
                     Some(Arc::clone(&inline_network_decider)),
                 )
                 .await

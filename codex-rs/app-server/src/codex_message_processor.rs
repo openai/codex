@@ -1683,7 +1683,7 @@ impl CodexMessageProcessor {
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
         let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
         let effective_policy = match requested_policy {
-            Some(policy) => match self.config.sandbox_policy.can_set(&policy) {
+            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => policy,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1695,9 +1695,9 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            None => self.config.sandbox_policy.get().clone(),
+            None => self.config.permissions.sandbox_policy.get().clone(),
         };
-        let started_network_proxy = match self.config.network.as_ref() {
+        let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec.start_proxy(&effective_policy, None).await {
                 Ok(started) => Some(started),
                 Err(err) => {
