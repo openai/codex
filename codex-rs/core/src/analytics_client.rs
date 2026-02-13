@@ -67,7 +67,7 @@ impl AnalyticsEventsQueue {
                         send_track_skill_invocations(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppMentioned(job) => {
-                        send_track_app_mentions(&auth_manager, job).await;
+                        send_track_app_mentioned(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
@@ -341,7 +341,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_app_mentions(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
+async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
     let TrackAppMentionedJob {
         config,
         tracking,
