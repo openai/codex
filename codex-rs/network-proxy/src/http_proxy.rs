@@ -679,7 +679,7 @@ fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
         headers.remove(name);
     }
 
-    // Remove the short two-byte hop-by-hop transfer-coding hint header.
+    // 0x74,0x65 is ASCII "te" (the HTTP TE hop-by-hop header).
     if let Ok(short_hop_header_name) = HeaderName::from_bytes(&[0x74, 0x65]) {
         headers.remove(short_hop_header_name);
     }
