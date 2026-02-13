@@ -483,31 +483,31 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: &str) -> ProcessStatus {
-        let status = {
-            let mut store = self.process_store.lock().await;
-            let Some(entry) = store.processes.get(process_id) else {
+        let mut store = self.process_store.lock().await;
+        let Some(entry) = store.processes.get(process_id) else {
+            return ProcessStatus::Unknown;
+        };
+
+        let exit_code = entry.process.exit_code();
+        let process_id = entry.process_id.clone();
+
+        let status = if entry.process.has_exited() {
+            let Some(entry) = store.remove(&process_id) else {
                 return ProcessStatus::Unknown;
             };
-
-            let exit_code = entry.process.exit_code();
-            let process_id = entry.process_id.clone();
-
-            if entry.process.has_exited() {
-                let Some(entry) = store.remove(&process_id) else {
-                    return ProcessStatus::Unknown;
-                };
-                ProcessStatus::Exited {
-                    exit_code,
-                    entry: Box::new(entry),
-                }
-            } else {
-                ProcessStatus::Alive {
-                    exit_code,
-                    call_id: entry.call_id.clone(),
-                    process_id,
-                }
+            ProcessStatus::Exited {
+                exit_code,
+                entry: Box::new(entry),
+            }
+        } else {
+            ProcessStatus::Alive {
+                exit_code,
+                call_id: entry.call_id.clone(),
+                process_id,
             }
         };
+
+        drop(store);
         if let ProcessStatus::Exited { entry, .. } = &status {
             Self::unregister_network_attempt_for_entry(entry).await;
         }
