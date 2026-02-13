@@ -96,27 +96,23 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     // Preserve command-process environment precedence:
-    // 1) Save the current exported environment before snapshot sourcing.
+    // 1) Capture the current exported environment before snapshot sourcing.
     // 2) Source the snapshot (best effort).
     // 3) Re-apply the original exported environment so command/worktree values
     //    win on conflicts, while snapshot-only vars remain present.
     // 4) Exec the original shell command.
     //
-    // This uses POSIX shell syntax and avoids `mktemp` so it works across
-    // common Unix systems where Bash/Zsh/sh are available.
+    // We keep the capture in-memory (no temp files) to avoid leaking exported
+    // environment values to disk.
     let rewritten_script = format!(
-        r#"__codex_tmp_dir="${{TMPDIR:-/tmp}}"
-__codex_restore_env_file="$__codex_tmp_dir/codex-restore-env-$$"
-
-if export -p > "$__codex_restore_env_file" 2>/dev/null; then :; fi
+        r#"__codex_restore_env="$(export -p 2>/dev/null || true)"
 
 if . '{snapshot_path}' >/dev/null 2>&1; then :; fi
 
-if [ -r "$__codex_restore_env_file" ]; then
-  . "$__codex_restore_env_file" >/dev/null 2>&1 || true
+if [ -n "$__codex_restore_env" ]; then
+  eval "$__codex_restore_env" >/dev/null 2>&1 || true
 fi
-
-rm -f "$__codex_restore_env_file" >/dev/null 2>&1 || true
+unset __codex_restore_env >/dev/null 2>&1 || true
 
 exec '{original_shell}' -c '{original_script}'{trailing_args}"#
     );
@@ -363,5 +359,28 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             "worktree|from_snapshot"
         );
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_avoids_temp_file_env_dump() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+        let session_shell = shell_with_snapshot(
+            ShellType::Bash,
+            "/bin/bash",
+            snapshot_path,
+            dir.path().to_path_buf(),
+        );
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path());
+
+        assert!(!rewritten[2].contains("/tmp/"));
+        assert!(!rewritten[2].contains("codex-restore-env-"));
     }
 }
