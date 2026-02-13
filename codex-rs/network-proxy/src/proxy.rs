@@ -1,7 +1,9 @@
 use crate::admin;
+use crate::attempt_metadata::proxy_username_for_attempt_id;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::runtime::BlockedRequest;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -312,8 +314,12 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    network_attempt_id: Option<&str>,
 ) {
-    let http_proxy_url = format!("http://{http_addr}");
+    let http_proxy_url = network_attempt_id
+        .map(proxy_username_for_attempt_id)
+        .map(|username| format!("http://{username}@{http_addr}"))
+        .unwrap_or_else(|| format!("http://{http_addr}"));
     let socks_proxy_url = format!("socks5h://{socks_addr}");
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
@@ -354,7 +360,12 @@ fn apply_proxy_env_overrides(
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
 
-    if socks_enabled {
+    // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
+    // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
+    //
+    // For attempt-scoped runs, point ALL_PROXY at the HTTP proxy URL so the
+    // attempt metadata survives in proxy credentials for correlation.
+    if socks_enabled && network_attempt_id.is_none() {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
         #[cfg(target_os = "macos")]
@@ -366,6 +377,7 @@ fn apply_proxy_env_overrides(
         }
     } else {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
+        set_env_keys(env, FTP_PROXY_ENV_KEYS, &http_proxy_url);
     }
 }
 
@@ -386,7 +398,51 @@ impl NetworkProxy {
         self.admin_addr
     }
 
+    /// Temporarily allows a host for a single retried command execution.
+    ///
+    /// Returns the normalized host token that should be passed to
+    /// `revoke_temporary_allowed_host` when the retry finishes.
+    pub async fn grant_temporary_allowed_host(&self, host: &str) -> Option<String> {
+        self.state.grant_temporary_allowed_host(host).await
+    }
+
+    /// Revokes a temporary host allowance created with
+    /// `grant_temporary_allowed_host`.
+    pub async fn revoke_temporary_allowed_host(&self, host: &str) {
+        self.state.revoke_temporary_allowed_host(host).await;
+    }
+
+    /// Drains proxy-blocked request telemetry entries.
+    pub async fn drain_blocked_requests(&self) -> Result<Vec<BlockedRequest>> {
+        self.state.drain_blocked().await
+    }
+
+    /// Returns the current blocked-request telemetry cursor.
+    pub async fn blocked_requests_cursor(&self) -> Result<u64> {
+        self.state.blocked_cursor().await
+    }
+
+    /// Returns blocked-request telemetry entries recorded after `cursor`.
+    pub async fn blocked_requests_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
+        self.state.blocked_since(cursor).await
+    }
+
+    pub async fn latest_blocked_request_for_attempt(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<BlockedRequest>> {
+        self.state.latest_blocked_for_attempt(attempt_id).await
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        self.apply_to_env_for_attempt(env, None);
+    }
+
+    pub fn apply_to_env_for_attempt(
+        &self,
+        env: &mut HashMap<String, String>,
+        network_attempt_id: Option<&str>,
+    ) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -395,6 +451,7 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
+            network_attempt_id,
         );
     }
 
@@ -694,6 +751,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            None,
         );
 
         assert_eq!(
@@ -736,6 +794,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
+            None,
         );
 
         assert_eq!(
@@ -743,6 +802,32 @@ mod tests {
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_embeds_attempt_id_in_http_proxy_url() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+            Some("attempt-123"),
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("HTTPS_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -759,6 +844,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            None,
         );
 
         assert_eq!(

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobSet;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -26,13 +27,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::net::lookup_host;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+const NETWORK_POLICY_VIOLATION_PREFIX: &str = "CODEX_NETWORK_POLICY_VIOLATION";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostBlockReason {
@@ -71,6 +75,14 @@ pub struct BlockedRequest {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
     pub timestamp: i64,
 }
 
@@ -81,6 +93,10 @@ pub struct BlockedRequestArgs {
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
     pub protocol: String,
+    pub attempt_id: Option<String>,
+    pub decision: Option<String>,
+    pub source: Option<String>,
+    pub port: Option<u16>,
 }
 
 impl BlockedRequest {
@@ -92,6 +108,10 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
+            attempt_id,
+            decision,
+            source,
+            port,
         } = args;
         Self {
             host,
@@ -100,7 +120,24 @@ impl BlockedRequest {
             method,
             mode,
             protocol,
+            attempt_id,
+            decision,
+            source,
+            port,
             timestamp: unix_timestamp(),
+        }
+    }
+}
+
+fn blocked_request_violation_log_line(entry: &BlockedRequest) -> String {
+    match serde_json::to_string(entry) {
+        Ok(json) => format!("{NETWORK_POLICY_VIOLATION_PREFIX} {json}"),
+        Err(err) => {
+            warn!("failed to serialize blocked request for violation log: {err}");
+            format!(
+                "{NETWORK_POLICY_VIOLATION_PREFIX} host={} reason={}",
+                entry.host, entry.reason
+            )
         }
     }
 }
@@ -112,6 +149,7 @@ pub struct ConfigState {
     pub deny_set: GlobSet,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
+    pub blocked_total: u64,
 }
 
 #[async_trait]
@@ -129,6 +167,7 @@ pub trait ConfigReloader: Send + Sync {
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
+    temporary_allowed_hosts: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -144,6 +183,7 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
+            temporary_allowed_hosts: self.temporary_allowed_hosts.clone(),
         }
     }
 }
@@ -153,6 +193,31 @@ impl NetworkProxyState {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
+            temporary_allowed_hosts: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Temporarily allow a host for one retried command execution.
+    ///
+    /// This does not persist to config and is revoked explicitly by the caller.
+    pub async fn grant_temporary_allowed_host(&self, host: &str) -> Option<String> {
+        let host = Host::parse(host).ok()?.as_str().to_string();
+        let mut guard = self.temporary_allowed_hosts.lock().await;
+        let count = guard.entry(host.clone()).or_default();
+        *count = count.saturating_add(1);
+        Some(host)
+    }
+
+    /// Revoke a previously granted temporary host allowance.
+    pub async fn revoke_temporary_allowed_host(&self, host: &str) {
+        let mut guard = self.temporary_allowed_hosts.lock().await;
+        let Some(count) = guard.get_mut(host) else {
+            return;
+        };
+        if *count <= 1 {
+            guard.remove(host);
+        } else {
+            *count -= 1;
         }
     }
 
@@ -267,7 +332,14 @@ impl NetworkProxyState {
             }
         }
 
-        if allowed_domains_empty || !is_allowlisted {
+        let is_temporarily_allowed = {
+            let guard = self.temporary_allowed_hosts.lock().await;
+            guard.contains_key(host_str)
+        };
+
+        if is_temporarily_allowed {
+            Ok(HostBlockDecision::Allowed)
+        } else if allowed_domains_empty || !is_allowlisted {
             Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed))
         } else {
             Ok(HostBlockDecision::Allowed)
@@ -276,12 +348,83 @@ impl NetworkProxyState {
 
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
+        let violation_line = blocked_request_violation_log_line(&entry);
         let mut guard = self.state.write().await;
+        let host = entry.host.clone();
+        let reason = entry.reason.clone();
+        let decision = entry.decision.clone();
+        let source = entry.source.clone();
+        let protocol = entry.protocol.clone();
+        let port = entry.port;
+        let attempt_id = entry.attempt_id.clone();
         guard.blocked.push_back(entry);
+        guard.blocked_total = guard.blocked_total.saturating_add(1);
+        let total = guard.blocked_total;
         while guard.blocked.len() > MAX_BLOCKED_EVENTS {
             guard.blocked.pop_front();
         }
+        debug!(
+            "recorded blocked request telemetry (total={}, host={}, reason={}, decision={:?}, source={:?}, protocol={}, port={:?}, attempt_id={:?}, buffered={})",
+            total,
+            host,
+            reason,
+            decision,
+            source,
+            protocol,
+            port,
+            attempt_id,
+            guard.blocked.len()
+        );
+        warn!("{violation_line}");
         Ok(())
+    }
+
+    pub async fn blocked_cursor(&self) -> Result<u64> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        let cursor = guard.blocked_total;
+        debug!("blocked telemetry cursor read: {cursor}");
+        Ok(cursor)
+    }
+
+    pub async fn blocked_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        let blocked_len_u64 = guard.blocked.len() as u64;
+        let oldest_retained_cursor = guard.blocked_total.saturating_sub(blocked_len_u64);
+        let effective_cursor = cursor.max(oldest_retained_cursor);
+        let skip = effective_cursor.saturating_sub(oldest_retained_cursor) as usize;
+        let result: Vec<BlockedRequest> = guard.blocked.iter().skip(skip).cloned().collect();
+        debug!(
+            "blocked_since(cursor={cursor}) -> {} entries (oldest_retained_cursor={}, blocked_total={}, buffered={})",
+            result.len(),
+            oldest_retained_cursor,
+            guard.blocked_total,
+            guard.blocked.len()
+        );
+        Ok(result)
+    }
+
+    /// Returns a snapshot of buffered blocked-request entries without consuming
+    /// them.
+    pub async fn blocked_snapshot(&self) -> Result<Vec<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.blocked.iter().cloned().collect())
+    }
+
+    pub async fn latest_blocked_for_attempt(
+        &self,
+        attempt_id: &str,
+    ) -> Result<Option<BlockedRequest>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard
+            .blocked
+            .iter()
+            .rev()
+            .find(|entry| entry.attempt_id.as_deref() == Some(attempt_id))
+            .cloned())
     }
 
     /// Drain and return the buffered blocked-request entries in FIFO order.
@@ -380,12 +523,17 @@ impl NetworkProxyState {
         match self.reloader.maybe_reload().await? {
             None => Ok(()),
             Some(mut new_state) => {
-                let (previous_cfg, blocked) = {
+                let (previous_cfg, blocked, blocked_total) = {
                     let guard = self.state.read().await;
-                    (guard.config.clone(), guard.blocked.clone())
+                    (
+                        guard.config.clone(),
+                        guard.blocked.clone(),
+                        guard.blocked_total,
+                    )
                 };
                 log_policy_changes(&previous_cfg, &new_state.config);
                 new_state.blocked = blocked;
+                new_state.blocked_total = blocked_total;
                 {
                     let mut guard = self.state.write().await;
                     *guard = new_state;
@@ -563,6 +711,240 @@ mod tests {
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn temporary_host_allowance_allows_host_until_revoked() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*.openai.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+
+        let granted_host = state
+            .grant_temporary_allowed_host("google.com")
+            .await
+            .expect("host should parse");
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+
+        state.revoke_temporary_allowed_host(&granted_host).await;
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn temporary_host_allowance_does_not_bypass_denylist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*".to_string()],
+            denied_domains: vec!["google.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        let granted_host = state
+            .grant_temporary_allowed_host("google.com")
+            .await
+            .expect("host should parse");
+        assert_eq!(
+            state.host_blocked("google.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+
+        state.revoke_temporary_allowed_host(&granted_host).await;
+    }
+
+    #[tokio::test]
+    async fn blocked_since_returns_only_new_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: None,
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should succeed");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].host, "google.com");
+        assert_eq!(blocked[0].decision.as_deref(), Some("ask"));
+    }
+
+    #[tokio::test]
+    async fn blocked_snapshot_does_not_consume_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "google.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: None,
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+
+        let snapshot = state
+            .blocked_snapshot()
+            .await
+            .expect("snapshot should succeed");
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].host, "google.com");
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should still include entry");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].host, "google.com");
+    }
+
+    #[tokio::test]
+    async fn latest_blocked_for_attempt_returns_latest_matching_entry() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "one.example.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: Some("attempt-1".to_string()),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "two.example.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: Some("attempt-2".to_string()),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+        state
+            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                host: "three.example.com".to_string(),
+                reason: "not_allowed".to_string(),
+                client: None,
+                method: Some("GET".to_string()),
+                mode: None,
+                protocol: "http".to_string(),
+                attempt_id: Some("attempt-1".to_string()),
+                decision: Some("ask".to_string()),
+                source: Some("decider".to_string()),
+                port: Some(80),
+            }))
+            .await
+            .expect("entry should be recorded");
+
+        let latest = state
+            .latest_blocked_for_attempt("attempt-1")
+            .await
+            .expect("lookup should succeed")
+            .expect("attempt should have a blocked entry");
+        assert_eq!(latest.host, "three.example.com");
+    }
+
+    #[tokio::test]
+    async fn blocked_since_handles_evicted_old_entries() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
+        let cursor = state
+            .blocked_cursor()
+            .await
+            .expect("cursor should be readable");
+
+        for idx in 0..(MAX_BLOCKED_EVENTS + 5) {
+            state
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: format!("example{idx}.com"),
+                    reason: "not_allowed".to_string(),
+                    client: None,
+                    method: Some("GET".to_string()),
+                    mode: None,
+                    protocol: "http".to_string(),
+                    attempt_id: None,
+                    decision: Some("ask".to_string()),
+                    source: Some("decider".to_string()),
+                    port: Some(80),
+                }))
+                .await
+                .expect("entry should be recorded");
+        }
+
+        let blocked = state
+            .blocked_since(cursor)
+            .await
+            .expect("blocked_since should succeed");
+        assert_eq!(blocked.len(), MAX_BLOCKED_EVENTS);
+        assert_eq!(blocked[0].host, "example5.com");
+    }
+
+    #[test]
+    fn blocked_request_violation_log_line_serializes_payload() {
+        let entry = BlockedRequest {
+            host: "google.com".to_string(),
+            reason: "not_allowed".to_string(),
+            client: Some("127.0.0.1".to_string()),
+            method: Some("GET".to_string()),
+            mode: Some(NetworkMode::Full),
+            protocol: "http".to_string(),
+            attempt_id: Some("attempt-1".to_string()),
+            decision: Some("ask".to_string()),
+            source: Some("decider".to_string()),
+            port: Some(80),
+            timestamp: 1_735_689_600,
+        };
+
+        assert_eq!(
+            blocked_request_violation_log_line(&entry),
+            r#"CODEX_NETWORK_POLICY_VIOLATION {"host":"google.com","reason":"not_allowed","client":"127.0.0.1","method":"GET","mode":"full","protocol":"http","attempt_id":"attempt-1","decision":"ask","source":"decider","port":80,"timestamp":1735689600}"#
         );
     }
 
