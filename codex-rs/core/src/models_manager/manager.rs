@@ -54,6 +54,7 @@ pub(crate) struct ModelInfoResolution {
 #[derive(Debug)]
 pub struct ModelsManager {
     local_models: Vec<ModelPreset>,
+    bundled_models: Vec<ModelInfo>,
     remote_models: RwLock<Vec<ModelInfo>>,
     auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
@@ -68,9 +69,11 @@ impl ModelsManager {
     pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        let bundled_models = Self::load_remote_models_from_file().unwrap_or_default();
         Self {
             local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            bundled_models: bundled_models.clone(),
+            remote_models: RwLock::new(bundled_models),
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -180,8 +183,13 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> Option<ModelInfo> {
+        let models_for_resolution = if config.features.enabled(Feature::RemoteModels) {
+            self.remote_models.read().await.clone()
+        } else {
+            self.bundled_models.clone()
+        };
         let mut best: Option<ModelInfo> = None;
-        for candidate in self.get_remote_models(config).await {
+        for candidate in models_for_resolution {
             if !model.starts_with(&candidate.slug) {
                 continue;
             }
@@ -383,9 +391,11 @@ impl ModelsManager {
     ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
+        let bundled_models = Self::load_remote_models_from_file().unwrap_or_default();
         Self {
             local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
+            bundled_models: bundled_models.clone(),
+            remote_models: RwLock::new(bundled_models),
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
@@ -505,6 +515,10 @@ mod tests {
             .await
             .expect("load default test config");
         config.features.enable(Feature::RemoteModels);
+        let mut config_with_remote_models_disabled = config.clone();
+        config_with_remote_models_disabled
+            .features
+            .disable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
@@ -520,7 +534,16 @@ mod tests {
             .get_model_info_resolution(known_slug.as_str(), &config)
             .await;
         assert!(!known.used_fallback_model_metadata);
-        assert_eq!(known.model_info.slug, known_slug);
+        assert_eq!(known.model_info.slug, known_slug.as_str());
+
+        let known_without_remote_models = manager
+            .get_model_info_resolution(known_slug.as_str(), &config_with_remote_models_disabled)
+            .await;
+        assert!(!known_without_remote_models.used_fallback_model_metadata);
+        assert_eq!(
+            known_without_remote_models.model_info.slug,
+            known_slug.as_str()
+        );
 
         let unknown = manager
             .get_model_info_resolution("model-that-does-not-exist", &config)
