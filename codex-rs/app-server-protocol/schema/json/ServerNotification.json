@@ -7699,6 +7699,61 @@
         }
       ]
     },
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStatus": {
+      "enum": [
+        "started",
+        "running",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStatusNotification": {
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "elapsedMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/WindowsSandboxSetupStatus"
+        },
+        "surface": {
+          "$ref": "#/definitions/WindowsSandboxNuxSurface"
+        }
+      },
+      "required": [
+        "attempt",
+        "elapsedMs",
+        "status",
+        "surface"
+      ],
+      "type": "object"
+    },
     "WindowsWorldWritableWarningNotification": {
       "properties": {
         "extraCount": {
@@ -8309,6 +8364,26 @@
         "params"
       ],
       "title": "Windows/worldWritableWarningNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "windowsSandbox/setupStatus"
+          ],
+          "title": "WindowsSandbox/setupStatusNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxSetupStatusNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/setupStatusNotification",
       "type": "object"
     },
     {

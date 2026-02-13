@@ -1706,14 +1706,17 @@ impl App {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
-                self.otel_manager
-                    .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
+                self.otel_manager.counter(
+                    "codex.windows_sandbox.fallback_prompt_shown",
+                    1,
+                    &[("surface", "tui")],
+                );
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                     self.otel_manager.record_duration(
                         "codex.windows_sandbox.elevated_setup_duration_ms",
                         started_at.elapsed(),
-                        &[("result", "failure")],
+                        &[("result", "failure"), ("surface", "tui")],
                     );
                 }
                 self.chat_widget
@@ -1757,7 +1760,7 @@ impl App {
                                 otel_manager.counter(
                                     "codex.windows_sandbox.elevated_setup_success",
                                     1,
-                                    &[],
+                                    &[("surface", "tui")],
                                 );
                                 AppEvent::EnableWindowsSandboxForAgentMode {
                                     preset: preset.clone(),
@@ -1775,7 +1778,7 @@ impl App {
                                     code_tag = Some(code);
                                     message_tag = Some(message);
                                 }
-                                let mut tags: Vec<(&str, &str)> = Vec::new();
+                                let mut tags: Vec<(&str, &str)> = vec![("surface", "tui")];
                                 if let Some(code) = code_tag.as_deref() {
                                     tags.push(("code", code));
                                 }
@@ -1828,7 +1831,7 @@ impl App {
                             otel_manager.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
                                 1,
-                                &[],
+                                &[("surface", "tui")],
                             );
                             tracing::warn!(
                                 error = %err,
@@ -1911,7 +1914,7 @@ impl App {
                         self.otel_manager.record_duration(
                             "codex.windows_sandbox.elevated_setup_duration_ms",
                             started_at.elapsed(),
-                            &[("result", "success")],
+                            &[("result", "success"), ("surface", "tui")],
                         );
                     }
                     let profile = self.active_profile.as_deref();

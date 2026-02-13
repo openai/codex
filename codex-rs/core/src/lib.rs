@@ -65,6 +65,7 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
+pub mod windows_sandbox_nux;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;

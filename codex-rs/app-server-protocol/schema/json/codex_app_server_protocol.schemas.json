@@ -1281,6 +1281,30 @@
             },
             "method": {
               "enum": [
+                "windowsSandbox/nuxStart"
+              ],
+              "title": "WindowsSandbox/nuxStartRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WindowsSandboxNuxStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WindowsSandbox/nuxStartRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "configRequirements/read"
               ],
               "title": "ConfigRequirements/readRequestMethod",
@@ -8528,6 +8552,26 @@
           "properties": {
             "method": {
               "enum": [
+                "windowsSandbox/setupStatus"
+              ],
+              "title": "WindowsSandbox/setupStatusNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupStatusNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WindowsSandbox/setupStatusNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "account/login/completed"
               ],
               "title": "Account/login/completedNotificationMethod",
@@ -8735,6 +8779,30 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "windowsSandbox/nuxPrompt"
+              ],
+              "title": "WindowsSandbox/nuxPromptRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WindowsSandboxNuxPromptParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WindowsSandbox/nuxPromptRequest",
           "type": "object"
         },
         {
@@ -10006,6 +10074,64 @@
           "type": "object"
         }
       ]
+    },
+    "WindowsSandboxNuxPromptAction": {
+      "enum": [
+        "setupElevated",
+        "setupUnelevated",
+        "retryElevated",
+        "quit"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxNuxPromptParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screen": {
+          "$ref": "#/definitions/WindowsSandboxNuxPromptScreen"
+        },
+        "surface": {
+          "$ref": "#/definitions/v2/WindowsSandboxNuxSurface"
+        }
+      },
+      "required": [
+        "screen",
+        "surface"
+      ],
+      "title": "WindowsSandboxNuxPromptParams",
+      "type": "object"
+    },
+    "WindowsSandboxNuxPromptResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/WindowsSandboxNuxPromptAction"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "WindowsSandboxNuxPromptResponse",
+      "type": "object"
+    },
+    "WindowsSandboxNuxPromptScreen": {
+      "enum": [
+        "enable",
+        "fallback"
+      ],
+      "type": "string"
     },
     "v2": {
       "AbsolutePathBuf": {
@@ -16586,6 +16712,89 @@
           "live"
         ],
         "type": "string"
+      },
+      "WindowsSandboxNuxStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "surface": {
+            "$ref": "#/definitions/v2/WindowsSandboxNuxSurface"
+          }
+        },
+        "required": [
+          "surface"
+        ],
+        "title": "WindowsSandboxNuxStartParams",
+        "type": "object"
+      },
+      "WindowsSandboxNuxStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "WindowsSandboxNuxStartResponse",
+        "type": "object"
+      },
+      "WindowsSandboxNuxSurface": {
+        "enum": [
+          "tui",
+          "codexApp",
+          "vscode"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxSetupStatus": {
+        "enum": [
+          "started",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxSetupStatusNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "attempt": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "elapsedMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failureCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failureMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupStatus"
+          },
+          "surface": {
+            "$ref": "#/definitions/v2/WindowsSandboxNuxSurface"
+          }
+        },
+        "required": [
+          "attempt",
+          "elapsedMs",
+          "status",
+          "surface"
+        ],
+        "title": "WindowsSandboxSetupStatusNotification",
+        "type": "object"
       },
       "WindowsWorldWritableWarningNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

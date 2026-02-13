@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WindowsSandboxNuxPromptAction": {
+      "enum": [
+        "setupElevated",
+        "setupUnelevated",
+        "retryElevated",
+        "quit"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "action": {
+      "$ref": "#/definitions/WindowsSandboxNuxPromptAction"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "WindowsSandboxNuxPromptResponse",
+  "type": "object"
+}

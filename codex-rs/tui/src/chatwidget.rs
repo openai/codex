@@ -3321,7 +3321,7 @@ impl ChatWidget {
                     self.otel_manager.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
                         1,
-                        &[],
+                        &[("surface", "tui")],
                     );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
@@ -5705,8 +5705,11 @@ impl ChatWidget {
             return;
         }
 
-        self.otel_manager
-            .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
+        self.otel_manager.counter(
+            "codex.windows_sandbox.elevated_prompt_shown",
+            1,
+            &[("surface", "tui")],
+        );
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -5725,7 +5728,11 @@ impl ChatWidget {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
+                    accept_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_accept",
+                        1,
+                        &[("surface", "tui")],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -5737,7 +5744,11 @@ impl ChatWidget {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
+                    legacy_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_use_legacy",
+                        1,
+                        &[("surface", "tui")],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
@@ -5749,7 +5760,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_quit",
+                        1,
+                        &[("surface", "tui")],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -5799,7 +5814,11 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = elevated_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_retry_elevated",
+                            1,
+                            &[("surface", "tui")],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset: preset.clone(),
                         });
@@ -5815,7 +5834,11 @@ impl ChatWidget {
                     let otel = self.otel_manager.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_use_legacy",
+                            1,
+                            &[("surface", "tui")],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset.clone(),
                         });
@@ -5828,7 +5851,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.fallback_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.fallback_prompt_quit",
+                        1,
+                        &[("surface", "tui")],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,

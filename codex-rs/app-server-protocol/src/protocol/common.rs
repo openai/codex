@@ -353,6 +353,10 @@ client_request_definitions! {
         params: v2::ConfigBatchWriteParams,
         response: v2::ConfigWriteResponse,
     },
+    WindowsSandboxNuxStart => "windowsSandbox/nuxStart" {
+        params: v2::WindowsSandboxNuxStartParams,
+        response: v2::WindowsSandboxNuxStartResponse,
+    },
 
     ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
@@ -676,6 +680,10 @@ server_request_definitions! {
         params: v2::ChatgptAuthTokensRefreshParams,
         response: v2::ChatgptAuthTokensRefreshResponse,
     },
+    WindowsSandboxNuxPrompt => "windowsSandbox/nuxPrompt" {
+        params: v2::WindowsSandboxNuxPromptParams,
+        response: v2::WindowsSandboxNuxPromptResponse,
+    },
 
     /// DEPRECATED APIs below
     /// Request to approve a patch.
@@ -794,6 +802,7 @@ server_notification_definitions! {
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+    WindowsSandboxSetupStatus => "windowsSandbox/setupStatus" (v2::WindowsSandboxSetupStatusNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]

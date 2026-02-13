@@ -594,6 +594,64 @@ pub struct ConfigBatchWriteParams {
     pub expected_version: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WindowsSandboxNuxSurface {
+    Tui,
+    CodexApp,
+    Vscode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsSandboxNuxStartParams {
+    pub surface: WindowsSandboxNuxSurface,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsSandboxNuxStartResponse {
+    pub accepted: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WindowsSandboxNuxPromptScreen {
+    Enable,
+    Fallback,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsSandboxNuxPromptParams {
+    pub surface: WindowsSandboxNuxSurface,
+    pub screen: WindowsSandboxNuxPromptScreen,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WindowsSandboxNuxPromptAction {
+    SetupElevated,
+    SetupUnelevated,
+    RetryElevated,
+    Quit,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsSandboxNuxPromptResponse {
+    pub action: WindowsSandboxNuxPromptAction,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3057,6 +3115,28 @@ pub struct WindowsWorldWritableWarningNotification {
     pub sample_paths: Vec<String>,
     pub extra_count: usize,
     pub failed_scan: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WindowsSandboxSetupStatus {
+    Started,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsSandboxSetupStatusNotification {
+    pub surface: WindowsSandboxNuxSurface,
+    pub status: WindowsSandboxSetupStatus,
+    pub attempt: u32,
+    pub elapsed_ms: i64,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
 }
 
 /// Deprecated: Use `ContextCompaction` item type instead.

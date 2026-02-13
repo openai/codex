@@ -609,6 +609,48 @@
         "question"
       ],
       "type": "object"
+    },
+    "WindowsSandboxNuxPromptParams": {
+      "properties": {
+        "failureCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screen": {
+          "$ref": "#/definitions/WindowsSandboxNuxPromptScreen"
+        },
+        "surface": {
+          "$ref": "#/definitions/WindowsSandboxNuxSurface"
+        }
+      },
+      "required": [
+        "screen",
+        "surface"
+      ],
+      "type": "object"
+    },
+    "WindowsSandboxNuxPromptScreen": {
+      "enum": [
+        "enable",
+        "fallback"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
     }
   },
   "description": "Request initiated from the server and sent to the client.",
@@ -735,6 +777,30 @@
         "params"
       ],
       "title": "Account/chatgptAuthTokens/refreshRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/nuxPrompt"
+          ],
+          "title": "WindowsSandbox/nuxPromptRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxNuxPromptParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/nuxPromptRequest",
       "type": "object"
     },
     {

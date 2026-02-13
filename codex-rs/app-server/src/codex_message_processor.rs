@@ -106,6 +106,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::SendUserTurnResponse;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
@@ -156,6 +157,15 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_app_server_protocol::WindowsSandboxNuxPromptAction;
+use codex_app_server_protocol::WindowsSandboxNuxPromptParams;
+use codex_app_server_protocol::WindowsSandboxNuxPromptResponse;
+use codex_app_server_protocol::WindowsSandboxNuxPromptScreen;
+use codex_app_server_protocol::WindowsSandboxNuxStartParams;
+use codex_app_server_protocol::WindowsSandboxNuxStartResponse;
+use codex_app_server_protocol::WindowsSandboxNuxSurface;
+use codex_app_server_protocol::WindowsSandboxSetupStatus;
+use codex_app_server_protocol::WindowsSandboxSetupStatusNotification;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -212,6 +222,15 @@ use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxHost;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxOutcome;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxPromptAction as CoreWindowsSandboxNuxPromptAction;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxPromptRequest as CoreWindowsSandboxNuxPromptRequest;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxPromptScreen as CoreWindowsSandboxNuxPromptScreen;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxRunParams;
+use codex_core::windows_sandbox_nux::WindowsSandboxNuxSurface as CoreWindowsSandboxNuxSurface;
+use codex_core::windows_sandbox_nux::WindowsSandboxSetupStatus as CoreWindowsSandboxSetupStatus;
+use codex_core::windows_sandbox_nux::WindowsSandboxSetupStatusUpdate as CoreWindowsSandboxSetupStatusUpdate;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -279,6 +298,108 @@ const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 struct ActiveLogin {
     shutdown_handle: ShutdownHandle,
     login_id: Uuid,
+}
+
+struct AppServerWindowsSandboxNuxHost {
+    outgoing: ThreadScopedOutgoingMessageSender,
+    surface: WindowsSandboxNuxSurface,
+}
+
+impl AppServerWindowsSandboxNuxHost {
+    fn prompt_screen_to_protocol(
+        screen: CoreWindowsSandboxNuxPromptScreen,
+    ) -> WindowsSandboxNuxPromptScreen {
+        match screen {
+            CoreWindowsSandboxNuxPromptScreen::Enable => WindowsSandboxNuxPromptScreen::Enable,
+            CoreWindowsSandboxNuxPromptScreen::Fallback => WindowsSandboxNuxPromptScreen::Fallback,
+        }
+    }
+
+    fn prompt_action_from_protocol(
+        action: WindowsSandboxNuxPromptAction,
+    ) -> CoreWindowsSandboxNuxPromptAction {
+        match action {
+            WindowsSandboxNuxPromptAction::SetupElevated => {
+                CoreWindowsSandboxNuxPromptAction::SetupElevated
+            }
+            WindowsSandboxNuxPromptAction::SetupUnelevated => {
+                CoreWindowsSandboxNuxPromptAction::SetupUnelevated
+            }
+            WindowsSandboxNuxPromptAction::RetryElevated => {
+                CoreWindowsSandboxNuxPromptAction::RetryElevated
+            }
+            WindowsSandboxNuxPromptAction::Quit => CoreWindowsSandboxNuxPromptAction::Quit,
+        }
+    }
+
+    fn setup_status_to_protocol(
+        status: CoreWindowsSandboxSetupStatus,
+    ) -> WindowsSandboxSetupStatus {
+        match status {
+            CoreWindowsSandboxSetupStatus::Started => WindowsSandboxSetupStatus::Started,
+            CoreWindowsSandboxSetupStatus::Running => WindowsSandboxSetupStatus::Running,
+            CoreWindowsSandboxSetupStatus::Completed => WindowsSandboxSetupStatus::Completed,
+            CoreWindowsSandboxSetupStatus::Failed => WindowsSandboxSetupStatus::Failed,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WindowsSandboxNuxHost for AppServerWindowsSandboxNuxHost {
+    async fn request_prompt(
+        &mut self,
+        request: CoreWindowsSandboxNuxPromptRequest,
+    ) -> Option<CoreWindowsSandboxNuxPromptAction> {
+        let response_rx = self
+            .outgoing
+            .send_request(ServerRequestPayload::WindowsSandboxNuxPrompt(
+                WindowsSandboxNuxPromptParams {
+                    surface: self.surface.clone(),
+                    screen: Self::prompt_screen_to_protocol(request.screen),
+                    failure_code: request.failure_code,
+                    failure_message: request.failure_message,
+                },
+            ))
+            .await;
+        let response = tokio::time::timeout(Duration::from_secs(10 * 60), response_rx).await;
+        let value = match response {
+            Ok(Ok(Ok(value))) => value,
+            Ok(Ok(Err(err))) => {
+                warn!("windows sandbox nux prompt failed with client error: {err:?}");
+                return None;
+            }
+            Ok(Err(err)) => {
+                warn!("windows sandbox nux prompt failed: {err:?}");
+                return None;
+            }
+            Err(err) => {
+                warn!("windows sandbox nux prompt timed out: {err}");
+                return None;
+            }
+        };
+
+        serde_json::from_value::<WindowsSandboxNuxPromptResponse>(value)
+            .map(|response| Self::prompt_action_from_protocol(response.action))
+            .map_err(|err| {
+                warn!("failed to deserialize WindowsSandboxNuxPromptResponse: {err}");
+            })
+            .ok()
+    }
+
+    async fn on_setup_status(&mut self, update: CoreWindowsSandboxSetupStatusUpdate) {
+        self.outgoing
+            .send_server_notification(ServerNotification::WindowsSandboxSetupStatus(
+                WindowsSandboxSetupStatusNotification {
+                    surface: self.surface.clone(),
+                    status: Self::setup_status_to_protocol(update.status),
+                    attempt: update.attempt,
+                    elapsed_ms: update.elapsed_ms,
+                    failure_code: update.failure_code,
+                    failure_message: update.failure_message,
+                },
+            ))
+            .await;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -401,6 +522,96 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    fn windows_sandbox_surface_to_core(
+        surface: WindowsSandboxNuxSurface,
+    ) -> CoreWindowsSandboxNuxSurface {
+        match surface {
+            WindowsSandboxNuxSurface::Tui => CoreWindowsSandboxNuxSurface::Tui,
+            WindowsSandboxNuxSurface::CodexApp => CoreWindowsSandboxNuxSurface::CodexApp,
+            WindowsSandboxNuxSurface::Vscode => CoreWindowsSandboxNuxSurface::Vscode,
+        }
+    }
+
+    async fn windows_sandbox_nux_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: WindowsSandboxNuxStartParams,
+    ) {
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = params;
+            self.outgoing
+                .send_response(
+                    request_id,
+                    WindowsSandboxNuxStartResponse { accepted: false },
+                )
+                .await;
+            return;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let config = match self.load_latest_config().await {
+                Ok(config) => config,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+            if WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Elevated {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        WindowsSandboxNuxStartResponse { accepted: false },
+                    )
+                    .await;
+                return;
+            }
+
+            self.outgoing
+                .send_response(
+                    request_id.clone(),
+                    WindowsSandboxNuxStartResponse { accepted: true },
+                )
+                .await;
+
+            let protocol_surface = params.surface;
+            let run_params = WindowsSandboxNuxRunParams {
+                surface: Self::windows_sandbox_surface_to_core(protocol_surface.clone()),
+                codex_home: config.codex_home.clone(),
+                active_profile: config.active_profile.clone(),
+                policy: config.permissions.sandbox_policy.get().clone(),
+                policy_cwd: config.cwd.clone(),
+                command_cwd: config.cwd.clone(),
+                env_map: std::env::vars().collect(),
+            };
+            let outgoing = ThreadScopedOutgoingMessageSender::new(
+                Arc::clone(&self.outgoing),
+                vec![request_id.connection_id],
+            );
+
+            tokio::spawn(async move {
+                let mut host = AppServerWindowsSandboxNuxHost {
+                    outgoing,
+                    surface: protocol_surface,
+                };
+                let outcome =
+                    codex_core::windows_sandbox_nux::run_windows_sandbox_nux(&mut host, run_params)
+                        .await;
+                match outcome {
+                    Ok(WindowsSandboxNuxOutcome::EnabledElevated)
+                    | Ok(WindowsSandboxNuxOutcome::EnabledUnelevated)
+                    | Ok(WindowsSandboxNuxOutcome::Quit)
+                    | Ok(WindowsSandboxNuxOutcome::PromptUnavailable) => {}
+                    Err(err) => {
+                        warn!(error = %err, "windows sandbox nux run failed");
+                    }
+                }
+            });
+        }
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -771,6 +982,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ConfigRequirementsRead { .. } => {
                 warn!("ConfigRequirementsRead request reached CodexMessageProcessor unexpectedly");
+            }
+            ClientRequest::WindowsSandboxNuxStart { request_id, params } => {
+                self.windows_sandbox_nux_start(to_connection_request_id(request_id), params)
+                    .await;
             }
             ClientRequest::GetAccountRateLimits {
                 request_id,

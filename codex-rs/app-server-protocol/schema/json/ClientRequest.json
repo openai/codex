@@ -3268,6 +3268,25 @@
           "type": "object"
         }
       ]
+    },
+    "WindowsSandboxNuxStartParams": {
+      "properties": {
+        "surface": {
+          "$ref": "#/definitions/WindowsSandboxNuxSurface"
+        }
+      },
+      "required": [
+        "surface"
+      ],
+      "type": "object"
+    },
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
     }
   },
   "description": "Request from the client to the server.",
@@ -4109,6 +4128,30 @@
         "params"
       ],
       "title": "Config/batchWriteRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "windowsSandbox/nuxStart"
+          ],
+          "title": "WindowsSandbox/nuxStartRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WindowsSandboxNuxStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "WindowsSandbox/nuxStartRequest",
       "type": "object"
     },
     {

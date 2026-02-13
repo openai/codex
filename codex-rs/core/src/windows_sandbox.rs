@@ -52,6 +52,33 @@ pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandbo
     WindowsSandboxLevel::from_features(features)
 }
 
+pub fn record_windows_sandbox_counter(
+    metric_name: &str,
+    surface: &str,
+    extra_tags: &[(&str, &str)],
+) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let mut tags = Vec::with_capacity(1 + extra_tags.len());
+        tags.push(("surface", surface));
+        tags.extend_from_slice(extra_tags);
+        let _ = metrics.counter(metric_name, 1, &tags);
+    }
+}
+
+pub fn record_windows_sandbox_histogram(
+    metric_name: &str,
+    value: i64,
+    surface: &str,
+    extra_tags: &[(&str, &str)],
+) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let mut tags = Vec::with_capacity(1 + extra_tags.len());
+        tags.push(("surface", surface));
+        tags.extend_from_slice(extra_tags);
+        let _ = metrics.histogram(metric_name, value, &tags);
+    }
+}
+
 pub fn resolve_windows_sandbox_mode(
     cfg: &ConfigToml,
     profile: &ConfigProfile,

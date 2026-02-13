@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "surface": {
+      "$ref": "#/definitions/WindowsSandboxNuxSurface"
+    }
+  },
+  "required": [
+    "surface"
+  ],
+  "title": "WindowsSandboxNuxStartParams",
+  "type": "object"
+}

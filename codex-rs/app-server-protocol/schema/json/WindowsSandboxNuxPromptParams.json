@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WindowsSandboxNuxPromptScreen": {
+      "enum": [
+        "enable",
+        "fallback"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "failureCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "failureMessage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "screen": {
+      "$ref": "#/definitions/WindowsSandboxNuxPromptScreen"
+    },
+    "surface": {
+      "$ref": "#/definitions/WindowsSandboxNuxSurface"
+    }
+  },
+  "required": [
+    "screen",
+    "surface"
+  ],
+  "title": "WindowsSandboxNuxPromptParams",
+  "type": "object"
+}

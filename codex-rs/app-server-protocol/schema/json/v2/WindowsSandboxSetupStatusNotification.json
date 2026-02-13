@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WindowsSandboxNuxSurface": {
+      "enum": [
+        "tui",
+        "codexApp",
+        "vscode"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupStatus": {
+      "enum": [
+        "started",
+        "running",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "attempt": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "elapsedMs": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "failureCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "failureMessage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/definitions/WindowsSandboxSetupStatus"
+    },
+    "surface": {
+      "$ref": "#/definitions/WindowsSandboxNuxSurface"
+    }
+  },
+  "required": [
+    "attempt",
+    "elapsedMs",
+    "status",
+    "surface"
+  ],
+  "title": "WindowsSandboxSetupStatusNotification",
+  "type": "object"
+}

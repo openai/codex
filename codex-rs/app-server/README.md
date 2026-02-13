@@ -149,6 +149,7 @@ Example with notification opt-out:
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), `enforceResidency`, and `network` constraints.
+- `windowsSandbox/nuxStart` — start the Windows sandbox NUX flow for a specific surface (`codexApp` or `vscode`). The server drives the prompts via server-initiated requests and emits async setup status notifications while elevated setup is running.
 
 ### Example: Start or resume a thread
 
@@ -641,6 +642,18 @@ Order of messages:
 4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+## Windows Sandbox NUX (v2)
+
+On Windows, UIs that use CLI app-server mode can delegate sandbox onboarding to app-server.
+
+1. Client calls `windowsSandbox/nuxStart` with `{ "surface": "codexApp" | "vscode" }`.
+2. If `{ "accepted": true }`, app-server sends `windowsSandbox/nuxPrompt` requests.
+3. Client responds with one action: `setupElevated`, `setupUnelevated`, `retryElevated`, or `quit`.
+4. While elevated setup is running, app-server emits `windowsSandbox/setupStatus` notifications with:
+   `status: "started" | "running" | "completed" | "failed"`, `attempt`, `elapsedMs`, and optional failure fields.
+
+This flow lets UI surfaces render the two existing NUX screens while app-server owns setup/preflight execution, config persistence, and metrics (`codex.windows_sandbox.*` with `surface` tag).
 
 ### Dynamic tool calls (experimental)
 
