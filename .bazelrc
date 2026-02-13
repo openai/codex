@@ -30,8 +30,6 @@ common --incompatible_strict_action_env
 # Not ideal, but We need to allow dotslash to be found
 common:linux --test_env=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 common:macos --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-# Keep remote execution for mac builds, but run Rust cargo build scripts locally so bindgen can use host libclang.
-common:macos --strategy=CargoBuildScriptRun=darwin-sandbox,local
 
 # Pass through some env vars Windows needs to use powershell?
 common:windows --test_env=PATH
