@@ -2705,6 +2705,201 @@ impl CodexMessageProcessor {
             persist_extended_history,
         } = params;
 
+        let has_resume_overrides = model.is_some()
+            || model_provider.is_some()
+            || cwd.is_some()
+            || approval_policy.is_some()
+            || sandbox.is_some()
+            || request_overrides.is_some()
+            || base_instructions.is_some()
+            || developer_instructions.is_some()
+            || personality.is_some()
+            || persist_extended_history;
+
+        if let Ok(existing_thread_id) = ThreadId::from_string(&thread_id)
+            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
+        {
+            if history.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume thread {existing_thread_id} with history while it is already running"
+                    ),
+                )
+                .await;
+                return;
+            }
+
+            let rollout_path = if let Some(path) = existing_thread.rollout_path() {
+                if path.exists() {
+                    path
+                } else {
+                    match find_thread_path_by_id_str(
+                        &self.config.codex_home,
+                        &existing_thread_id.to_string(),
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("no rollout found for thread id {existing_thread_id}"),
+                            )
+                            .await;
+                            return;
+                        }
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to locate thread id {existing_thread_id}: {err}"),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                }
+            } else {
+                match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &existing_thread_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("no rollout found for thread id {existing_thread_id}"),
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(err) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to locate thread id {existing_thread_id}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            };
+
+            if let Some(requested_path) = path.as_ref()
+                && requested_path != &rollout_path
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
+                        requested_path.display(),
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+
+            // Keep any in-flight stream attached instead of spawning a replacement thread object.
+            if let Err(err) = self
+                .ensure_conversation_listener(
+                    existing_thread_id,
+                    request_id.connection_id,
+                    false,
+                    ApiVersion::V2,
+                )
+                .await
+            {
+                tracing::warn!(
+                    "failed to attach listener for thread {}: {}",
+                    existing_thread_id,
+                    err.message
+                );
+            }
+
+            let config_snapshot = existing_thread.config_snapshot().await;
+            if has_resume_overrides {
+                let mismatch_details = collect_resume_override_mismatches(
+                    model.as_deref(),
+                    model_provider.as_deref(),
+                    cwd.as_deref(),
+                    approval_policy.as_ref(),
+                    sandbox.as_ref(),
+                    request_overrides.is_some(),
+                    base_instructions.is_some(),
+                    developer_instructions.is_some(),
+                    personality.as_ref(),
+                    persist_extended_history,
+                    &config_snapshot,
+                );
+                if !mismatch_details.is_empty() {
+                    tracing::warn!(
+                        "thread/resume overrides ignored for running thread {}: {}",
+                        existing_thread_id,
+                        mismatch_details.join("; ")
+                    );
+                }
+            }
+
+            let mut thread = match read_summary_from_rollout(
+                rollout_path.as_path(),
+                config_snapshot.model_provider_id.as_str(),
+            )
+            .await
+            {
+                Ok(summary) => summary_to_thread(summary),
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                Ok(items) => {
+                    thread.turns = build_turns_from_rollout_items(&items);
+                }
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
+
+            let ThreadConfigSnapshot {
+                model,
+                model_provider_id,
+                approval_policy,
+                sandbox_policy,
+                cwd,
+                reasoning_effort,
+                ..
+            } = config_snapshot;
+            let response = ThreadResumeResponse {
+                thread,
+                model,
+                model_provider: model_provider_id,
+                cwd,
+                approval_policy: approval_policy.into(),
+                sandbox: sandbox_policy.into(),
+                reasoning_effort,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return;
+        }
+
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
                 self.send_invalid_request_error(
@@ -5805,6 +6000,110 @@ impl CodexMessageProcessor {
             Err(_) => None,
         }
     }
+}
+
+fn collect_resume_override_mismatches(
+    model: Option<&str>,
+    model_provider: Option<&str>,
+    cwd: Option<&str>,
+    approval_policy: Option<&AskForApproval>,
+    sandbox: Option<&SandboxMode>,
+    has_config_overrides: bool,
+    has_base_instructions: bool,
+    has_developer_instructions: bool,
+    personality: Option<&Personality>,
+    persist_extended_history: bool,
+    config_snapshot: &ThreadConfigSnapshot,
+) -> Vec<String> {
+    let mut mismatch_details = Vec::new();
+
+    if let Some(requested_model) = model
+        && requested_model != config_snapshot.model
+    {
+        mismatch_details.push(format!(
+            "model requested={requested_model} active={}",
+            config_snapshot.model
+        ));
+    }
+    if let Some(requested_provider) = model_provider
+        && requested_provider != config_snapshot.model_provider_id
+    {
+        mismatch_details.push(format!(
+            "model_provider requested={requested_provider} active={}",
+            config_snapshot.model_provider_id
+        ));
+    }
+    if let Some(requested_cwd) = cwd {
+        let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
+        if requested_cwd_path != config_snapshot.cwd {
+            mismatch_details.push(format!(
+                "cwd requested={} active={}",
+                requested_cwd_path.display(),
+                config_snapshot.cwd.display()
+            ));
+        }
+    }
+    if let Some(requested_approval) = approval_policy {
+        let active_approval: AskForApproval = config_snapshot.approval_policy.into();
+        if requested_approval != &active_approval {
+            mismatch_details.push(format!(
+                "approval_policy requested={requested_approval:?} active={active_approval:?}"
+            ));
+        }
+    }
+    if let Some(requested_sandbox) = sandbox {
+        let sandbox_matches = matches!(
+            (requested_sandbox, &config_snapshot.sandbox_policy),
+            (
+                SandboxMode::ReadOnly,
+                codex_protocol::protocol::SandboxPolicy::ReadOnly { .. }
+            ) | (
+                SandboxMode::WorkspaceWrite,
+                codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
+            ) | (
+                SandboxMode::DangerFullAccess,
+                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+            ) | (
+                SandboxMode::DangerFullAccess,
+                codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
+            )
+        );
+        if !sandbox_matches {
+            mismatch_details.push(format!(
+                "sandbox requested={requested_sandbox:?} active={:?}",
+                config_snapshot.sandbox_policy
+            ));
+        }
+    }
+    if let Some(requested_personality) = personality
+        && config_snapshot.personality.as_ref() != Some(requested_personality)
+    {
+        mismatch_details.push(format!(
+            "personality requested={requested_personality:?} active={:?}",
+            config_snapshot.personality
+        ));
+    }
+
+    if has_config_overrides {
+        mismatch_details
+            .push("config overrides were provided and ignored while running".to_string());
+    }
+    if has_base_instructions {
+        mismatch_details
+            .push("baseInstructions override was provided and ignored while running".to_string());
+    }
+    if has_developer_instructions {
+        mismatch_details.push(
+            "developerInstructions override was provided and ignored while running".to_string(),
+        );
+    }
+    if persist_extended_history {
+        mismatch_details.push(
+            "persistExtendedHistory override was provided and ignored while running".to_string(),
+        );
+    }
+
+    mismatch_details
 }
 
 fn skills_to_info(
