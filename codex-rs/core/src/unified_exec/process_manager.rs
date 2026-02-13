@@ -594,6 +594,7 @@ impl UnifiedExecProcessManager {
         network_attempt_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
+        let network_attempt_id_for_watcher = network_attempt_id.clone();
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
@@ -632,10 +633,40 @@ impl UnifiedExecProcessManager {
             context.call_id.clone(),
             command.to_vec(),
             cwd,
-            process_id,
+            process_id.clone(),
             transcript,
             started_at,
         );
+
+        if let Some(network_attempt_id) = network_attempt_id_for_watcher {
+            let exit_token = process.cancellation_token();
+            let session = Arc::clone(&context.session);
+            let process = Arc::clone(&process);
+            let process_id = process_id.clone();
+            tokio::spawn(async move {
+                let mut poll = tokio::time::interval(Duration::from_millis(100));
+                poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                loop {
+                    tokio::select! {
+                        _ = exit_token.cancelled() => {
+                            break;
+                        }
+                        _ = poll.tick() => {
+                            if session.take_network_approval_outcome(&network_attempt_id).await
+                                == Some(NetworkApprovalOutcome::DeniedByUser)
+                            {
+                                tracing::debug!(
+                                    "terminating unified exec process {process_id} after delayed network denial for attempt {network_attempt_id}"
+                                );
+                                process.terminate();
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
     }
 
     pub(crate) async fn open_session_with_exec_env(
