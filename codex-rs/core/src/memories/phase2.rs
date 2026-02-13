@@ -165,9 +165,23 @@ mod job {
             1,
             &[("status", reason)],
         );
-        let _ = db
-            .mark_global_phase2_job_failed(&claim.token, reason, phase_two::JOB_RETRY_DELAY_SECONDS)
-            .await;
+        if matches!(
+            db.mark_global_phase2_job_failed(
+                &claim.token,
+                reason,
+                phase_two::JOB_RETRY_DELAY_SECONDS,
+            )
+            .await,
+            Ok(false)
+        ) {
+            let _ = db
+                .mark_global_phase2_job_failed_if_unowned(
+                    &claim.token,
+                    reason,
+                    phase_two::JOB_RETRY_DELAY_SECONDS,
+                )
+                .await;
+        }
     }
 
     pub(super) async fn succeed(
