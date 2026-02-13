@@ -79,11 +79,11 @@ For Codex on Windows, use WSL2 and run install commands inside your Linux shell 
 
 If `npm` works but `codex` does not, restart the WSL terminal so your npm global bin path is reloaded.
 
-Tip: copy only commands from fenced code blocks. Do not paste markdown, git diffs, or `+`/`@@` patch lines into PowerShell.
+Tip: copy only commands from fenced code blocks. Do not paste markdown, git diffs, or `+`/`@@` patch lines into any shell.
 
-Also do not paste Unix/Bash patch commands (for example `git apply <<'EOF' ... EOF`) into PowerShell; that syntax is for Bash, not PowerShell.
+As noted above, you should run Unix/Bash commands (including patch commands like `git apply <<'EOF' ... EOF`) inside your WSL/Linux shell, not in PowerShell. That heredoc-style syntax is for Bash, not PowerShell.
 
-If your prompt changes to `>>`, PowerShell is waiting for more input (usually from an accidental paste). Press `Ctrl+C` to cancel, then run a real command.
+If you accidentally paste Unix/Bash syntax into PowerShell and your prompt changes to `>>`, PowerShell is waiting for more input. Press `Ctrl+C` to cancel, then switch back to your WSL terminal and run the intended command there.
 
 Example (safe sequence):
 
