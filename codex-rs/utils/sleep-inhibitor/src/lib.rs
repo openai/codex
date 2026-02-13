@@ -3,10 +3,14 @@
 //! On macOS this uses native IOKit power assertions instead of spawning
 //! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod dummy;
+#[cfg(target_os = "linux")]
+mod linux_inhibitor;
 #[cfg(target_os = "macos")]
 mod macos_inhibitor;
+#[cfg(target_os = "windows")]
+mod windows_inhibitor;
 
 use std::fmt::Debug;
 
@@ -27,7 +31,13 @@ impl SleepInhibitor {
         #[cfg(target_os = "macos")]
         let platform: Box<dyn PlatformSleepInhibitor> =
             Box::new(macos_inhibitor::MacOsSleepInhibitor::new());
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        let platform: Box<dyn PlatformSleepInhibitor> =
+            Box::new(linux_inhibitor::LinuxSleepInhibitor::new());
+        #[cfg(target_os = "windows")]
+        let platform: Box<dyn PlatformSleepInhibitor> =
+            Box::new(windows_inhibitor::WindowsSleepInhibitor::new());
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         let platform: Box<dyn PlatformSleepInhibitor> = Box::new(dummy::DummySleepInhibitor::new());
 
         Self { enabled, platform }
