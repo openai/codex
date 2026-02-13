@@ -1789,13 +1789,13 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
             local_image_paths,
             mention_bindings,
         );
-        self.set_remote_image_urls(remote_image_urls);
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -3917,13 +3917,13 @@ impl ChatWidget {
     ) {
         // Preserve the user's composed payload so they can retry after changing models.
         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
             local_image_paths,
             mention_bindings,
         );
-        self.set_remote_image_urls(remote_image_urls);
         self.add_to_history(history_cell::new_warning_event(
             self.image_inputs_not_supported_message(),
         ));
