@@ -42,7 +42,7 @@ impl RegularTask {
         let prewarmed_session_task = tokio::spawn(async move {
             let mut client_session = model_client.new_session();
             match client_session
-                .prewarm_websocket(&otel_manager, &model_info, None)
+                .prewarm_websocket(&otel_manager, &model_info)
                 .await
             {
                 Ok(()) => Some(client_session),
