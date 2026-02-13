@@ -1900,8 +1900,8 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = Constrained::allow_any(approval_policy);
-        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
     });
     let test = builder.build(&server).await?;
 
