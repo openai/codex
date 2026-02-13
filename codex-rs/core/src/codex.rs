@@ -101,6 +101,7 @@ use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
+use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
