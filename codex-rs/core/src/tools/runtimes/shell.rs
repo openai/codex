@@ -87,6 +87,56 @@ async fn network_policy_denial_message_for_attempt(
     }
 }
 
+async fn execute_with_network_approval_tracking(
+    req: &ShellRequest,
+    attempt: &SandboxAttempt<'_>,
+    ctx: &ToolCtx<'_>,
+    mut env: crate::sandboxing::ExecRequest,
+) -> Result<ExecToolCallOutput, ToolError> {
+    let network_attempt_id = req.network.as_ref().map(|_| Uuid::new_v4().to_string());
+    if let Some(attempt_id) = network_attempt_id.as_ref() {
+        ctx.session
+            .register_network_approval_attempt(
+                attempt_id.clone(),
+                ctx.turn.sub_id.clone(),
+                ctx.call_id.clone(),
+                req.command.clone(),
+                req.cwd.clone(),
+            )
+            .await;
+    }
+    env.network_attempt_id = network_attempt_id.clone();
+
+    let out = execute_env(env, attempt.policy, ShellRuntime::stdout_stream(ctx))
+        .await
+        .map_err(ToolError::Codex);
+    let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
+        ctx.session.take_network_approval_outcome(attempt_id).await
+    } else {
+        None
+    };
+    let network_policy_denial_message = network_policy_denial_message_for_attempt(
+        req.network.as_ref(),
+        network_attempt_id.as_deref(),
+    )
+    .await;
+
+    if let Some(attempt_id) = network_attempt_id.as_deref() {
+        ctx.session
+            .unregister_network_approval_attempt(attempt_id)
+            .await;
+    }
+
+    if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
+        return Err(ToolError::Rejected("rejected by user".to_string()));
+    }
+    if let Some(message) = network_policy_denial_message {
+        return Err(ToolError::Rejected(message));
+    }
+
+    out
+}
+
 impl Sandboxable for ShellRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
         SandboxablePreference::Auto
@@ -190,52 +240,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.sandbox_permissions,
             req.justification.clone(),
         )?;
-        let mut env = attempt
+        let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-
-        let network_attempt_id = req.network.as_ref().map(|_| Uuid::new_v4().to_string());
-        if let Some(attempt_id) = network_attempt_id.as_ref() {
-            ctx.session
-                .register_network_approval_attempt(
-                    attempt_id.clone(),
-                    ctx.turn.sub_id.clone(),
-                    ctx.call_id.clone(),
-                    req.command.clone(),
-                    req.cwd.clone(),
-                )
-                .await;
-        }
-        env.network_attempt_id = network_attempt_id.clone();
-
-        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
-            .await
-            .map_err(ToolError::Codex);
-        let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
-            ctx.session.take_network_approval_outcome(attempt_id).await
-        } else {
-            None
-        };
-        let network_policy_denial_message = network_policy_denial_message_for_attempt(
-            req.network.as_ref(),
-            network_attempt_id.as_deref(),
-        )
-        .await;
-
-        if let Some(attempt_id) = network_attempt_id.as_deref() {
-            ctx.session
-                .unregister_network_approval_attempt(attempt_id)
-                .await;
-        }
-
-        if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
-            return Err(ToolError::Rejected("rejected by user".to_string()));
-        }
-        if let Some(message) = network_policy_denial_message {
-            return Err(ToolError::Rejected(message));
-        }
-
-        let out = out?;
+        let out = execute_with_network_approval_tracking(req, attempt, ctx, env).await?;
         Ok(out)
     }
 }

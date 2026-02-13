@@ -737,6 +737,9 @@ async fn exec(
         arg0: arg0_ref,
         cwd,
         sandbox_policy,
+        // The environment already has attempt-scoped proxy settings from
+        // apply_to_env_for_attempt above. Passing network here would reapply
+        // non-attempt proxy vars and drop attempt correlation metadata.
         network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,

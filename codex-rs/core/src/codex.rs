@@ -1223,6 +1223,8 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
+        // The managed proxy can call back into core for allowlist-miss decisions.
+        // Only construct and wire this inline decider when network policy is configured.
         let inline_network_decider = config
             .permissions
             .network
