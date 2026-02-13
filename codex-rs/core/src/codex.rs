@@ -14,6 +14,7 @@ use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
+use crate::analytics_client::AppInvocation;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::compact;
@@ -4205,7 +4206,11 @@ pub(crate) async fn run_turn(
 
     let otel_manager = turn_context.otel_manager.clone();
     let thread_id = sess.conversation_id.to_string();
-    let tracking = build_track_events_context(turn_context.model_info.slug.clone(), thread_id);
+    let tracking = build_track_events_context(
+        turn_context.model_info.slug.clone(),
+        thread_id,
+        turn_context.sub_id.clone(),
+    );
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
@@ -4228,6 +4233,23 @@ pub(crate) async fn run_turn(
         &available_connectors,
         &skill_name_counts_lower,
     ));
+    let connector_names_by_id = available_connectors
+        .iter()
+        .map(|connector| (connector.id.as_str(), connector.name.as_str()))
+        .collect::<HashMap<&str, &str>>();
+    let app_mentions = explicitly_enabled_connectors
+        .iter()
+        .map(|connector_id| AppInvocation {
+            connector_id: Some(connector_id.clone()),
+            app_name: connector_names_by_id
+                .get(connector_id.as_str())
+                .map(|name| (*name).to_string()),
+            invoke_type: Some("explicit".to_string()),
+        })
+        .collect::<Vec<_>>();
+    sess.services
+        .analytics_events_client
+        .track_app_mentions(tracking.clone(), app_mentions);
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
