@@ -66,7 +66,7 @@ impl AnalyticsEventsQueue {
                     TrackEventsJob::SkillInvocations(job) => {
                         send_track_skill_invocations(&auth_manager, job).await;
                     }
-                    TrackEventsJob::AppMentions(job) => {
+                    TrackEventsJob::AppMentioned(job) => {
                         send_track_app_mentions(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppUsed(job) => {
@@ -144,7 +144,7 @@ impl AnalyticsEventsClient {
 
 enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
-    AppMentions(TrackAppMentionsJob),
+    AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
 }
 
@@ -154,7 +154,7 @@ struct TrackSkillInvocationsJob {
     invocations: Vec<SkillInvocation>,
 }
 
-struct TrackAppMentionsJob {
+struct TrackAppMentionedJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     mentions: Vec<AppInvocation>,
@@ -262,7 +262,7 @@ pub(crate) fn track_app_mentions(
     if mentions.is_empty() {
         return;
     }
-    let job = TrackEventsJob::AppMentions(TrackAppMentionsJob {
+    let job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
         config,
         tracking,
         mentions,
@@ -341,8 +341,8 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_app_mentions(auth_manager: &AuthManager, job: TrackAppMentionsJob) {
-    let TrackAppMentionsJob {
+async fn send_track_app_mentions(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
+    let TrackAppMentionedJob {
         config,
         tracking,
         mentions,
