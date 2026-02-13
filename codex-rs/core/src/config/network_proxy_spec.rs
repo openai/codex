@@ -107,7 +107,10 @@ impl NetworkProxySpec {
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         let state = NetworkProxyState::with_reloader(state, reloader);
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
-        if should_ask_on_allowlist_miss(sandbox_policy) {
+        if matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ) {
             builder = match policy_decider {
                 Some(policy_decider) => builder.policy_decider_arc(policy_decider),
                 None => builder.policy_decider(|_request| async {
@@ -182,11 +185,4 @@ impl NetworkProxySpec {
 
         (config, constraints)
     }
-}
-
-fn should_ask_on_allowlist_miss(sandbox_policy: &SandboxPolicy) -> bool {
-    matches!(
-        sandbox_policy,
-        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-    )
 }
