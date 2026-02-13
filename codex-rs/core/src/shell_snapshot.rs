@@ -120,11 +120,10 @@ impl ShellSnapshot {
             .join(format!("{session_id}.{extension}"));
 
         // Clean the (unlikely) leaked snapshot files.
-        let cleanup_codex_home = codex_home.to_path_buf();
+        let codex_home = codex_home.to_path_buf();
         let cleanup_session_id = session_id;
         tokio::spawn(async move {
-            if let Err(err) = cleanup_stale_snapshots(&cleanup_codex_home, cleanup_session_id).await
-            {
+            if let Err(err) = cleanup_stale_snapshots(&codex_home, cleanup_session_id).await {
                 tracing::warn!("Failed to clean up shell snapshots: {err:?}");
             }
         });
