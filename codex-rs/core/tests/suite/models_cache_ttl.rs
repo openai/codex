@@ -6,7 +6,6 @@ use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -57,7 +56,6 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     builder = builder.with_config(|config| {
-        config.features.enable(Feature::RemoteModels);
         config.model = Some("gpt-5".to_string());
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(1);
@@ -160,7 +158,6 @@ async fn uses_cache_when_version_matches() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 
@@ -208,7 +205,6 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 
@@ -257,7 +253,6 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 

@@ -81,7 +81,6 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
@@ -127,7 +126,6 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.personality = Some(Personality::Friendly);
         });
@@ -181,7 +179,6 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.personality = Some(Personality::None);
         });
@@ -242,7 +239,6 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
     let mut builder = test_codex()
         .with_model("gpt-5.2-codex")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
@@ -290,7 +286,6 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
@@ -386,7 +381,6 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.personality = Some(Personality::Pragmatic);
         });
@@ -494,7 +488,6 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let mut builder = test_codex()
         .with_model("exp-codex-personality")
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.disable(Feature::Personality);
         });
     let test = builder.build(&server).await?;
@@ -632,7 +625,6 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.disable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
             config.personality = Some(Personality::Friendly);
@@ -750,7 +742,6 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some(remote_slug.to_string());
             config.personality = Some(Personality::Friendly);
@@ -867,7 +858,6 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let mut builder = test_codex()
         .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.features.enable(Feature::Personality);
             config.model = Some("gpt-5.2-codex".to_string());
         });

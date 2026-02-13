@@ -3608,8 +3608,7 @@ impl CodexMessageProcessor {
             cursor,
             include_hidden,
         } = params;
-        let mut config = (*config).clone();
-        config.features.enable(Feature::RemoteModels);
+        let config = (*config).clone();
         let models =
             supported_models(thread_manager, &config, include_hidden.unwrap_or(false)).await;
         let total = models.len();
