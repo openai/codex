@@ -81,6 +81,8 @@ pub use process::create_process_as_user;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
+pub use setup::run_elevated_setup_with_identity_overrides;
+#[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh_with_extra_read_roots;
@@ -88,6 +90,8 @@ pub use setup::run_setup_refresh_with_extra_read_roots;
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_secrets_dir;
+#[cfg(target_os = "windows")]
+pub use setup::SetupIdentityOverrides;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
