@@ -379,32 +379,6 @@ impl NetworkProxyState {
         Ok(())
     }
 
-    pub async fn blocked_cursor(&self) -> Result<u64> {
-        self.reload_if_needed().await?;
-        let guard = self.state.read().await;
-        let cursor = guard.blocked_total;
-        debug!("blocked telemetry cursor read: {cursor}");
-        Ok(cursor)
-    }
-
-    pub async fn blocked_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
-        self.reload_if_needed().await?;
-        let guard = self.state.read().await;
-        let blocked_len_u64 = guard.blocked.len() as u64;
-        let oldest_retained_cursor = guard.blocked_total.saturating_sub(blocked_len_u64);
-        let effective_cursor = cursor.max(oldest_retained_cursor);
-        let skip = effective_cursor.saturating_sub(oldest_retained_cursor) as usize;
-        let result: Vec<BlockedRequest> = guard.blocked.iter().skip(skip).cloned().collect();
-        debug!(
-            "blocked_since(cursor={cursor}) -> {} entries (oldest_retained_cursor={}, blocked_total={}, buffered={})",
-            result.len(),
-            oldest_retained_cursor,
-            guard.blocked_total,
-            guard.blocked.len()
-        );
-        Ok(result)
-    }
-
     /// Returns a snapshot of buffered blocked-request entries without consuming
     /// them.
     pub async fn blocked_snapshot(&self) -> Result<Vec<BlockedRequest>> {
@@ -763,45 +737,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocked_since_returns_only_new_entries() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
-        let cursor = state
-            .blocked_cursor()
-            .await
-            .expect("cursor should be readable");
-
-        state
-            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                host: "google.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                attempt_id: None,
-                decision: Some("ask".to_string()),
-                source: Some("decider".to_string()),
-                port: Some(80),
-            }))
-            .await
-            .expect("entry should be recorded");
-
-        let blocked = state
-            .blocked_since(cursor)
-            .await
-            .expect("blocked_since should succeed");
-        assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].host, "google.com");
-        assert_eq!(blocked[0].decision.as_deref(), Some("ask"));
-    }
-
-    #[tokio::test]
     async fn blocked_snapshot_does_not_consume_entries() {
         let state = network_proxy_state_for_policy(NetworkProxySettings::default());
-        let cursor = state
-            .blocked_cursor()
-            .await
-            .expect("cursor should be readable");
 
         state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
@@ -825,13 +762,18 @@ mod tests {
             .expect("snapshot should succeed");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].host, "google.com");
+        assert_eq!(snapshot[0].decision.as_deref(), Some("ask"));
 
-        let blocked = state
-            .blocked_since(cursor)
+        let drained = state
+            .drain_blocked()
             .await
-            .expect("blocked_since should still include entry");
-        assert_eq!(blocked.len(), 1);
-        assert_eq!(blocked[0].host, "google.com");
+            .expect("drain should include snapshot entry");
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].host, snapshot[0].host);
+        assert_eq!(drained[0].reason, snapshot[0].reason);
+        assert_eq!(drained[0].decision, snapshot[0].decision);
+        assert_eq!(drained[0].source, snapshot[0].source);
+        assert_eq!(drained[0].port, snapshot[0].port);
     }
 
     #[tokio::test]
@@ -893,12 +835,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blocked_since_handles_evicted_old_entries() {
+    async fn drain_blocked_returns_buffered_window() {
         let state = network_proxy_state_for_policy(NetworkProxySettings::default());
-        let cursor = state
-            .blocked_cursor()
-            .await
-            .expect("cursor should be readable");
 
         for idx in 0..(MAX_BLOCKED_EVENTS + 5) {
             state
@@ -918,10 +856,7 @@ mod tests {
                 .expect("entry should be recorded");
         }
 
-        let blocked = state
-            .blocked_since(cursor)
-            .await
-            .expect("blocked_since should succeed");
+        let blocked = state.drain_blocked().await.expect("drain should succeed");
         assert_eq!(blocked.len(), MAX_BLOCKED_EVENTS);
         assert_eq!(blocked[0].host, "example5.com");
     }

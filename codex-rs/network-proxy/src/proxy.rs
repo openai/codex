@@ -417,16 +417,6 @@ impl NetworkProxy {
         self.state.drain_blocked().await
     }
 
-    /// Returns the current blocked-request telemetry cursor.
-    pub async fn blocked_requests_cursor(&self) -> Result<u64> {
-        self.state.blocked_cursor().await
-    }
-
-    /// Returns blocked-request telemetry entries recorded after `cursor`.
-    pub async fn blocked_requests_since(&self, cursor: u64) -> Result<Vec<BlockedRequest>> {
-        self.state.blocked_since(cursor).await
-    }
-
     pub async fn latest_blocked_request_for_attempt(
         &self,
         attempt_id: &str,
