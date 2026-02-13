@@ -352,5 +352,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
+        used_fallback_model_metadata: false,
     }
 }

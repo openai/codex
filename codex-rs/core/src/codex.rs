@@ -1731,13 +1731,11 @@ impl Session {
             }
         }
 
+        let resolved_model_slug = session_configuration.collaboration_mode.model().to_string();
         let model_info = self
             .services
             .models_manager
-            .get_model_info(
-                session_configuration.collaboration_mode.model(),
-                &per_turn_config,
-            )
+            .get_model_info(resolved_model_slug.as_str(), &per_turn_config)
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -1745,7 +1743,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_info,
+            model_info.clone(),
             self.services
                 .network_proxy
                 .as_ref()
@@ -1758,6 +1756,17 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
+        if model_info.used_fallback_model_metadata {
+            self.send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(WarningEvent {
+                    message: format!(
+                        "Model metadata for `{resolved_model_slug}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+                    ),
+                }),
+            )
+            .await;
+        }
         turn_context.spawn_turn_metadata_enrichment_task();
         turn_context
     }

@@ -671,6 +671,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         supported_in_api: true,
         input_modalities: vec![InputModality::Text],
         prefer_websockets: false,
+        used_fallback_model_metadata: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),

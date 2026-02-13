@@ -253,6 +253,11 @@ pub struct ModelInfo {
     /// When true, this model should use websocket transport even when websocket features are off.
     #[serde(default)]
     pub prefer_websockets: bool,
+    /// Internal-only marker set by core when a model slug resolved to fallback metadata.
+    #[serde(default, skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub used_fallback_model_metadata: bool,
 }
 
 impl ModelInfo {
@@ -517,6 +522,7 @@ mod tests {
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
             prefer_websockets: false,
+            used_fallback_model_metadata: false,
         }
     }
 
