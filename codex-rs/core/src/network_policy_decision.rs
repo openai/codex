@@ -29,7 +29,9 @@ pub(crate) fn network_approval_context_from_payload(
 
     let protocol = match payload.protocol.as_deref() {
         Some("http") => NetworkApprovalProtocol::Http,
-        Some("https") | Some("https_connect") => NetworkApprovalProtocol::Https,
+        Some("https") | Some("https_connect") | Some("http-connect") => {
+            NetworkApprovalProtocol::Https
+        }
         _ => return None,
     };
 
@@ -120,6 +122,22 @@ mod tests {
         };
         assert_eq!(
             network_approval_context_from_payload(&https_payload),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
+        );
+
+        let http_connect_payload = NetworkPolicyDecisionPayload {
+            decision: "ask".to_string(),
+            source: "decider".to_string(),
+            protocol: Some("http-connect".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
+        assert_eq!(
+            network_approval_context_from_payload(&http_connect_payload),
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
                 protocol: NetworkApprovalProtocol::Https,
