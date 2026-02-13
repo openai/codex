@@ -5,14 +5,12 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use serde::Deserialize;
 use serde::Deserializer;
-use serde::de::Error as DeError;
+use serde::de::Error;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyDecisionPayload {
-    #[serde(deserialize_with = "deserialize_network_policy_decision")]
     pub decision: NetworkPolicyDecision,
-    #[serde(deserialize_with = "deserialize_network_decision_source")]
     pub source: NetworkDecisionSource,
     #[serde(
         default,
@@ -31,70 +29,21 @@ impl NetworkPolicyDecisionPayload {
 }
 
 fn parse_network_policy_decision(value: &str) -> Option<NetworkPolicyDecision> {
-    if value.eq_ignore_ascii_case(NetworkPolicyDecision::Deny.as_str()) {
-        return Some(NetworkPolicyDecision::Deny);
+    match value {
+        "deny" => Some(NetworkPolicyDecision::Deny),
+        "ask" => Some(NetworkPolicyDecision::Ask),
+        _ => None,
     }
-    if value.eq_ignore_ascii_case(NetworkPolicyDecision::Ask.as_str()) {
-        return Some(NetworkPolicyDecision::Ask);
-    }
-    None
-}
-
-fn parse_network_decision_source(value: &str) -> Option<NetworkDecisionSource> {
-    if value.eq_ignore_ascii_case(NetworkDecisionSource::BaselinePolicy.as_str()) {
-        return Some(NetworkDecisionSource::BaselinePolicy);
-    }
-    if value.eq_ignore_ascii_case(NetworkDecisionSource::ModeGuard.as_str()) {
-        return Some(NetworkDecisionSource::ModeGuard);
-    }
-    if value.eq_ignore_ascii_case(NetworkDecisionSource::ProxyState.as_str()) {
-        return Some(NetworkDecisionSource::ProxyState);
-    }
-    if value.eq_ignore_ascii_case(NetworkDecisionSource::Decider.as_str()) {
-        return Some(NetworkDecisionSource::Decider);
-    }
-    None
 }
 
 fn parse_network_approval_protocol(value: &str) -> Option<NetworkApprovalProtocol> {
-    if value.eq_ignore_ascii_case("http") {
-        return Some(NetworkApprovalProtocol::Http);
+    match value {
+        "http" => Some(NetworkApprovalProtocol::Http),
+        "https" | "https_connect" | "http-connect" => Some(NetworkApprovalProtocol::Https),
+        "socks5_tcp" => Some(NetworkApprovalProtocol::Socks5Tcp),
+        "socks5_udp" => Some(NetworkApprovalProtocol::Socks5Udp),
+        _ => None,
     }
-    if value.eq_ignore_ascii_case("https")
-        || value.eq_ignore_ascii_case("https_connect")
-        || value.eq_ignore_ascii_case("http-connect")
-    {
-        return Some(NetworkApprovalProtocol::Https);
-    }
-    if value.eq_ignore_ascii_case("socks5_tcp") {
-        return Some(NetworkApprovalProtocol::Socks5Tcp);
-    }
-    if value.eq_ignore_ascii_case("socks5_udp") {
-        return Some(NetworkApprovalProtocol::Socks5Udp);
-    }
-    None
-}
-
-fn deserialize_network_policy_decision<'de, D>(
-    deserializer: D,
-) -> Result<NetworkPolicyDecision, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    parse_network_policy_decision(&value)
-        .ok_or_else(|| DeError::custom(format!("unsupported network policy decision: {value}")))
-}
-
-fn deserialize_network_decision_source<'de, D>(
-    deserializer: D,
-) -> Result<NetworkDecisionSource, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    parse_network_decision_source(&value)
-        .ok_or_else(|| DeError::custom(format!("unsupported network decision source: {value}")))
 }
 
 fn deserialize_network_approval_protocol_option<'de, D>(
@@ -107,7 +56,7 @@ where
     value
         .map(|value| {
             parse_network_approval_protocol(&value)
-                .ok_or_else(|| DeError::custom(format!("unsupported network protocol: {value}")))
+                .ok_or_else(|| Error::custom(format!("unsupported network protocol: {value}")))
         })
         .transpose()
 }
