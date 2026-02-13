@@ -290,7 +290,9 @@ pub async fn run_main(
     .await;
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
+    if let Some(warning) =
+        add_dir_warning_message(&cli.add_dir, config.permissions.sandbox_policy.get())
+    {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -473,6 +475,7 @@ async fn run_ratatui_app(
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
+    let mut trust_decision_was_made = false;
 
     let config = if should_show_onboarding {
         let show_login_screen = should_show_login_screen(login_status, &initial_config);
@@ -499,6 +502,7 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
+        trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
         // If this onboarding run included the login step, always refresh cloud requirements and
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
@@ -674,6 +678,9 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
+    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
+        && trust_decision_was_made
+        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
 
     let Cli {
         prompt,
@@ -697,6 +704,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        should_prompt_windows_sandbox_nux_at_startup,
     )
     .await;
 
@@ -881,12 +889,6 @@ async fn load_config_or_exit_with_fallback_cwd(
 /// or if the current cwd project is already trusted. If not, we need to
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if cfg!(target_os = "windows")
-        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
-    {
-        // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
-        return false;
-    }
     if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // Respect explicit approval/sandbox overrides made by the user.
         return false;
@@ -941,7 +943,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
+    async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
@@ -949,17 +951,10 @@ mod tests {
         config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
-        if cfg!(target_os = "windows") {
-            assert!(
-                !should_show,
-                "Windows trust prompt should always be skipped on native Windows"
-            );
-        } else {
-            assert!(
-                should_show,
-                "Non-Windows should still show trust prompt when project is untrusted"
-            );
-        }
+        assert!(
+            should_show,
+            "Trust prompt should be shown when project trust is undecided"
+        );
         Ok(())
     }
     #[tokio::test]
@@ -1011,8 +1006,8 @@ mod tests {
         TurnContextItem {
             turn_id: None,
             cwd,
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model,
             personality: None,
             collaboration_mode: None,
@@ -1130,7 +1125,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            trusted_config.approval_policy.value(),
+            trusted_config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
         );
 
@@ -1144,7 +1139,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            untrusted_config.approval_policy.value(),
+            untrusted_config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
         );
         Ok(())

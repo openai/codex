@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::path::Path;
 use tracing::warn;
 use url::Url;
 
@@ -175,7 +176,20 @@ pub struct RuntimeConfig {
     pub admin_addr: SocketAddr,
 }
 
+pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> Result<()> {
+    for (index, socket_path) in cfg.network.allow_unix_sockets.iter().enumerate() {
+        if !Path::new(socket_path).is_absolute() {
+            bail!(
+                "invalid network.allow_unix_sockets[{index}]: expected an absolute path, got {socket_path:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
+    validate_unix_socket_allowlist_paths(cfg)?;
+
     let http_addr = resolve_addr(&cfg.network.proxy_url, 3128)
         .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
     let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
@@ -549,5 +563,27 @@ mod tests {
         assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
         assert_eq!(socks_addr, "127.0.0.1:8081".parse::<SocketAddr>().unwrap());
         assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn resolve_runtime_rejects_relative_allow_unix_sockets_entries() {
+        let cfg = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                allow_unix_sockets: vec!["relative.sock".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        let err = match resolve_runtime(&cfg) {
+            Ok(runtime) => panic!(
+                "relative allow_unix_sockets should fail, but resolve_runtime succeeded: {:?}",
+                runtime.http_addr
+            ),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("network.allow_unix_sockets[0]"),
+            "error should point at the invalid allow_unix_sockets entry: {err:#}"
+        );
     }
 }

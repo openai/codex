@@ -1,4 +1,6 @@
 use crate::agent::AgentRole;
+use crate::client_common::tools::FreeformTool;
+use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
@@ -31,6 +33,8 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub search_tool: bool,
+    pub js_repl_enabled: bool,
+    pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub request_rule_enabled: bool,
@@ -51,10 +55,13 @@ impl ToolsConfig {
             web_search_mode,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_js_repl = features.enabled(Feature::JsRepl);
+        let include_js_repl_tools_only =
+            include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let request_rule_enabled = features.enabled(Feature::RequestRule);
-        let include_search_tool = features.enabled(Feature::SearchTool);
+        let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -86,12 +93,25 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             search_tool: include_search_tool,
+            js_repl_enabled: include_js_repl,
+            js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
+}
+
+pub(crate) fn filter_tools_for_model(tools: Vec<ToolSpec>, config: &ToolsConfig) -> Vec<ToolSpec> {
+    if !config.js_repl_tools_only {
+        return tools;
+    }
+
+    tools
+        .into_iter()
+        .filter(|spec| matches!(spec.name(), "js_repl" | "js_repl_reset"))
+        .collect()
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1039,6 +1059,36 @@ fn create_list_dir_tool() -> ToolSpec {
     })
 }
 
+fn create_js_repl_tool() -> ToolSpec {
+    const JS_REPL_FREEFORM_GRAMMAR: &str = r#"start: /[\s\S]*/"#;
+
+    ToolSpec::Freeform(FreeformTool {
+        name: "js_repl".to_string(),
+        description: "Runs JavaScript in a persistent Node kernel with top-level await. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-js-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+            .to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: JS_REPL_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
+fn create_js_repl_reset_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "js_repl_reset".to_string(),
+        description:
+            "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_list_mcp_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -1346,6 +1396,8 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
+    use crate::tools::handlers::JsReplHandler;
+    use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -1373,6 +1425,8 @@ pub(crate) fn build_specs(
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let js_repl_handler = Arc::new(JsReplHandler);
+    let js_repl_reset_handler = Arc::new(JsReplResetHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1421,6 +1475,13 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config.js_repl_enabled {
+        builder.push_spec(create_js_repl_tool());
+        builder.push_spec(create_js_repl_reset_tool());
+        builder.register_handler("js_repl", js_repl_handler);
+        builder.register_handler("js_repl_reset", js_repl_reset_handler);
+    }
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
@@ -1574,6 +1635,7 @@ mod tests {
             input_schema: std::sync::Arc::new(rmcp::model::object(input_schema)),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -1591,6 +1653,7 @@ mod tests {
             input_schema: std::sync::Arc::new(schema),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         };
@@ -1617,6 +1680,27 @@ mod tests {
         let mut names = HashSet::new();
         let mut duplicates = Vec::new();
         for name in tools.iter().map(|t| tool_name(&t.spec)) {
+            if !names.insert(name) {
+                duplicates.push(name);
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "duplicate tool entries detected: {duplicates:?}"
+        );
+        for expected in expected_subset {
+            assert!(
+                names.contains(expected),
+                "expected tool {expected} to be present; had: {names:?}"
+            );
+        }
+    }
+
+    fn assert_contains_tool_specs(tools: &[ToolSpec], expected_subset: &[&str]) {
+        use std::collections::HashSet;
+        let mut names = HashSet::new();
+        let mut duplicates = Vec::new();
+        for name in tools.iter().map(tool_name) {
             if !names.insert(name) {
                 duplicates.push(name);
             }
@@ -1815,6 +1899,118 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
+    }
+
+    #[test]
+    fn js_repl_requires_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl"),
+            "js_repl should be disabled when the feature is off"
+        );
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
+            "js_repl_reset should be disabled when the feature is off"
+        );
+    }
+
+    #[test]
+    fn js_repl_enabled_adds_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
+    }
+
+    #[test]
+    fn js_repl_tools_only_filters_model_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
+        assert!(
+            !filtered.iter().any(|tool| tool_name(tool) == "shell"),
+            "expected non-js_repl tools to be hidden when js_repl_tools_only is enabled"
+        );
+    }
+
+    #[test]
+    fn js_repl_tools_only_hides_dynamic_tools_from_model_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::JsRepl);
+        features.enable(Feature::JsReplToolsOnly);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let dynamic_tools = vec![DynamicToolSpec {
+            name: "dynamic_echo".to_string(),
+            description: "echo dynamic payload".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"],
+                "additionalProperties": false
+            }),
+        }];
+        let (tools, _) = build_specs(&tools_config, None, &dynamic_tools).build();
+        assert!(
+            tools.iter().any(|tool| tool.spec.name() == "dynamic_echo"),
+            "expected dynamic tool in full router specs"
+        );
+
+        let filtered = filter_tools_for_model(
+            tools.iter().map(|tool| tool.spec.clone()).collect(),
+            &tools_config,
+        );
+        assert!(
+            !filtered
+                .iter()
+                .any(|tool| tool_name(tool) == "dynamic_echo"),
+            "expected dynamic tools to be hidden from direct model tools in js_repl_tools_only mode"
+        );
+        assert_contains_tool_specs(&filtered, &["js_repl", "js_repl_reset"]);
     }
 
     fn assert_model_tools(

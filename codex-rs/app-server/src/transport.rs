@@ -478,6 +478,9 @@ pub(crate) async fn route_outgoing_envelope(
                 );
                 return disconnected;
             };
+            if should_skip_notification_for_connection(connection_state, &message) {
+                return disconnected;
+            }
             if connection_state.writer.send(message).await.is_err() {
                 connections.remove(&connection_id);
                 disconnected.push(connection_id);
@@ -509,14 +512,6 @@ pub(crate) async fn route_outgoing_envelope(
         }
     }
     disconnected
-}
-
-pub(crate) fn has_initialized_connections(
-    connections: &HashMap<ConnectionId, ConnectionState>,
-) -> bool {
-    connections
-        .values()
-        .any(|connection| connection.session.initialized)
 }
 
 #[cfg(test)]
@@ -745,5 +740,41 @@ mod tests {
             .expect("writer queue should still contain original message");
         let queued_json = serde_json::to_value(queued_outgoing).expect("serialize queued message");
         assert_eq!(queued_json, json!({ "method": "queued" }));
+    }
+
+    #[tokio::test]
+    async fn to_connection_notification_respects_opt_out_filters() {
+        let connection_id = ConnectionId(7);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let initialized = Arc::new(AtomicBool::new(true));
+        let opted_out_notification_methods = Arc::new(RwLock::new(HashSet::from([
+            "codex/event/task_started".to_string(),
+        ])));
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(writer_tx, initialized, opted_out_notification_methods),
+        );
+
+        let disconnected = route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Notification(
+                    crate::outgoing_message::OutgoingNotification {
+                        method: "codex/event/task_started".to_string(),
+                        params: None,
+                    },
+                ),
+            },
+        )
+        .await;
+
+        assert_eq!(disconnected, Vec::<ConnectionId>::new());
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "opted-out notification should be dropped"
+        );
     }
 }

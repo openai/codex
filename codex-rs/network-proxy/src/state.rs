@@ -54,6 +54,7 @@ pub fn build_config_state(
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
+    crate::config::validate_unix_socket_allowlist_paths(&config)?;
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     Ok(ConfigState {

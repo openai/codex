@@ -319,6 +319,11 @@ impl NetworkProxyState {
         };
         let requested_canonical = std::fs::canonicalize(requested_abs.as_path()).ok();
         for allowed in &guard.config.network.allow_unix_sockets {
+            let allowed_path = Path::new(allowed);
+            if !allowed_path.is_absolute() {
+                continue;
+            }
+
             if allowed == path {
                 return Ok(true);
             }
@@ -328,7 +333,7 @@ impl NetworkProxyState {
             let Some(requested_canonical) = &requested_canonical else {
                 continue;
             };
-            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed)
+            if let Ok(allowed_canonical) = std::fs::canonicalize(allowed_path)
                 && &allowed_canonical == requested_canonical
             {
                 return Ok(true);

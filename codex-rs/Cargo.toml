@@ -53,6 +53,7 @@ members = [
     "utils/cli",
     "utils/elapsed",
     "utils/sandbox-summary",
+    "utils/sanitizer",
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
@@ -129,6 +130,7 @@ codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
+codex-utils-sanitizer = { path = "utils/sanitizer" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -214,7 +216,7 @@ ratatui-macros = "0.6.0"
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = "0.12"
-rmcp = { version = "0.14.0", default-features = false }
+rmcp = { version = "0.15.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
