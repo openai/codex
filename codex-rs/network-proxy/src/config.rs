@@ -176,9 +176,13 @@ pub struct RuntimeConfig {
     pub admin_addr: SocketAddr,
 }
 
+pub(crate) fn is_absolute_unix_socket_path(socket_path: &str) -> bool {
+    Path::new(socket_path).is_absolute() || socket_path.starts_with('/')
+}
+
 pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> Result<()> {
     for (index, socket_path) in cfg.network.allow_unix_sockets.iter().enumerate() {
-        if !Path::new(socket_path).is_absolute() {
+        if !is_absolute_unix_socket_path(socket_path) {
             bail!(
                 "invalid network.allow_unix_sockets[{index}]: expected an absolute path, got {socket_path:?}"
             );
@@ -584,6 +588,21 @@ mod tests {
         assert!(
             err.to_string().contains("network.allow_unix_sockets[0]"),
             "error should point at the invalid allow_unix_sockets entry: {err:#}"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_accepts_unix_style_absolute_allow_unix_sockets_entries() {
+        let cfg = NetworkProxyConfig {
+            network: NetworkProxySettings {
+                allow_unix_sockets: vec!["/tmp/example.sock".to_string()],
+                ..NetworkProxySettings::default()
+            },
+        };
+
+        assert!(
+            resolve_runtime(&cfg).is_ok(),
+            "unix-style absolute allow_unix_sockets entry should be accepted"
         );
     }
 }
