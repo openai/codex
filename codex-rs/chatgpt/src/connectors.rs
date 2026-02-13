@@ -20,6 +20,7 @@ use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 use codex_core::connectors::merge_connectors;
+pub use codex_core::connectors::with_app_enabled_state;
 
 #[derive(Debug, Deserialize)]
 struct DirectoryListResponse {
@@ -72,7 +73,10 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
-    Ok(merge_connectors_with_accessible(connectors, accessible))
+    Ok(with_app_enabled_state(
+        merge_connectors_with_accessible(connectors, accessible),
+        config,
+    ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
@@ -283,6 +287,7 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         distribution_channel: app.distribution_channel,
         install_url: None,
         is_accessible: false,
+        is_enabled: true,
     }
 }
 
@@ -341,6 +346,7 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         }
     }
 
