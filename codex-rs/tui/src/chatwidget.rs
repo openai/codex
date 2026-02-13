@@ -5637,7 +5637,7 @@ impl ChatWidget {
             accept_actions.extend(Self::approval_preset_actions(
                 approval,
                 sandbox,
-                mode_label.clone(),
+                mode_label.to_string(),
             ));
         }
 
@@ -5650,7 +5650,7 @@ impl ChatWidget {
             accept_and_remember_actions.extend(Self::approval_preset_actions(
                 approval,
                 sandbox,
-                mode_label.clone(),
+                mode_label.to_string(),
             ));
         }
 
