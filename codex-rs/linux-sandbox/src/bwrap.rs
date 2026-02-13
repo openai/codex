@@ -49,14 +49,15 @@ pub(crate) enum BwrapNetworkMode {
     Isolated,
     /// Intended proxy-only mode.
     ///
-    /// Bubblewrap enforces this by unsharing the network namespace. The
-    /// proxy-routing bridge is established by the helper process after startup.
+    /// Bubblewrap leaves networking untouched in this mode. The helper process
+    /// creates an isolated network namespace after re-entry and establishes the
+    /// proxy-routing bridge before exec.
     ProxyOnly,
 }
 
 impl BwrapNetworkMode {
     fn should_unshare_network(self) -> bool {
-        !matches!(self, Self::FullAccess)
+        matches!(self, Self::Isolated)
     }
 }
 
@@ -65,8 +66,10 @@ impl BwrapNetworkMode {
 ///
 /// When the policy grants full disk write access and full network access, this
 /// returns `command` unchanged so we avoid unnecessary sandboxing overhead.
-/// If network isolation is requested, we still wrap with bubblewrap so network
-/// namespace restrictions apply while preserving full filesystem access.
+/// If restricted networking is requested, we still wrap with bubblewrap so
+/// network namespace restrictions apply while preserving full filesystem
+/// access. In proxy-only mode, network namespace isolation is applied by the
+/// helper process after re-entry.
 pub(crate) fn create_bwrap_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
@@ -338,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
+    fn full_disk_write_proxy_only_keeps_full_filesystem_without_unshare_net() {
         let command = vec!["/bin/true".to_string()];
         let args = create_bwrap_command_args(
             command,
@@ -360,7 +363,6 @@ mod tests {
                 "/".to_string(),
                 "/".to_string(),
                 "--unshare-pid".to_string(),
-                "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),
                 "--".to_string(),

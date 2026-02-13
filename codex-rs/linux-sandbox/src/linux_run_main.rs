@@ -94,6 +94,9 @@ pub fn run_main() -> ! {
     // established the filesystem view.
     if apply_seccomp_then_exec {
         if allow_network_for_proxy {
+            if let Err(err) = isolate_network_namespace_for_proxy_mode() {
+                panic!("error isolating Linux network namespace for proxy mode: {err}");
+            }
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
@@ -173,6 +176,14 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
     }
+}
+
+fn isolate_network_namespace_for_proxy_mode() -> std::io::Result<()> {
+    let result = unsafe { libc::unshare(libc::CLONE_NEWNET) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn run_bwrap_with_proc_fallback(
