@@ -41,6 +41,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         return;
     };
     let root = memory_root(&config.codex_home);
+    let max_raw_memories = config.memories.max_raw_memories_for_global;
 
     // 1. Claim the job.
     let claim = match job::claim(session, db).await {
@@ -64,10 +65,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
 
     // 3. Query the memories
-    let raw_memories = match db
-        .list_stage1_outputs_for_global(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
-        .await
-    {
+    let raw_memories = match db.list_stage1_outputs_for_global(max_raw_memories).await {
         Ok(memories) => memories,
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {}", err);
@@ -80,13 +78,17 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
-    if let Err(err) = sync_rollout_summaries_from_memories(&root, &raw_memories).await {
+    if let Err(err) =
+        sync_rollout_summaries_from_memories(&root, &raw_memories, max_raw_memories).await
+    {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;
         return;
     }
     // [`raw_memories.md`]
-    if let Err(err) = rebuild_raw_memories_file_from_memories(&root, &raw_memories).await {
+    if let Err(err) =
+        rebuild_raw_memories_file_from_memories(&root, &raw_memories, max_raw_memories).await
+    {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
         return;
@@ -207,20 +209,19 @@ mod agent {
 
     pub(super) fn get_config(config: Arc<Config>) -> Option<Config> {
         let root = memory_root(&config.codex_home);
-        let mut consolidation_config = config.as_ref().clone();
+        let mut agent_config = config.as_ref().clone();
 
-        consolidation_config.cwd = root;
+        agent_config.cwd = root;
         // Approval policy
-        consolidation_config.permissions.approval_policy =
-            Constrained::allow_only(AskForApproval::Never);
+        agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
-        match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
+        match AbsolutePathBuf::from_absolute_path(agent_config.codex_home.clone()) {
             Ok(codex_home) => writable_roots.push(codex_home),
             Err(err) => warn!(
                 "memory phase-2 consolidation could not add codex_home writable root {}: {err}",
-                consolidation_config.codex_home.display()
+                agent_config.codex_home.display()
             ),
         }
         // The consolidation agent only needs local codex_home write access and no network.
@@ -231,13 +232,21 @@ mod agent {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
-        consolidation_config
+        agent_config
             .permissions
             .sandbox_policy
             .set(consolidation_sandbox_policy)
             .ok()?;
 
-        Some(consolidation_config)
+        agent_config.model = Some(
+            config
+                .memories
+                .phase_2_model
+                .clone()
+                .unwrap_or(phase_two::MODEL.to_string()),
+        );
+
+        Some(agent_config)
     }
 
     pub(super) fn get_prompt(config: Arc<Config>) -> Vec<UserInput> {

@@ -5,7 +5,6 @@ use std::path::Path;
 use tracing::warn;
 
 use crate::memories::ensure_layout;
-use crate::memories::phase_two;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
 
@@ -15,21 +14,23 @@ use crate::memories::rollout_summaries_dir;
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
-    rebuild_raw_memories_file(root, memories).await
+    rebuild_raw_memories_file(root, memories, max_raw_memories_for_global).await
 }
 
 /// Syncs canonical rollout summary files from DB-backed stage-1 output rows.
 pub(super) async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
     let retained = memories
         .iter()
-        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(max_raw_memories_for_global)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
@@ -62,10 +63,14 @@ pub(super) async fn sync_rollout_summaries_from_memories(
     Ok(())
 }
 
-async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
+async fn rebuild_raw_memories_file(
+    root: &Path,
+    memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
+) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(max_raw_memories_for_global)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 

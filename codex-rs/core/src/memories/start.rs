@@ -35,7 +35,7 @@ pub(crate) fn start_memories_startup_task(
         };
 
         // Run phase 1.
-        phase1::run(&session).await;
+        phase1::run(&session, &config).await;
         // Run phase 2.
         phase2::run(&session, config).await;
     });

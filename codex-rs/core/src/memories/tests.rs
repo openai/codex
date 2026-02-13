@@ -1,5 +1,6 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
+use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -70,12 +71,20 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
 
-    sync_rollout_summaries_from_memories(&root, &memories)
-        .await
-        .expect("sync rollout summaries");
-    rebuild_raw_memories_file_from_memories(&root, &memories)
-        .await
-        .expect("rebuild raw memories");
+    sync_rollout_summaries_from_memories(
+        &root,
+        &memories,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+    )
+    .await
+    .expect("sync rollout summaries");
+    rebuild_raw_memories_file_from_memories(
+        &root,
+        &memories,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+    )
+    .await
+    .expect("rebuild raw memories");
 
     assert!(keep_path.is_file());
     assert!(!drop_path.exists());

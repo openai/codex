@@ -2,6 +2,8 @@ use crate::Prompt;
 use crate::RolloutRecorder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
+use crate::config::types::MemoriesConfig;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
@@ -78,9 +80,9 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub(in crate::memories) async fn run(session: &Arc<Session>) {
+pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     // 1. Claim startup job.
-    let Some(claimed_candidates) = claim_startup_jobs(session).await else {
+    let Some(claimed_candidates) = claim_startup_jobs(session, &config.memories).await else {
         return;
     };
     if claimed_candidates.is_empty() {
@@ -93,7 +95,7 @@ pub(in crate::memories) async fn run(session: &Arc<Session>) {
     }
 
     // 2. Build request.
-    let stage_one_context = build_request_context(session).await;
+    let stage_one_context = build_request_context(session, config).await;
 
     // 3. Run the parallel sampling.
     let outcomes = run_jobs(session, claimed_candidates, stage_one_context).await;
@@ -129,18 +131,22 @@ impl RequestContext {
     pub(in crate::memories) fn from_turn_context(
         turn_context: &TurnContext,
         turn_metadata_header: Option<String>,
+        model_info: ModelInfo,
     ) -> Self {
         Self {
-            model_info: turn_context.model_info.clone(),
+            model_info,
+            turn_metadata_header,
             otel_manager: turn_context.otel_manager.clone(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: turn_context.reasoning_summary,
-            turn_metadata_header,
         }
     }
 }
 
-async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::Stage1JobClaim>> {
+async fn claim_startup_jobs(
+    session: &Arc<Session>,
+    memories_config: &MemoriesConfig,
+) -> Option<Vec<codex_state::Stage1JobClaim>> {
     let Some(state_db) = session.services.state_db.as_deref() else {
         // This should not happen.
         warn!("state db unavailable while claiming phase-1 startup jobs; skipping");
@@ -157,9 +163,9 @@ async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::S
             session.conversation_id,
             codex_state::Stage1StartupClaimParams {
                 scan_limit: phase_one::THREAD_SCAN_LIMIT,
-                max_claimed: phase_one::MAX_ROLLOUTS_PER_STARTUP,
-                max_age_days: phase_one::MAX_ROLLOUT_AGE_DAYS,
-                min_rollout_idle_hours: phase_one::MIN_ROLLOUT_IDLE_HOURS,
+                max_claimed: memories_config.max_rollouts_per_startup,
+                max_age_days: memories_config.max_rollout_age_days,
+                min_rollout_idle_hours: memories_config.min_rollout_idle_hours,
                 allowed_sources: allowed_sources.as_slice(),
                 lease_seconds: phase_one::JOB_LEASE_SECONDS,
             },
@@ -179,11 +185,22 @@ async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::S
     }
 }
 
-async fn build_request_context(session: &Arc<Session>) -> RequestContext {
+async fn build_request_context(session: &Arc<Session>, config: &Config) -> RequestContext {
+    let model_name = config
+        .memories
+        .phase_1_model
+        .clone()
+        .unwrap_or(phase_one::MODEL.to_string());
+    let model = session
+        .services
+        .models_manager
+        .get_model_info(&model_name, config)
+        .await;
     let turn_context = session.new_default_turn().await;
     RequestContext::from_turn_context(
         turn_context.as_ref(),
         turn_context.resolve_turn_metadata_header().await,
+        model,
     )
 }
 
