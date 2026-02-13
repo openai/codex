@@ -193,7 +193,8 @@ mod agent {
 
         consolidation_config.cwd = root;
         // Approval policy
-        consolidation_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        consolidation_config.permissions.approval_policy =
+            Constrained::allow_only(AskForApproval::Never);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -213,6 +214,7 @@ mod agent {
             exclude_slash_tmp: false,
         };
         consolidation_config
+            .permissions
             .sandbox_policy
             .set(consolidation_sandbox_policy)
             .ok()?;
