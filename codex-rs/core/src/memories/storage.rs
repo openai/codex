@@ -177,7 +177,7 @@ fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
         }
     }
 
-    while slug.ends_with('-') {
+    while slug.ends_with('_') {
         slug.pop();
     }
 
