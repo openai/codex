@@ -324,9 +324,9 @@ async fn test_fuzzy_file_search_session_no_updates_after_complete_until_query_ed
     assert_no_session_updates_for(&mut mcp, session_id, STOP_GRACE_PERIOD, SHORT_READ_TIMEOUT)
         .await?;
 
-    mcp.update_fuzzy_file_search_session(session_id, "alph")
+    mcp.update_fuzzy_file_search_session(session_id, "alpha")
         .await?;
-    wait_for_session_updated(&mut mcp, session_id, "alph", FileExpectation::NonEmpty).await?;
+    wait_for_session_updated(&mut mcp, session_id, "alpha", FileExpectation::NonEmpty).await?;
 
     Ok(())
 }
