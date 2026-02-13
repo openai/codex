@@ -2505,7 +2505,7 @@ dependencies = [
  "core-foundation 0.9.4",
  "libc",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
