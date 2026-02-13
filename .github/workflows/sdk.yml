@@ -31,7 +31,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.93
+      - uses: dtolnay/rust-toolchain@1.93.0
 
       - name: build codex
         run: cargo build --bin codex
