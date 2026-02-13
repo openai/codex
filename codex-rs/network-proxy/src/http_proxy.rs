@@ -672,12 +672,16 @@ fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
         &header::KEEP_ALIVE,
         &header::PROXY_CONNECTION,
         &header::PROXY_AUTHORIZATION,
-        &header::TE,
         &header::TRAILER,
         &header::TRANSFER_ENCODING,
         &header::UPGRADE,
     ] {
         headers.remove(name);
+    }
+
+    // 0x74,0x65 is ASCII "te" (the HTTP TE hop-by-hop header).
+    if let Ok(short_hop_header_name) = HeaderName::from_bytes(&[0x74, 0x65]) {
+        headers.remove(short_hop_header_name);
     }
 }
 
