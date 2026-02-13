@@ -692,7 +692,11 @@ impl TurnContext {
     }
 
     async fn build_turn_metadata_header(&self) -> Option<String> {
-        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
+        let sandbox = sandbox_tag(
+            &self.sandbox_policy,
+            self.windows_sandbox_level,
+            self.features.enabled(Feature::UseLinuxSandboxBwrap),
+        );
         self.turn_metadata_header
             .get_or_init(|| async {
                 build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
