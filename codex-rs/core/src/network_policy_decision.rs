@@ -4,12 +4,16 @@ use codex_network_proxy::NetworkPolicyDecision;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use serde::Deserialize;
+use serde::Deserializer;
+use serde::de::Error as DeError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyDecisionPayload {
-    pub decision: String,
-    pub source: String,
+    #[serde(deserialize_with = "deserialize_network_policy_decision")]
+    pub decision: NetworkPolicyDecision,
+    #[serde(deserialize_with = "deserialize_network_decision_source")]
+    pub source: NetworkDecisionSource,
     pub protocol: Option<String>,
     pub host: Option<String>,
     pub reason: Option<String>,
@@ -18,12 +22,56 @@ pub struct NetworkPolicyDecisionPayload {
 
 impl NetworkPolicyDecisionPayload {
     pub(crate) fn is_ask_from_decider(&self) -> bool {
-        self.decision
-            .eq_ignore_ascii_case(NetworkPolicyDecision::Ask.as_str())
-            && self
-                .source
-                .eq_ignore_ascii_case(NetworkDecisionSource::Decider.as_str())
+        self.decision == NetworkPolicyDecision::Ask && self.source == NetworkDecisionSource::Decider
     }
+}
+
+fn parse_network_policy_decision(value: &str) -> Option<NetworkPolicyDecision> {
+    if value.eq_ignore_ascii_case(NetworkPolicyDecision::Deny.as_str()) {
+        return Some(NetworkPolicyDecision::Deny);
+    }
+    if value.eq_ignore_ascii_case(NetworkPolicyDecision::Ask.as_str()) {
+        return Some(NetworkPolicyDecision::Ask);
+    }
+    None
+}
+
+fn parse_network_decision_source(value: &str) -> Option<NetworkDecisionSource> {
+    if value.eq_ignore_ascii_case(NetworkDecisionSource::BaselinePolicy.as_str()) {
+        return Some(NetworkDecisionSource::BaselinePolicy);
+    }
+    if value.eq_ignore_ascii_case(NetworkDecisionSource::ModeGuard.as_str()) {
+        return Some(NetworkDecisionSource::ModeGuard);
+    }
+    if value.eq_ignore_ascii_case(NetworkDecisionSource::ProxyState.as_str()) {
+        return Some(NetworkDecisionSource::ProxyState);
+    }
+    if value.eq_ignore_ascii_case(NetworkDecisionSource::Decider.as_str()) {
+        return Some(NetworkDecisionSource::Decider);
+    }
+    None
+}
+
+fn deserialize_network_policy_decision<'de, D>(
+    deserializer: D,
+) -> Result<NetworkPolicyDecision, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_network_policy_decision(&value)
+        .ok_or_else(|| DeError::custom(format!("unsupported network policy decision: {value}")))
+}
+
+fn deserialize_network_decision_source<'de, D>(
+    deserializer: D,
+) -> Result<NetworkDecisionSource, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_network_decision_source(&value)
+        .ok_or_else(|| DeError::custom(format!("unsupported network decision source: {value}")))
 }
 
 pub(crate) fn network_approval_context_from_payload(
@@ -53,11 +101,11 @@ pub(crate) fn network_approval_context_from_payload(
 }
 
 pub(crate) fn denied_network_policy_message(blocked: &BlockedRequest) -> Option<String> {
-    if !blocked
+    let decision = blocked
         .decision
         .as_deref()
-        .is_some_and(|decision| decision.eq_ignore_ascii_case(NetworkPolicyDecision::Deny.as_str()))
-    {
+        .and_then(parse_network_policy_decision);
+    if decision != Some(NetworkPolicyDecision::Deny) {
         return None;
     }
 
@@ -89,8 +137,8 @@ mod tests {
     #[test]
     fn network_approval_context_requires_ask_from_decider() {
         let payload = NetworkPolicyDecisionPayload {
-            decision: "deny".to_string(),
-            source: "decider".to_string(),
+            decision: NetworkPolicyDecision::Deny,
+            source: NetworkDecisionSource::Decider,
             protocol: Some("https_connect".to_string()),
             host: Some("example.com".to_string()),
             reason: Some("not_allowed".to_string()),
@@ -103,8 +151,8 @@ mod tests {
     #[test]
     fn network_approval_context_maps_http_and_https_protocols() {
         let http_payload = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
+            decision: NetworkPolicyDecision::Ask,
+            source: NetworkDecisionSource::Decider,
             protocol: Some("http".to_string()),
             host: Some("example.com".to_string()),
             reason: Some("not_allowed".to_string()),
@@ -119,8 +167,8 @@ mod tests {
         );
 
         let https_payload = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
+            decision: NetworkPolicyDecision::Ask,
+            source: NetworkDecisionSource::Decider,
             protocol: Some("https_connect".to_string()),
             host: Some("example.com".to_string()),
             reason: Some("not_allowed".to_string()),
@@ -135,8 +183,8 @@ mod tests {
         );
 
         let http_connect_payload = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
+            decision: NetworkPolicyDecision::Ask,
+            source: NetworkDecisionSource::Decider,
             protocol: Some("http-connect".to_string()),
             host: Some("example.com".to_string()),
             reason: Some("not_allowed".to_string()),
