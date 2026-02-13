@@ -176,7 +176,7 @@ async fn build_request_context(session: &Arc<Session>) -> Phase1RequestContext {
     let turn_context = session.new_default_turn().await;
     Phase1RequestContext::from_turn_context(
         turn_context.as_ref(),
-        turn_context.resolve_turn_metadata_header().await,
+        turn_context.current_turn_metadata_header(),
     )
 }
 

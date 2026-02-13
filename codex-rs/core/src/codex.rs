@@ -37,8 +37,7 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
-use crate::turn_metadata::build_turn_metadata_header;
-use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
+use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -91,7 +90,6 @@ use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -103,7 +101,6 @@ use tracing::field;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
-use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
@@ -560,7 +557,7 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    turn_metadata_header: OnceCell<Option<String>>,
+    turn_metadata_state: Arc<TurnMetadataState>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -640,7 +637,7 @@ impl TurnContext {
             truncation_policy,
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
-            turn_metadata_header: self.turn_metadata_header.clone(),
+            turn_metadata_state: self.turn_metadata_state.clone(),
         }
     }
 
@@ -691,39 +688,16 @@ impl TurnContext {
         })
     }
 
-    async fn build_turn_metadata_header(&self) -> Option<String> {
-        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
-        self.turn_metadata_header
-            .get_or_init(|| async {
-                build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
-            })
-            .await
-            .clone()
+    pub fn current_turn_metadata_header(&self) -> Option<String> {
+        self.turn_metadata_state.current_header_value()
     }
 
-    /// Resolves the per-turn metadata header under a shared timeout policy.
-    ///
-    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
-    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
-    pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        resolve_turn_metadata_header_with_timeout(
-            self.build_turn_metadata_header(),
-            self.turn_metadata_header.get().cloned().flatten(),
-        )
-        .await
+    pub fn spawn_turn_metadata_enrichment_task(self: &Arc<Self>) {
+        self.turn_metadata_state.spawn_git_enrichment_task();
     }
 
-    /// Starts best-effort background computation of turn metadata.
-    ///
-    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
-    pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
-        let context = Arc::clone(self);
-        tokio::spawn(async move {
-            trace!("Spawning turn metadata calculation task");
-            context.build_turn_metadata_header().await;
-            trace!("Turn metadata calculation task completed");
-        });
+    pub fn cancel_turn_metadata_enrichment_task(&self) {
+        self.turn_metadata_state.cancel_git_enrichment_task();
     }
 }
 
@@ -950,6 +924,17 @@ impl Session {
         });
 
         let cwd = session_configuration.cwd.clone();
+        let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            sub_id.clone(),
+            cwd.clone(),
+            Some(
+                sandbox_tag(
+                    session_configuration.sandbox_policy.get(),
+                    session_configuration.windows_sandbox_level,
+                )
+                .to_string(),
+            ),
+        ));
         TurnContext {
             sub_id,
             config: per_turn_config.clone(),
@@ -980,7 +965,7 @@ impl Session {
             truncation_policy: model_info.truncation_policy.into(),
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
-            turn_metadata_header: OnceCell::new(),
+            turn_metadata_state,
         }
     }
 
@@ -1275,17 +1260,10 @@ impl Session {
         let prewarm_model_info = models_manager
             .get_model_info(session_configuration.collaboration_mode.model(), &config)
             .await;
-        let prewarm_cwd = session_configuration.cwd.clone();
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
-            None,
-        )
-        .boxed();
         let startup_regular_task = RegularTask::with_startup_prewarm(
             services.model_client.clone(),
             services.otel_manager.clone(),
             prewarm_model_info,
-            turn_metadata_header,
         );
         state.set_startup_regular_task(startup_regular_task);
 
@@ -1781,7 +1759,7 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        turn_context.spawn_turn_metadata_header_task();
+        turn_context.spawn_turn_metadata_enrichment_task();
         turn_context
     }
 
@@ -4033,9 +4011,21 @@ async fn spawn_review_thread(
     let session_source = parent_turn_context.session_source.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
+    let review_turn_id = sub_id.to_string();
+    let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        review_turn_id.clone(),
+        parent_turn_context.cwd.clone(),
+        Some(
+            sandbox_tag(
+                &parent_turn_context.sandbox_policy,
+                parent_turn_context.windows_sandbox_level,
+            )
+            .to_string(),
+        ),
+    ));
 
     let review_turn_context = TurnContext {
-        sub_id: sub_id.to_string(),
+        sub_id: review_turn_id,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
@@ -4064,7 +4054,7 @@ async fn spawn_review_thread(
         js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
-        turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
+        turn_metadata_state,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4074,6 +4064,7 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
+    tc.spawn_turn_metadata_enrichment_task();
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
@@ -4284,7 +4275,6 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
     let mut client_session =
@@ -4336,6 +4326,7 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let turn_metadata_header = turn_context.current_turn_metadata_header();
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
