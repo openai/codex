@@ -533,9 +533,7 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
         return close_fd(fd);
     }
 
-    unsafe {
-        ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
-    }
+    ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
     let set_flags_result = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS, &ifreq) };
     if set_flags_result < 0 {
         let err = io::Error::last_os_error();
