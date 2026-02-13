@@ -341,6 +341,69 @@
       },
       "type": "object"
     },
+    "LoadedThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/ThreadTerminalOutcome"
+            },
+            "type": {
+              "enum": [
+                "terminal"
+              ],
+              "title": "TerminalLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "type"
+          ],
+          "title": "TerminalLoadedThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -618,6 +681,14 @@
         "updatedAt"
       ],
       "type": "object"
+    },
+    "ThreadActiveFlag": {
+      "enum": [
+        "running",
+        "waitingPermission",
+        "waitingUserInput"
+      ],
+      "type": "string"
     },
     "ThreadId": {
       "type": "string"
@@ -1094,6 +1165,15 @@
         }
       ]
     },
+    "ThreadTerminalOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted",
+        "shutdown"
+      ],
+      "type": "string"
+    },
     "Turn": {
       "properties": {
         "error": {
@@ -1400,10 +1480,17 @@
         "string",
         "null"
       ]
+    },
+    "statuses": {
+      "additionalProperties": {
+        "$ref": "#/definitions/LoadedThreadStatus"
+      },
+      "type": "object"
     }
   },
   "required": [
-    "data"
+    "data",
+    "statuses"
   ],
   "title": "ThreadListResponse",
   "type": "object"

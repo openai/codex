@@ -8067,6 +8067,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/status/changed"
+              ],
+              "title": "Thread/status/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadStatusChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/status/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -12480,6 +12500,69 @@
         "title": "ListMcpServerStatusResponse",
         "type": "object"
       },
+      "LoadedThreadStatus": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "idle"
+                ],
+                "title": "IdleLoadedThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IdleLoadedThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "activeFlags": {
+                "items": {
+                  "$ref": "#/definitions/v2/ThreadActiveFlag"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "active"
+                ],
+                "title": "ActiveLoadedThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "activeFlags",
+              "type"
+            ],
+            "title": "ActiveLoadedThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "outcome": {
+                "$ref": "#/definitions/v2/ThreadTerminalOutcome"
+              },
+              "type": {
+                "enum": [
+                  "terminal"
+                ],
+                "title": "TerminalLoadedThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "type"
+            ],
+            "title": "TerminalLoadedThreadStatus",
+            "type": "object"
+          }
+        ]
+      },
       "LocalShellAction": {
         "oneOf": [
           {
@@ -15089,6 +15172,14 @@
         ],
         "type": "object"
       },
+      "ThreadActiveFlag": {
+        "enum": [
+          "running",
+          "waitingPermission",
+          "waitingUserInput"
+        ],
+        "type": "string"
+      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -15798,10 +15889,17 @@
               "string",
               "null"
             ]
+          },
+          "statuses": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/LoadedThreadStatus"
+            },
+            "type": "object"
           }
         },
         "required": [
-          "data"
+          "data",
+          "statuses"
         ],
         "title": "ThreadListResponse",
         "type": "object"
@@ -15893,11 +15991,15 @@
       "ThreadReadResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/LoadedThreadStatus"
+          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           }
         },
         "required": [
+          "status",
           "thread"
         ],
         "title": "ThreadReadResponse",
@@ -16245,6 +16347,32 @@
         ],
         "title": "ThreadStartedNotification",
         "type": "object"
+      },
+      "ThreadStatusChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/LoadedThreadStatus"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "threadId"
+        ],
+        "title": "ThreadStatusChangedNotification",
+        "type": "object"
+      },
+      "ThreadTerminalOutcome": {
+        "enum": [
+          "completed",
+          "failed",
+          "interrupted",
+          "shutdown"
+        ],
+        "type": "string"
       },
       "ThreadTokenUsage": {
         "properties": {

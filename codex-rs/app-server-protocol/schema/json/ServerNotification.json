@@ -4134,6 +4134,69 @@
       ],
       "type": "object"
     },
+    "LoadedThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/ThreadTerminalOutcome"
+            },
+            "type": {
+              "enum": [
+                "terminal"
+              ],
+              "title": "TerminalLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "type"
+          ],
+          "title": "TerminalLoadedThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -6539,6 +6602,14 @@
       ],
       "type": "object"
     },
+    "ThreadActiveFlag": {
+      "enum": [
+        "running",
+        "waitingPermission",
+        "waitingUserInput"
+      ],
+      "type": "string"
+    },
     "ThreadId": {
       "type": "string"
     },
@@ -7041,6 +7112,30 @@
         "thread"
       ],
       "type": "object"
+    },
+    "ThreadStatusChangedNotification": {
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/LoadedThreadStatus"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadTerminalOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted",
+        "shutdown"
+      ],
+      "type": "string"
     },
     "ThreadTokenUsage": {
       "properties": {
@@ -8074,6 +8169,26 @@
         "params"
       ],
       "title": "Thread/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/status/changed"
+          ],
+          "title": "Thread/status/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadStatusChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/status/changedNotification",
       "type": "object"
     },
     {

@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "LoadedThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/ThreadTerminalOutcome"
+            },
+            "type": {
+              "enum": [
+                "terminal"
+              ],
+              "title": "TerminalLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "type"
+          ],
+          "title": "TerminalLoadedThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadActiveFlag": {
+      "enum": [
+        "running",
+        "waitingPermission",
+        "waitingUserInput"
+      ],
+      "type": "string"
+    },
+    "ThreadTerminalOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted",
+        "shutdown"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "status": {
+      "$ref": "#/definitions/LoadedThreadStatus"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "threadId"
+  ],
+  "title": "ThreadStatusChangedNotification",
+  "type": "object"
+}

@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoadedThreadStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
@@ -62,7 +63,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, status } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
@@ -73,6 +74,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
     assert_eq!(thread.turns.len(), 0);
+    assert_eq!(status, LoadedThreadStatus::Idle);
 
     Ok(())
 }
@@ -115,7 +117,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, status } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(thread.turns.len(), 1);
     let turn = &thread.turns[0];
@@ -133,6 +135,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+    assert_eq!(status, LoadedThreadStatus::Idle);
 
     Ok(())
 }
@@ -175,12 +178,16 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse {
+        thread: read,
+        status,
+    } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read.id, thread.id);
     assert_eq!(read.path, Some(thread_path));
     assert!(read.preview.is_empty());
     assert_eq!(read.turns.len(), 0);
+    assert_eq!(status, LoadedThreadStatus::Idle);
 
     Ok(())
 }

@@ -9,6 +9,7 @@ use chrono::Utc;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LoadedThreadStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
@@ -157,7 +158,9 @@ async fn thread_list_basic_empty() -> Result<()> {
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -220,6 +223,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     // Page 1: limit 2 → expect next_cursor Some.
     let ThreadListResponse {
         data: data1,
+        statuses: statuses1,
         next_cursor: cursor1,
     } = list_threads(
         &mut mcp,
@@ -240,12 +244,19 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
+        assert_eq!(
+            statuses1.get(&thread.id),
+            Some(&LoadedThreadStatus::Idle),
+            "expected idle status for listed thread {}",
+            thread.id
+        );
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
 
     // Page 2: with cursor → expect next_cursor None when no more results.
     let ThreadListResponse {
         data: data2,
+        statuses: statuses2,
         next_cursor: cursor2,
     } = list_threads(
         &mut mcp,
@@ -266,6 +277,12 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
+        assert_eq!(
+            statuses2.get(&thread.id),
+            Some(&LoadedThreadStatus::Idle),
+            "expected idle status for listed thread {}",
+            thread.id
+        );
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 
@@ -298,7 +315,9 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
 
     // Filter to only other_provider; expect 1 item, nextCursor None.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -369,7 +388,9 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let ThreadListResponse { data, next_cursor } = to_response::<ThreadListResponse>(resp)?;
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadListResponse>(resp)?;
 
     assert_eq!(next_cursor, None);
     assert_eq!(data.len(), 1);
@@ -405,7 +426,9 @@ async fn thread_list_empty_source_kinds_defaults_to_interactive_only() -> Result
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -454,7 +477,9 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -607,7 +632,9 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
 
     // Request 8 threads for the target provider; the matches only start on the
     // third page so we rely on pagination to reach the limit.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(8),
@@ -653,7 +680,9 @@ async fn thread_list_enforces_max_limit() -> Result<()> {
 
     let mut mcp = init_mcp(codex_home.path()).await?;
 
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(200),
@@ -700,7 +729,9 @@ async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()
 
     // Request more threads than exist after filtering; expect all matches to be
     // returned with nextCursor None.
-    let ThreadListResponse { data, next_cursor } = list_threads(
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = list_threads(
         &mut mcp,
         None,
         Some(10),
@@ -934,6 +965,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ThreadListResponse {
         data: page1,
         next_cursor: cursor1,
+        ..
     } = list_threads_with_sort(
         &mut mcp,
         None,
@@ -951,6 +983,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ThreadListResponse {
         data: page2,
         next_cursor: cursor2,
+        ..
     } = list_threads_with_sort(
         &mut mcp,
         Some(cursor1),

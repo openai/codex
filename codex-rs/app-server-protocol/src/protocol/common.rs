@@ -769,6 +769,7 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
@@ -1320,6 +1321,28 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_status_changed_notification() -> Result<()> {
+        let notification =
+            ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
+                thread_id: "thr_123".to_string(),
+                status: v2::LoadedThreadStatus::Idle,
+            });
+        assert_eq!(
+            json!({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": "thr_123",
+                    "status": {
+                        "type": "idle"
+                    },
+                }
+            }),
+            serde_json::to_value(&notification)?,
         );
         Ok(())
     }
