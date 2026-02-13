@@ -4227,8 +4227,8 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
-    explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
+    let mut mentioned_connector_ids = collect_explicit_app_ids(&input);
+    mentioned_connector_ids.extend(collect_explicit_app_ids_from_skill_items(
         &skill_items,
         &available_connectors,
         &skill_name_counts_lower,
@@ -4237,7 +4237,7 @@ pub(crate) async fn run_turn(
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
         .collect::<HashMap<&str, &str>>();
-    let app_mentions = explicitly_enabled_connectors
+    let mentioned_app_invocations = mentioned_connector_ids
         .iter()
         .map(|connector_id| AppInvocation {
             connector_id: Some(connector_id.clone()),
@@ -4249,8 +4249,8 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
     sess.services
         .analytics_events_client
-        .track_app_mentions(tracking.clone(), app_mentions);
-    sess.merge_connector_selection(explicitly_enabled_connectors.clone())
+        .track_app_mentions(tracking.clone(), mentioned_app_invocations);
+    sess.merge_connector_selection(mentioned_connector_ids.clone())
         .await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
@@ -4329,7 +4329,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             skills_outcome.as_ref(),
             cancellation_token.child_token(),
         )
@@ -4537,7 +4537,7 @@ fn collect_explicit_app_ids_from_skill_items(
 fn filter_connectors_for_input(
     connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
+    mentioned_connector_ids: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
     let connectors = connectors
@@ -4549,7 +4549,7 @@ fn filter_connectors_for_input(
     }
 
     let user_messages = collect_user_messages(input);
-    if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
+    if user_messages.is_empty() && mentioned_connector_ids.is_empty() {
         return Vec::new();
     }
 
@@ -4561,7 +4561,7 @@ fn filter_connectors_for_input(
         .collect::<HashSet<String>>();
 
     let connector_slug_counts = build_connector_slug_counts(&connectors);
-    let mut allowed_connector_ids = explicitly_enabled_connectors.clone();
+    let mut allowed_connector_ids = mentioned_connector_ids.clone();
     for path in mentions
         .paths
         .iter()
@@ -4651,7 +4651,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    explicitly_enabled_connectors: &HashSet<String>,
+    mentioned_connector_ids: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
@@ -4659,7 +4659,7 @@ async fn run_sampling_request(
         sess.as_ref(),
         turn_context.as_ref(),
         &input,
-        explicitly_enabled_connectors,
+        mentioned_connector_ids,
         skills_outcome,
         &cancellation_token,
     )
@@ -4774,7 +4774,7 @@ async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     input: &[ResponseItem],
-    explicitly_enabled_connectors: &HashSet<String>,
+    mentioned_connector_ids: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
@@ -4787,8 +4787,8 @@ async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
 
-    let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
-    effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
+    let mut effective_mentioned_connector_ids = mentioned_connector_ids.clone();
+    effective_mentioned_connector_ids.extend(sess.get_connector_selection().await);
 
     let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
@@ -4801,7 +4801,7 @@ async fn built_tools(
         Some(filter_connectors_for_input(
             connectors,
             input,
-            &effective_explicitly_enabled_connectors,
+            &effective_mentioned_connector_ids,
             &skill_name_counts_lower,
         ))
     } else {
@@ -5793,13 +5793,13 @@ mod tests {
             make_connector("two", "Foo-Bar"),
         ];
         let input = vec![user_message("use $foo-bar")];
-        let explicitly_enabled_connectors = HashSet::new();
+        let mentioned_connector_ids = HashSet::new();
         let skill_name_counts_lower = HashMap::new();
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             &skill_name_counts_lower,
         );
 
@@ -5810,13 +5810,13 @@ mod tests {
     fn filter_connectors_for_input_skips_when_skill_name_conflicts() {
         let connectors = vec![make_connector("one", "Todoist")];
         let input = vec![user_message("use $todoist")];
-        let explicitly_enabled_connectors = HashSet::new();
+        let mentioned_connector_ids = HashSet::new();
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
         let selected = filter_connectors_for_input(
             connectors,
             &input,
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             &skill_name_counts_lower,
         );
 
@@ -5828,11 +5828,11 @@ mod tests {
         let mut connector = make_connector("calendar", "Calendar");
         connector.is_enabled = false;
         let input = vec![user_message("use $calendar")];
-        let explicitly_enabled_connectors = HashSet::new();
+        let mentioned_connector_ids = HashSet::new();
         let selected = filter_connectors_for_input(
             vec![connector],
             &input,
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             &HashMap::new(),
         );
 
@@ -5907,11 +5907,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        let explicitly_enabled_connectors = HashSet::new();
+        let mentioned_connector_ids = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("run the selected tools")],
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
@@ -5950,11 +5950,11 @@ mod tests {
         let mut selected_mcp_tools =
             filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
-        let explicitly_enabled_connectors = HashSet::new();
+        let mentioned_connector_ids = HashSet::new();
         let connectors = filter_connectors_for_input(
             connectors,
             &[user_message("use $calendar and then echo the response")],
-            &explicitly_enabled_connectors,
+            &mentioned_connector_ids,
             &HashMap::new(),
         );
         let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
