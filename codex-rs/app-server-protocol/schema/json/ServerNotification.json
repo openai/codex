@@ -3888,6 +3888,84 @@
       ],
       "type": "object"
     },
+    "LoadedThreadEntry": {
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/LoadedThreadStatus"
+        },
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "status",
+        "thread"
+      ],
+      "type": "object"
+    },
+    "LoadedThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveLoadedThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/ThreadTerminalOutcome"
+            },
+            "type": {
+              "enum": [
+                "terminal"
+              ],
+              "title": "TerminalLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "type"
+          ],
+          "title": "TerminalLoadedThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -6230,6 +6308,14 @@
       ],
       "type": "object"
     },
+    "ThreadActiveFlag": {
+      "enum": [
+        "running",
+        "waitingPermission",
+        "waitingUserInput"
+      ],
+      "type": "string"
+    },
     "ThreadId": {
       "type": "string"
     },
@@ -6733,6 +6819,15 @@
       ],
       "type": "object"
     },
+    "ThreadTerminalOutcome": {
+      "enum": [
+        "completed",
+        "failed",
+        "interrupted",
+        "shutdown"
+      ],
+      "type": "string"
+    },
     "ThreadTokenUsage": {
       "properties": {
         "last": {
@@ -6771,6 +6866,82 @@
         "threadId",
         "tokenUsage",
         "turnId"
+      ],
+      "type": "object"
+    },
+    "ThreadWatchUpdate": {
+      "oneOf": [
+        {
+          "properties": {
+            "entry": {
+              "$ref": "#/definitions/LoadedThreadEntry"
+            },
+            "type": {
+              "enum": [
+                "upsert"
+              ],
+              "title": "UpsertThreadWatchUpdateType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "entry",
+            "type"
+          ],
+          "title": "UpsertThreadWatchUpdate",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "threadId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "remove"
+              ],
+              "title": "RemoveThreadWatchUpdateType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "type"
+          ],
+          "title": "RemoveThreadWatchUpdate",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "resyncRequired"
+              ],
+              "title": "ResyncRequiredThreadWatchUpdateType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ResyncRequiredThreadWatchUpdate",
+          "type": "object"
+        }
+      ]
+    },
+    "ThreadWatchUpdatedNotification": {
+      "properties": {
+        "update": {
+          "$ref": "#/definitions/ThreadWatchUpdate"
+        },
+        "version": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "update",
+        "version"
       ],
       "type": "object"
     },
@@ -7765,6 +7936,26 @@
         "params"
       ],
       "title": "Thread/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/watch/updated"
+          ],
+          "title": "Thread/watch/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadWatchUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/watch/updatedNotification",
       "type": "object"
     },
     {

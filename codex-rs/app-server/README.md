@@ -119,6 +119,7 @@ Example with notification opt-out:
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
+- `thread/watch` — atomically subscribe to loaded-thread state with an initial snapshot and stream versioned `thread/watch/updated` deltas (`upsert`, `remove`, `resyncRequired`).
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
@@ -252,6 +253,42 @@ When `nextCursor` is `null`, you’ve reached the final page.
     "data": ["thr_123", "thr_456"]
 } }
 ```
+
+### Example: Watch loaded threads atomically
+
+`thread/watch` gives an eventually-consistent in-memory view of loaded threads:
+
+- Response contains a full snapshot (`snapshotVersion` + `data`).
+- Server then streams `thread/watch/updated` notifications with monotonically increasing `version`.
+- Updates are idempotent (`upsert` carries full entry payload; `remove` carries `threadId`).
+- If a client lags and misses updates, server emits `resyncRequired`; client should call `thread/watch` again.
+
+```json
+{ "method": "thread/watch", "id": 22, "params": {} }
+{ "id": 22, "result": {
+    "snapshotVersion": 3,
+    "data": [
+        {
+            "thread": { "id": "thr_123", "preview": "", "modelProvider": "openai", "createdAt": 1730910000, "updatedAt": 1730910000, "path": null, "cwd": "/repo", "cliVersion": "0.0.0", "source": "vscode", "gitInfo": null, "turns": [] },
+            "status": { "type": "active", "activeFlags": ["running"] }
+        }
+    ]
+} }
+{ "method": "thread/watch/updated", "params": {
+    "version": 4,
+    "update": {
+        "type": "upsert",
+        "entry": { "...": "..." }
+    }
+} }
+```
+
+Root status semantics:
+
+- `thread/watch` only emits root threads.
+- Root active flags are transitively consolidated from all loaded descendants (`running`, `waitingPermission`, `waitingUserInput`).
+- Root terminal/idle outcome comes from the root thread itself when no consolidated active flags are set.
+- Descendant failures do not change root terminal outcome, but descendant blockers do affect root active flags.
 
 ### Example: Read a thread
 

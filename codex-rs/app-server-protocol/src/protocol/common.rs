@@ -231,6 +231,10 @@ client_request_definitions! {
         params: v2::ThreadLoadedListParams,
         response: v2::ThreadLoadedListResponse,
     },
+    ThreadWatch => "thread/watch" {
+        params: v2::ThreadWatchParams,
+        response: v2::ThreadWatchResponse,
+    },
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
@@ -762,6 +766,7 @@ server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadWatchUpdated => "thread/watch/updated" (v2::ThreadWatchUpdatedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
@@ -1310,6 +1315,48 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_watch() -> Result<()> {
+        let request = ClientRequest::ThreadWatch {
+            request_id: RequestId::Integer(9),
+            params: v2::ThreadWatchParams {},
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/watch",
+                "id": 9,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_watch_updated_notification() -> Result<()> {
+        let notification =
+            ServerNotification::ThreadWatchUpdated(v2::ThreadWatchUpdatedNotification {
+                version: 7,
+                update: v2::ThreadWatchUpdate::Remove {
+                    thread_id: "thr_123".to_string(),
+                },
+            });
+        assert_eq!(
+            json!({
+                "method": "thread/watch/updated",
+                "params": {
+                    "version": 7,
+                    "update": {
+                        "type": "remove",
+                        "threadId": "thr_123",
+                    }
+                }
+            }),
+            serde_json::to_value(&notification)?,
         );
         Ok(())
     }

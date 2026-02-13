@@ -10,6 +10,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::thread_watch::ThreadWatchManager;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -145,6 +146,9 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
+use codex_app_server_protocol::ThreadWatchParams;
+use codex_app_server_protocol::ThreadWatchUpdate;
+use codex_app_server_protocol::ThreadWatchUpdatedNotification;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnStartParams;
@@ -252,6 +256,7 @@ use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -297,6 +302,11 @@ impl Drop for ActiveLogin {
     }
 }
 
+struct ThreadWatchSubscription {
+    cancel_tx: oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
 /// Handles JSON-RPC messages for Codex threads (and legacy conversation APIs).
 pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
@@ -308,12 +318,14 @@ pub(crate) struct CodexMessageProcessor {
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     thread_state_manager: ThreadStateManager,
+    thread_watch_manager: ThreadWatchManager,
+    thread_watch_subscriptions: HashMap<ConnectionId, ThreadWatchSubscription>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     feedback: CodexFeedback,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum ApiVersion {
     V1,
     #[default]
@@ -376,6 +388,8 @@ impl CodexMessageProcessor {
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
             thread_state_manager: ThreadStateManager::new(),
+            thread_watch_manager: ThreadWatchManager::new(),
+            thread_watch_subscriptions: HashMap::new(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             feedback,
@@ -539,6 +553,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadLoadedList { request_id, params } => {
                 self.thread_loaded_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadWatch { request_id, params } => {
+                self.thread_watch(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadRead { request_id, params } => {
@@ -2006,6 +2024,10 @@ impl CodexMessageProcessor {
                     );
                 }
 
+                self.thread_watch_manager
+                    .upsert_thread(thread.clone())
+                    .await;
+
                 self.outgoing.send_response(request_id, response).await;
 
                 let notif = ThreadStartedNotification { thread };
@@ -2533,6 +2555,31 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn thread_watch(&mut self, request_id: ConnectionRequestId, _params: ThreadWatchParams) {
+        let connection_id = request_id.connection_id;
+        self.stop_thread_watch_subscription(connection_id).await;
+
+        let (response, updates_rx) = self.thread_watch_manager.subscribe_with_snapshot().await;
+
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+
+        // Send the snapshot before forwarding live deltas so the client can seed state first.
+        self.outgoing.send_response(request_id, response).await;
+
+        let outgoing = self.outgoing.clone();
+        let thread_watch_manager = self.thread_watch_manager.clone();
+        let task = tokio::spawn(forward_thread_watch_updates(
+            connection_id,
+            outgoing,
+            thread_watch_manager,
+            updates_rx,
+            cancel_rx,
+        ));
+
+        self.thread_watch_subscriptions
+            .insert(connection_id, ThreadWatchSubscription { cancel_tx, task });
+    }
+
     async fn thread_read(&mut self, request_id: ConnectionRequestId, params: ThreadReadParams) {
         let ThreadReadParams {
             thread_id,
@@ -2663,10 +2710,20 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
+    async fn stop_thread_watch_subscription(&mut self, connection_id: ConnectionId) {
+        if let Some(subscription) = self.thread_watch_subscriptions.remove(&connection_id) {
+            let _ = subscription.cancel_tx.send(());
+            if let Err(err) = subscription.task.await {
+                warn!("thread/watch subscription task join failed: {err}");
+            }
+        }
+    }
+
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
         self.thread_state_manager
             .remove_connection(connection_id)
             .await;
+        self.stop_thread_watch_subscription(connection_id).await;
     }
 
     /// Best-effort: ensure initialized connections are subscribed to this thread.
@@ -2675,6 +2732,13 @@ impl CodexMessageProcessor {
         thread_id: ThreadId,
         connection_ids: Vec<ConnectionId>,
     ) {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            let config_snapshot = thread.config_snapshot().await;
+            let loaded_thread =
+                build_thread_from_snapshot(thread_id, &config_snapshot, thread.rollout_path());
+            self.thread_watch_manager.upsert_thread(loaded_thread).await;
+        }
+
         for connection_id in connection_ids {
             if let Err(err) = self
                 .ensure_conversation_listener(thread_id, connection_id, false, ApiVersion::V2)
@@ -2902,6 +2966,10 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+
+                self.thread_watch_manager
+                    .upsert_thread(response.thread.clone())
+                    .await;
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -3139,6 +3207,10 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
+
+        self.thread_watch_manager
+            .upsert_thread(thread.clone())
+            .await;
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -4402,6 +4474,10 @@ impl CodexMessageProcessor {
                 .await;
         }
 
+        self.thread_watch_manager
+            .remove_thread(&thread_id.to_string())
+            .await;
+
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config, None).await;
         }
@@ -5247,6 +5323,9 @@ impl CodexMessageProcessor {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
                     let thread = summary_to_thread(summary);
+                    self.thread_watch_manager
+                        .upsert_thread(thread.clone())
+                        .await;
                     let notif = ThreadStartedNotification { thread };
                     self.outgoing
                         .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -5481,6 +5560,8 @@ impl CodexMessageProcessor {
             thread_state.set_listener(cancel_tx, &conversation);
         }
         let outgoing_for_task = self.outgoing.clone();
+        let thread_manager = self.thread_manager.clone();
+        let thread_watch_manager = self.thread_watch_manager.clone();
         let fallback_model_provider = self.config.model_provider_id.clone();
         tokio::spawn(async move {
             loop {
@@ -5553,8 +5634,10 @@ impl CodexMessageProcessor {
                             event.clone(),
                             conversation_id,
                             conversation.clone(),
+                            thread_manager.clone(),
                             thread_outgoing,
                             thread_state.clone(),
+                            thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
                         )
@@ -5804,6 +5887,52 @@ impl CodexMessageProcessor {
         match self.thread_manager.get_thread(conversation_id).await {
             Ok(conv) => conv.rollout_path(),
             Err(_) => None,
+        }
+    }
+}
+
+async fn forward_thread_watch_updates(
+    connection_id: ConnectionId,
+    outgoing: Arc<OutgoingMessageSender>,
+    thread_watch_manager: ThreadWatchManager,
+    mut updates_rx: broadcast::Receiver<ThreadWatchUpdatedNotification>,
+    mut cancel_rx: oneshot::Receiver<()>,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut cancel_rx => {
+                break;
+            }
+            update = updates_rx.recv() => {
+                match update {
+                    Ok(update) => {
+                        outgoing
+                            .send_server_notification_to_connections(
+                                &[connection_id],
+                                ServerNotification::ThreadWatchUpdated(update),
+                            )
+                            .await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let version = thread_watch_manager.current_version().await;
+                        let update = ThreadWatchUpdatedNotification {
+                            version,
+                            update: ThreadWatchUpdate::ResyncRequired,
+                        };
+                        outgoing
+                            .send_server_notification_to_connections(
+                                &[connection_id],
+                                ServerNotification::ThreadWatchUpdated(update),
+                            )
+                            .await;
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -6371,11 +6500,16 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
     use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
@@ -6655,6 +6789,85 @@ mod tests {
             state.lock().await.subscribed_connection_ids(),
             vec![connection_b]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn thread_watch_forwarder_sends_resync_required_on_lag() -> Result<()> {
+        let thread_id = "00000000-0000-0000-0000-000000000001".to_string();
+        let manager = ThreadWatchManager::new();
+        manager
+            .upsert_thread(codex_app_server_protocol::Thread {
+                id: thread_id.clone(),
+                preview: String::new(),
+                model_provider: "mock-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                path: None,
+                cwd: PathBuf::from("/tmp"),
+                cli_version: "test".to_string(),
+                source: codex_app_server_protocol::SessionSource::AppServer,
+                git_info: None,
+                turns: Vec::new(),
+            })
+            .await;
+        let (_snapshot, updates_rx) = manager.subscribe_with_snapshot().await;
+
+        // Keep this channel tiny to force the forwarder to block on sends and lag behind.
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let task = tokio::spawn(forward_thread_watch_updates(
+            ConnectionId(42),
+            outgoing,
+            manager.clone(),
+            updates_rx,
+            cancel_rx,
+        ));
+
+        for _ in 0..300 {
+            manager.note_turn_started(&thread_id).await;
+            manager.note_turn_interrupted(&thread_id).await;
+        }
+
+        let mut saw_resync_required = false;
+        for _ in 0..20 {
+            let envelope = timeout(Duration::from_secs(1), outgoing_rx.recv())
+                .await
+                .expect("timed out reading forwarded updates")
+                .expect("forwarder ended without sending resync");
+            let OutgoingEnvelope::ToConnection {
+                connection_id,
+                message,
+            } = envelope
+            else {
+                continue;
+            };
+            if connection_id != ConnectionId(42) {
+                continue;
+            }
+            let OutgoingMessage::AppServerNotification(ServerNotification::ThreadWatchUpdated(
+                notification,
+            )) = message
+            else {
+                continue;
+            };
+            if notification.update == ThreadWatchUpdate::ResyncRequired {
+                saw_resync_required = true;
+                break;
+            }
+        }
+        assert!(
+            saw_resync_required,
+            "expected thread/watch forwarder to send resyncRequired after lag"
+        );
+
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("forwarder should exit after resyncRequired")
+            .expect("forwarder task panicked");
+
+        drop(cancel_tx);
         Ok(())
     }
 }

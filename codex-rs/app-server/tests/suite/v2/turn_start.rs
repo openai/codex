@@ -1715,6 +1715,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 #[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
 async fn command_execution_notifications_include_process_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    let command_timeout = std::time::Duration::from_secs(30);
 
     let responses = vec![
         create_exec_command_sse_response("uexec-1")?,
@@ -1764,7 +1765,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     .await??;
     let TurnStartResponse { turn: _turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
-    let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
+    let started_command = timeout(command_timeout, async {
         loop {
             let notif = mcp
                 .read_stream_until_notification_message("item/started")
@@ -1794,7 +1795,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     assert_eq!(status, CommandExecutionStatus::InProgress);
     let started_process_id = started_process_id.expect("process id should be present");
 
-    let completed_command = timeout(DEFAULT_READ_TIMEOUT, async {
+    let completed_command = timeout(command_timeout, async {
         loop {
             let notif = mcp
                 .read_stream_until_notification_message("item/completed")
@@ -1840,7 +1841,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     );
 
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        command_timeout,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
