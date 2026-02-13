@@ -365,6 +365,13 @@ fn should_show_model_migration_prompt(
         return false;
     }
 
+    if !available_models
+        .iter()
+        .any(|preset| preset.model == target_model && preset.show_in_picker)
+    {
+        return false;
+    }
+
     if available_models
         .iter()
         .any(|preset| preset.model == current_model && preset.upgrade.is_some())
@@ -401,7 +408,7 @@ fn target_preset_for_upgrade<'a>(
 ) -> Option<&'a ModelPreset> {
     available_models
         .iter()
-        .find(|preset| preset.model == target_model)
+        .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -3039,25 +3046,25 @@ mod tests {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
-            "gpt-5.1",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex",
-            "gpt-5.1-codex",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
-            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
-            "gpt-5.1-codex-max",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
@@ -3088,7 +3095,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_migration_prompt_skips_when_target_missing() {
+    async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         let mut available = all_model_presets();
         let mut current = available
             .iter()
@@ -3106,7 +3113,7 @@ mod tests {
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
 
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             &current.model,
             "missing-target",
             &BTreeMap::new(),
@@ -3114,6 +3121,21 @@ mod tests {
         ));
 
         assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
+
+        let mut with_hidden_target = all_model_presets();
+        let target = with_hidden_target
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2-codex")
+            .expect("target preset present");
+        target.show_in_picker = false;
+
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.2-codex",
+            &BTreeMap::new(),
+            &with_hidden_target,
+        ));
+        assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.2-codex").is_none());
     }
 
     #[tokio::test]
