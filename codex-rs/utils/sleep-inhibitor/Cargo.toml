@@ -13,7 +13,6 @@ libc = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-dbus = "0.9"
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

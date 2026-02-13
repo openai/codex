@@ -1,13 +1,11 @@
 use crate::PlatformSleepInhibitor;
-use dbus::arg::OwnedFd;
-use dbus::blocking::Connection;
-use std::time::Duration;
+use std::process::Child;
+use std::process::Command;
 use tracing::warn;
 
 const ASSERTION_REASON: &str = "Codex is running an active turn";
 const APP_ID: &str = "codex";
-const DBUS_TIMEOUT: Duration = Duration::from_secs(2);
-const GNOME_INHIBIT_SUSPEND_SESSION_FLAG: u32 = 4;
+const BLOCKER_SLEEP_SECONDS: &str = "2147483647";
 
 #[derive(Debug, Default)]
 pub(crate) struct LinuxSleepInhibitor {
@@ -18,51 +16,16 @@ pub(crate) struct LinuxSleepInhibitor {
 enum InhibitState {
     #[default]
     Inactive,
-    Logind(OwnedFd),
-    Cookie {
-        api: CookieApi,
-        cookie: u32,
+    Active {
+        backend: LinuxBackend,
+        child: Child,
     },
 }
 
 #[derive(Debug, Clone, Copy)]
-enum CookieApi {
-    Gnome,
-    FreedesktopPower,
-    FreedesktopScreensaver,
-}
-
-impl CookieApi {
-    fn service_name(self) -> &'static str {
-        match self {
-            Self::Gnome => "org.gnome.SessionManager",
-            Self::FreedesktopPower => "org.freedesktop.PowerManagement",
-            Self::FreedesktopScreensaver => "org.freedesktop.ScreenSaver",
-        }
-    }
-
-    fn object_path(self) -> &'static str {
-        match self {
-            Self::Gnome => "/org/gnome/SessionManager",
-            Self::FreedesktopPower => "/org/freedesktop/PowerManagement/Inhibit",
-            Self::FreedesktopScreensaver => "/org/freedesktop/ScreenSaver",
-        }
-    }
-
-    fn interface_name(self) -> &'static str {
-        match self {
-            Self::Gnome => "org.gnome.SessionManager",
-            Self::FreedesktopPower => "org.freedesktop.PowerManagement.Inhibit",
-            Self::FreedesktopScreensaver => "org.freedesktop.ScreenSaver",
-        }
-    }
-
-    fn uninhibit_method(self) -> &'static str {
-        match self {
-            Self::Gnome => "Uninhibit",
-            Self::FreedesktopPower | Self::FreedesktopScreensaver => "UnInhibit",
-        }
-    }
+enum LinuxBackend {
+    SystemdInhibit,
+    GnomeSessionInhibit,
 }
 
 impl LinuxSleepInhibitor {
@@ -73,94 +36,82 @@ impl LinuxSleepInhibitor {
 
 impl PlatformSleepInhibitor for LinuxSleepInhibitor {
     fn acquire(&mut self) {
-        if !matches!(self.state, InhibitState::Inactive) {
+        if let InhibitState::Active { child, .. } = &mut self.state
+            && child.try_wait().ok().flatten().is_none()
+        {
             return;
         }
 
-        match acquire_logind_inhibitor() {
-            Ok(state) => {
-                self.state = state;
-                return;
-            }
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    "Failed to acquire sleep inhibitor via org.freedesktop.login1"
-                );
-            }
-        }
+        self.state = InhibitState::Inactive;
 
-        for api in [
-            CookieApi::Gnome,
-            CookieApi::FreedesktopPower,
-            CookieApi::FreedesktopScreensaver,
+        for backend in [
+            LinuxBackend::SystemdInhibit,
+            LinuxBackend::GnomeSessionInhibit,
         ] {
-            match acquire_cookie_inhibitor(api) {
-                Ok(state) => {
-                    self.state = state;
+            match spawn_backend(backend) {
+                Ok(child) => {
+                    self.state = InhibitState::Active { backend, child };
                     return;
                 }
                 Err(error) => {
-                    warn!(?api, error = %error, "Failed to acquire sleep inhibitor via D-Bus");
+                    warn!(
+                        ?backend,
+                        error, "Failed to start Linux sleep inhibitor backend"
+                    );
                 }
             }
         }
 
-        warn!("No Linux sleep inhibition API is available");
+        warn!("No Linux sleep inhibitor backend is available");
     }
 
     fn release(&mut self) {
         match std::mem::take(&mut self.state) {
             InhibitState::Inactive => {}
-            InhibitState::Logind(fd) => drop(fd),
-            InhibitState::Cookie { api, cookie } => {
-                if let Err(error) = release_cookie_inhibitor(api, cookie) {
-                    warn!(?api, error = %error, "Failed to release D-Bus sleep inhibitor");
+            InhibitState::Active { backend, mut child } => {
+                if let Err(error) = child.kill()
+                    && !child_exited(&error)
+                {
+                    warn!(?backend, reason = %error, "Failed to stop Linux sleep inhibitor backend");
+                }
+                if let Err(error) = child.wait()
+                    && !child_exited(&error)
+                {
+                    warn!(?backend, reason = %error, "Failed to reap Linux sleep inhibitor backend");
                 }
             }
         }
     }
 }
 
-fn acquire_logind_inhibitor() -> Result<InhibitState, dbus::Error> {
-    let connection = Connection::new_system()?;
-    let proxy = connection.with_proxy(
-        "org.freedesktop.login1",
-        "/org/freedesktop/login1",
-        DBUS_TIMEOUT,
-    );
-    let (fd,): (OwnedFd,) = proxy.method_call(
-        "org.freedesktop.login1.Manager",
-        "Inhibit",
-        ("sleep", APP_ID, ASSERTION_REASON, "block"),
-    )?;
-    Ok(InhibitState::Logind(fd))
-}
-
-fn acquire_cookie_inhibitor(api: CookieApi) -> Result<InhibitState, dbus::Error> {
-    let connection = Connection::new_session()?;
-    let proxy = connection.with_proxy(api.service_name(), api.object_path(), DBUS_TIMEOUT);
-    let (cookie,): (u32,) = match api {
-        CookieApi::Gnome => proxy.method_call(
-            api.interface_name(),
-            "Inhibit",
-            (
+fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
+    match backend {
+        LinuxBackend::SystemdInhibit => Command::new("systemd-inhibit")
+            .args([
+                "--what=sleep",
+                "--mode=block",
+                "--who",
                 APP_ID,
-                0_u32,
+                "--why",
                 ASSERTION_REASON,
-                GNOME_INHIBIT_SUSPEND_SESSION_FLAG,
-            ),
-        )?,
-        CookieApi::FreedesktopPower | CookieApi::FreedesktopScreensaver => {
-            proxy.method_call(api.interface_name(), "Inhibit", (APP_ID, ASSERTION_REASON))?
-        }
-    };
-    Ok(InhibitState::Cookie { api, cookie })
+                "--",
+                "sleep",
+                BLOCKER_SLEEP_SECONDS,
+            ])
+            .spawn(),
+        LinuxBackend::GnomeSessionInhibit => Command::new("gnome-session-inhibit")
+            .args([
+                "--inhibit",
+                "suspend",
+                "--reason",
+                ASSERTION_REASON,
+                "sleep",
+                BLOCKER_SLEEP_SECONDS,
+            ])
+            .spawn(),
+    }
 }
 
-fn release_cookie_inhibitor(api: CookieApi, cookie: u32) -> Result<(), dbus::Error> {
-    let connection = Connection::new_session()?;
-    let proxy = connection.with_proxy(api.service_name(), api.object_path(), DBUS_TIMEOUT);
-    let _: () = proxy.method_call(api.interface_name(), api.uninhibit_method(), (cookie,))?;
-    Ok(())
+fn child_exited(error: &std::io::Error) -> bool {
+    matches!(error.kind(), std::io::ErrorKind::InvalidInput)
 }
