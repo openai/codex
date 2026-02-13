@@ -4724,9 +4724,10 @@ impl CodexMessageProcessor {
         all_connectors: Option<&[AppInfo]>,
         accessible_connectors: Option<&[AppInfo]>,
     ) -> Vec<AppInfo> {
+        let all_connectors_loaded = all_connectors.is_some();
         let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
         let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-        connectors::merge_connectors_with_accessible(all, accessible)
+        connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
     }
 
     fn paginate_apps(

@@ -3215,7 +3215,7 @@ mod tests {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let app_id = "connector_1".to_string();
+        let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
 
         assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
 
