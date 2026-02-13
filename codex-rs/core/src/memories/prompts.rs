@@ -2,43 +2,23 @@ use crate::memories::memory_root;
 use crate::memories::phase_one;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
-use askama::Template;
 use codex_protocol::openai_models::ModelInfo;
 use std::path::Path;
 use tokio::fs;
-use tracing::warn;
+use tracing::error;
 
-#[derive(Template)]
-#[template(path = "memories/consolidation.md", escape = "none")]
-struct ConsolidationPromptTemplate<'a> {
-    memory_root: &'a str,
-}
-
-#[derive(Template)]
-#[template(path = "memories/stage_one_input.md", escape = "none")]
-struct StageOneInputTemplate<'a> {
-    rollout_path: &'a str,
-    rollout_cwd: &'a str,
-    rollout_contents: &'a str,
-}
-
-#[derive(Template)]
-#[template(path = "memories/read_path.md", escape = "none")]
-struct MemoryToolDeveloperInstructionsTemplate<'a> {
-    base_path: &'a str,
-    memory_summary: &'a str,
-}
+const CONSOLIDATION_PROMPT_TEMPLATE: &str =
+    include_str!("../../templates/memories/consolidation.md");
+const STAGE_ONE_INPUT_TEMPLATE: &str = include_str!("../../templates/memories/stage_one_input.md");
+const READ_PATH_TEMPLATE: &str = include_str!("../../templates/memories/read_path.md");
 
 /// Builds the consolidation subagent prompt for a specific memory root.
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
-    let template = ConsolidationPromptTemplate {
-        memory_root: &memory_root,
-    };
-    template.render().unwrap_or_else(|err| {
-        warn!("failed to render memories consolidation prompt template: {err}");
-        format!("## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}")
-    })
+    render_template(
+        CONSOLIDATION_PROMPT_TEMPLATE,
+        &[("memory_root", memory_root.as_str())],
+    )
 }
 
 /// Builds the stage-1 user message containing rollout metadata and content.
@@ -65,12 +45,14 @@ pub(super) fn build_stage_one_input_message(
 
     let rollout_path = rollout_path.display().to_string();
     let rollout_cwd = rollout_cwd.display().to_string();
-    Ok(StageOneInputTemplate {
-        rollout_path: &rollout_path,
-        rollout_cwd: &rollout_cwd,
-        rollout_contents: &truncated_rollout_contents,
-    }
-    .render()?)
+    Ok(render_template(
+        STAGE_ONE_INPUT_TEMPLATE,
+        &[
+            ("rollout_path", rollout_path.as_str()),
+            ("rollout_cwd", rollout_cwd.as_str()),
+            ("rollout_contents", truncated_rollout_contents.as_str()),
+        ],
+    ))
 }
 
 /// Build prompt used for read path. This prompt must be added to the developer instructions. In
@@ -92,11 +74,29 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
         return None;
     }
     let base_path = base_path.display().to_string();
-    let template = MemoryToolDeveloperInstructionsTemplate {
-        base_path: &base_path,
-        memory_summary: &memory_summary,
-    };
-    template.render().ok()
+    Some(render_template(
+        READ_PATH_TEMPLATE,
+        &[
+            ("base_path", base_path.as_str()),
+            ("memory_summary", memory_summary.as_str()),
+        ],
+    ))
+}
+
+fn render_template(template: &str, replacements: &[(&str, &str)]) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in replacements {
+        let placeholder = format!("{{{{ {key} }}}}");
+        rendered = rendered.replace(&placeholder, value);
+    }
+
+    if rendered.contains("{{") {
+        error!(
+            "unresolved template placeholders after memory prompt rendering; template may have changed"
+        );
+    }
+
+    rendered
 }
 
 #[cfg(test)]
