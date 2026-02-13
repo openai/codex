@@ -68,7 +68,7 @@ impl PowerRequest {
             },
         };
         let handle = unsafe { PowerCreateRequest(&context) };
-        if handle.is_null() {
+        if handle == 0 {
             let error = std::io::Error::last_os_error();
             return Err(format!("PowerCreateRequest failed: {error}"));
         }
