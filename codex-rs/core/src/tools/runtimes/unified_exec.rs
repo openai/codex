@@ -109,6 +109,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                 session
                     .request_command_approval(
                         turn,
+                        call_id.clone(),
                         call_id,
                         command,
                         cwd,

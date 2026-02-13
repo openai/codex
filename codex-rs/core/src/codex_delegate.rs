@@ -313,6 +313,7 @@ async fn handle_exec_approval(
 ) {
     let ExecApprovalRequestEvent {
         call_id,
+        approval_id,
         command,
         cwd,
         reason,
@@ -320,11 +321,11 @@ async fn handle_exec_approval(
         proposed_execpolicy_amendment,
         ..
     } = event;
-    let approval_id = call_id.clone();
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
         call_id,
+        approval_id.clone(),
         command,
         cwd,
         reason,

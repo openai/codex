@@ -179,6 +179,10 @@
     },
     "CommandExecutionRequestApprovalParams": {
       "properties": {
+        "approvalId": {
+          "description": "Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is typically the same as `itemId` (one approval callback per command item).\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (typically a UUID) used to disambiguate routing.",
+          "type": "string"
+        },
         "command": {
           "description": "The command to be executed.",
           "type": [
@@ -231,6 +235,7 @@
         }
       },
       "required": [
+        "approvalId",
         "itemId",
         "threadId",
         "turnId"

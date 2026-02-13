@@ -51,6 +51,7 @@ tokio = { workspace = true, features = [
 ] }
 toml = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }

@@ -218,6 +218,7 @@ async fn run_codex_tool_session_inner(
                         command,
                         cwd,
                         call_id,
+                        approval_id: _,
                         reason: _,
                         proposed_execpolicy_amendment: _,
                         parsed_cmd,
