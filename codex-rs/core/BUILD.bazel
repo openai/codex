@@ -4,12 +4,7 @@ codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
     compile_data = glob(
-        include = [
-            "*.json",
-            "*.md",
-            "src/**",
-            "templates/**",
-        ],
+        include = ["**"],
         exclude = [
             "**/* *",
             "BUILD.bazel",
