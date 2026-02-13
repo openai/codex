@@ -58,7 +58,7 @@ async fn should_skip_bwrap_tests() -> bool {
 
     let output = run_linux_sandbox_direct(
         &["bash", "-lc", "true"],
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         false,
         env,
         NETWORK_TIMEOUT_MS,

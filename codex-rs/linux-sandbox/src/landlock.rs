@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn restricted_network_without_proxy_routing_uses_restricted_mode() {
         assert_eq!(
-            network_seccomp_mode(&SandboxPolicy::ReadOnly, false, false),
+            network_seccomp_mode(&SandboxPolicy::new_read_only_policy(), false, false),
             Some(NetworkSeccompMode::Restricted)
         );
     }
