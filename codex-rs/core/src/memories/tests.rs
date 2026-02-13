@@ -101,6 +101,7 @@ mod phase2 {
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
     use chrono::Utc;
+    use codex_config::Constrained;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Op;
@@ -112,6 +113,19 @@ mod phase2 {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
+        Stage1Output {
+            thread_id: ThreadId::new(),
+            source_updated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at, 0)
+                .expect("valid source_updated_at timestamp"),
+            raw_memory: "raw memory".to_string(),
+            rollout_summary: "rollout summary".to_string(),
+            cwd: PathBuf::from("/tmp/workspace"),
+            generated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at + 1, 0)
+                .expect("valid generated_at timestamp"),
+        }
+    }
 
     struct DispatchHarness {
         _codex_home: TempDir,
@@ -222,19 +236,67 @@ mod phase2 {
 
     #[test]
     fn completion_watermark_never_regresses_below_claimed_input_watermark() {
-        let stage1_output = Stage1Output {
-            thread_id: ThreadId::new(),
-            source_updated_at: chrono::DateTime::<Utc>::from_timestamp(123, 0)
-                .expect("valid source_updated_at timestamp"),
-            raw_memory: "raw memory".to_string(),
-            rollout_summary: "rollout summary".to_string(),
-            cwd: PathBuf::from("/tmp/workspace"),
-            generated_at: chrono::DateTime::<Utc>::from_timestamp(124, 0)
-                .expect("valid generated_at timestamp"),
-        };
+        let stage1_output = stage1_output_with_source_updated_at(123);
 
         let completion = phase2::get_watermark(1_000, &[stage1_output]);
         pretty_assertions::assert_eq!(completion, 1_000);
+    }
+
+    #[test]
+    fn completion_watermark_uses_claimed_watermark_when_there_are_no_memories() {
+        let completion = phase2::get_watermark(777, &[]);
+        pretty_assertions::assert_eq!(completion, 777);
+    }
+
+    #[test]
+    fn completion_watermark_uses_latest_memory_timestamp_when_it_is_newer() {
+        let older = stage1_output_with_source_updated_at(123);
+        let newer = stage1_output_with_source_updated_at(456);
+
+        let completion = phase2::get_watermark(200, &[older, newer]);
+        pretty_assertions::assert_eq!(completion, 456);
+    }
+
+    #[tokio::test]
+    async fn dispatch_skips_when_global_job_is_not_dirty() {
+        let harness = DispatchHarness::new().await;
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_skips_when_global_job_is_already_running() {
+        let harness = DispatchHarness::new().await;
+        harness
+            .state_db
+            .enqueue_global_consolidation(123)
+            .await
+            .expect("enqueue global consolidation");
+        let claimed = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim running global lock");
+        assert!(
+            matches!(claimed, Phase2JobClaimOutcome::Claimed { .. }),
+            "precondition should claim the running lock"
+        );
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        let running_claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim while lock is still running");
+        pretty_assertions::assert_eq!(running_claim, Phase2JobClaimOutcome::SkippedRunning);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
     }
 
     #[tokio::test]
@@ -367,8 +429,86 @@ mod phase2 {
                 .expect("check skills dir existence"),
             "empty consolidation should remove stale skills directory"
         );
+        let next_claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after empty consolidation success");
+        pretty_assertions::assert_eq!(next_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
 
         harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_marks_job_for_retry_when_sandbox_policy_cannot_be_overridden() {
+        let harness = DispatchHarness::new().await;
+        harness
+            .state_db
+            .enqueue_global_consolidation(99)
+            .await
+            .expect("enqueue global consolidation");
+        let mut constrained_config = harness.config.as_ref().clone();
+        constrained_config.sandbox_policy =
+            Constrained::allow_only(SandboxPolicy::DangerFullAccess);
+
+        phase2::run(&harness.session, Arc::new(constrained_config)).await;
+
+        let retry_claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after sandbox policy failure");
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_marks_job_for_retry_when_syncing_artifacts_fails() {
+        let harness = DispatchHarness::new().await;
+        harness.seed_stage1_output(100).await;
+        let root = memory_root(&harness.config.codex_home);
+        tokio::fs::write(&root, "not a directory")
+            .await
+            .expect("create file at memory root");
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        let retry_claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after sync failure");
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_marks_job_for_retry_when_rebuilding_raw_memories_fails() {
+        let harness = DispatchHarness::new().await;
+        harness.seed_stage1_output(100).await;
+        let root = memory_root(&harness.config.codex_home);
+        tokio::fs::create_dir_all(raw_memories_file(&root))
+            .await
+            .expect("create raw_memories.md as a directory");
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        let retry_claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
+            .await
+            .expect("claim global job after rebuild failure");
+        pretty_assertions::assert_eq!(retry_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
+        let thread_ids = harness.manager.list_thread_ids().await;
+        pretty_assertions::assert_eq!(thread_ids.len(), 0);
     }
 
     #[tokio::test]
