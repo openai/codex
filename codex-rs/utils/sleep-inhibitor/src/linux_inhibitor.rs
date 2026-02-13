@@ -56,7 +56,8 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
                 Err(error) => {
                     warn!(
                         ?backend,
-                        error, "Failed to start Linux sleep inhibitor backend"
+                        reason = %error,
+                        "Failed to start Linux sleep inhibitor backend"
                     );
                 }
             }
