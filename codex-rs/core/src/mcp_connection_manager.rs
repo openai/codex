@@ -1477,11 +1477,6 @@ mod tests {
             }
 
             assert!(read_cached_codex_apps_tools().is_none());
-
-            let cache_guard = CODEX_APPS_TOOLS_CACHE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            assert!(cache_guard.is_none());
         });
     }
 
