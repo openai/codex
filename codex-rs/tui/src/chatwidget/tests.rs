@@ -20,6 +20,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+#[cfg(target_os = "windows")]
+use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
@@ -4891,6 +4893,11 @@ async fn approvals_popup_navigation_skips_disabled() {
 #[tokio::test]
 async fn permissions_selection_emits_history_cell_when_selection_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
@@ -4913,6 +4920,11 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
 #[tokio::test]
 async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
     chat.config
         .permissions
         .approval_policy
@@ -4943,6 +4955,11 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 #[tokio::test]
 async fn permissions_full_access_history_cell_emitted_only_after_confirmation() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
     chat.config.notices.hide_full_access_warning = None;
 
     chat.open_permissions_popup();
