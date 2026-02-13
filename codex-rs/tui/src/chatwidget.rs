@@ -162,7 +162,6 @@ use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
-use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -5742,7 +5741,7 @@ impl ChatWidget {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    legacy_otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                    legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
@@ -5754,7 +5753,7 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
+                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_quit", 1, &[]);
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -5775,14 +5774,8 @@ impl ChatWidget {
     pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(
-        &mut self,
-        preset: ApprovalPreset,
-        reason: WindowsSandboxFallbackReason,
-    ) {
+    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, preset: ApprovalPreset) {
         use ratatui_macros::line;
-
-        let _ = reason;
 
         let mut lines = Vec::new();
         lines.push(line![
@@ -5839,7 +5832,7 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
+                    quit_otel.counter("codex.windows_sandbox.fallback_prompt_quit", 1, &[]);
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -5857,12 +5850,7 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(
-        &mut self,
-        _preset: ApprovalPreset,
-        _reason: WindowsSandboxFallbackReason,
-    ) {
-    }
+    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, _preset: ApprovalPreset) {}
 
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
