@@ -215,10 +215,7 @@ async fn collect_turn_notifications(
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let features = BTreeMap::from([
-        (Feature::RemoteModels, false),
-        (Feature::CollaborationModes, true),
-    ]);
+    let features = BTreeMap::from([(Feature::CollaborationModes, true)]);
     let feature_entries = features
         .into_iter()
         .map(|(feature, enabled)| {

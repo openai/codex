@@ -6,7 +6,6 @@ use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -57,7 +56,6 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     builder = builder.with_config(|config| {
-        config.features.enable(Feature::RemoteModels);
         config.model = Some("gpt-5".to_string());
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(1);
@@ -70,7 +68,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     // Populate cache via initial refresh.
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
 
     let cache_path = config.codex_home.join(CACHE_FILE);
@@ -123,7 +121,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
     // Cached models remain usable offline.
     let offline_models = test
         .thread_manager
-        .list_models(&config, RefreshStrategy::Offline)
+        .list_models(RefreshStrategy::Offline)
         .await;
     assert!(
         offline_models
@@ -160,14 +158,13 @@ async fn uses_cache_when_version_matches() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
 
     assert!(
@@ -208,14 +205,13 @@ async fn refreshes_when_cache_version_missing() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
 
     assert!(
@@ -257,14 +253,13 @@ async fn refreshes_when_cache_version_differs() -> Result<()> {
             write_cache_sync(&cache_path, &cache).expect("write cache");
         })
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model_provider.request_max_retries = Some(0);
         });
 
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let models = models_manager
-        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
 
     assert!(

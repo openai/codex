@@ -698,7 +698,6 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     let TestCodex { codex, cwd, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some(model_slug.to_string());
         })
         .build(&server)

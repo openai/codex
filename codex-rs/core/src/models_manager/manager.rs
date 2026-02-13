@@ -7,7 +7,6 @@ use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
-use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
@@ -74,18 +73,11 @@ impl ModelsManager {
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
-    pub async fn list_models(
-        &self,
-        config: &Config,
-        refresh_strategy: RefreshStrategy,
-    ) -> Vec<ModelPreset> {
-        if let Err(err) = self
-            .refresh_available_models(config, refresh_strategy)
-            .await
-        {
+    pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
+        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.get_remote_models(config).await;
+        let remote_models = self.get_remote_models().await;
         self.build_available_models(remote_models)
     }
 
@@ -99,8 +91,8 @@ impl ModelsManager {
     /// Attempt to list models without blocking, using the current cached state.
     ///
     /// Returns an error if the internal lock cannot be acquired.
-    pub fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
-        let remote_models = self.try_get_remote_models(config)?;
+    pub fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
+        let remote_models = self.try_get_remote_models()?;
         Ok(self.build_available_models(remote_models))
     }
 
@@ -112,19 +104,15 @@ impl ModelsManager {
     pub async fn get_default_model(
         &self,
         model: &Option<String>,
-        config: &Config,
         refresh_strategy: RefreshStrategy,
     ) -> String {
         if let Some(model) = model.as_ref() {
             return model.to_string();
         }
-        if let Err(err) = self
-            .refresh_available_models(config, refresh_strategy)
-            .await
-        {
+        if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
         }
-        let remote_models = self.get_remote_models(config).await;
+        let remote_models = self.get_remote_models().await;
         let available = self.build_available_models(remote_models);
         available
             .iter()
@@ -137,9 +125,7 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote = self
-            .find_remote_model_by_longest_prefix(model, config)
-            .await;
+        let remote = self.find_remote_model_by_longest_prefix(model).await;
         // Preserve how metadata was resolved so callers can warn when we use fallback.
         let (mut model_info, used_fallback_model_metadata) = if let Some(remote) = remote {
             (
@@ -156,13 +142,9 @@ impl ModelsManager {
         model_info::with_config_overrides(model_info, config)
     }
 
-    async fn find_remote_model_by_longest_prefix(
-        &self,
-        model: &str,
-        config: &Config,
-    ) -> Option<ModelInfo> {
+    async fn find_remote_model_by_longest_prefix(&self, model: &str) -> Option<ModelInfo> {
         let mut best: Option<ModelInfo> = None;
-        for candidate in self.get_remote_models(config).await {
+        for candidate in self.get_remote_models().await {
             if !model.starts_with(&candidate.slug) {
                 continue;
             }
@@ -181,7 +163,7 @@ impl ModelsManager {
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
-    pub(crate) async fn refresh_if_new_etag(&self, etag: String, config: &Config) {
+    pub(crate) async fn refresh_if_new_etag(&self, etag: String) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -189,23 +171,13 @@ impl ModelsManager {
             }
             return;
         }
-        if let Err(err) = self
-            .refresh_available_models(config, RefreshStrategy::Online)
-            .await
-        {
+        if let Err(err) = self.refresh_available_models(RefreshStrategy::Online).await {
             error!("failed to refresh available models: {err}");
         }
     }
 
     /// Refresh available models according to the specified strategy.
-    async fn refresh_available_models(
-        &self,
-        config: &Config,
-        refresh_strategy: RefreshStrategy,
-    ) -> CoreResult<()> {
-        if !config.features.enabled(Feature::RemoteModels) {
-            return Ok(());
-        }
+    async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
         if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
             if matches!(
                 refresh_strategy,
@@ -340,20 +312,12 @@ impl ModelsManager {
         merged_presets
     }
 
-    async fn get_remote_models(&self, config: &Config) -> Vec<ModelInfo> {
-        if config.features.enabled(Feature::RemoteModels) {
-            self.remote_models.read().await.clone()
-        } else {
-            Vec::new()
-        }
+    async fn get_remote_models(&self) -> Vec<ModelInfo> {
+        self.remote_models.read().await.clone()
     }
 
-    fn try_get_remote_models(&self, config: &Config) -> Result<Vec<ModelInfo>, TryLockError> {
-        if config.features.enabled(Feature::RemoteModels) {
-            Ok(self.remote_models.try_read()?.clone())
-        } else {
-            Ok(Vec::new())
-        }
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
+        Ok(self.remote_models.try_read()?.clone())
     }
 
     /// Construct a manager with a specific provider for testing.
@@ -403,7 +367,6 @@ mod tests {
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
-    use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
     use codex_protocol::openai_models::ModelsResponse;
@@ -480,17 +443,16 @@ mod tests {
     #[tokio::test]
     async fn get_model_info_tracks_fallback_usage() {
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
             .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
         let known_slug = manager
-            .get_remote_models(&config)
+            .get_remote_models()
             .await
             .first()
             .expect("bundled models should include at least one model")
@@ -524,12 +486,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -540,15 +496,13 @@ mod tests {
         );
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("refresh succeeds");
-        let cached_remote = manager.get_remote_models(&config).await;
+        let cached_remote = manager.get_remote_models().await;
         assert_models_contain(&cached_remote, &remote_models);
 
-        let available = manager
-            .list_models(&config, RefreshStrategy::OnlineIfUncached)
-            .await;
+        let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
         let high_idx = available
             .iter()
             .position(|model| model.model == "priority-high")
@@ -581,12 +535,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -597,17 +545,17 @@ mod tests {
         );
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("first refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
+        assert_models_contain(&manager.get_remote_models().await, &remote_models);
 
         // Second call should read from cache and avoid the network.
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("cached refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
+        assert_models_contain(&manager.get_remote_models().await, &remote_models);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -628,12 +576,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -644,7 +586,7 @@ mod tests {
         );
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("initial refresh succeeds");
 
@@ -668,10 +610,10 @@ mod tests {
         .await;
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
+        assert_models_contain(&manager.get_remote_models().await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,
@@ -697,12 +639,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -713,7 +649,7 @@ mod tests {
         );
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("initial refresh succeeds");
 
@@ -737,10 +673,10 @@ mod tests {
         .await;
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
+        assert_models_contain(&manager.get_remote_models().await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,
@@ -766,12 +702,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
         let provider = provider_for(server.uri());
@@ -783,7 +713,7 @@ mod tests {
         manager.cache_manager.set_ttl(Duration::ZERO);
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("initial refresh succeeds");
 
@@ -798,12 +728,12 @@ mod tests {
         .await;
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
+            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
 
         let available = manager
-            .try_list_models(&config)
+            .try_list_models()
             .expect("models should be available");
         assert!(
             available.iter().any(|preset| preset.model == "remote-new"),
@@ -838,12 +768,6 @@ mod tests {
         .await;
 
         let codex_home = tempdir().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        config.features.enable(Feature::RemoteModels);
         let auth_manager = Arc::new(AuthManager::new(
             codex_home.path().to_path_buf(),
             false,
@@ -857,10 +781,10 @@ mod tests {
         );
 
         manager
-            .refresh_available_models(&config, RefreshStrategy::Online)
+            .refresh_available_models(RefreshStrategy::Online)
             .await
             .expect("refresh should no-op without chatgpt auth");
-        let cached_remote = manager.get_remote_models(&config).await;
+        let cached_remote = manager.get_remote_models().await;
         assert!(
             !cached_remote
                 .iter()

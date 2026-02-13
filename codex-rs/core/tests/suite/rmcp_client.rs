@@ -11,7 +11,6 @@ use std::time::UNIX_EPOCH;
 use codex_core::CodexAuth;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 
 use codex_core::protocol::AskForApproval;
@@ -441,8 +440,6 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.features.enable(Feature::RemoteModels);
-
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -478,7 +475,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     fixture
         .thread_manager
         .get_models_manager()
-        .list_models(&fixture.config, RefreshStrategy::Online)
+        .list_models(RefreshStrategy::Online)
         .await;
     assert_eq!(models_mock.requests().len(), 1);
 
