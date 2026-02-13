@@ -271,7 +271,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
@@ -438,9 +438,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    let available_models = models_manager
-        .list_models(&test.config, RefreshStrategy::Online)
-        .await;
+    let available_models = models_manager.list_models(RefreshStrategy::Online).await;
     assert!(
         available_models
             .iter()

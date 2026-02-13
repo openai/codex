@@ -475,7 +475,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     fixture
         .thread_manager
         .get_models_manager()
-        .list_models(&fixture.config, RefreshStrategy::Online)
+        .list_models(RefreshStrategy::Online)
         .await;
     assert_eq!(models_mock.requests().len(), 1);
 

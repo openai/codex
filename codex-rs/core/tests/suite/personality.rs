@@ -631,12 +631,7 @@ async fn ignores_remote_personality_if_remote_models_disabled() -> anyhow::Resul
         });
     let test = builder.build(&server).await?;
 
-    wait_for_model_available(
-        &test.thread_manager.get_models_manager(),
-        remote_slug,
-        &test.config,
-    )
-    .await;
+    wait_for_model_available(&test.thread_manager.get_models_manager(), remote_slug).await;
 
     test.codex
         .submit(Op::UserTurn {
@@ -748,12 +743,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         });
     let test = builder.build(&server).await?;
 
-    wait_for_model_available(
-        &test.thread_manager.get_models_manager(),
-        remote_slug,
-        &test.config,
-    )
-    .await;
+    wait_for_model_available(&test.thread_manager.get_models_manager(), remote_slug).await;
 
     test.codex
         .submit(Op::UserTurn {
@@ -863,12 +853,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         });
     let test = builder.build(&server).await?;
 
-    wait_for_model_available(
-        &test.thread_manager.get_models_manager(),
-        remote_slug,
-        &test.config,
-    )
-    .await;
+    wait_for_model_available(&test.thread_manager.get_models_manager(), remote_slug).await;
 
     test.codex
         .submit(Op::UserTurn {
@@ -947,16 +932,10 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     Ok(())
 }
 
-async fn wait_for_model_available(
-    manager: &Arc<ModelsManager>,
-    slug: &str,
-    config: &codex_core::config::Config,
-) {
+async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let models = manager
-            .list_models(config, RefreshStrategy::OnlineIfUncached)
-            .await;
+        let models = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
         if models.iter().any(|model| model.model == slug) {
             return;
         }
