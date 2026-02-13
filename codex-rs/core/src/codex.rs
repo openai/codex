@@ -144,7 +144,6 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
-#[cfg(test)]
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
@@ -4542,14 +4541,15 @@ fn collect_explicit_app_ids_from_skill_items(
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::AppInfo>,
+    connectors: &[connectors::AppInfo],
     input: &[ResponseItem],
     explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
-    let connectors = connectors
-        .into_iter()
+    let connectors: Vec<connectors::AppInfo> = connectors
+        .iter()
         .filter(|connector| connector.is_enabled)
+        .cloned()
         .collect::<Vec<_>>();
     if connectors.is_empty() {
         return Vec::new();
@@ -4614,6 +4614,34 @@ fn connector_inserted_in_messages(
         .copied()
         .unwrap_or(0);
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
+}
+
+fn filter_codex_apps_mcp_tools(
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    connectors: &[connectors::AppInfo],
+) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
+    let allowed: HashSet<&str> = connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+
+    mcp_tools
+        .iter()
+        .filter(|(_, tool)| {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return true;
+            }
+            let Some(connector_id) = codex_apps_connector_id(tool) else {
+                return false;
+            };
+            allowed.contains(connector_id)
+        })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
+}
+
+fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
+    tool.connector_id.as_deref()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4771,15 +4799,21 @@ async fn built_tools(
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
-    if turn_context.features.enabled(Feature::Apps) {
+    let connectors = if turn_context.features.enabled(Feature::Apps) {
+        Some(connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn_context.config,
+        ))
+    } else {
+        None
+    };
+
+    if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
-        let connectors = connectors::with_app_enabled_state(
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-            &turn_context.config,
-        );
-        let connectors_for_tools = filter_connectors_for_input(
+
+        let explicitly_enabled = filter_connectors_for_input(
             connectors,
             input,
             &effective_explicitly_enabled_connectors,
@@ -4788,17 +4822,21 @@ async fn built_tools(
 
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+                filter_mcp_tools_by_name(&mcp_tools, &selected_tools)
             } else {
                 HashMap::new()
             };
 
         let apps_mcp_tools =
-            filter_codex_apps_mcp_tools_only(mcp_tools, connectors_for_tools.as_ref());
+            filter_codex_apps_mcp_tools_only(&mcp_tools, explicitly_enabled.as_ref());
         selected_mcp_tools.extend(apps_mcp_tools);
 
         mcp_tools = selected_mcp_tools;
     }
+
+    let app_tools = connectors
+        .as_ref()
+        .map(|connectors| filter_codex_apps_mcp_tools(&mcp_tools, connectors));
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -4808,6 +4846,7 @@ async fn built_tools(
                 .map(|(name, tool)| (name, tool.tool))
                 .collect(),
         ),
+        app_tools,
         turn_context.dynamic_tools.as_slice(),
     )))
 }
@@ -5763,7 +5802,7 @@ mod tests {
         let skill_name_counts_lower = HashMap::new();
 
         let selected = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
@@ -5780,7 +5819,7 @@ mod tests {
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
         let selected = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
@@ -5796,7 +5835,7 @@ mod tests {
         let input = vec![user_message("use $calendar")];
         let explicitly_enabled_connectors = HashSet::new();
         let selected = filter_connectors_for_input(
-            vec![connector],
+            &[connector],
             &input,
             &explicitly_enabled_connectors,
             &HashMap::new(),
@@ -5870,17 +5909,16 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let mut selected_mcp_tools = filter_mcp_tools_by_name(&mcp_tools, &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &[user_message("run the selected tools")],
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(&mcp_tools, &connectors);
         selected_mcp_tools.extend(apps_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -5913,17 +5951,16 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let mut selected_mcp_tools = filter_mcp_tools_by_name(&mcp_tools, &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &[user_message("use $calendar and then echo the response")],
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(&mcp_tools, &connectors);
         selected_mcp_tools.extend(apps_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -7587,6 +7624,7 @@ mod tests {
                 .list_all_tools()
                 .await
         };
+        let app_tools = Some(tools.clone());
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
             Some(
@@ -7595,6 +7633,7 @@ mod tests {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            app_tools,
             turn_context.dynamic_tools.as_slice(),
         );
         let item = ResponseItem::CustomToolCall {

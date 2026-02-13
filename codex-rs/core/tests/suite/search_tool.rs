@@ -25,8 +25,8 @@ use serde_json::Value;
 use serde_json::json;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
-    "Apps MCP tools (`mcp__codex_apps__...`) are hidden until you search for them.",
-    "Matching tools are added to `active_selected_tools`.",
+    "apps tools (`mcp__codex_apps__...`) are hidden until you search for them.",
+    "Matching tools are added to available `tools` and available for the remainder of the current turn.",
 ];
 
 fn tool_names(body: &Value) -> Vec<String> {

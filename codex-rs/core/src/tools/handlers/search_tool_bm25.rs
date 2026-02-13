@@ -132,7 +132,6 @@ impl ToolHandler for SearchToolBm25Handler {
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
-            .filter(|(_, info)| info.server_name == CODEX_APPS_MCP_SERVER_NAME)
             .map(|(name, info)| ToolEntry::new(name, info))
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -209,7 +208,7 @@ fn filter_codex_apps_mcp_tools(
 
     mcp_tools.retain(|_, tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return true;
+            return false;
         }
 
         tool.connector_id
@@ -309,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_codex_apps_mcp_tools_keeps_non_apps_and_enabled_apps() {
+    fn filter_codex_apps_mcp_tools_keeps_enabled_apps_only() {
         let mcp_tools = HashMap::from([
             make_tool(
                 "mcp__codex_apps__calendar_create_event",
@@ -335,13 +334,7 @@ mod tests {
             .collect();
         filtered.sort();
 
-        assert_eq!(
-            filtered,
-            vec![
-                "mcp__codex_apps__drive_search".to_string(),
-                "mcp__rmcp__echo".to_string(),
-            ]
-        );
+        assert_eq!(filtered, vec!["mcp__codex_apps__drive_search".to_string()]);
     }
 
     #[test]
@@ -362,6 +355,6 @@ mod tests {
                 .collect();
         filtered.sort();
 
-        assert_eq!(filtered, vec!["mcp__rmcp__echo".to_string()]);
+        assert_eq!(filtered, Vec::<String>::new());
     }
 }
