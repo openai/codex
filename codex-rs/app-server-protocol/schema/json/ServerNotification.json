@@ -6230,6 +6230,17 @@
       ],
       "type": "object"
     },
+    "ThreadClosedNotification": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadId": {
       "type": "string"
     },
@@ -7765,6 +7776,26 @@
         "params"
       ],
       "title": "Thread/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/closed"
+          ],
+          "title": "Thread/closedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadClosedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/closedNotification",
       "type": "object"
     },
     {

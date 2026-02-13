@@ -119,6 +119,7 @@ Example with notification opt-out:
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
+- `thread/close` — unload a thread from memory and return a close status. If a turn is running, the server interrupts it. Once shutdown is confirmed, the server emits `thread/closed`.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
 - `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
@@ -251,6 +252,16 @@ When `nextCursor` is `null`, you’ve reached the final page.
 { "id": 21, "result": {
     "data": ["thr_123", "thr_456"]
 } }
+```
+
+### Example: Close a loaded thread
+
+`thread/close` unloads a thread from memory. The response includes a `status` field (`closed`, `notLoaded`, `shutdownSubmitFailed`, `shutdownTimedOut`). The server only emits `thread/closed` when shutdown is confirmed (`status: "closed"`).
+
+```json
+{ "method": "thread/close", "id": 22, "params": { "threadId": "thr_123" } }
+{ "id": 22, "result": { "status": "closed" } }
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Read a thread
@@ -519,7 +530,7 @@ Notes:
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/closed`, `turn/*`, and `item/*` notifications.
 
 ### Notification opt-out
 

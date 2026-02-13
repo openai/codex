@@ -563,6 +563,30 @@
             },
             "method": {
               "enum": [
+                "thread/close"
+              ],
+              "title": "Thread/closeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadCloseParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/closeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/name/set"
               ],
               "title": "Thread/name/setRequestMethod",
@@ -7984,6 +8008,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/closed"
+              ],
+              "title": "Thread/closedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadClosedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/closedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -14709,6 +14753,54 @@
       "ThreadArchiveResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadArchiveResponse",
+        "type": "object"
+      },
+      "ThreadCloseParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadCloseParams",
+        "type": "object"
+      },
+      "ThreadCloseResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/ThreadCloseStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ThreadCloseResponse",
+        "type": "object"
+      },
+      "ThreadCloseStatus": {
+        "enum": [
+          "closed",
+          "notLoaded",
+          "shutdownSubmitFailed",
+          "shutdownTimedOut"
+        ],
+        "type": "string"
+      },
+      "ThreadClosedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadClosedNotification",
         "type": "object"
       },
       "ThreadCompactStartParams": {

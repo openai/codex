@@ -122,6 +122,10 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
+use codex_app_server_protocol::ThreadCloseStatus;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -496,6 +500,10 @@ impl CodexMessageProcessor {
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
                 self.thread_start(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadClose { request_id, params } => {
+                self.thread_close(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadResume { request_id, params } => {
@@ -4303,6 +4311,72 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_close(&mut self, request_id: ConnectionRequestId, params: ThreadCloseParams) {
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let status = if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            info!("thread {thread_id} is loaded; shutting down");
+            match thread.submit(Op::Shutdown).await {
+                Ok(_) => {
+                    let wait_for_shutdown = async {
+                        loop {
+                            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    };
+                    if tokio::time::timeout(Duration::from_secs(10), wait_for_shutdown)
+                        .await
+                        .is_err()
+                    {
+                        warn!("thread {thread_id} shutdown timed out; leaving thread loaded");
+                        ThreadCloseStatus::ShutdownTimedOut
+                    } else {
+                        let removed_thread = self.thread_manager.remove_thread(&thread_id).await;
+                        if removed_thread.is_some() {
+                            self.thread_state_manager
+                                .remove_thread_state(thread_id)
+                                .await;
+                            let notification = ThreadClosedNotification {
+                                thread_id: thread_id.to_string(),
+                            };
+                            self.outgoing
+                                .send_server_notification(ServerNotification::ThreadClosed(
+                                    notification,
+                                ))
+                                .await;
+                            ThreadCloseStatus::Closed
+                        } else {
+                            info!("thread {thread_id} was already removed before close finalized");
+                            ThreadCloseStatus::NotLoaded
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!("failed to submit Shutdown to thread {thread_id}: {err}");
+                    ThreadCloseStatus::ShutdownSubmitFailed
+                }
+            }
+        } else {
+            self.thread_state_manager
+                .remove_thread_state(thread_id)
+                .await;
+            ThreadCloseStatus::NotLoaded
+        };
+
+        self.outgoing
+            .send_response(request_id, ThreadCloseResponse { status })
+            .await;
+    }
+
     async fn archive_thread_common(
         &mut self,
         thread_id: ThreadId,
@@ -4397,10 +4471,11 @@ impl CodexMessageProcessor {
                     error!("failed to submit Shutdown to thread {thread_id}: {err}");
                 }
             }
-            self.thread_state_manager
-                .remove_thread_state(thread_id)
-                .await;
         }
+
+        self.thread_state_manager
+            .remove_thread_state(thread_id)
+            .await;
 
         if state_db_ctx.is_none() {
             state_db_ctx = get_state_db(&self.config, None).await;
