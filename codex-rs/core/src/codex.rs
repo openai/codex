@@ -14,6 +14,7 @@ use crate::agent::AgentStatus;
 use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
+use crate::analytics_client::AppInvocation;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::compact;
@@ -37,8 +38,7 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::terminal;
 use crate::truncate::TruncationPolicy;
-use crate::turn_metadata::build_turn_metadata_header;
-use crate::turn_metadata::resolve_turn_metadata_header_with_timeout;
+use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -91,7 +91,6 @@ use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -522,9 +521,6 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
-const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
-    include_str!("../templates/search_tool/developer_instructions.md");
-
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -560,7 +556,7 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    turn_metadata_header: OnceCell<Option<String>>,
+    turn_metadata_state: Arc<TurnMetadataState>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -640,7 +636,7 @@ impl TurnContext {
             truncation_policy,
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
-            turn_metadata_header: self.turn_metadata_header.clone(),
+            turn_metadata_state: self.turn_metadata_state.clone(),
         }
     }
 
@@ -691,39 +687,16 @@ impl TurnContext {
         })
     }
 
-    async fn build_turn_metadata_header(&self) -> Option<String> {
-        let sandbox = sandbox_tag(&self.sandbox_policy, self.windows_sandbox_level);
-        self.turn_metadata_header
-            .get_or_init(|| async {
-                build_turn_metadata_header(self.cwd.as_path(), Some(sandbox)).await
-            })
-            .await
-            .clone()
+    pub fn current_turn_metadata_header(&self) -> Option<String> {
+        self.turn_metadata_state.current_header_value()
     }
 
-    /// Resolves the per-turn metadata header under a shared timeout policy.
-    ///
-    /// This uses the same timeout helper as websocket startup prewarm so both turn execution and
-    /// background prewarm observe identical "timeout means best-effort fallback" behavior.
-    pub async fn resolve_turn_metadata_header(&self) -> Option<String> {
-        resolve_turn_metadata_header_with_timeout(
-            self.build_turn_metadata_header(),
-            self.turn_metadata_header.get().cloned().flatten(),
-        )
-        .await
+    pub fn spawn_turn_metadata_enrichment_task(self: &Arc<Self>) {
+        self.turn_metadata_state.spawn_git_enrichment_task();
     }
 
-    /// Starts best-effort background computation of turn metadata.
-    ///
-    /// This warms the cached value used by [`TurnContext::resolve_turn_metadata_header`] so turns
-    /// and websocket prewarm are less likely to pay metadata construction latency on demand.
-    pub fn spawn_turn_metadata_header_task(self: &Arc<Self>) {
-        let context = Arc::clone(self);
-        tokio::spawn(async move {
-            trace!("Spawning turn metadata calculation task");
-            context.build_turn_metadata_header().await;
-            trace!("Turn metadata calculation task completed");
-        });
+    pub fn cancel_turn_metadata_enrichment_task(&self) {
+        self.turn_metadata_state.cancel_git_enrichment_task();
     }
 }
 
@@ -950,6 +923,17 @@ impl Session {
         });
 
         let cwd = session_configuration.cwd.clone();
+        let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            sub_id.clone(),
+            cwd.clone(),
+            Some(
+                sandbox_tag(
+                    session_configuration.sandbox_policy.get(),
+                    session_configuration.windows_sandbox_level,
+                )
+                .to_string(),
+            ),
+        ));
         TurnContext {
             sub_id,
             config: per_turn_config.clone(),
@@ -980,7 +964,7 @@ impl Session {
             truncation_policy: model_info.truncation_policy.into(),
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
-            turn_metadata_header: OnceCell::new(),
+            turn_metadata_state,
         }
     }
 
@@ -1275,17 +1259,10 @@ impl Session {
         let prewarm_model_info = models_manager
             .get_model_info(session_configuration.collaboration_mode.model(), &config)
             .await;
-        let prewarm_cwd = session_configuration.cwd.clone();
-        let turn_metadata_header = resolve_turn_metadata_header_with_timeout(
-            async move { build_turn_metadata_header(prewarm_cwd.as_path(), None).await },
-            None,
-        )
-        .boxed();
         let startup_regular_task = RegularTask::with_startup_prewarm(
             services.model_client.clone(),
             services.otel_manager.clone(),
             prewarm_model_info,
-            turn_metadata_header,
         );
         state.set_startup_regular_task(startup_regular_task);
 
@@ -1781,7 +1758,7 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        turn_context.spawn_turn_metadata_header_task();
+        turn_context.spawn_turn_metadata_enrichment_task();
         turn_context
     }
 
@@ -2508,11 +2485,6 @@ impl Session {
         );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
-        }
-        if turn_context.tools_config.search_tool {
-            items.push(
-                DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
-            );
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
@@ -4033,9 +4005,21 @@ async fn spawn_review_thread(
     let session_source = parent_turn_context.session_source.clone();
 
     let per_turn_config = Arc::new(per_turn_config);
+    let review_turn_id = sub_id.to_string();
+    let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        review_turn_id.clone(),
+        parent_turn_context.cwd.clone(),
+        Some(
+            sandbox_tag(
+                &parent_turn_context.sandbox_policy,
+                parent_turn_context.windows_sandbox_level,
+            )
+            .to_string(),
+        ),
+    ));
 
     let review_turn_context = TurnContext {
-        sub_id: sub_id.to_string(),
+        sub_id: review_turn_id,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
@@ -4064,7 +4048,7 @@ async fn spawn_review_thread(
         js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
-        turn_metadata_header: parent_turn_context.turn_metadata_header.clone(),
+        turn_metadata_state,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -4074,6 +4058,7 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
+    tc.spawn_turn_metadata_enrichment_task();
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
@@ -4241,7 +4226,11 @@ pub(crate) async fn run_turn(
 
     let otel_manager = turn_context.otel_manager.clone();
     let thread_id = sess.conversation_id.to_string();
-    let tracking = build_track_events_context(turn_context.model_info.slug.clone(), thread_id);
+    let tracking = build_track_events_context(
+        turn_context.model_info.slug.clone(),
+        thread_id,
+        turn_context.sub_id.clone(),
+    );
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
@@ -4264,6 +4253,23 @@ pub(crate) async fn run_turn(
         &available_connectors,
         &skill_name_counts_lower,
     ));
+    let connector_names_by_id = available_connectors
+        .iter()
+        .map(|connector| (connector.id.as_str(), connector.name.as_str()))
+        .collect::<HashMap<&str, &str>>();
+    let mentioned_app_invocations = explicitly_enabled_connectors
+        .iter()
+        .map(|connector_id| AppInvocation {
+            connector_id: Some(connector_id.clone()),
+            app_name: connector_names_by_id
+                .get(connector_id.as_str())
+                .map(|name| (*name).to_string()),
+            invoke_type: Some("explicit".to_string()),
+        })
+        .collect::<Vec<_>>();
+    sess.services
+        .analytics_events_client
+        .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
@@ -4284,7 +4290,6 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
     let mut client_session =
@@ -4336,6 +4341,7 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let turn_metadata_header = turn_context.current_turn_metadata_header();
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -4360,7 +4366,7 @@ pub(crate) async fn run_turn(
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
 
-                info!(
+                trace!(
                     turn_id = %turn_context.sub_id,
                     total_usage_tokens,
                     estimated_token_count = ?estimated_token_count,
@@ -4549,14 +4555,15 @@ fn collect_explicit_app_ids_from_skill_items(
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::AppInfo>,
+    connectors: &[connectors::AppInfo],
     input: &[ResponseItem],
     explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
-    let connectors = connectors
-        .into_iter()
+    let connectors: Vec<connectors::AppInfo> = connectors
+        .iter()
         .filter(|connector| connector.is_enabled)
+        .cloned()
         .collect::<Vec<_>>();
     if connectors.is_empty() {
         return Vec::new();
@@ -4624,7 +4631,7 @@ fn connector_inserted_in_messages(
 }
 
 fn filter_codex_apps_mcp_tools(
-    mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
@@ -4632,17 +4639,19 @@ fn filter_codex_apps_mcp_tools(
         .map(|connector| connector.id.as_str())
         .collect();
 
-    mcp_tools.retain(|_, tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return true;
-        }
-        let Some(connector_id) = codex_apps_connector_id(tool) else {
-            return false;
-        };
-        allowed.contains(connector_id)
-    });
-
     mcp_tools
+        .iter()
+        .filter(|(_, tool)| {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return true;
+            }
+            let Some(connector_id) = codex_apps_connector_id(tool) else {
+                return false;
+            };
+            allowed.contains(connector_id)
+        })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
@@ -4804,41 +4813,44 @@ async fn built_tools(
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
-    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
-        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
-            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
-        });
-        let connectors = connectors::with_app_enabled_state(
+    let connectors = if turn_context.features.enabled(Feature::Apps) {
+        Some(connectors::with_app_enabled_state(
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
             &turn_context.config,
-        );
-        Some(filter_connectors_for_input(
-            connectors,
-            input,
-            &effective_explicitly_enabled_connectors,
-            &skill_name_counts_lower,
         ))
     } else {
         None
     };
 
-    if turn_context.config.features.enabled(Feature::Apps) {
+    if let Some(connectors) = connectors.as_ref() {
+        let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
+            build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
+        });
+
+        let explicitly_enabled = filter_connectors_for_input(
+            connectors,
+            input,
+            &effective_explicitly_enabled_connectors,
+            &skill_name_counts_lower,
+        );
+
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
+                filter_mcp_tools_by_name(&mcp_tools, &selected_tools)
             } else {
                 HashMap::new()
             };
 
-        if let Some(connectors) = connectors_for_tools.as_ref() {
-            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
-            selected_mcp_tools.extend(apps_mcp_tools);
-        }
+        let apps_mcp_tools =
+            filter_codex_apps_mcp_tools_only(&mcp_tools, explicitly_enabled.as_ref());
+        selected_mcp_tools.extend(apps_mcp_tools);
 
         mcp_tools = selected_mcp_tools;
-    } else if let Some(connectors) = connectors_for_tools.as_ref() {
-        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
+
+    let app_tools = connectors
+        .as_ref()
+        .map(|connectors| filter_codex_apps_mcp_tools(&mcp_tools, connectors));
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -4848,6 +4860,7 @@ async fn built_tools(
                 .map(|(name, tool)| (name, tool.tool))
                 .collect(),
         ),
+        app_tools,
         turn_context.dynamic_tools.as_slice(),
     )))
 }
@@ -5803,7 +5816,7 @@ mod tests {
         let skill_name_counts_lower = HashMap::new();
 
         let selected = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
@@ -5820,7 +5833,7 @@ mod tests {
         let skill_name_counts_lower = HashMap::from([("todoist".to_string(), 1)]);
 
         let selected = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
@@ -5836,7 +5849,7 @@ mod tests {
         let input = vec![user_message("use $calendar")];
         let explicitly_enabled_connectors = HashSet::new();
         let selected = filter_connectors_for_input(
-            vec![connector],
+            &[connector],
             &input,
             &explicitly_enabled_connectors,
             &HashMap::new(),
@@ -5910,17 +5923,16 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let mut selected_mcp_tools = filter_mcp_tools_by_name(&mcp_tools, &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &[user_message("run the selected tools")],
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(&mcp_tools, &connectors);
         selected_mcp_tools.extend(apps_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -5953,17 +5965,16 @@ mod tests {
             ),
         ]);
 
-        let mut selected_mcp_tools =
-            filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tool_names);
+        let mut selected_mcp_tools = filter_mcp_tools_by_name(&mcp_tools, &selected_tool_names);
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         let explicitly_enabled_connectors = HashSet::new();
         let connectors = filter_connectors_for_input(
-            connectors,
+            &connectors,
             &[user_message("use $calendar and then echo the response")],
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
-        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, &connectors);
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(&mcp_tools, &connectors);
         selected_mcp_tools.extend(apps_mcp_tools);
 
         let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
@@ -7627,6 +7638,7 @@ mod tests {
                 .list_all_tools()
                 .await
         };
+        let app_tools = Some(tools.clone());
         let router = ToolRouter::from_config(
             &turn_context.tools_config,
             Some(
@@ -7635,6 +7647,7 @@ mod tests {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            app_tools,
             turn_context.dynamic_tools.as_slice(),
         );
         let item = ResponseItem::CustomToolCall {

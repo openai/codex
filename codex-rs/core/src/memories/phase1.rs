@@ -118,10 +118,10 @@ pub fn output_schema() -> Value {
         "type": "object",
         "properties": {
             "rollout_summary": { "type": "string" },
-            "rollout_slug": { "type": "string" },
+            "rollout_slug": { "type": ["string", "null"] },
             "raw_memory": { "type": "string" }
         },
-        "required": ["rollout_summary", "raw_memory"],
+        "required": ["rollout_summary", "rollout_slug", "raw_memory"],
         "additionalProperties": false
     })
 }
@@ -198,7 +198,7 @@ async fn build_request_context(session: &Arc<Session>, config: &Config) -> Reque
     let turn_context = session.new_default_turn().await;
     RequestContext::from_turn_context(
         turn_context.as_ref(),
-        turn_context.resolve_turn_metadata_header().await,
+        turn_context.current_turn_metadata_header(),
         model,
     )
 }

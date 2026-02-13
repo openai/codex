@@ -84,7 +84,6 @@ async fn run_compact_task_inner(
 
     let max_retries = turn_context.provider.stream_max_retries();
     let mut retries = 0;
-    let turn_metadata_header = turn_context.resolve_turn_metadata_header().await;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket append tracking)
     // survives retries within this compact turn.
@@ -110,6 +109,7 @@ async fn run_compact_task_inner(
             personality: turn_context.personality,
             ..Default::default()
         };
+        let turn_metadata_header = turn_context.current_turn_metadata_header();
         let attempt_result = drain_to_completed(
             &sess,
             turn_context.as_ref(),

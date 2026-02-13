@@ -22,7 +22,7 @@ fn memory_root_uses_shared_global_path() {
 }
 
 #[test]
-fn stage_one_output_schema_keeps_rollout_slug_optional() {
+fn stage_one_output_schema_requires_rollout_slug_and_keeps_it_nullable() {
     let schema = crate::memories::phase1::output_schema();
     let properties = schema
         .get("properties")
@@ -43,7 +43,24 @@ fn stage_one_output_schema_keeps_rollout_slug_optional() {
         properties.contains_key("rollout_slug"),
         "schema should declare rollout_slug"
     );
-    assert_eq!(required_keys, vec!["raw_memory", "rollout_summary"]);
+
+    let rollout_slug_type = properties
+        .get("rollout_slug")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("type"))
+        .and_then(Value::as_array)
+        .expect("rollout_slug type array");
+    let mut rollout_slug_types = rollout_slug_type
+        .iter()
+        .map(|entry| entry.as_str().expect("type entry string"))
+        .collect::<Vec<_>>();
+    rollout_slug_types.sort_unstable();
+
+    assert_eq!(
+        required_keys,
+        vec!["raw_memory", "rollout_slug", "rollout_summary"]
+    );
+    assert_eq!(rollout_slug_types, vec!["null", "string"]);
 }
 
 #[tokio::test]

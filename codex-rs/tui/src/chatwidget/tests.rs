@@ -1558,6 +1558,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
+    let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
     let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -1614,6 +1615,7 @@ async fn make_chatwidget_manual(
         skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
+        turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
@@ -4403,11 +4405,13 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Apps);
     chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_popup_refresh_connector_1";
+    let linear_id = "unit_test_apps_popup_refresh_connector_2";
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![codex_chatgpt::connectors::AppInfo {
-                id: "connector_1".to_string(),
+                id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
@@ -4440,7 +4444,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
         Ok(ConnectorsSnapshot {
             connectors: vec![
                 codex_chatgpt::connectors::AppInfo {
-                    id: "connector_1".to_string(),
+                    id: notion_id.to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
                     logo_url: None,
@@ -4451,7 +4455,7 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
                     is_enabled: true,
                 },
                 codex_chatgpt::connectors::AppInfo {
-                    id: "connector_2".to_string(),
+                    id: linear_id.to_string(),
                     name: "Linear".to_string(),
                     description: Some("Project tracking".to_string()),
                     logo_url: None,
@@ -4482,10 +4486,12 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.features.enable(Feature::Apps);
     chat.bottom_pane.set_connectors_enabled(true);
+    let notion_id = "unit_test_apps_refresh_failure_connector_1";
+    let linear_id = "unit_test_apps_refresh_failure_connector_2";
 
     let full_connectors = vec![
         codex_chatgpt::connectors::AppInfo {
-            id: "connector_1".to_string(),
+            id: notion_id.to_string(),
             name: "Notion".to_string(),
             description: Some("Workspace docs".to_string()),
             logo_url: None,
@@ -4496,7 +4502,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             is_enabled: true,
         },
         codex_chatgpt::connectors::AppInfo {
-            id: "connector_2".to_string(),
+            id: linear_id.to_string(),
             name: "Linear".to_string(),
             description: Some("Project tracking".to_string()),
             logo_url: None,
@@ -4517,7 +4523,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![codex_chatgpt::connectors::AppInfo {
-                id: "connector_1".to_string(),
+                id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
                 logo_url: None,
