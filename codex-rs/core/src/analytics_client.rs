@@ -95,7 +95,7 @@ impl AnalyticsEventsQueue {
         let mut emitted = self
             .app_used_emitted_keys
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if emitted.len() >= ANALYTICS_APP_USED_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
