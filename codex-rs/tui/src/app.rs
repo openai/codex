@@ -3,8 +3,6 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
-#[cfg(target_os = "windows")]
-use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
@@ -1707,7 +1705,7 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
                 self.otel_manager
                     .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
@@ -1719,7 +1717,7 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset, reason);
+                    .open_windows_sandbox_fallback_prompt(preset);
             }
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
@@ -1795,10 +1793,7 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt {
-                                    preset,
-                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
-                                }
+                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
                             }
                         };
                         tx.send(event);
@@ -1819,6 +1814,7 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
+                    let otel_manager = self.otel_manager.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
@@ -1829,6 +1825,11 @@ impl App {
                             &env_map,
                             codex_home.as_path(),
                         ) {
+                            otel_manager.counter(
+                                "codex.windows_sandbox.legacy_setup_preflight_failed",
+                                1,
+                                &[],
+                            );
                             tracing::warn!(
                                 error = %err,
                                 "failed to preflight non-admin Windows sandbox setup"

@@ -325,6 +325,9 @@ impl ModelClient {
             let subagent = match sub {
                 crate::protocol::SubAgentSource::Review => "review".to_string(),
                 crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::MemoryConsolidation => {
+                    "memory_consolidation".to_string()
+                }
                 crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
                 crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };

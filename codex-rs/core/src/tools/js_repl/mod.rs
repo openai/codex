@@ -653,6 +653,7 @@ impl JsReplManager {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            None,
             exec.turn.dynamic_tools.as_slice(),
         );
 
