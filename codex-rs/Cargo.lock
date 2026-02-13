@@ -2503,7 +2503,6 @@ name = "codex-utils-sleep-inhibitor"
 version = "0.0.0"
 dependencies = [
  "core-foundation 0.9.4",
- "dbus",
  "libc",
  "tracing",
  "windows-sys 0.60.2",
