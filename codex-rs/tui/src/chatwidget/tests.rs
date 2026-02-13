@@ -4911,13 +4911,15 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
 }
 
 #[tokio::test]
-async fn permissions_selection_does_not_emit_history_cell_when_current() {
+async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     chat.config
+        .permissions
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
@@ -4926,9 +4928,15 @@ async fn permissions_selection_does_not_emit_history_cell_when_current() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected history cell even when selecting current permissions"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        cells.is_empty(),
-        "did not expect history cell when selecting current permissions"
+        rendered.contains("Permissions updated to"),
+        "expected permissions update history message, got: {rendered}"
     );
 }
 

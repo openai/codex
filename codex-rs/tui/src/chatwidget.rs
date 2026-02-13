@@ -5318,20 +5318,7 @@ impl ChatWidget {
                     .notices
                     .hide_full_access_warning
                     .unwrap_or(false);
-            let mut actions: Vec<SelectionAction> = Vec::new();
-            if !(is_current || preset.id == "full-access" && requires_confirmation) {
-                let selected_name = name.clone();
-                actions.push(Box::new(move |tx| {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(
-                            format!("Permissions updated to {selected_name}"),
-                            None,
-                        ),
-                    )));
-                }));
-            }
-
-            let mut preset_actions: Vec<SelectionAction> = if requires_confirmation {
+            let actions: Vec<SelectionAction> = if requires_confirmation {
                 let preset_clone = preset.clone();
                 vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenFullAccessConfirmation {
@@ -5382,12 +5369,15 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        name.clone(),
+                    )
                 }
             } else {
-                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                Self::approval_preset_actions(preset.approval, preset.sandbox.clone(), name.clone())
             };
-            actions.append(&mut preset_actions);
             items.push(SelectionItem {
                 name,
                 description,
@@ -5440,6 +5430,7 @@ impl ChatWidget {
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
+        label: String,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
@@ -5456,6 +5447,9 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
+            )));
         })]
     }
 
@@ -5519,29 +5513,14 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
-        let selected_name_for_accept = selected_name.clone();
-        accept_actions.push(Box::new(move |tx| {
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    format!("Permissions updated to {selected_name_for_accept}"),
-                    None,
-                ),
-            )));
-        }));
+        let mut accept_actions =
+            Self::approval_preset_actions(approval, sandbox.clone(), selected_name.clone());
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
         }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
-        accept_and_remember_actions.push(Box::new(move |tx| {
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    format!("Permissions updated to {selected_name}"),
-                    None,
-                ),
-            )));
-        }));
+        let mut accept_and_remember_actions =
+            Self::approval_preset_actions(approval, sandbox, selected_name);
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
             tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
