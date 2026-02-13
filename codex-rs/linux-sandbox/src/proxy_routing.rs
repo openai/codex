@@ -97,7 +97,7 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
     for (endpoint, socket_path) in &socket_by_endpoint {
         host_bridge_pids.push(spawn_host_bridge(*endpoint, socket_path)?);
     }
-    spawn_proxy_socket_dir_cleanup_worker(socket_dir.clone(), host_bridge_pids)?;
+    spawn_proxy_socket_dir_cleanup_worker(socket_dir, host_bridge_pids)?;
 
     let mut routes = Vec::with_capacity(plan.routes.len());
     for route in plan.routes {
