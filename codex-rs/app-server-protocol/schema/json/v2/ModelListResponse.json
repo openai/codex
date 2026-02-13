@@ -50,6 +50,9 @@
         "model": {
           "type": "string"
         },
+        "showInPicker": {
+          "type": "boolean"
+        },
         "supportedReasoningEfforts": {
           "items": {
             "$ref": "#/definitions/ReasoningEffortOption"
@@ -74,6 +77,7 @@
         "id",
         "isDefault",
         "model",
+        "showInPicker",
         "supportedReasoningEfforts"
       ],
       "type": "object"

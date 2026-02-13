@@ -13,7 +13,6 @@ pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Confi
         .list_models(config, RefreshStrategy::OnlineIfUncached)
         .await
         .into_iter()
-        .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
         .collect()
 }
@@ -25,6 +24,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         upgrade: preset.upgrade.map(|upgrade| upgrade.id),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
+        show_in_picker: preset.show_in_picker,
         supported_reasoning_efforts: reasoning_efforts_from_preset(
             preset.supported_reasoning_efforts,
         ),
