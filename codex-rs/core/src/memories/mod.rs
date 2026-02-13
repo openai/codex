@@ -57,8 +57,6 @@ mod phase_one {
 
 /// Phase 2 (aka `Consolidation`).
 mod phase_two {
-    /// Subagent source label used to identify consolidation tasks.
-    pub(super) const MEMORY_CONSOLIDATION_SUBAGENT_LABEL: &str = "memory_consolidation";
     /// Maximum number of recent raw memories retained for global consolidation.
     pub(super) const MAX_RAW_MEMORIES_FOR_GLOBAL: usize = 1_024;
     /// Lease duration (seconds) for phase-2 consolidation job ownership.

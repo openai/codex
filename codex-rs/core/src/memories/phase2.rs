@@ -240,7 +240,6 @@ mod agent {
             return;
         };
         let session = session.clone();
-        let claim = claim;
 
         tokio::spawn(async move {
             let agent_control = session.services.agent_control.clone();

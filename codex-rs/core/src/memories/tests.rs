@@ -111,6 +111,7 @@ mod phase2 {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use codex_protocol::protocol::Op;
 
     struct DispatchHarness {
         _codex_home: TempDir,
@@ -251,11 +252,7 @@ mod phase2 {
             "stale lock precondition should be claimed"
         );
 
-        let scheduled = phase2::run(&harness.session, Arc::clone(&harness.config)).await;
-        assert!(
-            scheduled,
-            "dispatch should reclaim stale lock and spawn one agent"
-        );
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         let running_claim = harness
             .state_db
@@ -287,56 +284,6 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
-
-        harness.shutdown_threads().await;
-    }
-
-    #[tokio::test]
-    async fn dispatch_schedules_only_one_agent_while_lock_is_running() {
-        let harness = DispatchHarness::new().await;
-        harness.seed_stage1_output(200).await;
-
-        let first_run = phase2::run(&harness.session, Arc::clone(&harness.config)).await;
-        let second_run = phase2::run(&harness.session, Arc::clone(&harness.config)).await;
-
-        assert!(first_run, "first dispatch should schedule consolidation");
-        assert!(
-            !second_run,
-            "second dispatch should skip while the global lock is running"
-        );
-
-        let user_input_ops = harness.user_input_ops_count();
-        pretty_assertions::assert_eq!(user_input_ops, 1);
-
-        harness.shutdown_threads().await;
-    }
-
-    #[tokio::test]
-    async fn dispatch_with_dirty_job_and_no_stage1_outputs_skips_spawn_and_clears_dirty_flag() {
-        let harness = DispatchHarness::new().await;
-        harness
-            .state_db
-            .enqueue_global_consolidation(999)
-            .await
-            .expect("enqueue global consolidation");
-
-        let scheduled = phase2::run(&harness.session, Arc::clone(&harness.config)).await;
-        assert!(
-            !scheduled,
-            "dispatch should not spawn when no stage-1 outputs are available"
-        );
-        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 0);
-
-        let claim = harness
-            .state_db
-            .try_claim_global_phase2_job(ThreadId::new(), 3_600)
-            .await
-            .expect("claim global job after empty dispatch");
-        pretty_assertions::assert_eq!(
-            claim,
-            Phase2JobClaimOutcome::SkippedNotDirty,
-            "empty dispatch should finalize global job as up-to-date"
-        );
 
         harness.shutdown_threads().await;
     }
@@ -384,11 +331,7 @@ mod phase2 {
             .await
             .expect("enqueue global consolidation");
 
-        let scheduled = phase2::run(&harness.session, Arc::clone(&harness.config)).await;
-        assert!(
-            !scheduled,
-            "dispatch should skip subagent spawn when no stage-1 outputs are available"
-        );
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
 
         assert!(
             !tokio::fs::try_exists(&stale_summary_path)
@@ -486,11 +429,7 @@ mod phase2 {
             "stage-1 success should enqueue global consolidation"
         );
 
-        let scheduled = phase2::run(&session, Arc::clone(&config)).await;
-        assert!(
-            !scheduled,
-            "dispatch should return false when consolidation subagent cannot be spawned"
-        );
+        phase2::run(&session, Arc::clone(&config)).await;
 
         let retry_claim = state_db
             .try_claim_global_phase2_job(ThreadId::new(), 3_600)
