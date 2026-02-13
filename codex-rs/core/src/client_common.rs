@@ -240,6 +240,7 @@ mod tests {
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
+    use codex_protocol::config_types::ServiceTier;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -264,6 +265,7 @@ mod tests {
                 verbosity: Some(OpenAiVerbosity::Low),
                 format: None,
             }),
+            service_tier: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -302,6 +304,7 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: Some(text_controls),
+            service_tier: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -338,9 +341,35 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: None,
+            service_tier: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
+    }
+
+    #[test]
+    fn serializes_service_tier_when_set() {
+        let req = ResponsesApiRequest {
+            model: "gpt-5.1".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            tools: vec![],
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+            service_tier: Some(ServiceTier::Flex),
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert_eq!(
+            v.get("service_tier").and_then(|tier| tier.as_str()),
+            Some("flex")
+        );
     }
 }

@@ -1251,6 +1251,7 @@ async fn websocket_harness_with_options(
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
+        config.model_service_tier,
         websocket_enabled,
         websocket_v2_enabled,
         false,

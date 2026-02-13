@@ -6877,6 +6877,16 @@
             }
           ]
         },
+        "modelServiceTier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "modelVerbosity": {
           "anyOf": [
             {
@@ -9249,6 +9259,15 @@
       ],
       "title": "ServerRequest"
     },
+    "ServiceTier": {
+      "description": "Controls latency/cost class for OpenAI Responses API requests. Serialized with lowercase values to match the OpenAI API.",
+      "enum": [
+        "auto",
+        "default",
+        "flex"
+      ],
+      "type": "string"
+    },
     "SessionConfiguredNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -10262,6 +10281,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ReasoningSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelServiceTier": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
             },
             {
               "type": "null"
@@ -11708,6 +11737,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
               },
               {
                 "type": "null"
@@ -13793,6 +13832,16 @@
               }
             ]
           },
+          "model_service_tier": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ServiceTier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "model_verbosity": {
             "anyOf": [
               {
@@ -14925,6 +14974,15 @@
           }
         },
         "type": "object"
+      },
+      "ServiceTier": {
+        "description": "Controls latency/cost class for OpenAI Responses API requests. Serialized with lowercase values to match the OpenAI API.",
+        "enum": [
+          "auto",
+          "default",
+          "flex"
+        ],
+        "type": "string"
       },
       "SessionSource": {
         "oneOf": [
