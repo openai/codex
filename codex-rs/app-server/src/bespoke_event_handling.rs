@@ -299,6 +299,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
                     item_id: request.call_id,
+                    tool: request.tool,
+                    arguments: request.arguments,
                     questions,
                 };
                 let rx = outgoing

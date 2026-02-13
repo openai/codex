@@ -1761,6 +1761,18 @@ impl Session {
         call_id: String,
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
+        self.request_user_input_with_context(turn_context, call_id, args, None, None)
+            .await
+    }
+
+    pub async fn request_user_input_with_context(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestUserInputArgs,
+        tool: Option<String>,
+        arguments: Option<serde_json::Value>,
+    ) -> Option<RequestUserInputResponse> {
         let sub_id = turn_context.sub_id.clone();
         let (tx_response, rx_response) = oneshot::channel();
         let event_id = sub_id.clone();
@@ -1781,6 +1793,8 @@ impl Session {
         let event = EventMsg::RequestUserInput(RequestUserInputEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
+            tool,
+            arguments,
             questions: args.questions,
         });
         self.send_event(turn_context, event).await;

@@ -2886,6 +2886,8 @@ pub struct ToolRequestUserInputParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    pub tool: Option<String>,
+    pub arguments: Option<JsonValue>,
     pub questions: Vec<ToolRequestUserInputQuestion>,
 }
 

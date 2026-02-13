@@ -99,7 +99,7 @@ Example (from OpenAI's official VSCode extension):
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
-- `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
+- `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental; may include optional `tool` and JSON `arguments` context when available).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.

@@ -1486,6 +1486,7 @@
         },
         {
           "properties": {
+            "arguments": true,
             "call_id": {
               "description": "Responses API call id for the associated tool call, if available.",
               "type": "string"
@@ -1495,6 +1496,12 @@
                 "$ref": "#/definitions/RequestUserInputQuestion"
               },
               "type": "array"
+            },
+            "tool": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "turn_id": {
               "default": "",
@@ -6086,6 +6093,7 @@
     },
     {
       "properties": {
+        "arguments": true,
         "call_id": {
           "description": "Responses API call id for the associated tool call, if available.",
           "type": "string"
@@ -6095,6 +6103,12 @@
             "$ref": "#/definitions/RequestUserInputQuestion"
           },
           "type": "array"
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "turn_id": {
           "default": "",

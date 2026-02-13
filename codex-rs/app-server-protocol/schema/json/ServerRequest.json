@@ -549,6 +549,7 @@
     "ToolRequestUserInputParams": {
       "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
       "properties": {
+        "arguments": true,
         "itemId": {
           "type": "string"
         },
@@ -560,6 +561,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "turnId": {
           "type": "string"

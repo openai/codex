@@ -61,9 +61,15 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    if let Some(decision) =
-        maybe_request_mcp_tool_approval(sess.as_ref(), turn_context, &call_id, &server, &tool_name)
-            .await
+    if let Some(decision) = maybe_request_mcp_tool_approval(
+        sess.as_ref(),
+        turn_context,
+        &call_id,
+        &server,
+        &tool_name,
+        arguments_value.clone(),
+    )
+    .await
     {
         let result = match decision {
             McpToolApprovalDecision::Accept | McpToolApprovalDecision::AcceptAndRemember => {
@@ -198,6 +204,7 @@ async fn maybe_request_mcp_tool_approval(
     call_id: &str,
     server: &str,
     tool_name: &str,
+    arguments: Option<serde_json::Value>,
 ) -> Option<McpToolApprovalDecision> {
     if is_full_access_mode(turn_context) {
         return None;
@@ -237,7 +244,13 @@ async fn maybe_request_mcp_tool_approval(
         questions: vec![question],
     };
     let response = sess
-        .request_user_input(turn_context, call_id.to_string(), args)
+        .request_user_input_with_context(
+            turn_context,
+            call_id.to_string(),
+            args,
+            Some(tool_name.to_string()),
+            arguments,
+        )
         .await;
     let decision = parse_mcp_tool_approval_response(response, &question_id);
     if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
