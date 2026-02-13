@@ -21,11 +21,6 @@ common:linux --platforms=//:rbe
 # On mac, we can run all the build actions remotely but test actions locally.
 common:macos --config=remote
 common:macos --strategy=remote
-# Keep Cargo build scripts on the local mac execution platform.
-# Otherwise Bazel may resolve a remote Linux exec platform and produce
-# non-executable runner binaries for local execution.
-common:macos --modify_execution_info=CargoBuildScriptRun=+no-remote-exec
-common:macos --strategy=CargoBuildScriptRun=darwin-sandbox,local
 common:macos --strategy=TestRunner=darwin-sandbox,local
 
 # On windows we cannot cross-build the tests but run them locally due to what appears to be a Bazel bug
