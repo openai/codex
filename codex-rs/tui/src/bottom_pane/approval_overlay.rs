@@ -471,7 +471,7 @@ fn exec_options(
     if network_approval_context.is_some() {
         return vec![
             ApprovalOption {
-                label: "Yes, proceed".to_string(),
+                label: "Yes, just this once".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Approved),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
@@ -703,7 +703,7 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Yes, proceed".to_string(),
+                "Yes, just this once".to_string(),
                 "Yes, and allow this host for this session".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
