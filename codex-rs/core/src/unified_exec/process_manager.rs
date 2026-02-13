@@ -11,9 +11,12 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+use crate::codex::NetworkApprovalOutcome;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::network_policy_decision::denied_network_policy_message;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
@@ -22,6 +25,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -87,6 +91,25 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
     env
 }
 
+async fn network_policy_denial_message_for_attempt(
+    network: Option<&codex_network_proxy::NetworkProxy>,
+    attempt_id: Option<&str>,
+) -> Option<String> {
+    let (Some(network), Some(attempt_id)) = (network, attempt_id) else {
+        return None;
+    };
+    match network.latest_blocked_request_for_attempt(attempt_id).await {
+        Ok(Some(blocked)) => denied_network_policy_message(&blocked),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::debug!(
+                "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
+            );
+            None
+        }
+    }
+}
+
 struct PreparedProcessHandles {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_buffer: OutputBuffer,
@@ -130,8 +153,25 @@ impl UnifiedExecProcessManager {
     }
 
     pub(crate) async fn release_process_id(&self, process_id: &str) {
-        let mut store = self.process_store.lock().await;
-        store.remove(process_id);
+        let removed = {
+            let mut store = self.process_store.lock().await;
+            store.remove(process_id)
+        };
+        if let Some(entry) = removed {
+            Self::unregister_network_attempt_for_entry(&entry).await;
+        }
+    }
+
+    async fn unregister_network_attempt_for_entry(entry: &ProcessEntry) {
+        let Some(attempt_id) = entry.network_attempt_id.as_deref() else {
+            return;
+        };
+        let Some(session) = entry.session.upgrade() else {
+            return;
+        };
+        session
+            .unregister_network_approval_attempt(attempt_id)
+            .await;
     }
 
     pub(crate) async fn exec_command(
@@ -143,20 +183,6 @@ impl UnifiedExecProcessManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-
-        let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
-            .await;
-
-        let process = match process {
-            Ok(process) => Arc::new(process),
-            Err(err) => {
-                self.release_process_id(&request.process_id).await;
-                return Err(err);
-            }
-        };
-
-        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
             context.turn.as_ref(),
@@ -170,11 +196,48 @@ impl UnifiedExecProcessManager {
             Some(request.process_id.clone()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
-
-        start_streaming_output(&process, context, Arc::clone(&transcript));
-
         let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
+        let network_attempt_id = request.network.as_ref().map(|_| Uuid::new_v4().to_string());
+        if let Some(attempt_id) = network_attempt_id.as_ref() {
+            context
+                .session
+                .register_network_approval_attempt(
+                    attempt_id.clone(),
+                    context.turn.sub_id.clone(),
+                    context.call_id.clone(),
+                    request.command.clone(),
+                    cwd.clone(),
+                )
+                .await;
+        }
+
+        let process = self
+            .open_session_with_sandbox(
+                &request,
+                cwd.clone(),
+                context,
+                false,
+                network_attempt_id.clone(),
+            )
+            .await;
+
+        let process = match process {
+            Ok(process) => Arc::new(process),
+            Err(err) => {
+                if let Some(attempt_id) = network_attempt_id.as_deref() {
+                    context
+                        .session
+                        .unregister_network_approval_attempt(attempt_id)
+                        .await;
+                }
+                self.release_process_id(&request.process_id).await;
+                return Err(err);
+            }
+        };
+
+        let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+        start_streaming_output(&process, context, Arc::clone(&transcript));
 
         let start = Instant::now();
         // For the initial exec_command call, we both stream output to events
@@ -205,6 +268,7 @@ impl UnifiedExecProcessManager {
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id.clone();
+
         if has_exited {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
@@ -215,7 +279,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd,
+                cwd.clone(),
                 Some(process_id),
                 Arc::clone(&transcript),
                 output.clone(),
@@ -224,25 +288,107 @@ impl UnifiedExecProcessManager {
             )
             .await;
 
+            let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .take_network_approval_outcome(attempt_id)
+                    .await
+            } else {
+                None
+            };
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
+            }
+
             self.release_process_id(&request.process_id).await;
-            process.check_for_sandbox_denial_with_text(&text).await?;
-        } else {
-            // Long‑lived command: persist the process so write_stdin can reuse
-            // it, and register a background watcher that will emit
-            // ExecCommandEnd when the PTY eventually exits (even if no further
-            // tool calls are made).
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                cwd.clone(),
-                start,
-                process_id,
-                request.tty,
-                Arc::clone(&transcript),
+            if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
+                return Err(UnifiedExecError::create_process(
+                    "rejected by user".to_string(),
+                ));
+            }
+            if let Some(message) = network_policy_denial_message_for_attempt(
+                request.network.as_ref(),
+                network_attempt_id.as_deref(),
             )
-            .await;
+            .await
+            {
+                return Err(UnifiedExecError::create_process(message));
+            }
+            process.check_for_sandbox_denial_with_text(&text).await?;
+
+            let original_token_count = approx_token_count(&text);
+            let response = UnifiedExecResponse {
+                event_call_id: context.call_id.clone(),
+                chunk_id,
+                wall_time,
+                output,
+                raw_output: collected,
+                process_id: None,
+                exit_code,
+                original_token_count: Some(original_token_count),
+                session_command: Some(request.command.clone()),
+            };
+
+            return Ok(response);
+        }
+
+        let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
+            context
+                .session
+                .take_network_approval_outcome(attempt_id)
+                .await
+        } else {
+            None
         };
+        if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
+            process.terminate();
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
+            }
+            self.release_process_id(&request.process_id).await;
+            return Err(UnifiedExecError::create_process(
+                "rejected by user".to_string(),
+            ));
+        }
+        if let Some(message) = network_policy_denial_message_for_attempt(
+            request.network.as_ref(),
+            network_attempt_id.as_deref(),
+        )
+        .await
+        {
+            process.terminate();
+            if let Some(attempt_id) = network_attempt_id.as_deref() {
+                context
+                    .session
+                    .unregister_network_approval_attempt(attempt_id)
+                    .await;
+            }
+            self.release_process_id(&request.process_id).await;
+            return Err(UnifiedExecError::create_process(message));
+        }
+
+        // Long‑lived command: persist the process so write_stdin can reuse
+        // it, and register a background watcher that will emit
+        // ExecCommandEnd when the PTY eventually exits (even if no further
+        // tool calls are made).
+        self.store_process(
+            Arc::clone(&process),
+            context,
+            &request.command,
+            cwd.clone(),
+            start,
+            process_id,
+            request.tty,
+            network_attempt_id.clone(),
+            Arc::clone(&transcript),
+        )
+        .await;
 
         let original_token_count = approx_token_count(&text);
         let response = UnifiedExecResponse {
@@ -251,11 +397,7 @@ impl UnifiedExecProcessManager {
             wall_time,
             output,
             raw_output: collected,
-            process_id: if has_exited {
-                None
-            } else {
-                Some(request.process_id.clone())
-            },
+            process_id: Some(request.process_id.clone()),
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
@@ -358,29 +500,41 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: &str) -> ProcessStatus {
-        let mut store = self.process_store.lock().await;
-        let Some(entry) = store.processes.get(process_id) else {
-            return ProcessStatus::Unknown;
-        };
-
-        let exit_code = entry.process.exit_code();
-        let process_id = entry.process_id.clone();
-
-        if entry.process.has_exited() {
-            let Some(entry) = store.remove(&process_id) else {
+        let (status, removed_entry) = {
+            let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(process_id) else {
                 return ProcessStatus::Unknown;
             };
-            ProcessStatus::Exited {
-                exit_code,
-                entry: Box::new(entry),
+
+            let exit_code = entry.process.exit_code();
+            let process_id = entry.process_id.clone();
+
+            if entry.process.has_exited() {
+                let Some(entry) = store.remove(&process_id) else {
+                    return ProcessStatus::Unknown;
+                };
+                (
+                    ProcessStatus::Exited {
+                        exit_code,
+                        entry: Box::new(entry),
+                    },
+                    true,
+                )
+            } else {
+                (
+                    ProcessStatus::Alive {
+                        exit_code,
+                        call_id: entry.call_id.clone(),
+                        process_id,
+                    },
+                    false,
+                )
             }
-        } else {
-            ProcessStatus::Alive {
-                exit_code,
-                call_id: entry.call_id.clone(),
-                process_id,
-            }
+        };
+        if removed_entry && let ProcessStatus::Exited { entry, .. } = &status {
+            Self::unregister_network_attempt_for_entry(entry).await;
         }
+        status
     }
 
     async fn prepare_process_handles(
@@ -437,22 +591,30 @@ impl UnifiedExecProcessManager {
         started_at: Instant,
         process_id: String,
         tty: bool,
+        network_attempt_id: Option<String>,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
+        let network_attempt_id_for_watcher = network_attempt_id.clone();
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id: process_id.clone(),
             command: command.to_vec(),
             tty,
+            network_attempt_id,
+            session: Arc::downgrade(&context.session),
             last_used: started_at,
         };
-        let number_processes = {
+        let (number_processes, pruned_entry) = {
             let mut store = self.process_store.lock().await;
-            Self::prune_processes_if_needed(&mut store);
+            let pruned_entry = Self::prune_processes_if_needed(&mut store);
             store.processes.insert(process_id.clone(), entry);
-            store.processes.len()
+            (store.processes.len(), pruned_entry)
         };
+        if let Some(pruned_entry) = pruned_entry {
+            Self::unregister_network_attempt_for_entry(&pruned_entry).await;
+            pruned_entry.process.terminate();
+        }
 
         if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
             context
@@ -471,10 +633,40 @@ impl UnifiedExecProcessManager {
             context.call_id.clone(),
             command.to_vec(),
             cwd,
-            process_id,
+            process_id.clone(),
             transcript,
             started_at,
         );
+
+        if let Some(network_attempt_id) = network_attempt_id_for_watcher {
+            let exit_token = process.cancellation_token();
+            let session = Arc::clone(&context.session);
+            let process = Arc::clone(&process);
+            let process_id = process_id.clone();
+            tokio::spawn(async move {
+                let mut poll = tokio::time::interval(Duration::from_millis(100));
+                poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                loop {
+                    tokio::select! {
+                        _ = exit_token.cancelled() => {
+                            break;
+                        }
+                        _ = poll.tick() => {
+                            if session.take_network_approval_outcome(&network_attempt_id).await
+                                == Some(NetworkApprovalOutcome::DeniedByUser)
+                            {
+                                tracing::debug!(
+                                    "terminating unified exec process {process_id} after delayed network denial for attempt {network_attempt_id}"
+                                );
+                                process.terminate();
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        }
     }
 
     pub(crate) async fn open_session_with_exec_env(
@@ -516,6 +708,8 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathBuf,
         context: &UnifiedExecContext,
+        skip_command_approval: bool,
+        network_attempt_id: Option<String>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
@@ -523,23 +717,33 @@ impl UnifiedExecProcessManager {
         ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = context
-            .session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
-                sandbox_permissions: request.sandbox_permissions,
-                prefix_rule: request.prefix_rule.clone(),
-            })
-            .await;
+        let exec_approval_requirement = if skip_command_approval {
+            // This is a same-call retry after explicit network approval.
+            // Do not re-prompt command approval.
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            context
+                .session
+                .services
+                .exec_policy
+                .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                    command: &request.command,
+                    approval_policy: context.turn.approval_policy,
+                    sandbox_policy: &context.turn.sandbox_policy,
+                    sandbox_permissions: request.sandbox_permissions,
+                    prefix_rule: request.prefix_rule.clone(),
+                })
+                .await
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
             env,
             network: request.network.clone(),
+            network_attempt_id,
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),
@@ -643,9 +847,9 @@ impl UnifiedExecProcessManager {
         collected
     }
 
-    fn prune_processes_if_needed(store: &mut ProcessStore) -> bool {
+    fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
         if store.processes.len() < MAX_UNIFIED_EXEC_PROCESSES {
-            return false;
+            return None;
         }
 
         let meta: Vec<(String, Instant, bool)> = store
@@ -655,13 +859,10 @@ impl UnifiedExecProcessManager {
             .collect();
 
         if let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
-            if let Some(entry) = store.remove(&process_id) {
-                entry.process.terminate();
-            }
-            return true;
+            return store.remove(&process_id);
         }
 
-        false
+        None
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
@@ -706,6 +907,7 @@ impl UnifiedExecProcessManager {
         };
 
         for entry in entries {
+            Self::unregister_network_attempt_for_entry(&entry).await;
             entry.process.terminate();
         }
     }
