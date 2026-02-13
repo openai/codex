@@ -540,11 +540,7 @@ pub(crate) fn is_likely_sandbox_denied(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
 ) -> bool {
-    if sandbox_type == SandboxType::None {
-        return false;
-    }
-
-    if exec_output.exit_code == 0 {
+    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
         return false;
     }
 
