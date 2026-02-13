@@ -12,7 +12,6 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::command_attribution::configure_git_hooks_env_for_config;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
@@ -518,11 +517,10 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let mut env = create_env(
+        let env = create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         );
-        configure_git_hooks_env_for_config(&mut env, context.turn.config.as_ref());
         let env = apply_unified_exec_env(env);
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);

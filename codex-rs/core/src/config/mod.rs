@@ -187,11 +187,11 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional command attribution label for commit message co-author trailers.
+    /// Optional command attribution text for commit message co-author trailers.
     ///
-    /// - `None`: use default attribution ("Codex")
+    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
     /// - `Some("")` or whitespace-only: disable command attribution
-    /// - `Some("...")`: use the provided attribution text
+    /// - `Some("...")`: use the provided attribution text verbatim
     pub command_attribution: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
@@ -903,7 +903,7 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Optional command attribution label for commit message co-author trailers.
+    /// Optional command attribution text for commit message co-author trailers.
     ///
     /// Set to an empty string to disable automatic command attribution.
     pub command_attribution: Option<String>,
