@@ -124,12 +124,12 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_app_mentions(
+    pub(crate) fn track_app_mentioned(
         &self,
         tracking: TrackEventsContext,
         mentions: Vec<AppInvocation>,
     ) {
-        track_app_mentions(
+        track_app_mentioned(
             &self.queue,
             Arc::clone(&self.config),
             Some(tracking),
@@ -247,7 +247,7 @@ pub(crate) fn track_skill_invocations(
     queue.try_send(job);
 }
 
-pub(crate) fn track_app_mentions(
+pub(crate) fn track_app_mentioned(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,

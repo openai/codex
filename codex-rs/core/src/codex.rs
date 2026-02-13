@@ -4249,7 +4249,7 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
     sess.services
         .analytics_events_client
-        .track_app_mentions(tracking.clone(), mentioned_app_invocations);
+        .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
