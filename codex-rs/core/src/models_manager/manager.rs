@@ -140,19 +140,15 @@ impl ModelsManager {
         let remote = self
             .find_remote_model_by_longest_prefix(model, config)
             .await;
-        // Preserve how metadata was resolved so callers can warn when we use fallback.
-        let (mut model_info, used_fallback_model_metadata) = if let Some(remote) = remote {
-            (
-                ModelInfo {
-                    slug: model.to_string(),
-                    ..remote
-                },
-                false,
-            )
+        let model_info = if let Some(remote) = remote {
+            ModelInfo {
+                slug: model.to_string(),
+                used_fallback_model_metadata: false,
+                ..remote
+            }
         } else {
-            (model_info::model_info_from_slug(model), true)
+            model_info::model_info_from_slug(model)
         };
-        model_info.used_fallback_model_metadata = used_fallback_model_metadata;
         model_info::with_config_overrides(model_info, config)
     }
 

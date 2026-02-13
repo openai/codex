@@ -1810,7 +1810,7 @@ impl Session {
                 turn_context.as_ref(),
                 EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "Defaulting to fallback model metadata for `{resolved_model_slug}`. This can degrade performance and cause issues."
+                        "Model metadata for `{resolved_model_slug}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
                     ),
                 }),
             )
