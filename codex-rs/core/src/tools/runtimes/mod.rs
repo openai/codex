@@ -59,6 +59,10 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
 ) -> Vec<String> {
+    if cfg!(windows) {
+        return command.to_vec();
+    }
+
     let Some(snapshot) = session_shell.shell_snapshot() else {
         return command.to_vec();
     };
@@ -160,7 +164,7 @@ fn shell_single_quote(input: &str) -> String {
     input.replace('\'', r#"'"'"'"#)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::shell::ShellType;
