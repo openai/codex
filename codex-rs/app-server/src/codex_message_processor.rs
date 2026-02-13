@@ -2689,37 +2689,10 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
-        let ThreadResumeParams {
-            thread_id,
-            history,
-            path,
-            model,
-            model_provider,
-            cwd,
-            approval_policy,
-            sandbox,
-            config: request_overrides,
-            base_instructions,
-            developer_instructions,
-            personality,
-            persist_extended_history,
-        } = params;
-
-        let has_resume_overrides = model.is_some()
-            || model_provider.is_some()
-            || cwd.is_some()
-            || approval_policy.is_some()
-            || sandbox.is_some()
-            || request_overrides.is_some()
-            || base_instructions.is_some()
-            || developer_instructions.is_some()
-            || personality.is_some()
-            || persist_extended_history;
-
-        if let Ok(existing_thread_id) = ThreadId::from_string(&thread_id)
+        if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
             && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
         {
-            if history.is_some() {
+            if params.history.is_some() {
                 self.send_invalid_request_error(
                     request_id,
                     format!(
@@ -2786,7 +2759,7 @@ impl CodexMessageProcessor {
                 }
             };
 
-            if let Some(requested_path) = path.as_ref()
+            if let Some(requested_path) = params.path.as_ref()
                 && requested_path != &rollout_path
             {
                 self.send_invalid_request_error(
@@ -2819,27 +2792,13 @@ impl CodexMessageProcessor {
             }
 
             let config_snapshot = existing_thread.config_snapshot().await;
-            if has_resume_overrides {
-                let mismatch_details = collect_resume_override_mismatches(
-                    model.as_deref(),
-                    model_provider.as_deref(),
-                    cwd.as_deref(),
-                    approval_policy.as_ref(),
-                    sandbox.as_ref(),
-                    request_overrides.is_some(),
-                    base_instructions.is_some(),
-                    developer_instructions.is_some(),
-                    personality.as_ref(),
-                    persist_extended_history,
-                    &config_snapshot,
+            let mismatch_details = collect_resume_override_mismatches(&params, &config_snapshot);
+            if !mismatch_details.is_empty() {
+                tracing::warn!(
+                    "thread/resume overrides ignored for running thread {}: {}",
+                    existing_thread_id,
+                    mismatch_details.join("; ")
                 );
-                if !mismatch_details.is_empty() {
-                    tracing::warn!(
-                        "thread/resume overrides ignored for running thread {}: {}",
-                        existing_thread_id,
-                        mismatch_details.join("; ")
-                    );
-                }
             }
 
             let mut thread = match read_summary_from_rollout(
@@ -2899,6 +2858,22 @@ impl CodexMessageProcessor {
             self.outgoing.send_response(request_id, response).await;
             return;
         }
+
+        let ThreadResumeParams {
+            thread_id,
+            history,
+            path,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config: request_overrides,
+            base_instructions,
+            developer_instructions,
+            personality,
+            persist_extended_history,
+        } = params;
 
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
@@ -6003,21 +5978,12 @@ impl CodexMessageProcessor {
 }
 
 fn collect_resume_override_mismatches(
-    model: Option<&str>,
-    model_provider: Option<&str>,
-    cwd: Option<&str>,
-    approval_policy: Option<&AskForApproval>,
-    sandbox: Option<&SandboxMode>,
-    has_config_overrides: bool,
-    has_base_instructions: bool,
-    has_developer_instructions: bool,
-    personality: Option<&Personality>,
-    persist_extended_history: bool,
+    request: &ThreadResumeParams,
     config_snapshot: &ThreadConfigSnapshot,
 ) -> Vec<String> {
     let mut mismatch_details = Vec::new();
 
-    if let Some(requested_model) = model
+    if let Some(requested_model) = request.model.as_deref()
         && requested_model != config_snapshot.model
     {
         mismatch_details.push(format!(
@@ -6025,7 +5991,7 @@ fn collect_resume_override_mismatches(
             config_snapshot.model
         ));
     }
-    if let Some(requested_provider) = model_provider
+    if let Some(requested_provider) = request.model_provider.as_deref()
         && requested_provider != config_snapshot.model_provider_id
     {
         mismatch_details.push(format!(
@@ -6033,7 +5999,7 @@ fn collect_resume_override_mismatches(
             config_snapshot.model_provider_id
         ));
     }
-    if let Some(requested_cwd) = cwd {
+    if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
         if requested_cwd_path != config_snapshot.cwd {
             mismatch_details.push(format!(
@@ -6043,7 +6009,7 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_approval) = approval_policy {
+    if let Some(requested_approval) = request.approval_policy.as_ref() {
         let active_approval: AskForApproval = config_snapshot.approval_policy.into();
         if requested_approval != &active_approval {
             mismatch_details.push(format!(
@@ -6051,7 +6017,7 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_sandbox) = sandbox {
+    if let Some(requested_sandbox) = request.sandbox.as_ref() {
         let sandbox_matches = matches!(
             (requested_sandbox, &config_snapshot.sandbox_policy),
             (
@@ -6075,7 +6041,7 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_personality) = personality
+    if let Some(requested_personality) = request.personality.as_ref()
         && config_snapshot.personality.as_ref() != Some(requested_personality)
     {
         mismatch_details.push(format!(
@@ -6084,20 +6050,20 @@ fn collect_resume_override_mismatches(
         ));
     }
 
-    if has_config_overrides {
+    if request.config.is_some() {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
     }
-    if has_base_instructions {
+    if request.base_instructions.is_some() {
         mismatch_details
             .push("baseInstructions override was provided and ignored while running".to_string());
     }
-    if has_developer_instructions {
+    if request.developer_instructions.is_some() {
         mismatch_details.push(
             "developerInstructions override was provided and ignored while running".to_string(),
         );
     }
-    if persist_extended_history {
+    if request.persist_extended_history {
         mismatch_details.push(
             "persistExtendedHistory override was provided and ignored while running".to_string(),
         );
