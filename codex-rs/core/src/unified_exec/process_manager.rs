@@ -202,7 +202,18 @@ impl UnifiedExecProcessManager {
             .workdir
             .clone()
             .unwrap_or_else(|| context.turn.cwd.clone());
-        let network_attempt_id = request.network.as_ref().map(|_| Uuid::new_v4().to_string());
+        let has_managed_network_requirements = context
+            .turn
+            .config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
+        let network_attempt_id = if has_managed_network_requirements {
+            request.network.as_ref().map(|_| Uuid::new_v4().to_string())
+        } else {
+            None
+        };
         if let Some(attempt_id) = network_attempt_id.as_ref() {
             context
                 .session

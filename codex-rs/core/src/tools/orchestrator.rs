@@ -129,7 +129,7 @@ impl ToolOrchestrator {
                 output,
                 network_policy_decision,
             }))) => {
-                let network_approval_context = if turn_ctx.network.is_some() {
+                let network_approval_context = if has_managed_network_requirements {
                     network_policy_decision
                         .as_ref()
                         .and_then(network_approval_context_from_payload)

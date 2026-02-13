@@ -93,7 +93,11 @@ async fn execute_with_network_approval_tracking(
     ctx: &ToolCtx<'_>,
     mut env: crate::sandboxing::ExecRequest,
 ) -> Result<ExecToolCallOutput, ToolError> {
-    let network_attempt_id = req.network.as_ref().map(|_| Uuid::new_v4().to_string());
+    let network_attempt_id = if attempt.enforce_managed_network {
+        req.network.as_ref().map(|_| Uuid::new_v4().to_string())
+    } else {
+        None
+    };
     if let Some(attempt_id) = network_attempt_id.as_ref() {
         ctx.session
             .register_network_approval_attempt(
@@ -115,11 +119,15 @@ async fn execute_with_network_approval_tracking(
     } else {
         None
     };
-    let network_policy_denial_message = network_policy_denial_message_for_attempt(
-        req.network.as_ref(),
-        network_attempt_id.as_deref(),
-    )
-    .await;
+    let network_policy_denial_message = if attempt.enforce_managed_network {
+        network_policy_denial_message_for_attempt(
+            req.network.as_ref(),
+            network_attempt_id.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
 
     if let Some(attempt_id) = network_attempt_id.as_deref() {
         ctx.session
