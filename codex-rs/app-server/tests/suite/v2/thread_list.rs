@@ -17,6 +17,8 @@ use codex_app_server_protocol::ThreadSourceKind;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
@@ -66,6 +68,7 @@ async fn list_threads_with_sort(
             model_providers: providers,
             source_kinds,
             archived,
+            cwd: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -124,6 +127,26 @@ fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
         .append(true)
         .open(path)?
         .set_times(times)?;
+    Ok(())
+}
+
+fn set_rollout_cwd(path: &Path, cwd: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)?;
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let first_line = lines
+        .first_mut()
+        .ok_or_else(|| anyhow::anyhow!("rollout at {} is empty", path.display()))?;
+    let mut rollout_line: RolloutLine = serde_json::from_str(first_line)?;
+    let RolloutItem::SessionMeta(mut session_meta_line) = rollout_line.item else {
+        return Err(anyhow::anyhow!(
+            "rollout at {} does not start with session metadata",
+            path.display()
+        ));
+    };
+    session_meta_line.meta.cwd = cwd.to_path_buf();
+    rollout_line.item = RolloutItem::SessionMeta(session_meta_line);
+    *first_line = serde_json::to_string(&rollout_line)?;
+    fs::write(path, lines.join("\n") + "\n")?;
     Ok(())
 }
 
@@ -296,6 +319,63 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_respects_cwd_filter() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let filtered_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "filtered",
+        Some("mock_provider"),
+        None,
+    )?;
+    let unfiltered_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "unfiltered",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let target_cwd = codex_home.path().join("target-cwd");
+    fs::create_dir_all(&target_cwd)?;
+    set_rollout_cwd(
+        rollout_path(codex_home.path(), "2025-01-02T10-00-00", &filtered_id).as_path(),
+        &target_cwd,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: Some(target_cwd.to_string_lossy().into_owned()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadListResponse { data, next_cursor } = to_response::<ThreadListResponse>(resp)?;
+
+    assert_eq!(next_cursor, None);
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, filtered_id);
+    assert_ne!(data[0].id, unfiltered_id);
+    assert_eq!(data[0].cwd, target_cwd);
 
     Ok(())
 }
@@ -1107,6 +1187,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
+            cwd: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
