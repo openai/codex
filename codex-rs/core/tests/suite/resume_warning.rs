@@ -22,8 +22,9 @@ fn resume_history(
     let turn_ctx = TurnContextItem {
         turn_id: None,
         cwd: config.cwd.clone(),
-        approval_policy: config.approval_policy.value(),
-        sandbox_policy: config.sandbox_policy.get().clone(),
+        approval_policy: config.permissions.approval_policy.value(),
+        sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+        network: None,
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
@@ -68,7 +69,7 @@ async fn emits_warning_when_resumed_model_differs() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, initial_history, auth_manager)
+        .resume_thread_with_history(config, initial_history, auth_manager, false)
         .await
         .expect("resume conversation");
 

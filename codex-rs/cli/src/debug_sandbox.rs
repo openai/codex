@@ -130,7 +130,7 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let env = create_env(&config.shell_environment_policy, None);
+    let env = create_env(&config.permissions.shell_environment_policy, None);
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
@@ -141,7 +141,7 @@ async fn run_command_under_sandbox(
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
-            let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
+            let policy_str = serde_json::to_string(config.permissions.sandbox_policy.get())?;
 
             let sandbox_cwd = sandbox_policy_cwd.clone();
             let cwd_clone = cwd.clone();
@@ -214,7 +214,7 @@ async fn run_command_under_sandbox(
     let _ = log_denials;
 
     // This proxy should only live for the lifetime of the child process.
-    let network_proxy = match config.network.as_ref() {
+    let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
             spec.start_proxy()
                 .await
@@ -232,7 +232,7 @@ async fn run_command_under_sandbox(
             spawn_command_under_seatbelt(
                 command,
                 cwd,
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 network.as_ref(),
@@ -251,7 +251,7 @@ async fn run_command_under_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 use_bwrap_sandbox,
                 stdio_policy,

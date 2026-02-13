@@ -46,6 +46,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::ReadOnlyAccess;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::SendUserMessageParams;
@@ -301,7 +302,9 @@ fn trigger_cmd_approval(
         config_overrides,
         message,
         Some(AskForApproval::OnRequest),
-        Some(SandboxPolicy::ReadOnly),
+        Some(SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        }),
         dynamic_tools,
     )
 }
@@ -320,7 +323,9 @@ fn trigger_patch_approval(
         config_overrides,
         message,
         Some(AskForApproval::OnRequest),
-        Some(SandboxPolicy::ReadOnly),
+        Some(SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+        }),
         dynamic_tools,
     )
 }

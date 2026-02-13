@@ -87,6 +87,7 @@ async fn run_cmd_result_with_writable_roots(
             .iter()
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
+        read_only_access: Default::default(),
         network_access: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow

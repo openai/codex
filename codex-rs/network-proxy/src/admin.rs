@@ -89,7 +89,7 @@ async fn handle_admin_request(
                 text_response(StatusCode::INTERNAL_SERVER_ERROR, "error")
             }
         },
-        ("GET", "/blocked") => match state.drain_blocked().await {
+        ("GET", "/blocked") => match state.blocked_snapshot().await {
             Ok(blocked) => json_response(&BlockedResponse { blocked }),
             Err(err) => {
                 error!("failed to read blocked queue: {err}");

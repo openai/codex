@@ -59,7 +59,7 @@ Request `newConversation` params (subset):
 - `model`: string model id (e.g. "o3", "gpt-5.1", "gpt-5.1-codex")
 - `profile`: optional named profile
 - `cwd`: optional working directory
-- `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
+- `approvalPolicy`: `untrusted` | `on-request` | `on-failure` (deprecated) | `never`
 - `sandbox`: `read-only` | `workspace-write` | `external-sandbox` (honors `networkAccess` restricted/enabled) | `danger-full-access`
 - `config`: map of additional config overrides
 - `baseInstructions`: optional instruction override
@@ -81,9 +81,9 @@ Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
 
-For v2 threads, use `thread/list` with `archived: true` to list archived rollouts and
-`thread/unarchive` to restore them to the active sessions directory (it returns the restored
-thread summary).
+For v2 threads, use `thread/list` with filters such as `archived: true` or `cwd: "/path"` to
+narrow results, and `thread/unarchive` to restore archived rollouts to the active sessions
+directory (it returns the restored thread summary).
 
 ## Models
 

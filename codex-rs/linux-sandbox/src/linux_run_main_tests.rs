@@ -18,7 +18,7 @@ fn ignores_non_proc_mount_errors() {
 fn inserts_bwrap_argv0_before_command_separator() {
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -52,7 +52,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
 fn inserts_unshare_net_when_network_isolation_requested() {
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -66,7 +66,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -86,7 +86,7 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 fn managed_proxy_inner_command_includes_route_spec() {
     let args = build_inner_seccomp_command(
         Path::new("/tmp"),
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         true,
         true,
         Some("{\"routes\":[]}".to_string()),
@@ -101,7 +101,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
 fn non_managed_inner_command_omits_route_spec() {
     let args = build_inner_seccomp_command(
         Path::new("/tmp"),
-        &SandboxPolicy::ReadOnly,
+        &SandboxPolicy::new_read_only_policy(),
         true,
         false,
         None,
@@ -116,7 +116,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
     let result = std::panic::catch_unwind(|| {
         build_inner_seccomp_command(
             Path::new("/tmp"),
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             true,
             true,
             None,

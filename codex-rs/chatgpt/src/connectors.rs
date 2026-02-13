@@ -19,7 +19,9 @@ pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
+pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 use codex_core::connectors::merge_connectors;
+pub use codex_core::connectors::with_app_enabled_state;
 
 #[derive(Debug, Deserialize)]
 struct DirectoryListResponse {
@@ -72,11 +74,30 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
-    Ok(merge_connectors_with_accessible(connectors, accessible))
+    Ok(with_app_enabled_state(
+        merge_connectors_with_accessible(connectors, accessible),
+        config,
+    ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     list_all_connectors_with_options(config, false).await
+}
+
+pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Some(Vec::new());
+    }
+
+    if init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await
+        .is_err()
+    {
+        return None;
+    }
+    let token_data = get_chatgpt_token_data()?;
+    let cache_key = all_connectors_cache_key(config, &token_data);
+    read_cached_all_connectors(&cache_key)
 }
 
 pub async fn list_all_connectors_with_options(
@@ -283,6 +304,7 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         distribution_channel: app.distribution_channel,
         install_url: None,
         is_accessible: false,
+        is_enabled: true,
     }
 }
 
@@ -302,7 +324,6 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
@@ -311,7 +332,6 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    // TODO: Support Apps SDK connectors.
     connectors
         .into_iter()
         .filter(is_connector_allowed)
@@ -324,9 +344,6 @@ fn is_connector_allowed(connector: &AppInfo) -> bool {
         || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
     {
         return false;
-    }
-    if connector_id.starts_with("asdk_app_") {
-        return ALLOWED_APPS_SDK_APPS.contains(&connector_id);
     }
     true
 }
@@ -346,13 +363,14 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         }
     }
 
     #[test]
-    fn filters_internal_asdk_connectors() {
+    fn allows_asdk_connectors() {
         let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
-        assert_eq!(filtered, vec![app("alpha")]);
+        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
     }
 
     #[test]
