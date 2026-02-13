@@ -17,6 +17,13 @@ use tokio::process::Command;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
 const NETWORK_TIMEOUT_MS: u64 = 4_000;
+const MANAGED_PROXY_PERMISSION_ERR_SNIPPETS: &[&str] = &[
+    "loopback: Failed RTM_NEWADDR",
+    "loopback: Failed RTM_NEWLINK",
+    "setting up uid map: Permission denied",
+    "No permissions to create a new namespace",
+    "error isolating Linux network namespace for proxy mode",
+];
 
 const PROXY_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
@@ -65,6 +72,44 @@ async fn should_skip_bwrap_tests() -> bool {
     )
     .await;
     is_bwrap_unavailable_output(&output)
+}
+
+fn is_managed_proxy_permission_error(stderr: &str) -> bool {
+    MANAGED_PROXY_PERMISSION_ERR_SNIPPETS
+        .iter()
+        .any(|snippet| stderr.contains(snippet))
+}
+
+async fn managed_proxy_skip_reason() -> Option<String> {
+    if should_skip_bwrap_tests().await {
+        return Some("vendored bwrap was not built in this environment".to_string());
+    }
+
+    let mut env = create_env_from_core_vars();
+    strip_proxy_env(&mut env);
+    env.insert("HTTP_PROXY".to_string(), "http://127.0.0.1:9".to_string());
+
+    let output = run_linux_sandbox_direct(
+        &["bash", "-lc", "true"],
+        &SandboxPolicy::DangerFullAccess,
+        true,
+        env,
+        NETWORK_TIMEOUT_MS,
+    )
+    .await;
+    if output.status.success() {
+        return None;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if is_managed_proxy_permission_error(stderr.as_ref()) {
+        return Some(format!(
+            "managed proxy requires kernel namespace privileges unavailable here: {}",
+            stderr.trim()
+        ));
+    }
+
+    None
 }
 
 async fn run_linux_sandbox_direct(
@@ -116,8 +161,8 @@ async fn run_linux_sandbox_direct(
 
 #[tokio::test]
 async fn managed_proxy_mode_fails_closed_without_proxy_env() {
-    if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
         return;
     }
 
@@ -143,8 +188,8 @@ async fn managed_proxy_mode_fails_closed_without_proxy_env() {
 
 #[tokio::test]
 async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
-    if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
         return;
     }
 
@@ -223,8 +268,8 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
 
 #[tokio::test]
 async fn managed_proxy_mode_denies_af_unix_creation_for_user_command() {
-    if should_skip_bwrap_tests().await {
-        eprintln!("skipping bwrap test: vendored bwrap was not built in this environment");
+    if let Some(skip_reason) = managed_proxy_skip_reason().await {
+        eprintln!("skipping managed proxy test: {skip_reason}");
         return;
     }
 
