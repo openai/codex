@@ -43,6 +43,7 @@ pub enum NetworkApprovalProtocol {
     // TODO(viyatb): Add websocket protocol variants when managed proxy policy
     // decisions expose websocket traffic as a distinct approval context.
     Http,
+    #[serde(alias = "https_connect", alias = "http-connect")]
     Https,
     Socks5Tcp,
     Socks5Udp,

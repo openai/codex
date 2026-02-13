@@ -4,18 +4,13 @@ use codex_network_proxy::NetworkPolicyDecision;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use serde::Deserialize;
-use serde::Deserializer;
-use serde::de::Error;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkPolicyDecisionPayload {
     pub decision: NetworkPolicyDecision,
     pub source: NetworkDecisionSource,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_network_approval_protocol_option"
-    )]
+    #[serde(default)]
     pub protocol: Option<NetworkApprovalProtocol>,
     pub host: Option<String>,
     pub reason: Option<String>,
@@ -34,31 +29,6 @@ fn parse_network_policy_decision(value: &str) -> Option<NetworkPolicyDecision> {
         "ask" => Some(NetworkPolicyDecision::Ask),
         _ => None,
     }
-}
-
-fn parse_network_approval_protocol(value: &str) -> Option<NetworkApprovalProtocol> {
-    match value {
-        "http" => Some(NetworkApprovalProtocol::Http),
-        "https" | "https_connect" | "http-connect" => Some(NetworkApprovalProtocol::Https),
-        "socks5_tcp" => Some(NetworkApprovalProtocol::Socks5Tcp),
-        "socks5_udp" => Some(NetworkApprovalProtocol::Socks5Udp),
-        _ => None,
-    }
-}
-
-fn deserialize_network_approval_protocol_option<'de, D>(
-    deserializer: D,
-) -> Result<Option<NetworkApprovalProtocol>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    value
-        .map(|value| {
-            parse_network_approval_protocol(&value)
-                .ok_or_else(|| Error::custom(format!("unsupported network protocol: {value}")))
-        })
-        .transpose()
 }
 
 pub(crate) fn network_approval_context_from_payload(

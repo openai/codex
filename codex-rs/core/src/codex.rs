@@ -862,6 +862,39 @@ impl Session {
         }
     }
 
+    async fn start_managed_network_proxy(
+        config: &Config,
+        network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
+        blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
+        managed_network_requirements_enabled: bool,
+    ) -> anyhow::Result<(
+        Option<StartedNetworkProxy>,
+        Option<SessionNetworkProxyRuntime>,
+    )> {
+        let network_proxy = match config.permissions.network.as_ref() {
+            Some(spec) => Some(
+                spec.start_proxy(
+                    config.permissions.sandbox_policy.get(),
+                    network_policy_decider,
+                    blocked_request_observer,
+                    managed_network_requirements_enabled,
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
+            ),
+            None => None,
+        };
+        let session_network_proxy = network_proxy.as_ref().map(|started| {
+            let proxy = started.proxy();
+            SessionNetworkProxyRuntime {
+                http_addr: proxy.http_addr().to_string(),
+                socks_addr: proxy.socks_addr().to_string(),
+                admin_addr: proxy.admin_addr().to_string(),
+            }
+        });
+        Ok((network_proxy, session_network_proxy))
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -1212,11 +1245,7 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
-        let managed_network_requirements_enabled = config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
         let network_policy_decider_session = if managed_network_requirements_enabled {
@@ -1246,27 +1275,13 @@ impl Session {
                         Arc::clone(network_policy_decider_session),
                     )
                 });
-        let network_proxy = match config.permissions.network.as_ref() {
-            Some(spec) => Some(
-                spec.start_proxy(
-                    config.permissions.sandbox_policy.get(),
-                    network_policy_decider.as_ref().map(Arc::clone),
-                    blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_enabled,
-                )
-                .await
-                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
-            ),
-            None => None,
-        };
-        let session_network_proxy = network_proxy.as_ref().map(|started| {
-            let proxy = started.proxy();
-            SessionNetworkProxyRuntime {
-                http_addr: proxy.http_addr().to_string(),
-                socks_addr: proxy.socks_addr().to_string(),
-                admin_addr: proxy.admin_addr().to_string(),
-            }
-        });
+        let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
+            config.as_ref(),
+            network_policy_decider.as_ref().map(Arc::clone),
+            blocked_request_observer.as_ref().map(Arc::clone),
+            managed_network_requirements_enabled,
+        )
+        .await?;
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),

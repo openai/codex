@@ -213,11 +213,7 @@ async fn run_command_under_sandbox(
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
-    let managed_network_requirements_enabled = config
-        .config_layer_stack
-        .requirements_toml()
-        .network
-        .is_some();
+    let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
 
     // This proxy should only live for the lifetime of the child process.
     let network_proxy = match config.permissions.network.as_ref() {
