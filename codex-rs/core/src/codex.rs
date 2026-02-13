@@ -4360,7 +4360,7 @@ pub(crate) async fn run_turn(
                 let estimated_token_count =
                     sess.get_estimated_token_count(turn_context.as_ref()).await;
 
-                info!(
+                trace!(
                     turn_id = %turn_context.sub_id,
                     total_usage_tokens,
                     estimated_token_count = ?estimated_token_count,
