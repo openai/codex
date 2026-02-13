@@ -153,7 +153,6 @@ distilled into MEMORY.md and memory_summary.md.
 There is no strict size limit, and you should feel free to list a lot of points here as
 long as they are helpful.
 Instructional notes in angle brackets are guidance only; do not include them verbatim in the rollout summary.
-Use absolute paths for any file paths and commands. You should refer to the cwd of the rollout.
 
 Template (items are flexible; include only what is useful):
 
