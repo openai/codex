@@ -193,8 +193,12 @@ fn run_bwrap_with_proc_fallback(
     mount_proc: bool,
     allow_network_for_proxy: bool,
 ) -> ! {
-    let mut mount_proc = mount_proc;
     let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
+    if network_mode == BwrapNetworkMode::ProxyOnly && sandbox_policy.has_full_disk_write_access() {
+        exec_or_panic(inner);
+    }
+
+    let mut mount_proc = mount_proc;
 
     if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy, network_mode)
     {
