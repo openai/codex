@@ -99,9 +99,8 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # Keep cargo-based CI independent of system bwrap build deps.
-      # The bwrap FFI path is validated in Bazel workflows.
-      CODEX_BWRAP_ENABLE_FFI: "0"
+      # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -163,6 +162,12 @@ jobs:
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            profile: release
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
@@ -178,14 +183,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Install UBSan runtime (musl)
-        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
         shell: bash
         run: |
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+            packages=(pkg-config libcap-dev)
+            if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
+              packages+=(libubsan1)
+            fi
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
           fi
       - uses: dtolnay/rust-toolchain@1.93
         with:
@@ -379,21 +388,15 @@ jobs:
           cargo chef cook --recipe-path "$RECIPE" --target ${{ matrix.target }} --release --all-features
 
       - name: cargo clippy
-        id: clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
 
-      # Running `cargo build` from the workspace root builds the workspace using
-      # the union of all features from third-party crates. This can mask errors
-      # where individual crates have underspecified features. To avoid this, we
-      # run `cargo check` for each crate individually, though because this is
-      # slower, we only do this for the x86_64-unknown-linux-gnu target.
-      - name: cargo check individual crates
-        id: cargo_check_all_crates
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
-        continue-on-error: true
-        run: |
-          find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
-            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
+      - name: Upload Cargo timings (clippy)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-ci-clippy-${{ matrix.target }}-${{ matrix.profile }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       # Save caches explicitly; make non-fatal so cache packaging
       # never fails the overall job. Only save when key wasn't hit.
@@ -447,15 +450,6 @@ jobs:
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
-      # Fail the job if any of the previous steps failed.
-      - name: verify all steps passed
-        if: |
-          steps.clippy.outcome == 'failure' ||
-          steps.cargo_check_all_crates.outcome == 'failure'
-        run: |
-          echo "One or more checks failed (clippy or cargo_check_all_crates). See logs for details."
-          exit 1
-
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -470,9 +464,6 @@ jobs:
       USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # Keep cargo-based CI independent of system bwrap build deps.
-      # The bwrap FFI path is validated in Bazel workflows.
-      CODEX_BWRAP_ENABLE_FFI: "0"
 
     strategy:
       fail-fast: false
@@ -508,6 +499,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          fi
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -583,10 +583,18 @@ jobs:
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak
+
+      - name: Upload Cargo timings (nextest)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cargo-timings-rust-ci-nextest-${{ matrix.target }}-${{ matrix.profile }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
 
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'

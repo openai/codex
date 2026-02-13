@@ -20,7 +20,8 @@ pub mod test_codex_exec;
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
-    codex_core::set_deterministic_process_ids_for_tests(true);
+    codex_core::test_support::set_thread_manager_test_mode(true);
+    codex_core::test_support::set_deterministic_process_ids(true);
 }
 
 #[track_caller]

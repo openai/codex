@@ -2,11 +2,17 @@ use async_trait::async_trait;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
+use codex_app_server_protocol::AppInfo;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
+use crate::connectors;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -76,7 +82,10 @@ impl ToolHandler for SearchToolBm25Handler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
-            payload, session, ..
+            payload,
+            session,
+            turn,
+            ..
         } = invocation;
 
         let arguments = match payload {
@@ -111,6 +120,15 @@ impl ToolHandler for SearchToolBm25Handler {
             .await
             .list_all_tools()
             .await;
+        let mcp_tools = if turn.config.features.enabled(Feature::Apps) {
+            let connectors = connectors::with_app_enabled_state(
+                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+                &turn.config,
+            );
+            filter_codex_apps_mcp_tools(mcp_tools, &connectors)
+        } else {
+            mcp_tools
+        };
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
@@ -178,6 +196,28 @@ impl ToolHandler for SearchToolBm25Handler {
     }
 }
 
+fn filter_codex_apps_mcp_tools(
+    mut mcp_tools: HashMap<String, ToolInfo>,
+    connectors: &[AppInfo],
+) -> HashMap<String, ToolInfo> {
+    let enabled_connectors: HashSet<&str> = connectors
+        .iter()
+        .filter(|connector| connector.is_enabled)
+        .map(|connector| connector.id.as_str())
+        .collect();
+
+    mcp_tools.retain(|_, tool| {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            return true;
+        }
+
+        tool.connector_id
+            .as_deref()
+            .is_some_and(|connector_id| enabled_connectors.contains(connector_id))
+    });
+    mcp_tools
+}
+
 fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> String {
     let mut parts = vec![
         name.to_string(),
@@ -214,4 +254,113 @@ fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> Stri
     }
 
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::AppInfo;
+    use pretty_assertions::assert_eq;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Tool;
+    use std::sync::Arc;
+
+    fn make_connector(id: &str, enabled: bool) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: enabled,
+        }
+    }
+
+    fn make_tool(
+        qualified_name: &str,
+        server_name: &str,
+        tool_name: &str,
+        connector_id: Option<&str>,
+    ) -> (String, ToolInfo) {
+        (
+            qualified_name.to_string(),
+            ToolInfo {
+                server_name: server_name.to_string(),
+                tool_name: tool_name.to_string(),
+                tool: Tool {
+                    name: tool_name.to_string().into(),
+                    title: None,
+                    description: Some(format!("Test tool: {tool_name}").into()),
+                    input_schema: Arc::new(JsonObject::default()),
+                    output_schema: None,
+                    annotations: None,
+                    execution: None,
+                    icons: None,
+                    meta: None,
+                },
+                connector_id: connector_id.map(str::to_string),
+                connector_name: connector_id.map(str::to_string),
+            },
+        )
+    }
+
+    #[test]
+    fn filter_codex_apps_mcp_tools_keeps_non_apps_and_enabled_apps() {
+        let mcp_tools = HashMap::from([
+            make_tool(
+                "mcp__codex_apps__calendar_create_event",
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_create_event",
+                Some("calendar"),
+            ),
+            make_tool(
+                "mcp__codex_apps__drive_search",
+                CODEX_APPS_MCP_SERVER_NAME,
+                "drive_search",
+                Some("drive"),
+            ),
+            make_tool("mcp__rmcp__echo", "rmcp", "echo", None),
+        ]);
+        let connectors = vec![
+            make_connector("calendar", false),
+            make_connector("drive", true),
+        ];
+
+        let mut filtered: Vec<String> = filter_codex_apps_mcp_tools(mcp_tools, &connectors)
+            .into_keys()
+            .collect();
+        filtered.sort();
+
+        assert_eq!(
+            filtered,
+            vec![
+                "mcp__codex_apps__drive_search".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_codex_apps_mcp_tools_drops_apps_without_connector_id() {
+        let mcp_tools = HashMap::from([
+            make_tool(
+                "mcp__codex_apps__unknown",
+                CODEX_APPS_MCP_SERVER_NAME,
+                "unknown",
+                None,
+            ),
+            make_tool("mcp__rmcp__echo", "rmcp", "echo", None),
+        ]);
+
+        let mut filtered: Vec<String> =
+            filter_codex_apps_mcp_tools(mcp_tools, &[make_connector("calendar", true)])
+                .into_keys()
+                .collect();
+        filtered.sort();
+
+        assert_eq!(filtered, vec!["mcp__rmcp__echo".to_string()]);
+    }
 }

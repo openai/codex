@@ -208,7 +208,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -1884,6 +1884,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -1892,35 +1893,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -2573,6 +2545,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -2582,6 +2557,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -2596,6 +2572,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -2605,6 +2584,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -3382,6 +3362,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -3410,6 +3398,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -3838,6 +3827,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/PatchApplyStatus"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -3865,6 +3862,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -4141,6 +4139,12 @@
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -4956,6 +4960,14 @@
       ],
       "type": "string"
     },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "ExecOneOffCommandParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5398,6 +5410,30 @@
         "root",
         "score"
       ],
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "query",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionUpdatedNotification",
       "type": "object"
     },
     "GetAuthStatusParams": {
@@ -6436,6 +6472,14 @@
         }
       ]
     },
+    "PatchApplyStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "PlanItemArg": {
       "additionalProperties": false,
       "properties": {
@@ -6541,6 +6585,18 @@
             }
           ]
         },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "plan_type": {
           "anyOf": [
             {
@@ -6602,6 +6658,57 @@
         "used_percent"
       ],
       "type": "object"
+    },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -7616,8 +7723,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -7675,6 +7790,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -8358,6 +8481,26 @@
             "params"
           ],
           "title": "ConfigWarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionUpdated"
+              ],
+              "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdatedNotification",
           "type": "object"
         },
         {
@@ -10060,7 +10203,7 @@
           },
           "isEnabled": {
             "default": true,
-            "description": "Whether this app is enabled in config.toml. Example: ```toml [app.bad_app] enabled = false ```",
+            "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
             "type": "boolean"
           },
           "logoUrl": {
@@ -10258,6 +10401,7 @@
             "enum": [
               "contextWindowExceeded",
               "usageLimitExceeded",
+              "serverOverloaded",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -10266,35 +10410,6 @@
               "other"
             ],
             "type": "string"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "modelCap": {
-                "properties": {
-                  "model": {
-                    "type": "string"
-                  },
-                  "reset_after_seconds": {
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                      "integer",
-                      "null"
-                    ]
-                  }
-                },
-                "required": [
-                  "model"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "modelCap"
-            ],
-            "title": "ModelCapCodexErrorInfo",
-            "type": "object"
           },
           {
             "additionalProperties": false,
@@ -11828,7 +11943,22 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "rateLimits": {
-            "$ref": "#/definitions/v2/RateLimitSnapshot"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              }
+            ],
+            "description": "Backward-compatible single-bucket view; mirrors the historical payload."
+          },
+          "rateLimitsByLimitId": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/RateLimitSnapshot"
+            },
+            "description": "Multi-bucket view keyed by metered `limit_id` (for example, `codex`).",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12843,6 +12973,18 @@
               }
             ]
           },
+          "limitId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limitName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planType": {
             "anyOf": [
               {
@@ -12922,6 +13064,53 @@
         ],
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
+      },
+      "ReadOnlyAccess": {
+        "oneOf": [
+          {
+            "properties": {
+              "includePlatformDefaults": {
+                "default": true,
+                "type": "boolean"
+              },
+              "readableRoots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "RestrictedReadOnlyAccess",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "fullAccess"
+                ],
+                "title": "FullAccessReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "FullAccessReadOnlyAccess",
+            "type": "object"
+          }
+        ]
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -13763,6 +13952,16 @@
           },
           {
             "properties": {
+              "access": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -13814,6 +14013,16 @@
               "networkAccess": {
                 "default": false,
                 "type": "boolean"
+              },
+              "readOnlyAccess": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
               },
               "type": {
                 "enum": [

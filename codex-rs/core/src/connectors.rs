@@ -95,7 +95,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     let cancel_token = CancellationToken::new();
 
     let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
@@ -283,10 +283,9 @@ pub fn merge_connectors(
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
     let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
     for connector in &mut connectors {
-        connector.is_enabled = apps
-            .as_ref()
-            .and_then(|apps| apps.get(&connector.id))
-            .is_none_or(|app| app.enabled);
+        if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
+            connector.is_enabled = app.enabled;
+        }
     }
     connectors
 }

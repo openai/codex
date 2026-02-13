@@ -1,11 +1,12 @@
+use crate::memories::memory_root;
+use crate::memories::phase_one;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
 use askama::Template;
+use codex_protocol::openai_models::ModelInfo;
 use std::path::Path;
+use tokio::fs;
 use tracing::warn;
-
-use super::text::prefix_at_char_boundary;
-use super::text::suffix_at_char_boundary;
-
-const MAX_ROLLOUT_BYTES_FOR_PROMPT: usize = 1_000_000;
 
 #[derive(Template)]
 #[template(path = "memories/consolidation.md", escape = "none")]
@@ -17,87 +18,138 @@ struct ConsolidationPromptTemplate<'a> {
 #[template(path = "memories/stage_one_input.md", escape = "none")]
 struct StageOneInputTemplate<'a> {
     rollout_path: &'a str,
+    rollout_cwd: &'a str,
     rollout_contents: &'a str,
 }
 
+#[derive(Template)]
+#[template(path = "memories/read_path.md", escape = "none")]
+struct MemoryToolDeveloperInstructionsTemplate<'a> {
+    base_path: &'a str,
+    memory_summary: &'a str,
+}
+
 /// Builds the consolidation subagent prompt for a specific memory root.
-///
-/// Falls back to a simple string replacement if Askama rendering fails.
 pub(super) fn build_consolidation_prompt(memory_root: &Path) -> String {
     let memory_root = memory_root.display().to_string();
     let template = ConsolidationPromptTemplate {
         memory_root: &memory_root,
     };
-    match template.render() {
-        Ok(prompt) => prompt,
-        Err(err) => {
-            warn!("failed to render memories consolidation prompt template: {err}");
-            include_str!("../../templates/memories/consolidation.md")
-                .replace("{{ memory_root }}", &memory_root)
-        }
-    }
+    template.render().unwrap_or_else(|err| {
+        warn!("failed to render memories consolidation prompt template: {err}");
+        format!("## Memory Phase 2 (Consolidation)\nConsolidate Codex memories in: {memory_root}")
+    })
 }
 
 /// Builds the stage-1 user message containing rollout metadata and content.
 ///
-/// Large rollout payloads are truncated to a bounded byte budget while keeping
-/// both head and tail context.
-pub(super) fn build_stage_one_input_message(rollout_path: &Path, rollout_contents: &str) -> String {
-    let (rollout_contents, truncated) = truncate_rollout_for_prompt(rollout_contents);
-    if truncated {
-        warn!(
-            "truncated rollout {} for stage-1 memory prompt to {} bytes",
-            rollout_path.display(),
-            MAX_ROLLOUT_BYTES_FOR_PROMPT
-        );
-    }
+/// Large rollout payloads are truncated to 70% of the active model's effective
+/// input window token budget while keeping both head and tail context.
+pub(super) fn build_stage_one_input_message(
+    model_info: &ModelInfo,
+    rollout_path: &Path,
+    rollout_cwd: &Path,
+    rollout_contents: &str,
+) -> anyhow::Result<String> {
+    let rollout_token_limit = model_info
+        .context_window
+        .and_then(|limit| (limit > 0).then_some(limit))
+        .map(|limit| limit.saturating_mul(model_info.effective_context_window_percent) / 100)
+        .map(|limit| (limit.saturating_mul(phase_one::CONTEXT_WINDOW_PERCENT) / 100).max(1))
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT);
+    let truncated_rollout_contents = truncate_text(
+        rollout_contents,
+        TruncationPolicy::Tokens(rollout_token_limit),
+    );
 
     let rollout_path = rollout_path.display().to_string();
-    let template = StageOneInputTemplate {
+    let rollout_cwd = rollout_cwd.display().to_string();
+    Ok(StageOneInputTemplate {
         rollout_path: &rollout_path,
-        rollout_contents: &rollout_contents,
-    };
-    match template.render() {
-        Ok(prompt) => prompt,
-        Err(err) => {
-            warn!("failed to render memories stage-one input template: {err}");
-            include_str!("../../templates/memories/stage_one_input.md")
-                .replace("{{ rollout_path }}", &rollout_path)
-                .replace("{{ rollout_contents }}", &rollout_contents)
-        }
+        rollout_cwd: &rollout_cwd,
+        rollout_contents: &truncated_rollout_contents,
     }
+    .render()?)
 }
 
-fn truncate_rollout_for_prompt(input: &str) -> (String, bool) {
-    if input.len() <= MAX_ROLLOUT_BYTES_FOR_PROMPT {
-        return (input.to_string(), false);
+/// Build prompt used for read path. This prompt must be added to the developer instructions. In
+/// case of large memory files, the `memory_summary.md` is truncated at
+/// [phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT].
+pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) -> Option<String> {
+    let base_path = memory_root(codex_home);
+    let memory_summary_path = base_path.join("memory_summary.md");
+    let memory_summary = fs::read_to_string(&memory_summary_path)
+        .await
+        .ok()?
+        .trim()
+        .to_string();
+    let memory_summary = truncate_text(
+        &memory_summary,
+        TruncationPolicy::Tokens(phase_one::MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
+    );
+    if memory_summary.is_empty() {
+        return None;
     }
-
-    let marker = "\n\n[... ROLLOUT TRUNCATED FOR MEMORY EXTRACTION ...]\n\n";
-    let marker_len = marker.len();
-    let budget_without_marker = MAX_ROLLOUT_BYTES_FOR_PROMPT.saturating_sub(marker_len);
-    let head_budget = budget_without_marker / 3;
-    let tail_budget = budget_without_marker.saturating_sub(head_budget);
-    let head = prefix_at_char_boundary(input, head_budget);
-    let tail = suffix_at_char_boundary(input, tail_budget);
-    let truncated = format!("{head}{marker}{tail}");
-
-    (truncated, true)
+    let base_path = base_path.display().to_string();
+    let template = MemoryToolDeveloperInstructionsTemplate {
+        base_path: &base_path,
+        memory_summary: &memory_summary,
+    };
+    template.render().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models_manager::model_info::model_info_from_slug;
 
     #[test]
-    fn truncate_rollout_for_prompt_keeps_head_and_tail() {
+    fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
         let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
-        let (truncated, was_truncated) = truncate_rollout_for_prompt(&input);
+        let mut model_info = model_info_from_slug("gpt-5.2-codex");
+        model_info.context_window = Some(123_000);
+        let expected_rollout_token_limit = usize::try_from(
+            ((123_000_i64 * model_info.effective_context_window_percent) / 100)
+                * phase_one::CONTEXT_WINDOW_PERCENT
+                / 100,
+        )
+        .unwrap();
+        let expected_truncated = truncate_text(
+            &input,
+            TruncationPolicy::Tokens(expected_rollout_token_limit),
+        );
+        let message = build_stage_one_input_message(
+            &model_info,
+            Path::new("/tmp/rollout.jsonl"),
+            Path::new("/tmp"),
+            &input,
+        )
+        .unwrap();
 
-        assert!(was_truncated);
-        assert!(truncated.contains("[... ROLLOUT TRUNCATED FOR MEMORY EXTRACTION ...]"));
-        assert!(truncated.starts_with('a'));
-        assert!(truncated.ends_with('z'));
-        assert!(truncated.len() <= MAX_ROLLOUT_BYTES_FOR_PROMPT + 32);
+        assert!(expected_truncated.contains("tokens truncated"));
+        assert!(expected_truncated.starts_with('a'));
+        assert!(expected_truncated.ends_with('z'));
+        assert!(message.contains(&expected_truncated));
+    }
+
+    #[test]
+    fn build_stage_one_input_message_uses_default_limit_when_model_context_window_missing() {
+        let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
+        let mut model_info = model_info_from_slug("gpt-5.2-codex");
+        model_info.context_window = None;
+        let expected_truncated = truncate_text(
+            &input,
+            TruncationPolicy::Tokens(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),
+        );
+        let message = build_stage_one_input_message(
+            &model_info,
+            Path::new("/tmp/rollout.jsonl"),
+            Path::new("/tmp"),
+            &input,
+        )
+        .unwrap();
+
+        assert!(message.contains(&expected_truncated));
     }
 }

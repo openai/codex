@@ -11,12 +11,12 @@
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
-use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
@@ -212,6 +212,25 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
         preset: ApprovalPreset,
+    },
+
+    /// Begin the non-elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxLegacySetup {
+        preset: ApprovalPreset,
+    },
+
+    /// Begin a non-elevated grant of read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    BeginWindowsSandboxGrantReadRoot {
+        path: String,
+    },
+
+    /// Result of attempting to grant read access for an additional directory.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxGrantReadRootCompleted {
+        path: PathBuf,
+        error: Option<String>,
     },
 
     /// Enable the Windows sandbox feature and switch to Agent mode.

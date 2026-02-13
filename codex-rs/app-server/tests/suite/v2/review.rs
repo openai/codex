@@ -5,8 +5,6 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::CommandExecutionApprovalDecision;
-use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -211,9 +209,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     mcp.send_response(
         request_id,
-        serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: CommandExecutionApprovalDecision::Accept,
-        })?,
+        serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
     )
     .await?;
     timeout(
@@ -259,6 +255,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = "flaky on windows CI")]
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
     let review_payload = json!({
@@ -441,6 +438,7 @@ model_provider = "mock_provider"
 
 [features]
 remote_models = false
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider"

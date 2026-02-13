@@ -260,7 +260,27 @@ pub async fn list_threads_db(
         )
         .await
     {
-        Ok(page) => Some(page),
+        Ok(mut page) => {
+            let mut valid_items = Vec::with_capacity(page.items.len());
+            for item in page.items {
+                if tokio::fs::try_exists(&item.rollout_path)
+                    .await
+                    .unwrap_or(false)
+                {
+                    valid_items.push(item);
+                } else {
+                    warn!(
+                        "state db list_threads returned stale rollout path for thread {}: {}",
+                        item.id,
+                        item.rollout_path.display()
+                    );
+                    record_discrepancy("list_threads_db", "stale_db_path_dropped");
+                    let _ = ctx.delete_thread(item.id).await;
+                }
+            }
+            page.items = valid_items;
+            Some(page)
+        }
         Err(err) => {
             warn!("state db list_threads failed: {err}");
             None
@@ -395,21 +415,30 @@ pub async fn read_repair_rollout_path(
         return;
     };
 
+    // Fast path: update an existing metadata row in place, but avoid writes when
+    // read-repair computes no effective change.
+    let mut saw_existing_metadata = false;
     if let Some(thread_id) = thread_id
-        && let Ok(Some(mut metadata)) = ctx.get_thread(thread_id).await
+        && let Ok(Some(metadata)) = ctx.get_thread(thread_id).await
     {
-        metadata.rollout_path = rollout_path.to_path_buf();
-        metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
+        saw_existing_metadata = true;
+        let mut repaired = metadata.clone();
+        repaired.rollout_path = rollout_path.to_path_buf();
+        repaired.cwd = normalize_cwd_for_state_db(&repaired.cwd);
         match archived_only {
-            Some(true) if metadata.archived_at.is_none() => {
-                metadata.archived_at = Some(metadata.updated_at);
+            Some(true) if repaired.archived_at.is_none() => {
+                repaired.archived_at = Some(repaired.updated_at);
             }
             Some(false) => {
-                metadata.archived_at = None;
+                repaired.archived_at = None;
             }
             Some(true) | None => {}
         }
-        if let Err(err) = ctx.upsert_thread(&metadata).await {
+        if repaired == metadata {
+            return;
+        }
+        record_discrepancy("read_repair_rollout_path", "upsert_needed");
+        if let Err(err) = ctx.upsert_thread(&repaired).await {
             warn!(
                 "state db read-repair upsert failed for {}: {err}",
                 rollout_path.display()
@@ -419,6 +448,11 @@ pub async fn read_repair_rollout_path(
         }
     }
 
+    // Slow path: when the row is missing/unreadable (or direct upsert failed),
+    // rebuild metadata from rollout contents and reconcile it into SQLite.
+    if !saw_existing_metadata {
+        record_discrepancy("read_repair_rollout_path", "upsert_needed");
+    }
     let default_provider = crate::rollout::list::read_session_meta_line(rollout_path)
         .await
         .ok()

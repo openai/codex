@@ -10,8 +10,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-utils-cli = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

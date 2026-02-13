@@ -1,6 +1,6 @@
 use chrono::DateTime;
 use chrono::Utc;
-use codex_core::models_manager::model_presets::all_model_presets;
+use codex_core::test_support::all_model_presets;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;

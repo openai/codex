@@ -4,13 +4,12 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tracing::warn;
 
-use super::MAX_RAW_MEMORIES_FOR_GLOBAL;
-use super::MEMORY_REGISTRY_FILENAME;
-use super::SKILLS_SUBDIR;
-use super::ensure_layout;
-use super::raw_memories_file;
-use super::rollout_summaries_dir;
-use super::text::compact_whitespace;
+use crate::memories::ensure_layout;
+use crate::memories::phase_two;
+use crate::memories::raw_memories_file;
+use crate::memories::rollout_summaries_dir;
+
+//TODO(jif) clean.
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
@@ -30,7 +29,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
@@ -38,34 +37,26 @@ pub(super) async fn sync_rollout_summaries_from_memories(
         .collect::<BTreeSet<_>>();
     prune_rollout_summaries(root, &keep).await?;
 
-    for memory in retained {
+    for memory in &retained {
         write_rollout_summary_for_thread(root, memory).await?;
     }
-    Ok(())
-}
 
-/// Clears consolidation outputs so a fresh consolidation run can regenerate them.
-///
-/// Phase-1 artifacts (`rollout_summaries/` and `raw_memories.md`) are preserved.
-pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<()> {
-    let path = root.join(MEMORY_REGISTRY_FILENAME);
-    if let Err(err) = tokio::fs::remove_file(&path).await
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            "failed removing consolidation file {}: {err}",
-            path.display()
-        );
-    }
+    if retained.is_empty() {
+        for file_name in ["MEMORY.md", "memory_summary.md"] {
+            let path = root.join(file_name);
+            if let Err(err) = tokio::fs::remove_file(path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(err);
+            }
+        }
 
-    let skills_dir = root.join(SKILLS_SUBDIR);
-    if let Err(err) = tokio::fs::remove_dir_all(&skills_dir).await
-        && err.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            "failed removing consolidation skills directory {}: {err}",
-            skills_dir.display()
-        );
+        let skills_dir = root.join("skills");
+        if let Err(err) = tokio::fs::remove_dir_all(skills_dir).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(err);
+        }
     }
 
     Ok(())
@@ -74,7 +65,7 @@ pub(super) async fn wipe_consolidation_outputs(root: &Path) -> std::io::Result<(
 async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 
@@ -93,6 +84,8 @@ async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> st
             memory.source_updated_at.to_rfc3339()
         )
         .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
+        writeln!(body, "cwd: {}", memory.cwd.display())
+            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
         writeln!(body)
             .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
         body.push_str(memory.raw_memory.trim());
@@ -147,9 +140,11 @@ async fn write_rollout_summary_for_thread(
         memory.source_updated_at.to_rfc3339()
     )
     .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
+    writeln!(body, "cwd: {}", memory.cwd.display())
+        .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
     writeln!(body)
         .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
-    body.push_str(&compact_whitespace(&memory.rollout_summary));
+    body.push_str(&memory.rollout_summary);
     body.push('\n');
 
     tokio::fs::write(path, body).await

@@ -21,6 +21,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
@@ -101,6 +102,7 @@ pub(crate) async fn execute_user_shell_command(
         // emitted TurnStarted, so emitting another TurnStarted here would create
         // duplicate turn lifecycle events and confuse clients.
         let event = EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_context.sub_id.clone(),
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.collaboration_mode.mode,
         });
@@ -206,6 +208,7 @@ pub(crate) async fn execute_user_shell_command(
                         exit_code: -1,
                         duration: Duration::ZERO,
                         formatted_output: aborted_message,
+                        status: ExecCommandStatus::Failed,
                     }),
                 )
                 .await;
@@ -232,6 +235,11 @@ pub(crate) async fn execute_user_shell_command(
                             &output,
                             turn_context.truncation_policy,
                         ),
+                        status: if output.exit_code == 0 {
+                            ExecCommandStatus::Completed
+                        } else {
+                            ExecCommandStatus::Failed
+                        },
                     }),
                 )
                 .await;
@@ -271,6 +279,7 @@ pub(crate) async fn execute_user_shell_command(
                             &exec_output,
                             turn_context.truncation_policy,
                         ),
+                        status: ExecCommandStatus::Failed,
                     }),
                 )
                 .await;

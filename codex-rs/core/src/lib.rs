@@ -59,6 +59,7 @@ mod session_prefix;
 mod shell_detect;
 mod stream_events_utils;
 mod tagged_block_parser;
+pub mod test_support;
 mod text_encoding;
 pub mod token_data;
 mod truncate;
@@ -76,8 +77,10 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 mod event_mapping;
 pub mod review_format;
 pub mod review_prompts;
+mod seatbelt_permissions;
 mod thread_manager;
 pub mod web_search;
+pub mod windows_sandbox_read_grants;
 pub use codex_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
@@ -123,6 +126,7 @@ pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
+pub use rollout::policy::EventPersistenceMode;
 pub use rollout::rollout_date_parts;
 pub use rollout::session_index::find_thread_names_by_ids;
 mod function_tool;
@@ -145,8 +149,6 @@ pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
-#[cfg(any(test, feature = "test-support"))]
-pub use unified_exec::set_deterministic_process_ids_for_tests;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

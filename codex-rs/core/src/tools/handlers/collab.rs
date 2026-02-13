@@ -3,6 +3,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -16,6 +17,7 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
@@ -816,16 +818,12 @@ fn build_agent_shared_config(
     config.model_reasoning_summary = turn.reasoning_summary;
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
-    config.shell_environment_policy = turn.shell_environment_policy.clone();
+    config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
+    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
-        .approval_policy
-        .set(turn.approval_policy)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("approval_policy is invalid: {err}"))
-        })?;
-    config
+        .permissions
         .sandbox_policy
         .set(turn.sandbox_policy.clone())
         .map_err(|err| {
@@ -895,7 +893,7 @@ mod tests {
     }
 
     fn thread_manager() -> ThreadManager {
-        ThreadManager::with_models_provider(
+        ThreadManager::with_models_provider_for_tests(
             CodexAuth::from_api_key("dummy"),
             built_in_model_providers()["openai"].clone(),
         )
@@ -1304,6 +1302,7 @@ mod tests {
                     phase: None,
                 })]),
                 AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+                false,
             )
             .await
             .expect("start thread");
@@ -1690,22 +1689,6 @@ mod tests {
 
     #[tokio::test]
     async fn build_agent_spawn_config_uses_turn_context_values() {
-        fn pick_allowed_approval_policy(
-            constraint: &crate::config::Constrained<AskForApproval>,
-            base: AskForApproval,
-        ) -> AskForApproval {
-            let candidates = [
-                AskForApproval::Never,
-                AskForApproval::UnlessTrusted,
-                AskForApproval::OnRequest,
-                AskForApproval::OnFailure,
-            ];
-            candidates
-                .into_iter()
-                .find(|candidate| *candidate != base && constraint.can_set(candidate).is_ok())
-                .unwrap_or(base)
-        }
-
         fn pick_allowed_sandbox_policy(
             constraint: &crate::config::Constrained<SandboxPolicy>,
             base: SandboxPolicy,
@@ -1734,13 +1717,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         turn.cwd = temp_dir.path().to_path_buf();
         turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
-        turn.approval_policy = pick_allowed_approval_policy(
-            &turn.config.approval_policy,
-            *turn.config.approval_policy.get(),
-        );
         turn.sandbox_policy = pick_allowed_sandbox_policy(
-            &turn.config.sandbox_policy,
-            turn.config.sandbox_policy.get().clone(),
+            &turn.config.permissions.sandbox_policy,
+            turn.config.permissions.sandbox_policy.get().clone(),
         );
 
         let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
@@ -1752,14 +1731,16 @@ mod tests {
         expected.model_reasoning_summary = turn.reasoning_summary;
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
-        expected.shell_environment_policy = turn.shell_environment_policy.clone();
+        expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
         expected
+            .permissions
             .approval_policy
-            .set(turn.approval_policy)
+            .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
+            .permissions
             .sandbox_policy
             .set(turn.sandbox_policy)
             .expect("sandbox policy set");
@@ -1799,14 +1780,16 @@ mod tests {
         expected.model_reasoning_summary = turn.reasoning_summary;
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
-        expected.shell_environment_policy = turn.shell_environment_policy.clone();
+        expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
         expected
+            .permissions
             .approval_policy
-            .set(turn.approval_policy)
+            .set(AskForApproval::Never)
             .expect("approval policy set");
         expected
+            .permissions
             .sandbox_policy
             .set(turn.sandbox_policy)
             .expect("sandbox policy set");

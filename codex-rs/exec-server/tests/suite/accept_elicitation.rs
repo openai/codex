@@ -138,7 +138,14 @@ prefix_rule(
         .lock()
         .unwrap()
         .iter()
-        .map(|r| r.message.clone())
+        .map(|r| match r {
+            rmcp::model::CreateElicitationRequestParams::FormElicitationParams {
+                message, ..
+            }
+            | rmcp::model::CreateElicitationRequestParams::UrlElicitationParams {
+                message, ..
+            } => message.clone(),
+        })
         .collect::<Vec<_>>();
     assert_eq!(vec![expected_elicitation_message], elicitation_messages);
 
