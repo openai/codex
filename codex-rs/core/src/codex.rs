@@ -1234,12 +1234,21 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
-        // The managed proxy can call back into core for allowlist-miss decisions.
-        let inline_network_decider_session = config
-            .permissions
+        let managed_network_requirements_enabled = config
+            .config_layer_stack
+            .requirements_toml()
             .network
-            .as_ref()
-            .map(|_| Arc::new(RwLock::new(std::sync::Weak::<Session>::new())));
+            .is_some();
+        // The managed proxy can call back into core for allowlist-miss decisions.
+        let inline_network_decider_session = if managed_network_requirements_enabled {
+            config
+                .permissions
+                .network
+                .as_ref()
+                .map(|_| Arc::new(RwLock::new(std::sync::Weak::<Session>::new())))
+        } else {
+            None
+        };
         let inline_network_decider =
             inline_network_decider_session
                 .as_ref()
@@ -1263,6 +1272,7 @@ impl Session {
                 spec.start_proxy(
                     config.permissions.sandbox_policy.get(),
                     inline_network_decider.as_ref().map(Arc::clone),
+                    managed_network_requirements_enabled,
                 )
                 .await
                 .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,

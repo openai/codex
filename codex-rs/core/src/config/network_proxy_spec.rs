@@ -99,6 +99,7 @@ impl NetworkProxySpec {
         &self,
         sandbox_policy: &SandboxPolicy,
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        enable_network_approval_flow: bool,
     ) -> std::io::Result<StartedNetworkProxy> {
         let state =
             build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
@@ -107,10 +108,12 @@ impl NetworkProxySpec {
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         let state = NetworkProxyState::with_reloader(state, reloader);
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
-        if matches!(
-            sandbox_policy,
-            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-        ) {
+        if enable_network_approval_flow
+            && matches!(
+                sandbox_policy,
+                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+            )
+        {
             builder = match policy_decider {
                 Some(policy_decider) => builder.policy_decider_arc(policy_decider),
                 None => builder.policy_decider(|_request| async {
