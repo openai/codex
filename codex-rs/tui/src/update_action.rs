@@ -29,7 +29,7 @@ impl UpdateAction {
 
 #[cfg(not(debug_assertions))]
 pub(crate) fn get_update_action() -> Option<UpdateAction> {
-    let exe = std::env::current_exe().unwrap_or_default();
+    let exe = std::env::current_exe().ok()?;
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
     let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
 
