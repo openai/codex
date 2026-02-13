@@ -1,7 +1,7 @@
 use crate::admin;
-use crate::attempt_metadata::proxy_username_for_attempt_id;
 use crate::config;
 use crate::http_proxy;
+use crate::metadata::proxy_username_for_attempt_id;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequest;
 use crate::runtime::unix_socket_permissions_supported;
