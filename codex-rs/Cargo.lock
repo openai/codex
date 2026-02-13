@@ -1420,6 +1420,8 @@ dependencies = [
  "codex-protocol",
  "serde",
  "serde_json",
+ "tungstenite",
+ "url",
  "uuid",
 ]
 
@@ -2035,6 +2037,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "codex-utils-absolute-path",
  "codex-utils-rustls-provider",
@@ -2294,6 +2297,7 @@ dependencies = [
  "codex-utils-oss",
  "codex-utils-pty",
  "codex-utils-sandbox-summary",
+ "codex-utils-sleep-inhibitor",
  "codex-windows-sandbox",
  "color-eyre",
  "crossterm",
@@ -2491,6 +2495,15 @@ name = "codex-utils-sanitizer"
 version = "0.0.0"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "codex-utils-sleep-inhibitor"
+version = "0.0.0"
+dependencies = [
+ "core-foundation 0.9.4",
+ "libc",
+ "tracing",
 ]
 
 [[package]]

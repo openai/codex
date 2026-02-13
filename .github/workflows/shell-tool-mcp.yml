@@ -105,7 +105,7 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
 
-      - uses: dtolnay/rust-toolchain@1.93
+      - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: ${{ matrix.target }}
 
@@ -251,11 +251,11 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
-            yum install -y git gcc gcc-c++ make bison autoconf gettext
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           else
             echo "Unsupported package manager in container"
             exit 1
@@ -329,6 +329,212 @@ jobs:
           path: artifacts/**
           if-no-files-found: error
 
+  zsh-linux:
+    name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: ubuntu:24.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: ubuntu:22.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-12
+            image: debian:12
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-11
+            image: debian:11
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: arm64v8/ubuntu:24.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: arm64v8/ubuntu:22.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-20.04
+            image: arm64v8/ubuntu:20.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-12
+            image: arm64v8/debian:12
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-11
+            image: arm64v8/debian:11
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
+          else
+            echo "Unsupported package manager in container"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched zsh
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          cd /tmp/zsh
+          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
+          ./Util/preconfig
+          ./configure
+          cores="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/zsh/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp Src/zsh "$dest/zsh"
+
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  zsh-darwin:
+    name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            variant: macos-15
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            variant: macos-14
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v autoconf >/dev/null 2>&1; then
+            brew install autoconf
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched zsh
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://git.code.sf.net/p/zsh/code /tmp/zsh
+          cd /tmp/zsh
+          git fetch --depth 1 origin 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
+          ./Util/preconfig
+          ./configure
+          cores="$(getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/zsh/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp Src/zsh "$dest/zsh"
+
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
   package:
     name: Package npm module
     needs:
@@ -336,6 +542,8 @@ jobs:
       - rust-binaries
       - bash-linux
       - bash-darwin
+      - zsh-linux
+      - zsh-darwin
     runs-on: ubuntu-latest
     env:
       PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -409,7 +617,8 @@ jobs:
           chmod +x \
             "$staging"/vendor/*/codex-exec-mcp-server \
             "$staging"/vendor/*/codex-execve-wrapper \
-            "$staging"/vendor/*/bash/*/bash
+            "$staging"/vendor/*/bash/*/bash \
+            "$staging"/vendor/*/zsh/*/zsh
 
       - name: Create npm tarball
         shell: bash

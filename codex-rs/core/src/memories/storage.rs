@@ -5,7 +5,6 @@ use std::path::Path;
 use tracing::warn;
 
 use crate::memories::ensure_layout;
-use crate::memories::phase_two;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
 
@@ -15,25 +14,27 @@ use crate::memories::rollout_summaries_dir;
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
     memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
-    rebuild_raw_memories_file(root, memories).await
+    rebuild_raw_memories_file(root, memories, max_raw_memories_for_global).await
 }
 
 /// Syncs canonical rollout summary files from DB-backed stage-1 output rows.
 pub(super) async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
     let retained = memories
         .iter()
-        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(max_raw_memories_for_global)
         .collect::<Vec<_>>();
     let keep = retained
         .iter()
-        .map(|memory| memory.thread_id.to_string())
+        .map(|memory| rollout_summary_file_stem(memory))
         .collect::<BTreeSet<_>>();
     prune_rollout_summaries(root, &keep).await?;
 
@@ -62,10 +63,14 @@ pub(super) async fn sync_rollout_summaries_from_memories(
     Ok(())
 }
 
-async fn rebuild_raw_memories_file(root: &Path, memories: &[Stage1Output]) -> std::io::Result<()> {
+async fn rebuild_raw_memories_file(
+    root: &Path,
+    memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
+) -> std::io::Result<()> {
     let retained = memories
         .iter()
-        .take(phase_two::MAX_RAW_MEMORIES_FOR_GLOBAL)
+        .take(max_raw_memories_for_global)
         .collect::<Vec<_>>();
     let mut body = String::from("# Raw Memories\n\n");
 
@@ -108,10 +113,10 @@ async fn prune_rollout_summaries(root: &Path, keep: &BTreeSet<String>) -> std::i
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(thread_id) = extract_thread_id_from_rollout_summary_filename(file_name) else {
+        let Some(stem) = file_name.strip_suffix(".md") else {
             continue;
         };
-        if !keep.contains(thread_id)
+        if !keep.contains(stem)
             && let Err(err) = tokio::fs::remove_file(&path).await
             && err.kind() != std::io::ErrorKind::NotFound
         {
@@ -129,7 +134,8 @@ async fn write_rollout_summary_for_thread(
     root: &Path,
     memory: &Stage1Output,
 ) -> std::io::Result<()> {
-    let path = rollout_summaries_dir(root).join(format!("{}.md", memory.thread_id));
+    let file_stem = rollout_summary_file_stem(memory);
+    let path = rollout_summaries_dir(root).join(format!("{file_stem}.md"));
 
     let mut body = String::new();
     writeln!(body, "thread_id: {}", memory.thread_id)
@@ -150,7 +156,85 @@ async fn write_rollout_summary_for_thread(
     tokio::fs::write(path, body).await
 }
 
-fn extract_thread_id_from_rollout_summary_filename(file_name: &str) -> Option<&str> {
-    let stem = file_name.strip_suffix(".md")?;
-    if stem.is_empty() { None } else { Some(stem) }
+fn rollout_summary_file_stem(memory: &Stage1Output) -> String {
+    const ROLLOUT_SLUG_MAX_LEN: usize = 20;
+
+    let thread_id = memory.thread_id.to_string();
+    let Some(raw_slug) = memory.rollout_slug.as_deref() else {
+        return thread_id;
+    };
+
+    let mut slug = String::with_capacity(ROLLOUT_SLUG_MAX_LEN);
+    for ch in raw_slug.chars() {
+        if slug.len() >= ROLLOUT_SLUG_MAX_LEN {
+            break;
+        }
+
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else {
+            slug.push('_');
+        }
+    }
+
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+
+    if slug.is_empty() {
+        thread_id
+    } else {
+        format!("{thread_id}-{slug}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rollout_summary_file_stem;
+    use chrono::TimeZone;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use codex_state::Stage1Output;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn stage1_output_with_slug(rollout_slug: Option<&str>) -> Stage1Output {
+        Stage1Output {
+            thread_id: ThreadId::new(),
+            source_updated_at: Utc.timestamp_opt(123, 0).single().expect("timestamp"),
+            raw_memory: "raw memory".to_string(),
+            rollout_summary: "summary".to_string(),
+            rollout_slug: rollout_slug.map(ToString::to_string),
+            cwd: PathBuf::from("/tmp/workspace"),
+            generated_at: Utc.timestamp_opt(124, 0).single().expect("timestamp"),
+        }
+    }
+
+    #[test]
+    fn rollout_summary_file_stem_uses_thread_id_when_slug_missing() {
+        let memory = stage1_output_with_slug(None);
+        let thread_id = memory.thread_id.to_string();
+
+        assert_eq!(rollout_summary_file_stem(&memory), thread_id);
+    }
+
+    #[test]
+    fn rollout_summary_file_stem_sanitizes_and_truncates_slug() {
+        let memory =
+            stage1_output_with_slug(Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345"));
+        let thread_id = memory.thread_id.to_string();
+
+        assert_eq!(
+            rollout_summary_file_stem(&memory),
+            format!("{thread_id}-unsafe_slug_with_spa")
+        );
+    }
+
+    #[test]
+    fn rollout_summary_file_stem_uses_thread_id_when_slug_is_empty() {
+        let memory = stage1_output_with_slug(Some(""));
+        let thread_id = memory.thread_id.to_string();
+
+        assert_eq!(rollout_summary_file_stem(&memory), thread_id);
+    }
 }

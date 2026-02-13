@@ -52,6 +52,19 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     list_accessible_connectors_from_mcp_tools_with_options(config, false).await
 }
 
+pub async fn list_cached_accessible_connectors_from_mcp_tools(
+    config: &Config,
+) -> Option<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Some(Vec::new());
+    }
+
+    let auth_manager = auth_manager_from_config(config);
+    let auth = auth_manager.auth().await;
+    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    read_cached_accessible_connectors(&cache_key)
+}
+
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
     force_refetch: bool,

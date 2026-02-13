@@ -15,11 +15,12 @@ use codex_core::sandboxing::SandboxPermissions;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::posix::escalate_protocol::BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
+use crate::posix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::EscalateAction;
 use crate::posix::escalate_protocol::EscalateRequest;
 use crate::posix::escalate_protocol::EscalateResponse;
+use crate::posix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::posix::escalate_protocol::SuperExecMessage;
 use crate::posix::escalate_protocol::SuperExecResult;
 use crate::posix::escalation_policy::EscalationPolicy;
@@ -63,7 +64,11 @@ impl EscalateServer {
             client_socket.as_raw_fd().to_string(),
         );
         env.insert(
-            BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
+            EXEC_WRAPPER_ENV_VAR.to_string(),
+            self.execve_wrapper.to_string_lossy().to_string(),
+        );
+        env.insert(
+            LEGACY_BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
             self.execve_wrapper.to_string_lossy().to_string(),
         );
 

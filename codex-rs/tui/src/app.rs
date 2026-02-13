@@ -3,8 +3,6 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
-#[cfg(target_os = "windows")]
-use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
@@ -365,6 +363,13 @@ fn should_show_model_migration_prompt(
         return false;
     }
 
+    if !available_models
+        .iter()
+        .any(|preset| preset.model == target_model && preset.show_in_picker)
+    {
+        return false;
+    }
+
     if available_models
         .iter()
         .any(|preset| preset.model == current_model && preset.upgrade.is_some())
@@ -401,7 +406,7 @@ fn target_preset_for_upgrade<'a>(
 ) -> Option<&'a ModelPreset> {
     available_models
         .iter()
-        .find(|preset| preset.model == target_model)
+        .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -551,9 +556,21 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a thread (e.g., before starting a new one).
+    /// One-shot guard used while switching threads.
+    ///
+    /// We set this when intentionally stopping the current thread before moving
+    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
+    /// misclassified as an unexpected sub-agent death.
     suppress_shutdown_complete: bool,
+    /// Tracks the thread we intentionally shut down while exiting the app.
+    ///
+    /// When this matches the active thread, its `ShutdownComplete` should lead to
+    /// process exit instead of being treated as an unexpected sub-agent death that
+    /// triggers failover to the primary thread.
+    ///
+    /// This is thread-scoped state (`Option<ThreadId>`) instead of a global bool
+    /// so shutdown events from other threads still take the normal failover path.
+    pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
 
@@ -928,6 +945,29 @@ impl App {
         Ok(())
     }
 
+    /// Returns `(closed_thread_id, primary_thread_id)` when a non-primary active
+    /// thread has died and we should fail over to the primary thread.
+    ///
+    /// A user-requested shutdown (`ExitMode::ShutdownFirst`) sets
+    /// `pending_shutdown_exit_thread_id`; matching shutdown completions are ignored
+    /// here so Ctrl+C-like exits don't accidentally resurrect the main thread.
+    ///
+    /// Failover is only eligible when all of these are true:
+    /// 1. the event is `ShutdownComplete`;
+    /// 2. the active thread differs from the primary thread;
+    /// 3. the active thread is not the pending shutdown-exit thread.
+    fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
+        if !matches!(msg, EventMsg::ShutdownComplete) {
+            return None;
+        }
+        let active_thread_id = self.active_thread_id?;
+        let primary_thread_id = self.primary_thread_id?;
+        if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
+            return None;
+        }
+        (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
+    }
+
     fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
@@ -1148,6 +1188,7 @@ impl App {
             feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -1225,7 +1266,7 @@ impl App {
                     }
                 }, if app.active_thread_rx.is_some() => {
                     if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event)?;
+                        app.handle_active_thread_event(tui, event).await?;
                     } else {
                         app.clear_active_thread().await;
                     }
@@ -1577,8 +1618,15 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::ShutdownFirst => {
+                    // Mark the thread we are explicitly shutting down for exit so
+                    // its shutdown completion does not trigger agent failover.
+                    self.pending_shutdown_exit_thread_id =
+                        self.active_thread_id.or(self.chat_widget.thread_id());
+                    self.chat_widget.submit_op(Op::Shutdown);
+                }
                 ExitMode::Immediate => {
+                    self.pending_shutdown_exit_thread_id = None;
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
             },
@@ -1700,7 +1748,7 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
                 self.otel_manager
                     .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
@@ -1712,7 +1760,7 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset, reason);
+                    .open_windows_sandbox_fallback_prompt(preset);
             }
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
@@ -1788,10 +1836,7 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt {
-                                    preset,
-                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
-                                }
+                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
                             }
                         };
                         tx.send(event);
@@ -1812,6 +1857,7 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
+                    let otel_manager = self.otel_manager.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
@@ -1822,6 +1868,11 @@ impl App {
                             &env_map,
                             codex_home.as_path(),
                         ) {
+                            otel_manager.counter(
+                                "codex.windows_sandbox.legacy_setup_preflight_failed",
+                                1,
+                                &[],
+                            );
                             tracing::warn!(
                                 error = %err,
                                 "failed to preflight non-admin Windows sandbox setup"
@@ -2459,6 +2510,9 @@ impl App {
             event.msg,
             EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
         );
+        // This guard is only for intentional thread-switch shutdowns.
+        // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
+        // and resolved in `handle_active_thread_event`.
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2480,7 +2534,51 @@ impl App {
         self.chat_widget.handle_codex_event_replay(event);
     }
 
-    fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    /// Handles an event emitted by the currently active thread.
+    ///
+    /// This function enforces shutdown intent routing: unexpected non-primary
+    /// thread shutdowns fail over to the primary thread, while user-requested
+    /// app exits consume only the tracked shutdown completion and then proceed.
+    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        // Capture this before any potential thread switch: we only want to clear
+        // the exit marker when the currently active thread acknowledges shutdown.
+        let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
+            && self.pending_shutdown_exit_thread_id == self.active_thread_id;
+
+        // Processing order matters:
+        //
+        // 1. handle unexpected non-primary shutdown failover first;
+        // 2. clear pending exit marker for matching shutdown;
+        // 3. forward the event through normal handling.
+        //
+        // This preserves the mental model that user-requested exits do not trigger
+        // failover, while true sub-agent deaths still do.
+        if let Some((closed_thread_id, primary_thread_id)) =
+            self.active_non_primary_shutdown_target(&event.msg)
+        {
+            self.thread_event_channels.remove(&closed_thread_id);
+            self.select_agent_thread(tui, primary_thread_id).await?;
+            if self.active_thread_id == Some(primary_thread_id) {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Agent thread {closed_thread_id} closed. Switched back to main thread."
+                    ),
+                    None,
+                );
+            } else {
+                self.clear_active_thread().await;
+                self.chat_widget.add_error_message(format!(
+                    "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
+                ));
+            }
+            return Ok(());
+        }
+
+        if pending_shutdown_exit_completed {
+            // Clear only after seeing the shutdown completion for the tracked
+            // thread, so unrelated shutdowns cannot consume this marker.
+            self.pending_shutdown_exit_thread_id = None;
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -2764,6 +2862,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -2786,6 +2885,8 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
+    use codex_protocol::user_input::UserInput;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2868,6 +2969,85 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        app.active_thread_id = Some(ThreadId::new());
+        app.primary_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_primary_thread_shutdown()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_ids_for_non_primary_shutdown() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_when_shutdown_exit_is_pending()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(active_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_still_switches_for_other_pending_exit_thread()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2910,6 +3090,7 @@ mod tests {
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -2967,6 +3148,7 @@ mod tests {
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 active_thread_id: None,
@@ -3039,25 +3221,25 @@ mod tests {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
-            "gpt-5.1",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex",
-            "gpt-5.1-codex",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
-            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
-            "gpt-5.1-codex-max",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
@@ -3088,7 +3270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_migration_prompt_skips_when_target_missing() {
+    async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         let mut available = all_model_presets();
         let mut current = available
             .iter()
@@ -3106,7 +3288,7 @@ mod tests {
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
 
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             &current.model,
             "missing-target",
             &BTreeMap::new(),
@@ -3114,6 +3296,21 @@ mod tests {
         ));
 
         assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
+
+        let mut with_hidden_target = all_model_presets();
+        let target = with_hidden_target
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2-codex")
+            .expect("target preset present");
+        target.show_in_picker = false;
+
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.2-codex",
+            &BTreeMap::new(),
+            &with_hidden_target,
+        ));
+        assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.2-codex").is_none());
     }
 
     #[tokio::test]
@@ -3193,7 +3390,7 @@ mod tests {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let app_id = "connector_1".to_string();
+        let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
 
         assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
 
@@ -3233,12 +3430,14 @@ mod tests {
 
         let user_cell = |text: &str,
                          text_elements: Vec<TextElement>,
-                         local_image_paths: Vec<PathBuf>|
+                         local_image_paths: Vec<PathBuf>,
+                         remote_image_urls: Vec<String>|
          -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
                 text_elements,
                 local_image_paths,
+                remote_image_urls,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3284,17 +3483,18 @@ mod tests {
         // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up", Vec::new(), Vec::new()),
+            user_cell("follow-up", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer follow-up"),
             make_header(false),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
             user_cell(
                 &edited_text,
                 edited_text_elements.clone(),
                 edited_local_image_paths.clone(),
+                vec!["https://example.com/backtrack.png".to_string()],
             ),
             agent_cell("answer edited"),
         ];
@@ -3333,8 +3533,16 @@ mod tests {
         assert_eq!(selection.prefill, edited_text);
         assert_eq!(selection.text_elements, edited_text_elements);
         assert_eq!(selection.local_image_paths, edited_local_image_paths);
+        assert_eq!(
+            selection.remote_image_urls,
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         app.apply_backtrack_rollback(selection);
+        assert_eq!(
+            app.chat_widget.remote_image_urls(),
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {
@@ -3344,6 +3552,104 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        let remote_image_url = "https://example.com/remote-only.png".to_string();
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![remote_image_url.clone()],
+        });
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let data_image_url = "data:image/png;base64,abc123".to_string();
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        }) as Arc<dyn HistoryCell>];
+
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        });
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut saw_rollback = false;
+        let mut submitted_items: Option<Vec<UserInput>> = None;
+        while let Ok(op) = op_rx.try_recv() {
+            match op {
+                Op::ThreadRollback { .. } => saw_rollback = true,
+                Op::UserTurn { items, .. } => submitted_items = Some(items),
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let items = submitted_items.expect("expected user turn after backtrack resubmit");
+        assert!(items.iter().any(|item| {
+            matches!(
+                item,
+                UserInput::Image { image_url } if image_url == &data_image_url
+            )
+        }));
     }
 
     #[tokio::test]
@@ -3508,6 +3814,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after first")],
@@ -3517,6 +3824,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after second")],
