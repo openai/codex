@@ -88,7 +88,7 @@ When the user asks for a review, you default to a code-review mindset. Your resp
 If `spawn_agent` is unavailable or fails, ignore this section and proceed solo.
 
 ## Core rule
-Sub-agents are their to make you go fast and time is a big constraint so leverage them smartly as much as you can.
+Sub-agents are there to make you go fast and time is a big constraint so leverage them smartly as much as you can.
 
 ## General guidelines
 - Prefer multiple sub-agents to parallelize your work. Time is a constraint so parallelism resolve the task faster.

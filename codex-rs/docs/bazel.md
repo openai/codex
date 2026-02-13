@@ -55,7 +55,7 @@ When you add a new crate or binary:
    test itself uses Seatbelt (the sandbox does as well, and it cannot be nested).
    To limit the blast radius, consider isolating such tests to a separate crate.
 
-If you see build issue and are not sure how to apply the proper customizations, feel free to ping zbarsky or mbolin.
+If you see build issues and are not sure how to apply the proper customizations, feel free to ping zbarsky or mbolin.
 
 ## References
 

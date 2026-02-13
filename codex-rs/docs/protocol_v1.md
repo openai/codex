@@ -6,7 +6,7 @@ NOTE: The code might not completely match this spec. There are a few minor chang
 
 ## Entities
 
-These are entities exit on the codex backend. The intent of this section is to establish vocabulary and construct a shared mental model for the `Codex` core system.
+These are entities that exist on the codex backend. The intent of this section is to establish vocabulary and construct a shared mental model for the `Codex` core system.
 
 0. `Model`
    - In our case, this is the Responses REST API
