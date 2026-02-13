@@ -24,6 +24,23 @@
     ; Read network configuration.
     (global-name "com.apple.SystemConfiguration.DNSConfiguration")
     (global-name "com.apple.SystemConfiguration.configd")
+    (global-name "com.apple.SystemConfiguration.SCNetworkReachability")
+    (global-name "com.apple.SystemConfiguration.NetworkInformation")
+
+    ; mDNS / DNS resolution.
+    (global-name "com.apple.dnssd.service")
+    (global-name "com.apple.mDNSResponder.reHS")
+)
+
+(allow file-read*
+    (subpath "/Library/Preferences/SystemConfiguration")
+    (literal "/private/var/run/resolv.conf")
+    (literal "/private/etc/resolv.conf")
+    (literal "/private/etc/hosts")
+)
+
+(allow network-outbound
+    (literal "/private/var/run/mDNSResponder")
 )
 
 (allow sysctl-read

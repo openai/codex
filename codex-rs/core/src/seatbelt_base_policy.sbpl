@@ -19,6 +19,11 @@
   (require-all
     (path "/dev/null")
     (vnode-type CHARACTER-DEVICE)))
+(allow file-read*
+  (literal "/private/etc/hosts")
+  (literal "/private/etc/resolv.conf")
+  (literal "/private/var/run/resolv.conf")
+)
 
 ; sysctls permitted.
 (allow sysctl-read
