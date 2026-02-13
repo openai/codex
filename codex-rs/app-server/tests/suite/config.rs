@@ -97,6 +97,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_verbosity: Some(Verbosity::Medium),
+            model_service_tier: None,
             tools: Some(Tools {
                 web_search: Some(false),
                 view_image: Some(true),
@@ -110,6 +111,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
                     model_reasoning_effort: Some(ReasoningEffort::High),
                     model_reasoning_summary: Some(ReasoningSummary::Detailed),
                     model_verbosity: Some(Verbosity::Medium),
+                    model_service_tier: None,
                     model_provider: Some("openai".into()),
                     chatgpt_base_url: Some("https://api.chatgpt.com".into()),
                 },
@@ -147,6 +149,7 @@ async fn get_config_toml_empty() -> Result<()> {
             model_reasoning_effort: None,
             model_reasoning_summary: None,
             model_verbosity: None,
+            model_service_tier: None,
             tools: None,
             profile: None,
             profiles: HashMap::new(),
