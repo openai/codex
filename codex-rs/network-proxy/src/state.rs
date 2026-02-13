@@ -60,6 +60,7 @@ pub fn build_config_state(
         deny_set,
         constraints,
         blocked: std::collections::VecDeque::new(),
+        blocked_total: 0,
     })
 }
 

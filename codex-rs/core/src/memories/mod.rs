@@ -76,6 +76,8 @@ mod metrics {
     pub(super) const MEMORY_PHASE_ONE_JOBS: &str = "codex.memory.phase1";
     /// Number of raw memories produced by phase-1 startup extraction.
     pub(super) const MEMORY_PHASE_ONE_OUTPUT: &str = "codex.memory.phase1.output";
+    /// Histogram for aggregate token usage across one phase-1 startup run.
+    pub(super) const MEMORY_PHASE_ONE_TOKEN_USAGE: &str = "codex.memory.phase1.token_usage";
     /// Number of phase-2 startup jobs grouped by status.
     pub(super) const MEMORY_PHASE_TWO_JOBS: &str = "codex.memory.phase2";
     /// Number of stage-1 memories included in each phase-2 consolidation step.
