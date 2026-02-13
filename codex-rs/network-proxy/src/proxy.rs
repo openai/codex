@@ -368,16 +368,17 @@ fn apply_proxy_env_overrides(
     if socks_enabled && network_attempt_id.is_none() {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
-        #[cfg(target_os = "macos")]
-        {
-            // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
-            // and only provide a SOCKS ProxyCommand fallback when one is not present.
-            env.entry("GIT_SSH_COMMAND".to_string())
-                .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
-        }
     } else {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &http_proxy_url);
+    }
+
+    #[cfg(target_os = "macos")]
+    if socks_enabled {
+        // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
+        // and only provide a SOCKS ProxyCommand fallback when one is not present.
+        env.entry("GIT_SSH_COMMAND".to_string())
+            .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
     }
 }
 
@@ -799,6 +800,13 @@ mod tests {
             env.get("ALL_PROXY"),
             Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
         );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
     }
 
     #[cfg(target_os = "macos")]
