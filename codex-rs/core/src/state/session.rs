@@ -170,6 +170,27 @@ impl SessionState {
         merged
     }
 
+    pub(crate) fn set_mcp_tool_selection(&mut self, tool_names: Vec<String>) {
+        if tool_names.is_empty() {
+            self.active_mcp_tool_selection = None;
+            return;
+        }
+
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for tool_name in tool_names {
+            if seen.insert(tool_name.clone()) {
+                selected.push(tool_name);
+            }
+        }
+
+        self.active_mcp_tool_selection = if selected.is_empty() {
+            None
+        } else {
+            Some(selected)
+        };
+    }
+
     pub(crate) fn get_mcp_tool_selection(&self) -> Option<Vec<String>> {
         self.active_mcp_tool_selection.clone()
     }
@@ -289,6 +310,40 @@ mod tests {
         state.merge_mcp_tool_selection(vec!["mcp__rmcp__echo".to_string()]);
 
         state.clear_mcp_tool_selection();
+
+        assert_eq!(state.get_mcp_tool_selection(), None);
+    }
+
+    #[tokio::test]
+    async fn set_mcp_tool_selection_deduplicates_and_preserves_order() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        state.merge_mcp_tool_selection(vec!["mcp__rmcp__old".to_string()]);
+
+        state.set_mcp_tool_selection(vec![
+            "mcp__rmcp__echo".to_string(),
+            "mcp__rmcp__image".to_string(),
+            "mcp__rmcp__echo".to_string(),
+            "mcp__rmcp__search".to_string(),
+        ]);
+
+        assert_eq!(
+            state.get_mcp_tool_selection(),
+            Some(vec![
+                "mcp__rmcp__echo".to_string(),
+                "mcp__rmcp__image".to_string(),
+                "mcp__rmcp__search".to_string(),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn set_mcp_tool_selection_empty_input_clears_selection() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        state.merge_mcp_tool_selection(vec!["mcp__rmcp__echo".to_string()]);
+
+        state.set_mcp_tool_selection(Vec::new());
 
         assert_eq!(state.get_mcp_tool_selection(), None);
     }

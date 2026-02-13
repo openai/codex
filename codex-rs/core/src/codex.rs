@@ -1489,6 +1489,11 @@ impl Session {
         state.merge_mcp_tool_selection(tool_names)
     }
 
+    pub(crate) async fn set_mcp_tool_selection(&self, tool_names: Vec<String>) {
+        let mut state = self.state.lock().await;
+        state.set_mcp_tool_selection(tool_names);
+    }
+
     pub(crate) async fn get_mcp_tool_selection(&self) -> Option<Vec<String>> {
         let state = self.state.lock().await;
         state.get_mcp_tool_selection()
@@ -1522,6 +1527,7 @@ impl Session {
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
+        self.clear_mcp_tool_selection().await;
         match conversation_history {
             InitialHistory::New => {
                 // Build and record initial items (user instructions + environment context)
@@ -1537,6 +1543,8 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                let restored_tool_selection =
+                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
                 let previous_model = Self::last_rollout_model_name(&rollout_items)
                     .map(std::string::ToString::to_string);
                 {
@@ -1578,12 +1586,17 @@ impl Session {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
+                if let Some(selected_tools) = restored_tool_selection {
+                    self.set_mcp_tool_selection(selected_tools).await;
+                }
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
                 self.flush_rollout().await;
             }
             InitialHistory::Forked(rollout_items) => {
+                let restored_tool_selection =
+                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
                 let previous_model = Self::last_rollout_model_name(&rollout_items)
                     .map(std::string::ToString::to_string);
                 self.set_previous_model(previous_model).await;
@@ -1602,6 +1615,9 @@ impl Session {
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
+                }
+                if let Some(selected_tools) = restored_tool_selection {
+                    self.set_mcp_tool_selection(selected_tools).await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -1642,6 +1658,54 @@ impl Session {
             RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
             _ => None,
         })
+    }
+
+    fn extract_mcp_tool_selection_from_rollout(
+        rollout_items: &[RolloutItem],
+    ) -> Option<Vec<String>> {
+        let mut search_call_ids = HashSet::new();
+        let mut active_selected_tools: Option<Vec<String>> = None;
+
+        for item in rollout_items {
+            let RolloutItem::ResponseItem(response_item) = item else {
+                continue;
+            };
+            match response_item {
+                ResponseItem::FunctionCall { name, call_id, .. } => {
+                    if name == "search_tool_bm25" {
+                        search_call_ids.insert(call_id.clone());
+                    }
+                }
+                ResponseItem::FunctionCallOutput { call_id, output } => {
+                    if !search_call_ids.contains(call_id) {
+                        continue;
+                    }
+                    let Some(content) = output.body.to_text() else {
+                        continue;
+                    };
+                    let Ok(payload) = serde_json::from_str::<Value>(&content) else {
+                        continue;
+                    };
+                    let Some(selected_tools) = payload
+                        .get("active_selected_tools")
+                        .and_then(Value::as_array)
+                    else {
+                        continue;
+                    };
+                    let Some(selected_tools) = selected_tools
+                        .iter()
+                        .map(|value| value.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    active_selected_tools = Some(selected_tools);
+                }
+                _ => {}
+            }
+        }
+
+        active_selected_tools
     }
 
     async fn previous_model(&self) -> Option<String> {
@@ -5780,6 +5844,22 @@ mod tests {
         }
     }
 
+    fn function_call_rollout_item(name: &str, call_id: &str) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+            id: None,
+            name: name.to_string(),
+            arguments: "{}".to_string(),
+            call_id: call_id.to_string(),
+        })
+    }
+
+    fn function_call_output_rollout_item(call_id: &str, output: &str) -> RolloutItem {
+        RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload::from_text(output.to_string()),
+        })
+    }
+
     #[tokio::test]
     async fn get_base_instructions_no_user_content() {
         let prompt_with_apply_patch_instructions =
@@ -6054,6 +6134,103 @@ mod tests {
                 "mcp__rmcp__echo".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn extract_mcp_tool_selection_from_rollout_reads_search_tool_output() {
+        let rollout_items = vec![
+            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_output_rollout_item(
+                "search-1",
+                &json!({
+                    "active_selected_tools": [
+                        "mcp__codex_apps__calendar_create_event",
+                        "mcp__codex_apps__calendar_list_events",
+                    ],
+                })
+                .to_string(),
+            ),
+        ];
+
+        let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+        assert_eq!(
+            selected,
+            Some(vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__codex_apps__calendar_list_events".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn extract_mcp_tool_selection_from_rollout_latest_valid_payload_wins() {
+        let rollout_items = vec![
+            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_output_rollout_item(
+                "search-1",
+                &json!({
+                    "active_selected_tools": ["mcp__codex_apps__calendar_create_event"],
+                })
+                .to_string(),
+            ),
+            function_call_rollout_item("search_tool_bm25", "search-2"),
+            function_call_output_rollout_item(
+                "search-2",
+                &json!({
+                    "active_selected_tools": ["mcp__codex_apps__calendar_delete_event"],
+                })
+                .to_string(),
+            ),
+        ];
+
+        let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+        assert_eq!(
+            selected,
+            Some(vec!["mcp__codex_apps__calendar_delete_event".to_string(),])
+        );
+    }
+
+    #[test]
+    fn extract_mcp_tool_selection_from_rollout_ignores_non_search_and_malformed_payloads() {
+        let rollout_items = vec![
+            function_call_rollout_item("shell", "shell-1"),
+            function_call_output_rollout_item(
+                "shell-1",
+                &json!({
+                    "active_selected_tools": ["mcp__codex_apps__should_be_ignored"],
+                })
+                .to_string(),
+            ),
+            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_output_rollout_item("search-1", "{not-json"),
+            function_call_output_rollout_item(
+                "unknown-search-call",
+                &json!({
+                    "active_selected_tools": ["mcp__codex_apps__also_ignored"],
+                })
+                .to_string(),
+            ),
+            function_call_output_rollout_item(
+                "search-1",
+                &json!({
+                    "active_selected_tools": ["mcp__codex_apps__calendar_list_events"],
+                })
+                .to_string(),
+            ),
+        ];
+
+        let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+        assert_eq!(
+            selected,
+            Some(vec!["mcp__codex_apps__calendar_list_events".to_string(),])
+        );
+    }
+
+    #[test]
+    fn extract_mcp_tool_selection_from_rollout_returns_none_without_valid_search_output() {
+        let rollout_items = vec![function_call_rollout_item("search_tool_bm25", "search-1")];
+        let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
+        assert_eq!(selected, None);
     }
 
     #[tokio::test]

@@ -10,8 +10,8 @@ Follow this workflow:
    - `query` (required): focused terms that describe the capability you need.
    - `limit` (optional): maximum number of tools to return (default `8`).
 2. Use the returned `tools` list to decide which Apps tools are relevant.
-3. Matching tools are added to available `tools` and available for the remainder of the current turn.
-4. Repeated searches in the same turn are additive: new matches are unioned into `tools`.
+3. Matching tools are added to available `tools` and available for the remainder of the current session/thread.
+4. Repeated searches in the same session/thread are additive: new matches are unioned into `tools`.
 
 Notes:
 - Core tools remain available without searching.
