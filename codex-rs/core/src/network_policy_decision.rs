@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn denied_network_policy_message_requires_deny_decision() {
         let blocked = BlockedRequest {
-            host: "google.com".to_string(),
+            host: "example.com".to_string(),
             reason: "not_allowed".to_string(),
             client: None,
             method: Some("GET".to_string()),
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn denied_network_policy_message_for_denylist_block_is_explicit() {
         let blocked = BlockedRequest {
-            host: "google.com".to_string(),
+            host: "example.com".to_string(),
             reason: "denied".to_string(),
             client: None,
             method: Some("GET".to_string()),
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(
             denied_network_policy_message(&blocked),
             Some(
-                "Network access to \"google.com\" was blocked: domain is explicitly denied by policy and cannot be approved from this prompt.".to_string()
+                "Network access to \"example.com\" was blocked: domain is explicitly denied by policy and cannot be approved from this prompt.".to_string()
             )
         );
     }

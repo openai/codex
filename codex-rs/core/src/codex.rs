@@ -7409,7 +7409,7 @@ mod tests {
                 "attempt-1".to_string(),
                 "turn-1".to_string(),
                 "call-1".to_string(),
-                vec!["curl".to_string(), "google.com".to_string()],
+                vec!["curl".to_string(), "example.com".to_string()],
                 std::env::temp_dir(),
             )
             .await;
@@ -7417,7 +7417,7 @@ mod tests {
         let request = codex_network_proxy::NetworkPolicyRequest::new(
             codex_network_proxy::NetworkPolicyRequestArgs {
                 protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "google.com".to_string(),
+                host: "example.com".to_string(),
                 port: 80,
                 client_addr: None,
                 method: Some("GET".to_string()),
@@ -7444,7 +7444,7 @@ mod tests {
                 "attempt-1".to_string(),
                 "turn-1".to_string(),
                 "call-1".to_string(),
-                vec!["curl".to_string(), "google.com".to_string()],
+                vec!["curl".to_string(), "example.com".to_string()],
                 std::env::temp_dir(),
             )
             .await;
@@ -7491,7 +7491,7 @@ mod tests {
                 "attempt-1".to_string(),
                 "turn-1".to_string(),
                 "call-1".to_string(),
-                vec!["curl".to_string(), "google.com".to_string()],
+                vec!["curl".to_string(), "example.com".to_string()],
                 std::env::temp_dir(),
             )
             .await;
@@ -7499,7 +7499,7 @@ mod tests {
         let request = codex_network_proxy::NetworkPolicyRequest::new(
             codex_network_proxy::NetworkPolicyRequestArgs {
                 protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "google.com".to_string(),
+                host: "example.com".to_string(),
                 port: 80,
                 client_addr: None,
                 method: Some("GET".to_string()),
@@ -7525,7 +7525,7 @@ mod tests {
                 "attempt-1".to_string(),
                 "turn-1".to_string(),
                 "call-1".to_string(),
-                vec!["curl".to_string(), "google.com".to_string()],
+                vec!["curl".to_string(), "example.com".to_string()],
                 std::env::temp_dir(),
             )
             .await;
@@ -7542,7 +7542,7 @@ mod tests {
         let request = codex_network_proxy::NetworkPolicyRequest::new(
             codex_network_proxy::NetworkPolicyRequestArgs {
                 protocol: codex_network_proxy::NetworkProtocol::Http,
-                host: "google.com".to_string(),
+                host: "example.com".to_string(),
                 port: 80,
                 client_addr: None,
                 method: Some("GET".to_string()),
@@ -7596,7 +7596,7 @@ mod tests {
             .handle_inline_network_policy_request(codex_network_proxy::NetworkPolicyRequest::new(
                 codex_network_proxy::NetworkPolicyRequestArgs {
                     protocol: codex_network_proxy::NetworkProtocol::Http,
-                    host: "google.com".to_string(),
+                    host: "example.com".to_string(),
                     port: 80,
                     client_addr: None,
                     method: Some("GET".to_string()),
@@ -7621,7 +7621,7 @@ mod tests {
                 "attempt-1".to_string(),
                 "turn-1".to_string(),
                 "call-1".to_string(),
-                vec!["curl".to_string(), "google.com".to_string()],
+                vec!["curl".to_string(), "example.com".to_string()],
                 std::env::temp_dir(),
             )
             .await;
