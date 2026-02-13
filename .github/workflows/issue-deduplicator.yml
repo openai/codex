@@ -139,7 +139,7 @@ jobs:
             $issues[]
             | tostring
             | select(. != $current)
-          ] | unique | .[:5]')
+          ] | reduce .[] as $issue ([]; if index($issue) then . else . + [$issue] end) | .[:5]')
 
           has_matches=false
           if [ "$(jq 'length' <<< "$filtered")" -gt 0 ]; then
@@ -224,7 +224,7 @@ jobs:
             $issues[]
             | tostring
             | select(. != $current)
-          ] | unique | .[:5]')
+          ] | reduce .[] as $issue ([]; if index($issue) then . else . + [$issue] end) | .[:5]')
 
           has_matches=false
           if [ "$(jq 'length' <<< "$filtered")" -gt 0 ]; then
