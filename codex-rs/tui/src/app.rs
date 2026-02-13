@@ -551,10 +551,20 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a thread (e.g., before starting a new one).
+    /// One-shot guard used while switching threads.
+    ///
+    /// We set this when intentionally stopping the current thread before moving
+    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
+    /// misclassified as an unexpected sub-agent death.
     suppress_shutdown_complete: bool,
-    /// Active thread that should trigger app exit when its shutdown completes.
+    /// Tracks the thread we intentionally shut down while exiting the app.
+    ///
+    /// When this matches the active thread, its `ShutdownComplete` should lead to
+    /// process exit instead of being treated as an unexpected sub-agent death that
+    /// triggers failover to the primary thread.
+    ///
+    /// This is thread-scoped state (`Option<ThreadId>`) instead of a global bool
+    /// so shutdown events from other threads still take the normal failover path.
     pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
@@ -923,6 +933,17 @@ impl App {
         Ok(())
     }
 
+    /// Returns `(closed_thread_id, primary_thread_id)` when a non-primary active
+    /// thread has died and we should fail over to the primary thread.
+    ///
+    /// A user-requested shutdown (`ExitMode::ShutdownFirst`) sets
+    /// `pending_shutdown_exit_thread_id`; matching shutdown completions are ignored
+    /// here so Ctrl+C-like exits don't accidentally resurrect the main thread.
+    ///
+    /// Failover is only eligible when all of these are true:
+    /// 1. the event is `ShutdownComplete`;
+    /// 2. the active thread differs from the primary thread;
+    /// 3. the active thread is not the pending shutdown-exit thread.
     fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
         if !matches!(msg, EventMsg::ShutdownComplete) {
             return None;
@@ -1586,6 +1607,8 @@ impl App {
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => {
+                    // Mark the thread we are explicitly shutting down for exit so
+                    // its shutdown completion does not trigger agent failover.
                     self.pending_shutdown_exit_thread_id =
                         self.active_thread_id.or(self.chat_widget.thread_id());
                     self.chat_widget.submit_op(Op::Shutdown);
@@ -2356,6 +2379,9 @@ impl App {
             event.msg,
             EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
         );
+        // This guard is only for intentional thread-switch shutdowns.
+        // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
+        // and resolved in `handle_active_thread_event`.
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2377,10 +2403,25 @@ impl App {
         self.chat_widget.handle_codex_event_replay(event);
     }
 
+    /// Handles an event emitted by the currently active thread.
+    ///
+    /// This function enforces shutdown intent routing: unexpected non-primary
+    /// thread shutdowns fail over to the primary thread, while user-requested
+    /// app exits consume only the tracked shutdown completion and then proceed.
     async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        // Capture this before any potential thread switch: we only want to clear
+        // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
             && self.pending_shutdown_exit_thread_id == self.active_thread_id;
 
+        // Processing order matters:
+        //
+        // 1. handle unexpected non-primary shutdown failover first;
+        // 2. clear pending exit marker for matching shutdown;
+        // 3. forward the event through normal handling.
+        //
+        // This preserves the mental model that user-requested exits do not trigger
+        // failover, while true sub-agent deaths still do.
         if let Some((closed_thread_id, primary_thread_id)) =
             self.active_non_primary_shutdown_target(&event.msg)
         {
@@ -2403,6 +2444,8 @@ impl App {
         }
 
         if pending_shutdown_exit_completed {
+            // Clear only after seeing the shutdown completion for the tracked
+            // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
         self.handle_codex_event_now(event);
