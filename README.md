@@ -45,7 +45,7 @@ Each archive contains a single entry with the platform baked into the name (e.g.
 <details>
 <summary>Does it work on Windows?</summary>
 
-Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) - Codex has been tested on macOS and Linux with Node 22.
+Not directly. Codex requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) and has been tested on macOS and Linux with Node 22.
 
 </details>
 
