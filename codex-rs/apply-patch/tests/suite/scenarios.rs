@@ -124,3 +124,38 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn test_apply_patch_preserves_crlf_for_update_hunks() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let file_path = tmp.path().join("sample.txt");
+    fs::write(&file_path, b"one\r\ntwo\r\n")?;
+
+    let patch = "*** Begin Patch\r\n*** Update File: sample.txt\r\n@@\r\n-one\r\n+uno\r\n two\r\n*** End Patch\r\n";
+
+    Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
+        .arg(patch)
+        .current_dir(tmp.path())
+        .output()?;
+
+    assert_eq!(fs::read(&file_path)?, b"uno\r\ntwo\r\n");
+    Ok(())
+}
+
+#[test]
+fn test_apply_patch_preserves_crlf_for_add_file_hunks() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let patch =
+        "*** Begin Patch\r\n*** Add File: created.txt\r\n+hello\r\n+world\r\n*** End Patch\r\n";
+
+    Command::new(codex_utils_cargo_bin::cargo_bin("apply_patch")?)
+        .arg(patch)
+        .current_dir(tmp.path())
+        .output()?;
+
+    assert_eq!(
+        fs::read(tmp.path().join("created.txt"))?,
+        b"hello\r\nworld\r\n"
+    );
+    Ok(())
+}
