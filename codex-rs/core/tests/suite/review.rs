@@ -867,6 +867,66 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     server.verify().await;
 }
 
+/// Review startup should fail loudly when the sub-agent configuration cannot be
+/// created (for example when `cwd` is not absolute).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_startup_error_path_reports_error_and_exit_mode() {
+    let (server, _request_log) = start_responses_server_with_sse("[]", 0).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: Some(PathBuf::from(".")),
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: "review with invalid delegate cwd".to_string(),
+                },
+                user_facing_hint: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let EventMsg::Error(error_event) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::Error(_))
+    })
+    .await
+    else {
+        panic!("expected Error event");
+    };
+    assert!(
+        error_event.message.contains("cwd is not absolute"),
+        "unexpected review startup error message: {}",
+        error_event.message
+    );
+
+    let exited = wait_for_event(&codex, |event| matches!(event, EventMsg::ExitedReviewMode(_))).await;
+    assert!(
+        matches!(exited, EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output: None })),
+        "expected interrupted review exit"
+    );
+
+    let _complete = wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let _codex_home_guard = codex_home;
+    server.verify().await;
+}
+
 /// Start a mock Responses API server and mount the given SSE stream body.
 async fn start_responses_server_with_sse(
     sse_raw: &str,

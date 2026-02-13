@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::error::CodexErr;
 use crate::config::Constrained;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
@@ -64,8 +65,19 @@ impl SessionTask for ReviewTask {
         )
         .await
         {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
-            None => None,
+            Ok(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
+            Err(err) => {
+                session
+                    .clone_session()
+                    .send_event(
+                        ctx.as_ref(),
+                        EventMsg::Error(err.to_error_event(Some(
+                            "Failed to start review delegate".to_string(),
+                        )),
+                    )
+                    .await;
+                None
+            }
         };
         if !cancellation_token.is_cancelled() {
             exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
@@ -83,7 +95,7 @@ async fn start_review_conversation(
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
+) -> Result<async_channel::Receiver<Event>, CodexErr> {
     let config = ctx.config.clone();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
@@ -104,7 +116,7 @@ async fn start_review_conversation(
         .clone()
         .unwrap_or_else(|| ctx.model_info.slug.clone());
     sub_agent_config.model = Some(model);
-    (run_codex_thread_one_shot(
+    run_codex_thread_one_shot(
         sub_agent_config,
         session.auth_manager(),
         session.models_manager(),
@@ -114,9 +126,8 @@ async fn start_review_conversation(
         cancellation_token,
         None,
     )
-    .await)
-        .ok()
-        .map(|io| io.rx_event)
+    .await
+    .map(|io| io.rx_event)
 }
 
 async fn process_review_events(

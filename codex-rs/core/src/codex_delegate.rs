@@ -19,6 +19,7 @@ use codex_protocol::user_input::UserInput;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::AuthManager;
 use crate::codex::Codex;
@@ -144,14 +145,26 @@ pub(crate) async fn run_codex_thread_one_shot(
                 event.msg,
                 EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
             );
-            let _ = tx_bridge.send(event).await;
+            if tx_bridge.send(event).await.is_err() {
+                warn!("one-shot review bridge receiver closed; stopping delegate forwarding");
+                child_cancel.cancel();
+                break;
+            }
             if should_shutdown {
-                let _ = ops_tx
+                if let Err(err) = ops_tx
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
                     })
-                    .await;
+                    .await
+                {
+                    warn!(
+                        error = %err,
+                        "failed to forward review shutdown op to sub-agent"
+                    );
+                    child_cancel.cancel();
+                    break;
+                }
                 child_cancel.cancel();
                 break;
             }
@@ -271,8 +284,12 @@ async fn forward_events(
 
 /// Ask the delegate to stop and drain its events so background sends do not hit a closed channel.
 async fn shutdown_delegate(codex: &Codex) {
-    let _ = codex.submit(Op::Interrupt).await;
-    let _ = codex.submit(Op::Shutdown {}).await;
+    if let Err(err) = codex.submit(Op::Interrupt).await {
+        warn!(error = %err, "failed to submit interrupt to delegated sub-agent");
+    }
+    if let Err(err) = codex.submit(Op::Shutdown {}).await {
+        warn!(error = %err, "failed to submit shutdown to delegated sub-agent");
+    }
 
     let _ = timeout(Duration::from_millis(500), async {
         while let Ok(event) = codex.next_event().await {
@@ -294,11 +311,18 @@ async fn forward_ops(
     cancel_token_ops: CancellationToken,
 ) {
     loop {
-        let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
-            Ok(Ok(Submission { id: _, op })) => op,
+        let Submission { id, op } = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
+            Ok(Ok(submission)) => submission,
             Ok(Err(_)) | Err(_) => break,
         };
-        let _ = codex.submit(op).await;
+        if let Err(err) = codex.submit(op).await {
+            warn!(
+                error = %err,
+                submission_id = %id,
+                "failed to forward delegated op to sub-agent"
+            );
+            break;
+        }
     }
 }
 
@@ -332,13 +356,25 @@ async fn handle_exec_approval(
     let decision =
         await_approval_with_cancel(approval_fut, parent_session, &approval_id, cancel_token).await;
 
-    let _ = codex
+    if let Err(err) = codex
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: Some(turn_id),
             decision,
         })
-        .await;
+        .await
+    {
+        warn!(
+            error = %err,
+            turn_id = %turn_id,
+            sub_id = %parent_ctx.sub_id,
+            approval_id = %approval_id,
+            "failed to submit exec approval back to delegated sub-agent; aborting parent approval"
+        );
+        parent_session
+            .notify_approval(&approval_id, codex_protocol::protocol::ReviewDecision::Abort)
+            .await;
+    }
 }
 
 /// Handle an ApplyPatchApprovalRequest by consulting the parent session and replying.
@@ -368,12 +404,23 @@ async fn handle_patch_approval(
         cancel_token,
     )
     .await;
-    let _ = codex
+    if let Err(err) = codex
         .submit(Op::PatchApproval {
             id: approval_id,
             decision,
         })
-        .await;
+        .await
+    {
+        warn!(
+            error = %err,
+            sub_id = %parent_ctx.sub_id,
+            approval_id = %approval_id,
+            "failed to submit patch approval back to delegated sub-agent; aborting parent approval"
+        );
+        parent_session
+            .notify_approval(&approval_id, codex_protocol::protocol::ReviewDecision::Abort)
+            .await;
+    }
 }
 
 async fn handle_request_user_input(
@@ -396,7 +443,20 @@ async fn handle_request_user_input(
         cancel_token,
     )
     .await;
-    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+    if let Err(err) = codex
+        .submit(Op::UserInputAnswer { id, response: response.clone() })
+        .await
+    {
+        warn!(
+            error = %err,
+            sub_id = %parent_ctx.sub_id,
+            call_id = %id,
+            "failed to submit user input answer back to delegated sub-agent"
+        );
+        parent_session
+            .notify_user_input_response(&parent_ctx.sub_id, response)
+            .await;
+    }
 }
 
 async fn await_user_input_with_cancel<F>(
@@ -532,5 +592,119 @@ mod tests {
             ops.iter().any(|op| matches!(op, Op::Shutdown)),
             "expected Shutdown op after cancellation"
         );
+    }
+
+    #[tokio::test]
+    async fn forward_ops_stops_when_sub_agent_submit_channel_is_closed() {
+        let (tx_ops, rx_ops) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        drop(rx_sub);
+
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (session, _ctx, _rx) = crate::codex::make_session_and_context_with_rx().await;
+        let (_tx_event, rx_event) = bounded(1);
+        let codex = Arc::new(Codex {
+            tx_sub,
+            rx_event,
+            agent_status: agent_status_tx,
+            session,
+        });
+
+        tx_ops
+            .send(Submission {
+                id: "op-closed".to_string(),
+                op: Op::Interrupt,
+            })
+            .await
+            .expect("submit forward op");
+        drop(tx_ops);
+
+        timeout(Duration::from_millis(500), forward_ops(codex, rx_ops, CancellationToken::new()))
+            .await
+            .expect("forward_ops did not terminate on submit failure");
+    }
+
+    #[tokio::test]
+    async fn handle_exec_approval_submission_failure_notifies_parent_waiter() {
+        use codex_protocol::protocol::ReviewDecision;
+        use codex_protocol::protocol::ExecApprovalRequestEvent;
+
+        let (session, ctx, _rx_events) = crate::codex::make_session_and_context_with_rx().await;
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        drop(rx_sub);
+        let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (_tx_event, rx_event) = bounded(1);
+        let codex = Arc::new(Codex {
+            tx_sub,
+            rx_event,
+            agent_status: agent_status_tx,
+            session: Arc::clone(&session),
+        });
+
+        let event = ExecApprovalRequestEvent {
+            call_id: "approval-failed".to_string(),
+            turn_id: "turn-1".to_string(),
+            command: vec!["ls".to_string()],
+            cwd: std::path::PathBuf::from("/"),
+            reason: None,
+            proposed_execpolicy_amendment: None,
+            parsed_cmd: vec![],
+        };
+        let cancel_token = CancellationToken::new();
+        let handle = tokio::spawn({
+            let codex = Arc::clone(&codex);
+            let session = Arc::clone(&session);
+            let ctx = Arc::clone(&ctx);
+            async move {
+                handle_exec_approval(
+                    &codex,
+                    "turn-1".to_string(),
+                    &session,
+                    &ctx,
+                    event,
+                    &cancel_token,
+                )
+                .await;
+            }
+        });
+
+        timeout(Duration::from_millis(200), async {
+            loop {
+                let active = session.active_turn.lock().await;
+                let has_pending = if let Some(active_turn) = active.as_ref() {
+                    let turn_state = active_turn.turn_state.lock().await;
+                    turn_state
+                        .pending_approvals
+                        .contains_key("approval-failed")
+                } else {
+                    false
+                };
+                if has_pending {
+                    break;
+                }
+                drop(active);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approval request did not reach pending state");
+        session
+            .notify_approval("approval-failed", ReviewDecision::Approve)
+            .await;
+        timeout(Duration::from_millis(500), handle)
+            .await
+            .expect("handle_exec_approval hung")
+            .expect("handle_exec_approval join error");
+
+        let active = session.active_turn.lock().await;
+        if let Some(active_turn) = active.as_ref() {
+            let turn_state = active_turn.turn_state.lock().await;
+            assert!(
+                !turn_state.pending_approvals.contains_key("approval-failed"),
+                "approval was not cleared after failed delegated submit"
+            );
+        }
     }
 }
