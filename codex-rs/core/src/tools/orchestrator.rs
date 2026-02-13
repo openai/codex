@@ -8,8 +8,8 @@ caching).
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
+use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
-use crate::network_policy_decision::NetworkPolicyDecisionPayload;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -21,7 +21,6 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
-use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 
@@ -130,7 +129,14 @@ impl ToolOrchestrator {
                 output,
                 network_policy_decision,
             }))) => {
-                if network_policy_decision.is_some() {
+                let network_approval_context = if turn_ctx.network.is_some() {
+                    network_policy_decision
+                        .as_ref()
+                        .and_then(network_approval_context_from_payload)
+                } else {
+                    None
+                };
+                if network_policy_decision.is_some() && network_approval_context.is_none() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
                         network_policy_decision,
@@ -142,38 +148,47 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
-                let retry_details = build_denial_reason(
-                    network_policy_decision.as_ref(),
-                    should_prompt_for_network_approval(turn_ctx),
-                );
-
-                // Most tools disallow no-sandbox retry under OnRequest. However, for managed
-                // network denials with extracted network approval context, we still allow
-                // prompting so the user can explicitly approve the specific host/protocol access.
-                if !can_retry_without_sandbox(
-                    tool.wants_no_sandbox_approval(approval_policy),
-                    approval_policy,
-                    &turn_ctx.sandbox_policy,
-                    retry_details.network_approval_context.is_some(),
-                ) {
-                    return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output,
-                        network_policy_decision,
-                    })));
+                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
+                // sandbox denial that preserves the original output.
+                if !tool.wants_no_sandbox_approval(approval_policy) {
+                    let allow_on_request_network_prompt =
+                        matches!(approval_policy, AskForApproval::OnRequest)
+                            && network_approval_context.is_some()
+                            && matches!(
+                                default_exec_approval_requirement(
+                                    approval_policy,
+                                    &turn_ctx.sandbox_policy
+                                ),
+                                ExecApprovalRequirement::NeedsApproval { .. }
+                            );
+                    if !allow_on_request_network_prompt {
+                        return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                            output,
+                            network_policy_decision,
+                        })));
+                    }
                 }
+                let retry_reason =
+                    if let Some(network_approval_context) = network_approval_context.as_ref() {
+                        format!(
+                            "Network access to \"{}\" is blocked by policy.",
+                            network_approval_context.host
+                        )
+                    } else {
+                        build_denial_reason_from_output(output.as_ref())
+                    };
 
                 // Ask for approval before retrying with the escalated sandbox.
-                let should_bypass_retry_approval = should_bypass_retry_approval(
-                    tool.should_bypass_approval(approval_policy, already_approved),
-                    retry_details.network_approval_context.is_some(),
-                );
-                if !should_bypass_retry_approval {
+                let bypass_retry_approval = tool
+                    .should_bypass_approval(approval_policy, already_approved)
+                    && network_approval_context.is_none();
+                if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         turn: turn_ctx,
                         call_id: &tool_ctx.call_id,
-                        retry_reason: Some(retry_details.reason),
-                        network_approval_context: retry_details.network_approval_context.clone(),
+                        retry_reason: Some(retry_reason),
+                        network_approval_context: network_approval_context.clone(),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
@@ -201,245 +216,15 @@ impl ToolOrchestrator {
                 };
 
                 // Second attempt.
-                let second_attempt = (*tool).run(req, &escalated_attempt, tool_ctx).await;
-                second_attempt
+                (*tool).run(req, &escalated_attempt, tool_ctx).await
             }
             other => other,
         }
     }
 }
 
-#[derive(Debug)]
-struct RetryApprovalDetails {
-    reason: String,
-    network_approval_context: Option<NetworkApprovalContext>,
-}
-
-fn build_denial_reason(
-    network_policy_decision: Option<&NetworkPolicyDecisionPayload>,
-    network_prompting_enabled: bool,
-) -> RetryApprovalDetails {
-    let network_approval_context = if network_prompting_enabled {
-        network_policy_decision.and_then(network_approval_context_from_payload)
-    } else {
-        None
-    };
-    let reason = if let Some(network_approval_context) = network_approval_context.as_ref() {
-        format!(
-            "Network access to \"{}\" is blocked by policy.",
-            network_approval_context.host
-        )
-    } else {
-        // Keep approval reason terse and stable for UX/tests.
-        "command failed; retry without sandbox?".to_string()
-    };
-    RetryApprovalDetails {
-        reason,
-        network_approval_context,
-    }
-}
-
-fn should_prompt_for_network_approval(turn_ctx: &crate::codex::TurnContext) -> bool {
-    // Network retry prompting should follow the active managed proxy at runtime, not only
-    // requirements.toml. This keeps behavior consistent for default sandbox sessions that still
-    // route through a managed proxy.
-    turn_ctx.network.is_some()
-}
-
-fn can_retry_without_sandbox(
-    tool_wants_no_sandbox_approval: bool,
-    approval_policy: AskForApproval,
-    sandbox_policy: &codex_protocol::protocol::SandboxPolicy,
-    has_network_approval_context: bool,
-) -> bool {
-    if tool_wants_no_sandbox_approval {
-        return true;
-    }
-
-    if !matches!(approval_policy, AskForApproval::OnRequest) || !has_network_approval_context {
-        return false;
-    }
-
-    // Keep retry prompting aligned with command exec approvals for OnRequest:
-    // only restricted sandbox modes (ReadOnly/WorkspaceWrite) should prompt.
-    matches!(
-        default_exec_approval_requirement(approval_policy, sandbox_policy),
-        ExecApprovalRequirement::NeedsApproval { .. }
-    )
-}
-
-fn should_bypass_retry_approval(
-    tool_wants_to_bypass_approval: bool,
-    has_network_approval_context: bool,
-) -> bool {
-    tool_wants_to_bypass_approval && !has_network_approval_context
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::network_policy_decision::NetworkPolicyDecisionPayload;
-    use codex_protocol::approvals::NetworkApprovalProtocol;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn build_denial_reason_extracts_network_context_when_enabled() {
-        let decision = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
-            protocol: Some("https_connect".to_string()),
-            host: Some("example.com".to_string()),
-            reason: Some("not_allowed".to_string()),
-            port: Some(443),
-        };
-
-        let details = build_denial_reason(Some(&decision), true);
-
-        assert_eq!(
-            details.network_approval_context,
-            Some(NetworkApprovalContext {
-                host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Https,
-            })
-        );
-        assert_eq!(
-            details.reason,
-            "Network access to \"example.com\" is blocked by policy."
-        );
-    }
-
-    #[test]
-    fn build_denial_reason_skips_network_context_when_disabled() {
-        let decision = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
-            protocol: Some("https_connect".to_string()),
-            host: Some("example.com".to_string()),
-            reason: Some("not_allowed".to_string()),
-            port: Some(443),
-        };
-
-        let details = build_denial_reason(Some(&decision), false);
-
-        assert_eq!(details.network_approval_context, None);
-        assert_eq!(details.reason, "command failed; retry without sandbox?");
-    }
-
-    #[test]
-    fn build_denial_reason_ignores_non_ask_payloads() {
-        let decision = NetworkPolicyDecisionPayload {
-            decision: "deny".to_string(),
-            source: "decider".to_string(),
-            protocol: Some("http".to_string()),
-            host: Some("example.com".to_string()),
-            reason: Some("not_allowed".to_string()),
-            port: Some(80),
-        };
-
-        let details = build_denial_reason(Some(&decision), true);
-        assert_eq!(details.network_approval_context, None);
-    }
-
-    #[test]
-    fn build_denial_reason_ignores_non_decider_payloads() {
-        let decision = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "baseline_policy".to_string(),
-            protocol: Some("http".to_string()),
-            host: Some("example.com".to_string()),
-            reason: Some("not_allowed".to_string()),
-            port: Some(80),
-        };
-
-        let details = build_denial_reason(Some(&decision), true);
-        assert_eq!(details.network_approval_context, None);
-    }
-
-    #[test]
-    fn build_denial_reason_extracts_http_protocol() {
-        let decision = NetworkPolicyDecisionPayload {
-            decision: "ask".to_string(),
-            source: "decider".to_string(),
-            protocol: Some("http".to_string()),
-            host: Some("example.com".to_string()),
-            reason: Some("not_allowed".to_string()),
-            port: Some(80),
-        };
-
-        assert_eq!(
-            build_denial_reason(Some(&decision), true).network_approval_context,
-            Some(NetworkApprovalContext {
-                host: "example.com".to_string(),
-                protocol: NetworkApprovalProtocol::Http,
-            })
-        );
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_respects_default_on_request_gate() {
-        assert!(!can_retry_without_sandbox(
-            false,
-            AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
-            },
-            false
-        ));
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_allows_on_request_for_network_context() {
-        assert!(can_retry_without_sandbox(
-            false,
-            AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
-            },
-            true
-        ));
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_blocks_on_request_for_network_context_in_danger_full_access() {
-        assert!(!can_retry_without_sandbox(
-            false,
-            AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
-            true
-        ));
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_still_blocks_never_without_tool_override() {
-        assert!(!can_retry_without_sandbox(
-            false,
-            AskForApproval::Never,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
-            },
-            true
-        ));
-    }
-
-    #[test]
-    fn can_retry_without_sandbox_honors_tool_override() {
-        assert!(can_retry_without_sandbox(
-            true,
-            AskForApproval::OnRequest,
-            &codex_protocol::protocol::SandboxPolicy::ReadOnly {
-                access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
-            },
-            false
-        ));
-    }
-
-    #[test]
-    fn retry_approval_not_bypassed_when_network_context_present() {
-        assert!(!should_bypass_retry_approval(true, true));
-    }
-
-    #[test]
-    fn retry_approval_bypassed_without_network_context() {
-        assert!(should_bypass_retry_approval(true, false));
-    }
+fn build_denial_reason_from_output(_output: &ExecToolCallOutput) -> String {
+    // Keep approval reason terse and stable for UX/tests, but accept the
+    // output so we can evolve heuristics later without touching call sites.
+    "command failed; retry without sandbox?".to_string()
 }
