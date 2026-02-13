@@ -1677,11 +1677,11 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy, None);
+        let env = create_env(&self.config.permissions.shell_environment_policy, None);
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
-        let started_network_proxy = match self.config.network.as_ref() {
+        let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec.start_proxy().await {
                 Ok(started) => Some(started),
                 Err(err) => {
@@ -1713,7 +1713,7 @@ impl CodexMessageProcessor {
 
         let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
         let effective_policy = match requested_policy {
-            Some(policy) => match self.config.sandbox_policy.can_set(&policy) {
+            Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => policy,
                 Err(err) => {
                     let error = JSONRPCErrorError {
@@ -1725,7 +1725,7 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            None => self.config.sandbox_policy.get().clone(),
+            None => self.config.permissions.sandbox_policy.get().clone(),
         };
 
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
@@ -5156,10 +5156,13 @@ impl CodexMessageProcessor {
         &mut self,
         request_id: &ConnectionRequestId,
         parent_thread_id: ThreadId,
+        parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path =
+        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
+            path
+        } else {
             find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
                 .await
                 .map_err(|err| JSONRPCErrorError {
@@ -5171,7 +5174,8 @@ impl CodexMessageProcessor {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: format!("no rollout found for thread id {parent_thread_id}"),
                     data: None,
-                })?;
+                })?
+        };
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -5294,6 +5298,7 @@ impl CodexMessageProcessor {
                     .start_detached_review(
                         &request_id,
                         parent_thread_id,
+                        parent_thread,
                         review_request,
                         display_text.as_str(),
                     )

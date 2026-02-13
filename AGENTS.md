@@ -60,7 +60,14 @@ See `codex-rs/tui/styles.md`.
 
 ### Snapshot tests
 
-This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
+This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output.
+
+**Requirement:** any change that affects user-visible UI (including adding new UI) must include
+corresponding `insta` snapshot coverage (add a new snapshot test if one doesn't exist yet, or
+update the existing snapshot). Review and accept snapshot updates as part of the PR so UI impact
+is easy to review and future diffs stay visual.
+
+When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
   - `cargo test -p codex-tui`
