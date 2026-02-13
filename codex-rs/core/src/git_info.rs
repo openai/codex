@@ -263,7 +263,11 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     let mut command = Command::new("git");
-    command.args(args).current_dir(cwd).kill_on_drop(true);
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args(args)
+        .current_dir(cwd)
+        .kill_on_drop(true);
     let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
