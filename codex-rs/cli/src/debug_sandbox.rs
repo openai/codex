@@ -213,12 +213,23 @@ async fn run_command_under_sandbox(
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
+    let managed_network_requirements_enabled = config
+        .config_layer_stack
+        .requirements_toml()
+        .network
+        .is_some();
+
     // This proxy should only live for the lifetime of the child process.
     let network_proxy = match config.permissions.network.as_ref() {
         Some(spec) => Some(
-            spec.start_proxy(config.sandbox_policy.get(), None)
-                .await
-                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
+            spec.start_proxy(
+                config.permissions.sandbox_policy.get(),
+                None,
+                None,
+                managed_network_requirements_enabled,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
         ),
         None => None,
     };

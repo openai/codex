@@ -732,6 +732,42 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
+            name: "cat_redirect_unless_trusted_requires_approval",
+            approval_policy: UnlessTrusted,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: r#"cat < "hello" > /var/test.txt"#,
+            },
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            features: vec![],
+            model_override: Some("gpt-5"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "cat_redirect_on_request_requires_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: r#"cat < "hello" > /var/test.txt"#,
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5"),
+            outcome: Outcome::ExecApproval {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
             name: "danger_full_access_on_failure_allows_outside_write",
             approval_policy: OnFailure,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
@@ -1850,6 +1886,75 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         "",
         "unexpected file contents after second run"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let rules_dir = test.home.path().join("rules");
+    fs::create_dir_all(&rules_dir)?;
+    fs::write(
+        rules_dir.join("default.rules"),
+        r#"prefix_rule(pattern=["touch", "allow-prefix.txt"], decision="allow")"#,
+    )?;
+
+    let call_id = "heredoc-with-chained-prefix";
+    let command = "cat <<'EOF' > /tmp/test.txt && touch allow-prefix.txt\nhello\nEOF";
+    let (event, expected_command) = ActionKind::RunCommand { command }
+        .prepare(&test, &server, call_id, SandboxPermissions::UseDefault)
+        .await?;
+    let expected_command =
+        expected_command.expect("heredoc chained command scenario should produce a shell command");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-heredoc-prefix-1"),
+            event,
+            ev_completed("resp-heredoc-prefix-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-heredoc-prefix-1", "done"),
+            ev_completed("resp-heredoc-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "heredoc chained prefix",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.call_id,
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_completion(&test).await;
 
     Ok(())
 }

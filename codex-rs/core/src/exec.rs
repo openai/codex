@@ -67,7 +67,7 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
-    pub network_attempt_id: Option<String>,
+    pub network_attempt_id: Option<Uuid>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub justification: Option<String>,
@@ -192,6 +192,7 @@ pub async fn process_exec_tool_call(
         justification,
         arg0: _,
     } = params;
+    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
     if let Some(network) = network.as_ref() {
         network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
     }
@@ -250,8 +251,10 @@ pub(crate) async fn execute_exec_env(
         arg0,
     } = env;
 
-    let network_attempt_id =
-        network_attempt_id.or_else(|| network.as_ref().map(|_| Uuid::new_v4().to_string()));
+    let network_attempt_id = match network_attempt_id.as_deref() {
+        Some(attempt_id) => Uuid::parse_str(attempt_id).ok(),
+        None => network.as_ref().map(|_| Uuid::new_v4()),
+    };
 
     let params = ExecParams {
         command,
@@ -259,7 +262,7 @@ pub(crate) async fn execute_exec_env(
         expiration,
         env,
         network: network.clone(),
-        network_attempt_id: network_attempt_id.clone(),
+        network_attempt_id,
         sandbox_permissions,
         windows_sandbox_level,
         justification,
@@ -358,6 +361,7 @@ async fn exec_windows_sandbox(
         windows_sandbox_level,
         ..
     } = params;
+    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
     if let Some(network) = network.as_ref() {
         network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
     }
@@ -540,11 +544,7 @@ pub(crate) fn is_likely_sandbox_denied(
     sandbox_type: SandboxType,
     exec_output: &ExecToolCallOutput,
 ) -> bool {
-    if sandbox_type == SandboxType::None {
-        return false;
-    }
-
-    if exec_output.exit_code == 0 {
+    if sandbox_type == SandboxType::None || exec_output.exit_code == 0 {
         return false;
     }
 
@@ -723,6 +723,7 @@ async fn exec(
         windows_sandbox_level: _,
         ..
     } = params;
+    let network_attempt_id = network_attempt_id.map(|attempt_id| attempt_id.to_string());
 
     if let Some(network) = network.as_ref() {
         network.apply_to_env_for_attempt(&mut env, network_attempt_id.as_deref());
@@ -741,6 +742,9 @@ async fn exec(
         arg0: arg0_ref,
         cwd,
         sandbox_policy,
+        // The environment already has attempt-scoped proxy settings from
+        // apply_to_env_for_attempt above. Passing network here would reapply
+        // non-attempt proxy vars and drop attempt correlation metadata.
         network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,

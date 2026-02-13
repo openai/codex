@@ -86,9 +86,20 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
             .await;
 
         let result = match timeout(EXTERNAL_AUTH_REFRESH_TIMEOUT, rx).await {
-            Ok(result) => result.map_err(|err| {
-                std::io::Error::other(format!("auth refresh request canceled: {err}"))
-            })?,
+            Ok(result) => {
+                // Two failure scenarios:
+                // 1) `oneshot::Receiver` failed (sender dropped) => request canceled/channel closed.
+                // 2) client answered with JSON-RPC error payload => propagate code/message.
+                let result = result.map_err(|err| {
+                    std::io::Error::other(format!("auth refresh request canceled: {err}"))
+                })?;
+                result.map_err(|err| {
+                    std::io::Error::other(format!(
+                        "auth refresh request failed: code={} message={}",
+                        err.code, err.message
+                    ))
+                })?
+            }
             Err(_) => {
                 let _canceled = self.outgoing.cancel_request(&request_id).await;
                 return Err(std::io::Error::other(format!(

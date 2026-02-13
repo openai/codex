@@ -40,8 +40,12 @@ impl From<Vec<String>> for ExecPolicyAmendment {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkApprovalProtocol {
+    // TODO(viyatb): Add websocket protocol variants when managed proxy policy
+    // decisions expose websocket traffic as a distinct approval context.
     Http,
     Https,
+    Socks5Tcp,
+    Socks5Udp,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

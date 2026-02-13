@@ -1,6 +1,7 @@
 use crate::config;
 use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
+use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
@@ -99,6 +100,8 @@ impl NetworkProxySpec {
         &self,
         sandbox_policy: &SandboxPolicy,
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+        enable_network_approval_flow: bool,
     ) -> std::io::Result<StartedNetworkProxy> {
         let state =
             build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
@@ -107,16 +110,23 @@ impl NetworkProxySpec {
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         let state = NetworkProxyState::with_reloader(state, reloader);
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
-        if should_ask_on_allowlist_miss(sandbox_policy) {
-            if let Some(policy_decider) = policy_decider {
-                builder = builder.policy_decider_arc(policy_decider);
-            } else {
-                builder = builder.policy_decider(|_request| async {
+        if enable_network_approval_flow
+            && matches!(
+                sandbox_policy,
+                SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+            )
+        {
+            builder = match policy_decider {
+                Some(policy_decider) => builder.policy_decider_arc(policy_decider),
+                None => builder.policy_decider(|_request| async {
                     // In restricted sandbox modes, allowlist misses should ask for
                     // explicit network approval instead of hard-denying.
                     NetworkDecision::ask("not_allowed")
-                });
-            }
+                }),
+            };
+        }
+        if let Some(blocked_request_observer) = blocked_request_observer {
+            builder = builder.blocked_request_observer_arc(blocked_request_observer);
         }
         let proxy = builder.build().await.map_err(|err| {
             std::io::Error::other(format!("failed to build network proxy: {err}"))
@@ -182,47 +192,5 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
-    }
-}
-
-fn should_ask_on_allowlist_miss(sandbox_policy: &SandboxPolicy) -> bool {
-    matches!(
-        sandbox_policy,
-        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_protocol::protocol::ReadOnlyAccess;
-
-    #[test]
-    fn restricted_sandbox_modes_ask_on_allowlist_miss() {
-        assert!(should_ask_on_allowlist_miss(&SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
-        }));
-        assert!(should_ask_on_allowlist_miss(
-            &SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
-                read_only_access: ReadOnlyAccess::FullAccess,
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        ));
-    }
-
-    #[test]
-    fn yolo_and_external_modes_do_not_ask_on_allowlist_miss() {
-        assert!(!should_ask_on_allowlist_miss(
-            &SandboxPolicy::DangerFullAccess
-        ));
-        assert!(!should_ask_on_allowlist_miss(
-            &SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Restricted,
-            }
-        ));
     }
 }

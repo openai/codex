@@ -14,4 +14,6 @@ codex-app-server-protocol = { workspace = true }
 codex-protocol = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tungstenite = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
