@@ -74,7 +74,14 @@ async fn emits_warning_when_resumed_model_differs() {
         .expect("resume conversation");
 
     // Assert: a Warning event is emitted describing the model mismatch.
-    let warning = wait_for_event(&conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    let warning = wait_for_event(&conversation, |ev| {
+        matches!(
+            ev,
+            EventMsg::Warning(WarningEvent { message })
+                if message.contains("previous-model") && message.contains("current-model")
+        )
+    })
+    .await;
     let EventMsg::Warning(WarningEvent { message }) = warning else {
         panic!("expected warning event");
     };
