@@ -1827,6 +1827,7 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
     },
+    MemoryConsolidation,
     Other(String),
 }
 
@@ -1848,6 +1849,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,

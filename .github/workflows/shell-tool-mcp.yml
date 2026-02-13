@@ -251,11 +251,11 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
-            yum install -y git gcc gcc-c++ make bison autoconf gettext
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           else
             echo "Unsupported package manager in container"
             exit 1
@@ -391,11 +391,11 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
-            yum install -y git gcc gcc-c++ make bison autoconf gettext
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           else
             echo "Unsupported package manager in container"
             exit 1

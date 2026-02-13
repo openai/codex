@@ -15,6 +15,7 @@ pub struct Stage1Output {
     pub source_updated_at: DateTime<Utc>,
     pub raw_memory: String,
     pub rollout_summary: String,
+    pub rollout_slug: Option<String>,
     pub cwd: PathBuf,
     pub generated_at: DateTime<Utc>,
 }
@@ -25,6 +26,7 @@ pub(crate) struct Stage1OutputRow {
     source_updated_at: i64,
     raw_memory: String,
     rollout_summary: String,
+    rollout_slug: Option<String>,
     cwd: String,
     generated_at: i64,
 }
@@ -36,6 +38,7 @@ impl Stage1OutputRow {
             source_updated_at: row.try_get("source_updated_at")?,
             raw_memory: row.try_get("raw_memory")?,
             rollout_summary: row.try_get("rollout_summary")?,
+            rollout_slug: row.try_get("rollout_slug")?,
             cwd: row.try_get("cwd")?,
             generated_at: row.try_get("generated_at")?,
         })
@@ -51,6 +54,7 @@ impl TryFrom<Stage1OutputRow> for Stage1Output {
             source_updated_at: epoch_seconds_to_datetime(row.source_updated_at)?,
             raw_memory: row.raw_memory,
             rollout_summary: row.rollout_summary,
+            rollout_slug: row.rollout_slug,
             cwd: PathBuf::from(row.cwd),
             generated_at: epoch_seconds_to_datetime(row.generated_at)?,
         })
