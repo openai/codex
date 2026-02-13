@@ -530,16 +530,42 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
 
     let current_flags = unsafe { ifreq.ifr_ifru.ifru_flags };
     let up_flag = libc::IFF_UP as libc::c_short;
-    if (current_flags & up_flag) == up_flag {
-        return close_fd(fd);
+    if (current_flags & up_flag) != up_flag {
+        ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
+        let set_flags_result =
+            unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &ifreq) };
+        if set_flags_result < 0 {
+            let err = io::Error::last_os_error();
+            let _ = close_fd(fd);
+            return Err(err);
+        }
     }
 
-    ifreq.ifr_ifru.ifru_flags = current_flags | up_flag;
-    let set_flags_result = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &ifreq) };
-    if set_flags_result < 0 {
+    let mut addr_req = unsafe { std::mem::zeroed::<libc::ifreq>() };
+    for (index, byte) in LOOPBACK_INTERFACE_NAME.iter().copied().enumerate() {
+        addr_req.ifr_name[index] = byte as libc::c_char;
+    }
+    let loopback_addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: 0,
+        sin_addr: libc::in_addr {
+            s_addr: unsafe { libc::htonl(libc::INADDR_LOOPBACK) },
+        },
+        sin_zero: [0; 8],
+    };
+    unsafe {
+        addr_req.ifr_ifru.ifru_addr =
+            *(&loopback_addr as *const libc::sockaddr_in as *const libc::sockaddr);
+    }
+    let set_addr_result = unsafe { libc::ioctl(fd, libc::SIOCSIFADDR as libc::Ioctl, &addr_req) };
+    if set_addr_result < 0 {
         let err = io::Error::last_os_error();
-        let _ = close_fd(fd);
-        return Err(err);
+        let allow_existing_or_immutable_addr =
+            matches!(err.raw_os_error(), Some(libc::EEXIST | libc::EPERM));
+        if !allow_existing_or_immutable_addr {
+            let _ = close_fd(fd);
+            return Err(err);
+        }
     }
 
     close_fd(fd)

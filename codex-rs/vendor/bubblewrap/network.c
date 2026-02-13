@@ -179,7 +179,7 @@ loopback_setup (void)
   assert (header->nlmsg_len < sizeof (buffer));
 
   if (rtnl_do_request (rtnl_fd, header) != 0)
-    die_with_error ("loopback: Failed RTM_NEWADDR");
+    warn ("loopback: Failed RTM_NEWADDR: %m");
 
   header = rtnl_setup_request (buffer, RTM_NEWLINK,
                                NLM_F_ACK,
@@ -195,5 +195,5 @@ loopback_setup (void)
   assert (header->nlmsg_len < sizeof (buffer));
 
   if (rtnl_do_request (rtnl_fd, header) != 0)
-    die_with_error ("loopback: Failed RTM_NEWLINK");
+    warn ("loopback: Failed RTM_NEWLINK: %m");
 }

@@ -63,7 +63,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
 }
 
 #[test]
-fn omits_unshare_net_when_proxy_only_network_mode_requested() {
+fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
         &SandboxPolicy::new_read_only_policy(),
@@ -73,7 +73,7 @@ fn omits_unshare_net_when_proxy_only_network_mode_requested() {
             network_mode: BwrapNetworkMode::ProxyOnly,
         },
     );
-    assert_eq!(argv.contains(&"--unshare-net".to_string()), false);
+    assert_eq!(argv.contains(&"--unshare-net".to_string()), true);
 }
 
 #[test]

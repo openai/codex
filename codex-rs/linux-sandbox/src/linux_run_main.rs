@@ -94,9 +94,6 @@ pub fn run_main() -> ! {
     // established the filesystem view.
     if apply_seccomp_then_exec {
         if allow_network_for_proxy {
-            if let Err(err) = isolate_network_namespace_for_proxy_mode() {
-                panic!("error isolating Linux network namespace for proxy mode: {err}");
-            }
             let spec = proxy_route_spec
                 .as_deref()
                 .unwrap_or_else(|| panic!("managed proxy mode requires --proxy-route-spec"));
@@ -178,14 +175,6 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     }
 }
 
-fn isolate_network_namespace_for_proxy_mode() -> std::io::Result<()> {
-    let result = unsafe { libc::unshare(libc::CLONE_NEWNET) };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
@@ -194,10 +183,6 @@ fn run_bwrap_with_proc_fallback(
     allow_network_for_proxy: bool,
 ) -> ! {
     let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
-    if network_mode == BwrapNetworkMode::ProxyOnly && sandbox_policy.has_full_disk_write_access() {
-        exec_or_panic(inner);
-    }
-
     let mut mount_proc = mount_proc;
 
     if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy, network_mode)
