@@ -1697,7 +1697,8 @@ impl App {
                         &[("result", "failure")],
                     );
                 }
-                self.chat_widget.open_windows_sandbox_fallback_prompt(preset);
+                self.chat_widget
+                    .open_windows_sandbox_fallback_prompt(preset);
             }
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
