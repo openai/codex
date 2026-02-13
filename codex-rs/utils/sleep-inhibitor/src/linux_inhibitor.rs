@@ -85,6 +85,12 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
     }
 }
 
+impl Drop for LinuxSleepInhibitor {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
     match backend {
         LinuxBackend::SystemdInhibit => Command::new("systemd-inhibit")
