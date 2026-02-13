@@ -527,33 +527,6 @@ pub(crate) struct Session {
     next_internal_sub_id: AtomicU64,
 }
 
-struct InlineNetworkDecider {
-    session: Arc<RwLock<std::sync::Weak<Session>>>,
-    policy_decider: Arc<dyn NetworkPolicyDecider>,
-}
-
-impl InlineNetworkDecider {
-    fn new() -> Self {
-        let session = Arc::new(RwLock::new(std::sync::Weak::<Session>::new()));
-        let policy_decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
-            let session = Arc::clone(&session);
-            move |request: NetworkPolicyRequest| {
-                let session = Arc::clone(&session);
-                async move {
-                    let Some(session) = session.read().await.upgrade() else {
-                        return NetworkDecision::ask("not_allowed");
-                    };
-                    session.handle_inline_network_policy_request(request).await
-                }
-            }
-        });
-        Self {
-            session,
-            policy_decider,
-        }
-    }
-}
-
 struct NetworkApprovalAttempt {
     turn_id: String,
     call_id: String,
@@ -1224,25 +1197,43 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        // Only construct and wire this inline decider when network policy is configured.
-        let inline_network_decider = config
-            .permissions
-            .network
-            .as_ref()
-            .map(|_| InlineNetworkDecider::new());
-        let network_proxy = match (
-            config.permissions.network.as_ref(),
-            inline_network_decider.as_ref(),
-        ) {
-            (Some(spec), Some(inline_network_decider)) => Some(
+        let (inline_network_decider_session, inline_network_decider): (
+            Option<Arc<RwLock<std::sync::Weak<Session>>>>,
+            Option<Arc<dyn NetworkPolicyDecider>>,
+        ) = if config.permissions.network.is_some() {
+            let inline_network_decider_session =
+                Arc::new(RwLock::new(std::sync::Weak::<Session>::new()));
+            let inline_network_decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
+                let inline_network_decider_session = Arc::clone(&inline_network_decider_session);
+                move |request: NetworkPolicyRequest| {
+                    let inline_network_decider_session =
+                        Arc::clone(&inline_network_decider_session);
+                    async move {
+                        let Some(session) = inline_network_decider_session.read().await.upgrade()
+                        else {
+                            return NetworkDecision::ask("not_allowed");
+                        };
+                        session.handle_inline_network_policy_request(request).await
+                    }
+                }
+            });
+            (
+                Some(inline_network_decider_session),
+                Some(inline_network_decider),
+            )
+        } else {
+            (None, None)
+        };
+        let network_proxy = match config.permissions.network.as_ref() {
+            Some(spec) => Some(
                 spec.start_proxy(
                     config.permissions.sandbox_policy.get(),
-                    Some(Arc::clone(&inline_network_decider.policy_decider)),
+                    inline_network_decider.as_ref().map(Arc::clone),
                 )
                 .await
                 .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
             ),
-            _ => None,
+            None => None,
         };
         let session_network_proxy = network_proxy.as_ref().map(|started| {
             let proxy = started.proxy();
@@ -1328,8 +1319,8 @@ impl Session {
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
-        if let Some(inline_network_decider) = inline_network_decider.as_ref() {
-            let mut guard = inline_network_decider.session.write().await;
+        if let Some(inline_network_decider_session) = inline_network_decider_session {
+            let mut guard = inline_network_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
 
@@ -2197,29 +2188,13 @@ impl Session {
             if let Some(attempt) = attempts.get(attempt_id).cloned() {
                 return Some(attempt);
             }
-            tracing::debug!(
-                "inline network approval decider did not find attempt context for {attempt_id}"
-            );
             return None;
         }
-        tracing::debug!(
-            "inline network approval decider received request without attempt_id for host {}",
-            request.host
-        );
 
         if attempts.len() == 1 {
-            tracing::debug!(
-                "inline network approval decider falling back to sole active attempt for host {}",
-                request.host
-            );
             return attempts.values().next().cloned();
         }
 
-        tracing::debug!(
-            "inline network approval decider cannot disambiguate attempt for host {} (active_attempts={})",
-            request.host,
-            attempts.len()
-        );
         None
     }
 
@@ -2256,10 +2231,6 @@ impl Session {
         };
 
         let Some(turn_context) = self.turn_context_for_sub_id(&attempt.turn_id).await else {
-            tracing::debug!(
-                "inline network approval decider could not resolve turn context for {}",
-                attempt.turn_id
-            );
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
 
