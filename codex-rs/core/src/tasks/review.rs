@@ -67,15 +67,17 @@ impl SessionTask for ReviewTask {
         {
             Ok(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
             Err(err) => {
-                session
-                    .clone_session()
-                    .send_event(
-                        ctx.as_ref(),
-                        EventMsg::Error(err.to_error_event(Some(
-                            "Failed to start review delegate".to_string(),
-                        )),
-                    )
-                    .await;
+                if !cancellation_token.is_cancelled() && !matches!(err, CodexErr::TurnAborted) {
+                    session
+                        .clone_session()
+                        .send_event(
+                            ctx.as_ref(),
+                            EventMsg::Error(err.to_error_event(Some(
+                                "Failed to start review delegate".to_string(),
+                            )),
+                        )
+                        .await;
+                }
                 None
             }
         };
