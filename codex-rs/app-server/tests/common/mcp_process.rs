@@ -95,21 +95,6 @@ impl McpProcess {
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            // Shell snapshotting is flaky in Windows CI and not relevant to app-server protocol
-            // behavior covered by this harness. Disable it via managed config for stability.
-            let managed_config = codex_home.join("managed_config.toml");
-            std::fs::write(&managed_config, "[features]\nshell_snapshot = false\n").with_context(
-                || {
-                    format!(
-                        "failed to write managed config at {}",
-                        managed_config.display()
-                    )
-                },
-            )?;
-        }
-
         let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
             .context("should find binary for codex-app-server")?;
         let mut cmd = Command::new(program);
