@@ -12,9 +12,6 @@
 (allow process-fork)
 (allow signal (target same-sandbox))
 
-; Allow cf prefs to work.
-(allow user-preference-read)
-
 ; process-info
 (allow process-info* (target same-sandbox))
 

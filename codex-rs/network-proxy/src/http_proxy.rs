@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::metadata::attempt_id_from_proxy_authorization;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -16,7 +17,6 @@ use crate::responses::blocked_header_value;
 use crate::responses::blocked_message_with_policy;
 use crate::responses::blocked_text_response_with_policy;
 use crate::responses::json_response;
-use crate::responses::policy_decision_prefix;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
 use crate::state::BlockedRequestArgs;
@@ -36,11 +36,13 @@ use rama_core::layer::AddInputExtensionLayer;
 use rama_core::rt::Executor;
 use rama_core::service::service_fn;
 use rama_http::Body;
+use rama_http::HeaderMap;
+use rama_http::HeaderName;
 use rama_http::HeaderValue;
 use rama_http::Request;
 use rama_http::Response;
 use rama_http::StatusCode;
-use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
+use rama_http::header;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
 use rama_http_backend::client::proxy::layer::HttpProxyConnector;
@@ -119,7 +121,6 @@ async fn run_http_proxy_with_listener(
                 service_fn(http_connect_proxy),
             ),
             RemoveResponseHeaderLayer::hop_by_hop(),
-            RemoveRequestHeaderLayer::hop_by_hop(),
         )
             .into_layer(service_fn({
                 let policy_decider = policy_decider.clone();
@@ -159,6 +160,7 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
+    let network_attempt_id = request_network_attempt_id(&req);
 
     let enabled = app_state
         .enabled()
@@ -186,6 +188,7 @@ async fn http_connect_accept(
         method: Some("CONNECT".to_string()),
         command: None,
         exec_policy_hint: None,
+        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -210,6 +213,10 @@ async fn http_connect_accept(
                     method: Some("CONNECT".to_string()),
                     mode: None,
                     protocol: "http-connect".to_string(),
+                    attempt_id: network_attempt_id.clone(),
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(authority.port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -248,6 +255,10 @@ async fn http_connect_accept(
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http-connect".to_string(),
+                attempt_id: network_attempt_id,
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(authority.port),
             }))
             .await;
         let client = client.as_deref().unwrap_or_default();
@@ -353,7 +364,7 @@ async fn forward_connect_tunnel(
 
 async fn http_plain_proxy(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
-    req: Request,
+    mut req: Request,
 ) -> Result<Response, Infallible> {
     let app_state = match req.extensions().get::<Arc<NetworkProxyState>>().cloned() {
         Some(state) => state,
@@ -363,6 +374,7 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
+    let network_attempt_id = request_network_attempt_id(&req);
 
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
@@ -492,6 +504,7 @@ async fn http_plain_proxy(
         method: Some(req.method().as_str().to_string()),
         command: None,
         exec_policy_hint: None,
+        attempt_id: network_attempt_id.clone(),
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -516,6 +529,10 @@ async fn http_plain_proxy(
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
                     protocol: "http".to_string(),
+                    attempt_id: network_attempt_id.clone(),
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -546,6 +563,10 @@ async fn http_plain_proxy(
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http".to_string(),
+                attempt_id: network_attempt_id,
+                decision: Some(details.decision.as_str().to_string()),
+                source: Some(details.source.as_str().to_string()),
+                port: Some(port),
             }))
             .await;
         let client = client.as_deref().unwrap_or_default();
@@ -578,6 +599,8 @@ async fn http_plain_proxy(
         UpstreamClient::direct()
     };
 
+    // Strip hop-by-hop headers only after extracting metadata used for policy correlation.
+    remove_hop_by_hop_request_headers(req.headers_mut());
     match client.serve(req).await {
         Ok(resp) => Ok(resp),
         Err(err) => {
@@ -602,6 +625,7 @@ async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Respon
             .parse()
             .with_context(|| format!("invalid unix socket request path: {path}"))?;
         parts.headers.remove("x-unix-socket");
+        remove_hop_by_hop_request_headers(&mut parts.headers);
 
         let req = Request::from_parts(parts, body);
         client.serve(req).await.map_err(anyhow::Error::from)
@@ -621,20 +645,67 @@ fn client_addr<T: ExtensionsRef>(input: &T) -> Option<String> {
         .map(|info| info.peer_addr().to_string())
 }
 
+fn request_network_attempt_id(req: &Request) -> Option<String> {
+    // Some HTTP stacks normalize proxy credentials into `authorization`; accept both.
+    attempt_id_from_proxy_authorization(req.headers().get("proxy-authorization"))
+        .or_else(|| attempt_id_from_proxy_authorization(req.headers().get("authorization")))
+}
+
+fn remove_hop_by_hop_request_headers(headers: &mut HeaderMap) {
+    while let Some(raw_connection) = headers.get(header::CONNECTION).cloned() {
+        headers.remove(header::CONNECTION);
+        if let Ok(raw_connection) = raw_connection.to_str() {
+            let connection_headers: Vec<String> = raw_connection
+                .split(',')
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            for token in connection_headers {
+                if let Ok(name) = HeaderName::from_bytes(token.as_bytes()) {
+                    headers.remove(name);
+                }
+            }
+        }
+    }
+    for name in [
+        &header::KEEP_ALIVE,
+        &header::PROXY_CONNECTION,
+        &header::PROXY_AUTHORIZATION,
+        &header::TRAILER,
+        &header::TRANSFER_ENCODING,
+        &header::UPGRADE,
+    ] {
+        headers.remove(name);
+    }
+
+    // codespell:ignore te,TE
+    // 0x74,0x65 is ASCII "te" (the HTTP TE hop-by-hop header).
+    if let Ok(short_hop_header_name) = HeaderName::from_bytes(&[0x74, 0x65]) {
+        headers.remove(short_hop_header_name);
+    }
+}
+
 fn json_blocked(host: &str, reason: &str, details: Option<&PolicyDecisionDetails<'_>>) -> Response {
-    let (policy_decision_prefix, message) = details
+    let (message, decision, source, protocol, port) = details
         .map(|details| {
             (
-                Some(policy_decision_prefix(details)),
                 Some(blocked_message_with_policy(reason, details)),
+                Some(details.decision.as_str()),
+                Some(details.source.as_str()),
+                Some(details.protocol.as_policy_protocol()),
+                Some(details.port),
             )
         })
-        .unwrap_or((None, None));
+        .unwrap_or((None, None, None, None, None));
     let response = BlockedResponse {
         status: "blocked",
         host,
         reason,
-        policy_decision_prefix,
+        decision,
+        source,
+        protocol,
+        port,
         message,
     };
     let mut resp = json_response(&response);
@@ -667,6 +738,10 @@ async fn proxy_disabled_response(
             method,
             mode: None,
             protocol: protocol.as_policy_protocol().to_string(),
+            attempt_id: None,
+            decision: Some("deny".to_string()),
+            source: Some("proxy_state".to_string()),
+            port: Some(port),
         }))
         .await;
 
@@ -703,7 +778,13 @@ struct BlockedResponse<'a> {
     host: &'a str,
     reason: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    policy_decision_prefix: Option<String>,
+    decision: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
@@ -715,6 +796,8 @@ mod tests {
     use crate::config::NetworkMode;
     use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
@@ -742,6 +825,69 @@ mod tests {
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-method-policy"
+        );
+    }
+
+    #[test]
+    fn request_network_attempt_id_reads_proxy_authorization_header() {
+        let encoded = STANDARD.encode("codex-net-attempt-attempt-1:");
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("proxy-authorization", format!("Basic {encoded}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            request_network_attempt_id(&req),
+            Some("attempt-1".to_string())
+        );
+    }
+
+    #[test]
+    fn request_network_attempt_id_reads_authorization_header_fallback() {
+        let encoded = STANDARD.encode("codex-net-attempt-attempt-2:");
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("http://example.com")
+            .header("authorization", format!("Basic {encoded}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            request_network_attempt_id(&req),
+            Some("attempt-2".to_string())
+        );
+    }
+
+    #[test]
+    fn remove_hop_by_hop_request_headers_keeps_forwarding_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONNECTION,
+            HeaderValue::from_static("x-hop, keep-alive"),
+        );
+        headers.insert("x-hop", HeaderValue::from_static("1"));
+        headers.insert(
+            header::PROXY_AUTHORIZATION,
+            HeaderValue::from_static("Basic abc"),
+        );
+        headers.insert(
+            &header::X_FORWARDED_FOR,
+            HeaderValue::from_static("127.0.0.1"),
+        );
+        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
+
+        remove_hop_by_hop_request_headers(&mut headers);
+
+        assert_eq!(headers.get(header::CONNECTION), None);
+        assert_eq!(headers.get("x-hop"), None);
+        assert_eq!(headers.get(header::PROXY_AUTHORIZATION), None);
+        assert_eq!(
+            headers.get(&header::X_FORWARDED_FOR),
+            Some(&HeaderValue::from_static("127.0.0.1"))
+        );
+        assert_eq!(
+            headers.get(header::HOST),
+            Some(&HeaderValue::from_static("example.com"))
         );
     }
 }

@@ -35,6 +35,54 @@ const PROMPT_CONFLICT_REASON: &str =
 const RULES_DIR_NAME: &str = "rules";
 const RULE_EXTENSION: &str = "rules";
 const DEFAULT_POLICY_FILE: &str = "default.rules";
+static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
+    &["python3"],
+    &["python3", "-"],
+    &["python3", "-c"],
+    &["python"],
+    &["python", "-"],
+    &["python", "-c"],
+    &["py"],
+    &["py", "-3"],
+    &["pythonw"],
+    &["pyw"],
+    &["pypy"],
+    &["pypy3"],
+    &["git"],
+    &["bash"],
+    &["bash", "-lc"],
+    &["sh"],
+    &["sh", "-c"],
+    &["sh", "-lc"],
+    &["zsh"],
+    &["zsh", "-lc"],
+    &["/bin/zsh"],
+    &["/bin/zsh", "-lc"],
+    &["/bin/bash"],
+    &["/bin/bash", "-lc"],
+    &["pwsh"],
+    &["pwsh", "-Command"],
+    &["pwsh", "-c"],
+    &["powershell"],
+    &["powershell", "-Command"],
+    &["powershell", "-c"],
+    &["powershell.exe"],
+    &["powershell.exe", "-Command"],
+    &["powershell.exe", "-c"],
+    &["env"],
+    &["sudo"],
+    &["node"],
+    &["node", "-e"],
+    &["perl"],
+    &["perl", "-e"],
+    &["ruby"],
+    &["ruby", "-e"],
+    &["php"],
+    &["php", "-r"],
+    &["lua"],
+    &["lua", "-e"],
+    &["osascript"],
+];
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
     match rule_match {
@@ -240,6 +288,10 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
             policy_paths.extend(layer_policy_paths);
         }
     }
+    tracing::trace!(
+        policy_paths = ?policy_paths,
+        "loaded exec policies"
+    );
 
     let mut parser = PolicyParser::new();
     for policy_path in &policy_paths {
@@ -261,6 +313,7 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
 
     let policy = parser.build();
     tracing::debug!("loaded rules from {} files", policy_paths.len());
+    tracing::trace!(rules = ?policy, "exec policy rules loaded");
 
     let Some(requirements_policy) = config_stack.requirements().exec_policy.as_deref() else {
         return Ok(policy);
@@ -416,6 +469,15 @@ fn derive_requested_execpolicy_amendment(
 ) -> Option<ExecPolicyAmendment> {
     let prefix_rule = prefix_rule?;
     if prefix_rule.is_empty() {
+        return None;
+    }
+    if BANNED_PREFIX_SUGGESTIONS.iter().any(|banned| {
+        prefix_rule.len() == banned.len()
+            && prefix_rule
+                .iter()
+                .map(String::as_str)
+                .eq(banned.iter().copied())
+    }) {
         return None;
     }
 
@@ -1384,9 +1446,105 @@ prefix_rule(
         );
     }
 
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
+        assert_eq!(None, derive_requested_execpolicy_amendment(None, &[]));
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_for_empty_prefix_rule() {
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment(Some(&Vec::new()), &[])
+        );
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_for_exact_banned_prefix_rule() {
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment(
+                Some(&vec!["python".to_string(), "-c".to_string()]),
+                &[],
+            )
+        );
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_for_windows_and_pypy_variants() {
+        for prefix_rule in [
+            vec!["py".to_string()],
+            vec!["py".to_string(), "-3".to_string()],
+            vec!["pythonw".to_string()],
+            vec!["pyw".to_string()],
+            vec!["pypy".to_string()],
+            vec!["pypy3".to_string()],
+        ] {
+            assert_eq!(
+                None,
+                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+            );
+        }
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_for_shell_and_powershell_variants() {
+        for prefix_rule in [
+            vec!["bash".to_string(), "-lc".to_string()],
+            vec!["sh".to_string(), "-c".to_string()],
+            vec!["sh".to_string(), "-lc".to_string()],
+            vec!["zsh".to_string(), "-lc".to_string()],
+            vec!["/bin/bash".to_string(), "-lc".to_string()],
+            vec!["/bin/zsh".to_string(), "-lc".to_string()],
+            vec!["pwsh".to_string()],
+            vec!["pwsh".to_string(), "-Command".to_string()],
+            vec!["pwsh".to_string(), "-c".to_string()],
+            vec!["powershell".to_string()],
+            vec!["powershell".to_string(), "-Command".to_string()],
+            vec!["powershell".to_string(), "-c".to_string()],
+            vec!["powershell.exe".to_string()],
+            vec!["powershell.exe".to_string(), "-Command".to_string()],
+            vec!["powershell.exe".to_string(), "-c".to_string()],
+        ] {
+            assert_eq!(
+                None,
+                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+            );
+        }
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_allows_non_exact_banned_prefix_rule_match() {
+        let prefix_rule = vec![
+            "python".to_string(),
+            "-c".to_string(),
+            "print('hi')".to_string(),
+        ];
+
+        assert_eq!(
+            Some(ExecPolicyAmendment::new(prefix_rule.clone())),
+            derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+        );
+    }
+
+    #[test]
+    fn derive_requested_execpolicy_amendment_returns_none_when_policy_prompt_matches() {
+        let prefix_rule = vec!["cargo".to_string(), "build".to_string()];
+        let matched_rules = vec![RuleMatch::PrefixRuleMatch {
+            matched_prefix: vec!["cargo".to_string()],
+            decision: Decision::Prompt,
+            justification: None,
+        }];
+
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment(Some(&prefix_rule), &matched_rules)
+        );
+    }
+
     #[tokio::test]
-    async fn dangerous_git_push_requires_approval_in_danger_full_access() {
-        let command = vec_str(&["git", "push", "origin", "+main"]);
+    async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
+        let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
         let manager = ExecPolicyManager::default();
         let requirement = manager
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {

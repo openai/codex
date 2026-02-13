@@ -100,7 +100,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -188,6 +188,9 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_mcp_gateway": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -222,6 +225,9 @@
               "type": "boolean"
             },
             "js_repl": {
+              "type": "boolean"
+            },
+            "js_repl_tools_only": {
               "type": "boolean"
             },
             "memory_tool": {
@@ -1272,6 +1278,9 @@
         "apps": {
           "type": "boolean"
         },
+        "apps_mcp_gateway": {
+          "type": "boolean"
+        },
         "child_agents_md": {
           "type": "boolean"
         },
@@ -1306,6 +1315,9 @@
           "type": "boolean"
         },
         "js_repl": {
+          "type": "boolean"
+        },
+        "js_repl_tools_only": {
           "type": "boolean"
         },
         "memory_tool": {
