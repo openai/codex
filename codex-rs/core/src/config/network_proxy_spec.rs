@@ -6,6 +6,7 @@ use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyBuilder;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyHandle;
@@ -106,18 +107,11 @@ impl NetworkProxySpec {
             })?;
         let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
         let state = NetworkProxyState::with_reloader(state, reloader);
-        let mut builder = NetworkProxy::builder().state(Arc::new(state));
-        if should_ask_on_allowlist_miss(sandbox_policy) {
-            if let Some(policy_decider) = policy_decider {
-                builder = builder.policy_decider_arc(policy_decider);
-            } else {
-                builder = builder.policy_decider(|_request| async {
-                    // In restricted sandbox modes, allowlist misses should ask for
-                    // explicit network approval instead of hard-denying.
-                    NetworkDecision::ask("not_allowed")
-                });
-            }
-        }
+        let builder = configure_policy_decider(
+            NetworkProxy::builder().state(Arc::new(state)),
+            sandbox_policy,
+            policy_decider,
+        );
         let proxy = builder.build().await.map_err(|err| {
             std::io::Error::other(format!("failed to build network proxy: {err}"))
         })?;
@@ -182,6 +176,25 @@ impl NetworkProxySpec {
         }
 
         (config, constraints)
+    }
+}
+
+fn configure_policy_decider(
+    builder: NetworkProxyBuilder,
+    sandbox_policy: &SandboxPolicy,
+    policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+) -> NetworkProxyBuilder {
+    if !should_ask_on_allowlist_miss(sandbox_policy) {
+        return builder;
+    }
+
+    match policy_decider {
+        Some(policy_decider) => builder.policy_decider_arc(policy_decider),
+        None => builder.policy_decider(|_request| async {
+            // In restricted sandbox modes, allowlist misses should ask for
+            // explicit network approval instead of hard-denying.
+            NetworkDecision::ask("not_allowed")
+        }),
     }
 }
 
