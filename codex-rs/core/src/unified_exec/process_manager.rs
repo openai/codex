@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::codex::NetworkApprovalOutcome;
+use crate::codex::Session;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::network_policy_decision::denied_network_policy_message;
@@ -107,6 +108,25 @@ async fn network_policy_denial_message_for_attempt(
             None
         }
     }
+}
+
+async fn take_network_approval_outcome_for_attempt(
+    session: &Session,
+    attempt_id: Option<&str>,
+) -> Option<NetworkApprovalOutcome> {
+    let Some(attempt_id) = attempt_id else {
+        return None;
+    };
+    session.take_network_approval_outcome(attempt_id).await
+}
+
+async fn unregister_network_attempt_if_needed(session: &Session, attempt_id: Option<&str>) {
+    let Some(attempt_id) = attempt_id else {
+        return;
+    };
+    session
+        .unregister_network_approval_attempt(attempt_id)
+        .await;
 }
 
 struct PreparedProcessHandles {
@@ -203,12 +223,11 @@ impl UnifiedExecProcessManager {
         let process = match process {
             Ok(process) => Arc::new(process),
             Err(err) => {
-                if let Some(attempt_id) = network_attempt_id.as_deref() {
-                    context
-                        .session
-                        .unregister_network_approval_attempt(attempt_id)
-                        .await;
-                }
+                unregister_network_attempt_if_needed(
+                    context.session.as_ref(),
+                    network_attempt_id.as_deref(),
+                )
+                .await;
                 self.release_process_id(&request.process_id).await;
                 return Err(err);
             }
@@ -282,20 +301,16 @@ impl UnifiedExecProcessManager {
             )
             .await;
 
-            let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
-                context
-                    .session
-                    .take_network_approval_outcome(attempt_id)
-                    .await
-            } else {
-                None
-            };
-            if let Some(attempt_id) = network_attempt_id.as_deref() {
-                context
-                    .session
-                    .unregister_network_approval_attempt(attempt_id)
-                    .await;
-            }
+            let approval_outcome = take_network_approval_outcome_for_attempt(
+                context.session.as_ref(),
+                network_attempt_id.as_deref(),
+            )
+            .await;
+            unregister_network_attempt_if_needed(
+                context.session.as_ref(),
+                network_attempt_id.as_deref(),
+            )
+            .await;
 
             self.release_process_id(&request.process_id).await;
             if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
@@ -313,22 +328,18 @@ impl UnifiedExecProcessManager {
             }
             process.check_for_sandbox_denial_with_text(&text).await?;
         } else {
-            let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
-                context
-                    .session
-                    .take_network_approval_outcome(attempt_id)
-                    .await
-            } else {
-                None
-            };
+            let approval_outcome = take_network_approval_outcome_for_attempt(
+                context.session.as_ref(),
+                network_attempt_id.as_deref(),
+            )
+            .await;
             if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
                 process.terminate();
-                if let Some(attempt_id) = network_attempt_id.as_deref() {
-                    context
-                        .session
-                        .unregister_network_approval_attempt(attempt_id)
-                        .await;
-                }
+                unregister_network_attempt_if_needed(
+                    context.session.as_ref(),
+                    network_attempt_id.as_deref(),
+                )
+                .await;
                 self.release_process_id(&request.process_id).await;
                 return Err(UnifiedExecError::create_process(
                     "rejected by user".to_string(),
@@ -341,12 +352,11 @@ impl UnifiedExecProcessManager {
             .await
             {
                 process.terminate();
-                if let Some(attempt_id) = network_attempt_id.as_deref() {
-                    context
-                        .session
-                        .unregister_network_approval_attempt(attempt_id)
-                        .await;
-                }
+                unregister_network_attempt_if_needed(
+                    context.session.as_ref(),
+                    network_attempt_id.as_deref(),
+                )
+                .await;
                 self.release_process_id(&request.process_id).await;
                 return Err(UnifiedExecError::create_process(message));
             }
