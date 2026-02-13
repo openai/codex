@@ -611,9 +611,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "prevent_idle_sleep",
         #[cfg(target_os = "macos")]
         stage: Stage::Experimental {
-            name: "Prevent sleep while running",
-            menu_description: "Keep your computer awake while Codex is running a thread.",
-            announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            name: "Prevent idle system sleep during active turns",
+            menu_description: "On macOS, prevent idle system sleep while Codex is actively running a turn.",
+            announcement: "NEW: Prevent idle system sleep during active turns is now available in /experimental.",
         },
         #[cfg(not(target_os = "macos"))]
         stage: Stage::UnderDevelopment,
