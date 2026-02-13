@@ -861,7 +861,9 @@ async fn start_materialized_thread_and_restart(
     .await??;
 
     let thread_id = thread.id;
-    let rollout_file_path = thread.path.expect("thread path");
+    let rollout_file_path = thread
+        .path
+        .ok_or_else(|| anyhow::anyhow!("thread path missing from thread/start response"))?;
 
     drop(first_mcp);
 
