@@ -48,7 +48,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
             session.services.otel_manager.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
                 1,
-                &[("status", "failed_claim")],
+                &[("status", e)],
             );
             return;
         }
@@ -75,6 +75,10 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         }
     };
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
+    let counters = Counters {
+        input: raw_memories.len() as i64,
+    };
+    emit_metrics(session, counters);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
@@ -115,12 +119,6 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
 
     // 6. Spawn the agent handler.
     agent::handle(session, claim, new_watermark, thread_id);
-
-    // 7. Telemetry
-    let counters = Counters {
-        input: raw_memories.len() as i64,
-    };
-    emit_metrics(session, counters);
 }
 
 mod job {
