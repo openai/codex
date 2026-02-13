@@ -81,7 +81,6 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
     let _ = cleanup_stale_proxy_socket_dirs_in(temp_dir.as_path());
 
     let socket_dir = create_proxy_socket_dir()?;
-    spawn_proxy_socket_dir_cleanup_worker(socket_dir.clone())?;
     let mut socket_by_endpoint: BTreeMap<SocketAddr, PathBuf> = BTreeMap::new();
     let mut next_index = 0usize;
     for route in &plan.routes {
@@ -93,9 +92,11 @@ pub(crate) fn prepare_host_proxy_route_spec() -> io::Result<String> {
         socket_by_endpoint.insert(route.endpoint, socket_path);
     }
 
+    let mut host_bridge_pids = Vec::with_capacity(socket_by_endpoint.len());
     for (endpoint, socket_path) in &socket_by_endpoint {
-        spawn_host_bridge(*endpoint, socket_path)?;
+        host_bridge_pids.push(spawn_host_bridge(*endpoint, socket_path)?);
     }
+    spawn_proxy_socket_dir_cleanup_worker(socket_dir.clone(), host_bridge_pids)?;
 
     let mut routes = Vec::with_capacity(plan.routes.len());
     for route in plan.routes {
@@ -326,6 +327,10 @@ fn is_pid_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
+    is_pid_alive_raw(pid)
+}
+
+fn is_pid_alive_raw(pid: libc::pid_t) -> bool {
     let status = unsafe { libc::kill(pid, 0) };
     if status == 0 {
         return true;
@@ -334,8 +339,10 @@ fn is_pid_alive(pid: u32) -> bool {
     !matches!(err.raw_os_error(), Some(libc::ESRCH))
 }
 
-fn spawn_proxy_socket_dir_cleanup_worker(socket_dir: PathBuf) -> io::Result<()> {
-    let parent_pid = unsafe { libc::getpid() };
+fn spawn_proxy_socket_dir_cleanup_worker(
+    socket_dir: PathBuf,
+    host_bridge_pids: Vec<libc::pid_t>,
+) -> io::Result<()> {
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         return Err(io::Error::last_os_error());
@@ -343,7 +350,11 @@ fn spawn_proxy_socket_dir_cleanup_worker(socket_dir: PathBuf) -> io::Result<()> 
 
     if pid == 0 {
         loop {
-            if unsafe { libc::getppid() } != parent_pid {
+            if host_bridge_pids
+                .iter()
+                .copied()
+                .all(|bridge_pid| !is_pid_alive_raw(bridge_pid))
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -372,7 +383,7 @@ fn cleanup_proxy_socket_dir(socket_dir: &Path) -> io::Result<()> {
     }
 }
 
-fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<()> {
+fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<libc::pid_t> {
     let (read_fd, write_fd) = create_ready_pipe()?;
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -402,7 +413,7 @@ fn spawn_host_bridge(endpoint: SocketAddr, uds_path: &Path) -> io::Result<()> {
             "host bridge did not acknowledge readiness",
         ));
     }
-    Ok(())
+    Ok(pid)
 }
 
 fn run_host_bridge(endpoint: SocketAddr, uds_path: &Path, ready_fd: libc::c_int) -> io::Result<()> {
