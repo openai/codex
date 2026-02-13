@@ -18,16 +18,11 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
-use crate::user_shell_command::is_user_shell_command_text;
+use crate::session_prefix::is_contextual_user_message;
 use crate::web_search::web_search_action_detail;
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
-    if UserInstructions::is_user_instructions(message)
-        || SkillInstructions::is_skill_instructions(message)
-    {
+    if is_contextual_user_message(message) {
         return None;
     }
 
@@ -44,9 +39,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return None;
-                }
                 content.push(UserInput::Text {
                     text: text.clone(),
                     // Model input content does not carry UI element ranges.
@@ -59,9 +51,6 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 });
             }
             ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return None;
-                }
                 warn!("Output text in user message: {}", text);
             }
         }
@@ -339,7 +328,16 @@ mod tests {
                     text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
                 }],
                 end_turn: None,
-            phase: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<context_update>\n<environment_context>test_text</environment_context>\n</context_update>".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
             },
         ];
 

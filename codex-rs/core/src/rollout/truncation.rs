@@ -194,6 +194,10 @@ mod tests {
     async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
         let (session, turn_context) = make_session_and_context().await;
         let mut items = session.build_initial_context(&turn_context).await;
+        items.push(user_msg(
+            "<context_update>\n<environment_context>delta</environment_context>\n</context_update>",
+        ));
+        let prefix_and_context_count = items.len();
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));
         items.push(user_msg("second question"));
@@ -206,12 +210,12 @@ mod tests {
             .collect();
 
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
-        let expected: Vec<RolloutItem> = vec![
-            RolloutItem::ResponseItem(items[0].clone()),
-            RolloutItem::ResponseItem(items[1].clone()),
-            RolloutItem::ResponseItem(items[2].clone()),
-            RolloutItem::ResponseItem(items[3].clone()),
-        ];
+        let expected: Vec<RolloutItem> = items
+            .iter()
+            .take(prefix_and_context_count + 2)
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
 
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),

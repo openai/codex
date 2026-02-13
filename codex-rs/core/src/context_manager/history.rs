@@ -1,16 +1,12 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
-use crate::instructions::SkillInstructions;
-use crate::instructions::UserInstructions;
-use crate::session_prefix::is_session_prefix;
+use crate::session_prefix::is_contextual_user_message;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count_i64;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::BaseInstructions;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -448,29 +444,7 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     }
 
-    if UserInstructions::is_user_instructions(content)
-        || SkillInstructions::is_skill_instructions(content)
-    {
-        return false;
-    }
-
-    for content_item in content {
-        match content_item {
-            ContentItem::InputText { text } => {
-                if is_session_prefix(text) || is_user_shell_command_text(text) {
-                    return false;
-                }
-            }
-            ContentItem::OutputText { text } => {
-                if is_session_prefix(text) {
-                    return false;
-                }
-            }
-            ContentItem::InputImage { .. } => {}
-        }
-    }
-
-    true
+    !is_contextual_user_message(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
