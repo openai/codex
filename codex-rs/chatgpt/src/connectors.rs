@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
@@ -75,7 +76,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(connectors, accessible),
+        merge_connectors_with_accessible(connectors, accessible, true),
         config,
     ))
 }
@@ -185,7 +186,20 @@ fn write_cached_all_connectors(cache_key: AllConnectorsCacheKey, connectors: &[A
 pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
+    all_connectors_loaded: bool,
 ) -> Vec<AppInfo> {
+    let accessible_connectors = if all_connectors_loaded {
+        let connector_ids: HashSet<&str> = connectors
+            .iter()
+            .map(|connector| connector.id.as_str())
+            .collect();
+        accessible_connectors
+            .into_iter()
+            .filter(|connector| connector_ids.contains(connector.id.as_str()))
+            .collect()
+    } else {
+        accessible_connectors
+    };
     let merged = merge_connectors(connectors, accessible_connectors);
     filter_disallowed_connectors(merged)
 }
@@ -405,5 +419,42 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some(connector_install_url(id, id)),
+            is_accessible,
+            is_enabled: true,
+        }
+    }
+
+    #[test]
+    fn excludes_accessible_connectors_not_in_all_when_all_loaded() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            true,
+        );
+        assert_eq!(merged, vec![merged_app("alpha", true)]);
+    }
+
+    #[test]
+    fn keeps_accessible_connectors_not_in_all_while_all_loading() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            false,
+        );
+        assert_eq!(
+            merged,
+            vec![merged_app("alpha", true), merged_app("beta", true)]
+        );
     }
 }
