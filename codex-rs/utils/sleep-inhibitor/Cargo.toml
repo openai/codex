@@ -16,7 +16,7 @@ tracing = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tracing = { workspace = true }
-windows-sys = { version = "0.60.2", features = [
+windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_System_Power",
     "Win32_System_SystemServices",

@@ -39,7 +39,7 @@ impl PlatformSleepInhibitor for WindowsSleepInhibitor {
             }
             Err(error) => {
                 warn!(
-                    reason = error,
+                    reason = %error,
                     "Failed to acquire Windows sleep-prevention request"
                 );
             }
@@ -58,7 +58,7 @@ struct PowerRequest {
 }
 
 impl PowerRequest {
-    fn new_execution_required(reason: &str) -> Result<Self, &'static str> {
+    fn new_execution_required(reason: &str) -> Result<Self, String> {
         let mut wide_reason: Vec<u16> = OsStr::new(reason).encode_wide().chain(once(0)).collect();
         let context = REASON_CONTEXT {
             Version: POWER_REQUEST_CONTEXT_VERSION,
@@ -69,13 +69,15 @@ impl PowerRequest {
         };
         let handle = unsafe { PowerCreateRequest(&context) };
         if handle.is_null() {
-            return Err("PowerCreateRequest failed");
+            let error = std::io::Error::last_os_error();
+            return Err(format!("PowerCreateRequest failed: {error}"));
         }
 
         let request_type = PowerRequestExecutionRequired;
         if unsafe { PowerSetRequest(handle, request_type) } == 0 {
+            let error = std::io::Error::last_os_error();
             let _ = unsafe { CloseHandle(handle) };
-            return Err("PowerSetRequest failed");
+            return Err(format!("PowerSetRequest failed: {error}"));
         }
 
         Ok(Self {
