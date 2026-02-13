@@ -398,25 +398,6 @@ impl NetworkProxy {
         self.admin_addr
     }
 
-    /// Temporarily allows a host for a single retried command execution.
-    ///
-    /// Returns the normalized host token that should be passed to
-    /// `revoke_temporary_allowed_host` when the retry finishes.
-    pub async fn grant_temporary_allowed_host(&self, host: &str) -> Option<String> {
-        self.state.grant_temporary_allowed_host(host).await
-    }
-
-    /// Revokes a temporary host allowance created with
-    /// `grant_temporary_allowed_host`.
-    pub async fn revoke_temporary_allowed_host(&self, host: &str) {
-        self.state.revoke_temporary_allowed_host(host).await;
-    }
-
-    /// Drains proxy-blocked request telemetry entries.
-    pub async fn drain_blocked_requests(&self) -> Result<Vec<BlockedRequest>> {
-        self.state.drain_blocked().await
-    }
-
     pub async fn latest_blocked_request_for_attempt(
         &self,
         attempt_id: &str,
