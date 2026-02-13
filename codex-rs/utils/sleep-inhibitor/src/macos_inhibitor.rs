@@ -1,22 +1,75 @@
+use crate::PlatformSleepInhibitor;
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use core_foundation::string::CFStringRef;
+use std::fmt::Debug;
 use std::sync::OnceLock;
 use tracing::warn;
 
+const ASSERTION_REASON: &str = "Codex is running an active turn";
 const MACOS_IDLE_SLEEP_ASSERTION_TYPE: &str = "PreventUserIdleSystemSleep";
 const IOKIT_FRAMEWORK_BINARY: &[u8] = b"/System/Library/Frameworks/IOKit.framework/IOKit\0";
 const IOPM_ASSERTION_CREATE_WITH_NAME_SYMBOL: &[u8] = b"IOPMAssertionCreateWithName\0";
 const IOPM_ASSERTION_RELEASE_SYMBOL: &[u8] = b"IOPMAssertionRelease\0";
 const IOKIT_ASSERTION_API_UNAVAILABLE: &str = "IOKit power assertion APIs are unavailable";
 
+type IOPMAssertionReleaseFn = unsafe extern "C" fn(assertion_id: IOPMAssertionID) -> IOReturn;
+type IOPMAssertionID = u32;
+type IOPMAssertionLevel = u32;
+type IOReturn = i32;
+
+const K_IOPM_ASSERTION_LEVEL_ON: IOPMAssertionLevel = 255;
+const K_IORETURN_SUCCESS: IOReturn = 0;
+
+#[derive(Debug, Default)]
+pub(crate) struct MacOsSleepInhibitor {
+    assertion: Option<MacSleepAssertion>,
+}
+
+impl MacOsSleepInhibitor {
+    pub(crate) fn new() -> Self {
+        Self {
+            ..Default::default()
+        }
+    }
+}
+
+impl PlatformSleepInhibitor for MacOsSleepInhibitor {
+    fn acquire(&mut self) {
+        if self.assertion.is_some() {
+            return;
+        }
+
+        match MacSleepAssertion::create(ASSERTION_REASON) {
+            Ok(assertion) => {
+                self.assertion = Some(assertion);
+            }
+            Err(error) => match error {
+                MacSleepAssertionError::ApiUnavailable(reason) => {
+                    warn!(reason, "Failed to create macOS sleep-prevention assertion");
+                }
+                MacSleepAssertionError::Iokit(code) => {
+                    warn!(
+                        iokit_error = code,
+                        "Failed to create macOS sleep-prevention assertion"
+                    );
+                }
+            },
+        }
+    }
+
+    fn release(&mut self) {
+        self.assertion = None;
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct MacSleepAssertion {
+struct MacSleepAssertion {
     id: IOPMAssertionID,
 }
 
 impl MacSleepAssertion {
-    pub(crate) fn create(name: &str) -> Result<Self, MacSleepAssertionError> {
+    fn create(name: &str) -> Result<Self, MacSleepAssertionError> {
         let Some(api) = MacSleepApi::get() else {
             return Err(MacSleepAssertionError::ApiUnavailable(
                 IOKIT_ASSERTION_API_UNAVAILABLE,
@@ -63,7 +116,7 @@ impl Drop for MacSleepAssertion {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum MacSleepAssertionError {
+enum MacSleepAssertionError {
     ApiUnavailable(&'static str),
     Iokit(IOReturn),
 }
@@ -74,8 +127,6 @@ type IOPMAssertionCreateWithNameFn = unsafe extern "C" fn(
     assertion_name: CFStringRef,
     assertion_id: *mut IOPMAssertionID,
 ) -> IOReturn;
-
-type IOPMAssertionReleaseFn = unsafe extern "C" fn(assertion_id: IOPMAssertionID) -> IOReturn;
 
 struct MacSleepApi {
     // Keep the dlopen handle alive for the lifetime of the loaded symbols.
@@ -139,10 +190,3 @@ impl MacSleepApi {
         })
     }
 }
-
-type IOPMAssertionID = u32;
-type IOPMAssertionLevel = u32;
-type IOReturn = i32;
-
-const K_IOPM_ASSERTION_LEVEL_ON: IOPMAssertionLevel = 255;
-const K_IORETURN_SUCCESS: IOReturn = 0;

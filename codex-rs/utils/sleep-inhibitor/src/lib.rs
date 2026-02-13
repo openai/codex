@@ -3,34 +3,34 @@
 //! On macOS this uses native IOKit power assertions instead of spawning
 //! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
 
-#[cfg(target_os = "macos")]
+mod dummy;
 mod macos_inhibitor;
 
-#[cfg(target_os = "macos")]
-use macos_inhibitor::MacSleepAssertion;
-#[cfg(target_os = "macos")]
-use macos_inhibitor::MacSleepAssertionError;
-#[cfg(target_os = "macos")]
-use tracing::warn;
-
-#[cfg(target_os = "macos")]
-const ASSERTION_REASON: &str = "Codex is running an active turn";
+use crate::dummy::DummySleepInhibitor;
+use macos_inhibitor::MacOsSleepInhibitor;
+use std::fmt::Debug;
 
 /// Keeps the machine awake while a turn is in progress when enabled.
 #[derive(Debug)]
 pub struct SleepInhibitor {
     enabled: bool,
-    #[cfg(target_os = "macos")]
-    assertion: Option<MacSleepAssertion>,
+    platform: Box<dyn PlatformSleepInhibitor>,
+}
+
+pub(crate) trait PlatformSleepInhibitor: Debug {
+    fn acquire(&mut self);
+    fn release(&mut self);
 }
 
 impl SleepInhibitor {
     pub fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            #[cfg(target_os = "macos")]
-            assertion: None,
-        }
+        let platform: Box<dyn PlatformSleepInhibitor> = if cfg!(target_os = "macos") {
+            Box::new(MacOsSleepInhibitor::new())
+        } else {
+            Box::new(DummySleepInhibitor::new())
+        };
+
+        Self { enabled, platform }
     }
 
     /// Update the active turn state; turns sleep prevention on/off as needed.
@@ -48,36 +48,11 @@ impl SleepInhibitor {
     }
 
     fn acquire(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            if self.assertion.is_some() {
-                return;
-            }
-            match MacSleepAssertion::create(ASSERTION_REASON) {
-                Ok(assertion) => {
-                    self.assertion = Some(assertion);
-                }
-                Err(error) => match error {
-                    MacSleepAssertionError::ApiUnavailable(reason) => {
-                        warn!(reason, "Failed to create macOS sleep-prevention assertion");
-                    }
-                    MacSleepAssertionError::Iokit(code) => {
-                        warn!(
-                            iokit_error = code,
-                            "Failed to create macOS sleep-prevention assertion"
-                        );
-                    }
-                },
-            }
-        }
+        self.platform.acquire();
     }
 
     fn release(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            // Dropping the assertion releases it via `MacSleepAssertion::drop`.
-            self.assertion = None;
-        }
+        self.platform.release();
     }
 }
 
