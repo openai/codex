@@ -434,6 +434,43 @@
         }
       ]
     },
+    "MemoriesToml": {
+      "additionalProperties": false,
+      "description": "Memories settings loaded from config.toml.",
+      "properties": {
+        "max_raw_memories_for_global": {
+          "description": "Maximum number of recent raw memories retained for global consolidation.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "max_rollout_age_days": {
+          "description": "Maximum age of the threads used for memories.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_rollouts_per_startup": {
+          "description": "Maximum number of rollout candidates processed per pass.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "min_rollout_idle_hours": {
+          "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "phase_1_model": {
+          "description": "Model used for thread summarisation.",
+          "type": "string"
+        },
+        "phase_2_model": {
+          "description": "Model used for memory consolidation.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "ModeKind": {
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
@@ -1480,6 +1517,14 @@
       "default": {},
       "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
       "type": "object"
+    },
+    "memories": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/MemoriesToml"
+        }
+      ],
+      "description": "Memories subsystem settings."
     },
     "model": {
       "description": "Optional override of model selection.",
