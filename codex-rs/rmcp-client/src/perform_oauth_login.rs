@@ -114,8 +114,9 @@ fn spawn_callback_server(
             let path = request.url().to_string();
             match parse_oauth_callback(&path, &expected_callback_path) {
                 CallbackOutcome::Success(OauthCallbackResult { code, state }) => {
-                    let response =
-                        Response::from_string("Authentication complete. You may close this window.");
+                    let response = Response::from_string(
+                        "Authentication complete. You may close this window.",
+                    );
                     if let Err(err) = request.respond(response) {
                         eprintln!("Failed to respond to OAuth callback: {err}");
                     }
