@@ -31,7 +31,7 @@ it's worth redoing the quick memory pass.
 
 When to update memory:
 - Treat memory as guidance, not truth: if memory conflicts with the current repo state, tool outputs, or environment, user feedback, the current state wins. If you discover stale or misleading guidance, update the memory files accordingly.
-- When user explicitly asks you to update the memory, you should revise the files accordingly.
+- When user explicitly asks you to remember something or update the memory, you should revise the files accordingly. Usually you should directly update memory_summary.md (such as general tips and user profile section) and MEMORY.md.
 
 Memory citation requirements:
 - If ANY relevant memory files were used: you must output exactly one final line:
