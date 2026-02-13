@@ -98,32 +98,25 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     // Preserve command-process environment precedence:
     // 1) Save the current exported environment before snapshot sourcing.
     // 2) Source the snapshot (best effort).
-    // 3) Unset all currently exported names to drop snapshot-added values.
-    // 4) Restore the original exported environment.
-    // 5) Exec the original shell command.
+    // 3) Re-apply the original exported environment so command/worktree values
+    //    win on conflicts, while snapshot-only vars remain present.
+    // 4) Exec the original shell command.
     //
     // This uses POSIX shell syntax and avoids `mktemp` so it works across
     // common Unix systems where Bash/Zsh/sh are available.
     let rewritten_script = format!(
         r#"__codex_tmp_dir="${{TMPDIR:-/tmp}}"
 __codex_restore_env_file="$__codex_tmp_dir/codex-restore-env-$$"
-__codex_current_env_file="$__codex_tmp_dir/codex-current-env-$$"
 
 if export -p > "$__codex_restore_env_file" 2>/dev/null; then :; fi
 
 if . '{snapshot_path}' >/dev/null 2>&1; then :; fi
 
-if env > "$__codex_current_env_file" 2>/dev/null; then
-  while IFS='=' read -r __codex_name __codex_value; do
-    unset "$__codex_name" 2>/dev/null || true
-  done < "$__codex_current_env_file"
-fi
-
 if [ -r "$__codex_restore_env_file" ]; then
   . "$__codex_restore_env_file" >/dev/null 2>&1 || true
 fi
 
-rm -f "$__codex_restore_env_file" "$__codex_current_env_file" >/dev/null 2>&1 || true
+rm -f "$__codex_restore_env_file" >/dev/null 2>&1 || true
 
 exec '{original_shell}' -c '{original_script}'{trailing_args}"#
     );
@@ -338,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn maybe_wrap_shell_lc_with_snapshot_restores_original_environment() {
+    fn maybe_wrap_shell_lc_with_snapshot_restores_original_environment_precedence() {
         let dir = tempdir().expect("create temp dir");
         let snapshot_path = dir.path().join("snapshot.sh");
         std::fs::write(
@@ -366,6 +359,9 @@ mod tests {
             .expect("run rewritten command");
 
         assert!(output.status.success(), "command failed: {output:?}");
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "worktree|unset");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "worktree|from_snapshot"
+        );
     }
 }
