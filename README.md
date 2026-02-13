@@ -42,6 +42,65 @@ Each GitHub Release contains many executables, but in practice, you likely want 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
 </details>
+<details>
+<summary>Does it work on Windows?</summary>
+
+Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) - Codex has been tested on macOS and Linux with Node 22.
+
+</details>
+
+<details>
+<summary>PowerShell says <code>npm</code> or <code>codex</code> is not recognized. How do I fix that?</summary>
+
+`npm` is bundled with Node.js. If PowerShell says `npm` is not recognized, Node.js is not installed in that environment yet.
+
+For Codex on Windows, use WSL2 and run install commands inside your Linux shell (not in PowerShell):
+
+1. In **PowerShell (Admin)**, install WSL and reboot if prompted:
+
+   ```powershell
+   wsl --install
+   ```
+
+2. Open your WSL distro (for example, Ubuntu) and install Node.js 22+.
+3. In that same WSL shell, install Codex:
+
+   ```bash
+   npm install -g @openai/codex@latest
+   ```
+
+4. Verify in WSL:
+
+   ```bash
+   node -v
+   npm -v
+   codex --version
+   ```
+
+If `npm` works but `codex` does not, restart the WSL terminal so your npm global bin path is reloaded.
+
+Tip: copy only commands from fenced code blocks. Do not paste markdown, git diffs, or `+`/`@@` patch lines into PowerShell.
+
+Also do not paste Unix/Bash patch commands (for example `git apply <<'EOF' ... EOF`) into PowerShell; that syntax is for Bash, not PowerShell.
+
+If your prompt changes to `>>`, PowerShell is waiting for more input (usually from an accidental paste). Press `Ctrl+C` to cancel, then run a real command.
+
+Example (safe sequence):
+
+```powershell
+# PowerShell (Admin)
+wsl --install
+```
+
+```bash
+# WSL terminal (Ubuntu/Debian/etc.)
+node -v
+npm -v
+npm install -g @openai/codex@latest
+codex --version
+```
+
+</details>
 
 ### Using Codex with your ChatGPT plan
 
