@@ -533,6 +533,13 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
+    /// Keep the machine awake while a turn is actively running.
+    ///
+    /// On macOS this uses native IOKit power assertions. On other platforms this setting is
+    /// currently ignored.
+    #[serde(default)]
+    pub prevent_sleep_while_running: bool,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
     /// Defaults to unset.
     #[serde(default)]

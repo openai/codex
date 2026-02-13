@@ -232,6 +232,11 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
+    /// Keep the machine awake while a turn is actively running in the TUI.
+    ///
+    /// This maps to `tui.prevent_sleep_while_running` from `config.toml`.
+    pub tui_prevent_sleep_while_running: bool,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
     pub experimental_mode: Option<ModeKind>,
 
@@ -1836,6 +1841,11 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
+            tui_prevent_sleep_while_running: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.prevent_sleep_while_running)
+                .unwrap_or(false),
             experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
             tui_alternate_screen: cfg
                 .tui
@@ -2087,6 +2097,7 @@ persistence = "none"
                 notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
+                prevent_sleep_while_running: false,
                 experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
@@ -4085,6 +4096,7 @@ model_verbosity = "high"
                 tui_notification_method: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                tui_prevent_sleep_while_running: false,
                 experimental_mode: None,
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
@@ -4194,6 +4206,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_prevent_sleep_while_running: false,
             experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
@@ -4301,6 +4314,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_prevent_sleep_while_running: false,
             experimental_mode: None,
             analytics_enabled: Some(false),
             feedback_enabled: true,
@@ -4394,6 +4408,7 @@ model_verbosity = "high"
             tui_notification_method: Default::default(),
             animations: true,
             show_tooltips: true,
+            tui_prevent_sleep_while_running: false,
             experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
