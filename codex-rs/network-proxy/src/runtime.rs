@@ -133,7 +133,7 @@ fn blocked_request_violation_log_line(entry: &BlockedRequest) -> String {
     match serde_json::to_string(entry) {
         Ok(json) => format!("{NETWORK_POLICY_VIOLATION_PREFIX} {json}"),
         Err(err) => {
-            warn!("failed to serialize blocked request for violation log: {err}");
+            debug!("failed to serialize blocked request for violation log: {err}");
             format!(
                 "{NETWORK_POLICY_VIOLATION_PREFIX} host={} reason={}",
                 entry.host, entry.reason
@@ -375,7 +375,7 @@ impl NetworkProxyState {
             attempt_id,
             guard.blocked.len()
         );
-        warn!("{violation_line}");
+        debug!("{violation_line}");
         Ok(())
     }
 
