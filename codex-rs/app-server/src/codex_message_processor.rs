@@ -2689,173 +2689,10 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_resume(&mut self, request_id: ConnectionRequestId, params: ThreadResumeParams) {
-        if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
-            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
-        {
-            if params.history.is_some() {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "cannot resume thread {existing_thread_id} with history while it is already running"
-                    ),
-                )
-                .await;
-                return;
-            }
-
-            let rollout_path = if let Some(path) = existing_thread.rollout_path() {
-                if path.exists() {
-                    path
-                } else {
-                    match find_thread_path_by_id_str(
-                        &self.config.codex_home,
-                        &existing_thread_id.to_string(),
-                    )
-                    .await
-                    {
-                        Ok(Some(path)) => path,
-                        Ok(None) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("no rollout found for thread id {existing_thread_id}"),
-                            )
-                            .await;
-                            return;
-                        }
-                        Err(err) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("failed to locate thread id {existing_thread_id}: {err}"),
-                            )
-                            .await;
-                            return;
-                        }
-                    }
-                }
-            } else {
-                match find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &existing_thread_id.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("no rollout found for thread id {existing_thread_id}"),
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {existing_thread_id}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-            };
-
-            if let Some(requested_path) = params.path.as_ref()
-                && requested_path != &rollout_path
-            {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!(
-                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
-                        requested_path.display(),
-                        rollout_path.display()
-                    ),
-                )
-                .await;
-                return;
-            }
-
-            // Keep any in-flight stream attached instead of spawning a replacement thread object.
-            if let Err(err) = self
-                .ensure_conversation_listener(
-                    existing_thread_id,
-                    request_id.connection_id,
-                    false,
-                    ApiVersion::V2,
-                )
-                .await
-            {
-                tracing::warn!(
-                    "failed to attach listener for thread {}: {}",
-                    existing_thread_id,
-                    err.message
-                );
-            }
-
-            let config_snapshot = existing_thread.config_snapshot().await;
-            let mismatch_details = collect_resume_override_mismatches(&params, &config_snapshot);
-            if !mismatch_details.is_empty() {
-                tracing::warn!(
-                    "thread/resume overrides ignored for running thread {}: {}",
-                    existing_thread_id,
-                    mismatch_details.join("; ")
-                );
-            }
-
-            let mut thread = match read_summary_from_rollout(
-                rollout_path.as_path(),
-                config_snapshot.model_provider_id.as_str(),
-            )
+        if self
+            .resume_running_thread(request_id.clone(), &params)
             .await
-            {
-                Ok(summary) => summary_to_thread(summary),
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            };
-            match read_rollout_items_from_rollout(rollout_path.as_path()).await {
-                Ok(items) => {
-                    thread.turns = build_turns_from_rollout_items(&items);
-                }
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            }
-
-            let ThreadConfigSnapshot {
-                model,
-                model_provider_id,
-                approval_policy,
-                sandbox_policy,
-                cwd,
-                reasoning_effort,
-                ..
-            } = config_snapshot;
-            let response = ThreadResumeResponse {
-                thread,
-                model,
-                model_provider: model_provider_id,
-                cwd,
-                approval_policy: approval_policy.into(),
-                sandbox: sandbox_policy.into(),
-                reasoning_effort,
-            };
-            self.outgoing.send_response(request_id, response).await;
+        {
             return;
         }
 
@@ -2876,77 +2713,21 @@ impl CodexMessageProcessor {
         } = params;
 
         let thread_history = if let Some(history) = history {
-            if history.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "history must not be empty".to_string(),
-                )
-                .await;
+            let Some(thread_history) = self
+                .resume_thread_from_history(request_id.clone(), history.as_slice())
+                .await
+            else {
                 return;
-            }
-            InitialHistory::Forked(history.into_iter().map(RolloutItem::ResponseItem).collect())
-        } else if let Some(path) = path {
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => initial_history,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+            };
+            thread_history
         } else {
-            let existing_thread_id = match ThreadId::from_string(&thread_id) {
-                Ok(id) => id,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
+            let Some(thread_history) = self
+                .resume_thread_from_rollout(request_id.clone(), &thread_id, path.as_ref())
+                .await
+            else {
+                return;
             };
-
-            let path = match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {existing_thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-            match RolloutRecorder::get_rollout_history(&path).await {
-                Ok(initial_history) => initial_history,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to load rollout `{}`: {err}", path.display()),
-                    )
-                    .await;
-                    return;
-                }
-            }
+            thread_history
         };
 
         let history_cwd = thread_history.session_cwd();
@@ -3027,41 +2808,17 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let mut thread = match read_summary_from_rollout(
-                    rollout_path.as_path(),
-                    fallback_model_provider.as_str(),
-                )
-                .await
-                {
-                    Ok(summary) => summary_to_thread(summary),
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                rollout_path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
+                let Some(thread) = self
+                    .load_thread_from_rollout_or_send_internal(
+                        request_id.clone(),
+                        thread_id,
+                        rollout_path.as_path(),
+                        fallback_model_provider.as_str(),
+                    )
+                    .await
+                else {
+                    return;
                 };
-                match read_rollout_items_from_rollout(rollout_path.as_path()).await {
-                    Ok(items) => {
-                        thread.turns = build_turns_from_rollout_items(&items);
-                    }
-                    Err(err) => {
-                        self.send_internal_error(
-                            request_id,
-                            format!(
-                                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                                rollout_path.display()
-                            ),
-                        )
-                        .await;
-                        return;
-                    }
-                }
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -3082,6 +2839,278 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn resume_running_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: &ThreadResumeParams,
+    ) -> bool {
+        if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
+            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
+        {
+            if params.history.is_some() {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume thread {existing_thread_id} with history while it is already running"
+                    ),
+                )
+                .await;
+                return true;
+            }
+
+            let rollout_path = if let Some(path) = existing_thread.rollout_path() {
+                if path.exists() {
+                    path
+                } else {
+                    match find_thread_path_by_id_str(
+                        &self.config.codex_home,
+                        &existing_thread_id.to_string(),
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => path,
+                        Ok(None) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("no rollout found for thread id {existing_thread_id}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                        Err(err) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to locate thread id {existing_thread_id}: {err}"),
+                            )
+                            .await;
+                            return true;
+                        }
+                    }
+                }
+            } else {
+                match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &existing_thread_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("no rollout found for thread id {existing_thread_id}"),
+                        )
+                        .await;
+                        return true;
+                    }
+                    Err(err) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to locate thread id {existing_thread_id}: {err}"),
+                        )
+                        .await;
+                        return true;
+                    }
+                }
+            };
+
+            if let Some(requested_path) = params.path.as_ref()
+                && requested_path != &rollout_path
+            {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
+                        requested_path.display(),
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return true;
+            }
+
+            if let Err(err) = self
+                .ensure_conversation_listener(
+                    existing_thread_id,
+                    request_id.connection_id,
+                    false,
+                    ApiVersion::V2,
+                )
+                .await
+            {
+                tracing::warn!(
+                    "failed to attach listener for thread {}: {}",
+                    existing_thread_id,
+                    err.message
+                );
+            }
+
+            let config_snapshot = existing_thread.config_snapshot().await;
+            let mismatch_details = collect_resume_override_mismatches(params, &config_snapshot);
+            if !mismatch_details.is_empty() {
+                tracing::warn!(
+                    "thread/resume overrides ignored for running thread {}: {}",
+                    existing_thread_id,
+                    mismatch_details.join("; ")
+                );
+            }
+
+            let Some(thread) = self
+                .load_thread_from_rollout_or_send_internal(
+                    request_id.clone(),
+                    existing_thread_id,
+                    rollout_path.as_path(),
+                    config_snapshot.model_provider_id.as_str(),
+                )
+                .await
+            else {
+                return true;
+            };
+
+            let ThreadConfigSnapshot {
+                model,
+                model_provider_id,
+                approval_policy,
+                sandbox_policy,
+                cwd,
+                reasoning_effort,
+                ..
+            } = config_snapshot;
+            let response = ThreadResumeResponse {
+                thread,
+                model,
+                model_provider: model_provider_id,
+                cwd,
+                approval_policy: approval_policy.into(),
+                sandbox: sandbox_policy.into(),
+                reasoning_effort,
+            };
+            self.outgoing.send_response(request_id, response).await;
+            return true;
+        }
+        false
+    }
+
+    async fn resume_thread_from_history(
+        &self,
+        request_id: ConnectionRequestId,
+        history: &[ResponseItem],
+    ) -> Option<InitialHistory> {
+        if history.is_empty() {
+            self.send_invalid_request_error(request_id, "history must not be empty".to_string())
+                .await;
+            return None;
+        }
+        Some(InitialHistory::Forked(
+            history
+                .iter()
+                .cloned()
+                .map(RolloutItem::ResponseItem)
+                .collect(),
+        ))
+    }
+
+    async fn resume_thread_from_rollout(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+        path: Option<&PathBuf>,
+    ) -> Option<InitialHistory> {
+        let rollout_path = if let Some(path) = path {
+            path.clone()
+        } else {
+            let existing_thread_id = match ThreadId::from_string(thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return None;
+                }
+            };
+
+            match find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &existing_thread_id.to_string(),
+            )
+            .await
+            {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for thread id {existing_thread_id}"),
+                    )
+                    .await;
+                    return None;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {existing_thread_id}: {err}"),
+                    )
+                    .await;
+                    return None;
+                }
+            }
+        };
+
+        match RolloutRecorder::get_rollout_history(&rollout_path).await {
+            Ok(initial_history) => Some(initial_history),
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                )
+                .await;
+                None
+            }
+        }
+    }
+
+    async fn load_thread_from_rollout_or_send_internal(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: ThreadId,
+        rollout_path: &Path,
+        fallback_provider: &str,
+    ) -> Option<Thread> {
+        let mut thread = match read_summary_from_rollout(rollout_path, fallback_provider).await {
+            Ok(summary) => summary_to_thread(summary),
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return None;
+            }
+        };
+        match read_rollout_items_from_rollout(rollout_path).await {
+            Ok(items) => {
+                thread.turns = build_turns_from_rollout_items(&items);
+                Some(thread)
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                None
             }
         }
     }
