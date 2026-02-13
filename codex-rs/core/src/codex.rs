@@ -8034,4 +8034,32 @@ mod tests {
 
         pretty_assertions::assert_eq!(output, expected);
     }
+
+    #[tokio::test]
+    async fn session_configuration_apply_rejects_disallowed_approval_policy_update() {
+        let mut session_configuration = make_session_configuration_for_tests().await;
+        session_configuration.approval_policy =
+            Constrained::allow_only(AskForApproval::UnlessTrusted);
+
+        let err = match session_configuration.apply(&SessionSettingsUpdate {
+            approval_policy: Some(AskForApproval::OnRequest),
+            ..Default::default()
+        }) {
+            Ok(_) => panic!("disallowed approval policy update should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            crate::config::ConstraintError::InvalidValue {
+                candidate,
+                allowed,
+                ..
+            } if candidate == "OnRequest" && allowed == "[UnlessTrusted]"
+        ));
+        assert_eq!(
+            session_configuration.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+    }
 }

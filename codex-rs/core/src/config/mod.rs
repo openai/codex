@@ -5159,6 +5159,166 @@ trust_level = "untrusted"
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn explicit_on_request_approval_falls_back_to_untrusted_when_disallowed_by_requirements()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"approval_policy = "on-request"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cli_on_request_approval_falls_back_to_untrusted_when_disallowed_by_requirements()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cli_overrides(vec![(
+                "approval_policy".to_string(),
+                TomlValue::String("on-request".to_string()),
+            )])
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disallowed_approval_policy_adds_startup_warning() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"approval_policy = "on-request"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        assert!(
+            config.startup_warnings.iter().any(|warning| {
+                warning.contains("Configured value for `approval_policy`")
+                    && warning.contains("falling back to required value")
+                    && warning.contains("UnlessTrusted")
+            }),
+            "{:?}",
+            config.startup_warnings
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mdm_untrusted_approval_requirement_allows_startup() -> std::io::Result<()> {
+        use base64::Engine;
+
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"approval_policy = "on-request"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .loader_overrides(LoaderOverrides {
+                managed_config_path: None,
+                managed_preferences_base64: Some(String::new()),
+                macos_managed_config_requirements_base64: Some(
+                    base64::prelude::BASE64_STANDARD.encode(
+                        br#"
+allowed_approval_policies = ["untrusted"]
+"#,
+                    ),
+                ),
+            })
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mdm_untrusted_approval_requirement_allows_startup_with_cli_override()
+    -> std::io::Result<()> {
+        use base64::Engine;
+
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cli_overrides(vec![(
+                "approval_policy".to_string(),
+                TomlValue::String("on-request".to_string()),
+            )])
+            .loader_overrides(LoaderOverrides {
+                managed_config_path: None,
+                managed_preferences_base64: Some(String::new()),
+                macos_managed_config_requirements_base64: Some(
+                    base64::prelude::BASE64_STANDARD.encode(
+                        br#"
+allowed_approval_policies = ["untrusted"]
+"#,
+                    ),
+                ),
+            })
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]

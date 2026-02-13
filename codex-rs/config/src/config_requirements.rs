@@ -886,6 +886,22 @@ mod tests {
     }
 
     #[test]
+    fn empty_allowed_approval_policies_is_rejected() -> Result<()> {
+        let toml_str = r#"
+            allowed_approval_policies = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let err = ConfigRequirements::try_from(with_unknown_source(config))
+            .expect_err("empty allowlist should be rejected");
+
+        assert_eq!(
+            err,
+            ConstraintError::empty_field("allowed_approval_policies")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn deserialize_allowed_sandbox_modes() -> Result<()> {
         let toml_str = r#"
             allowed_sandbox_modes = ["read-only", "workspace-write"]
