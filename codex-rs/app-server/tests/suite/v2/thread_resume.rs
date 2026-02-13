@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::Personality;
@@ -211,7 +212,16 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
 #[tokio::test]
 async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = responses::start_mock_server().await;
+    let seed_turn_response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let in_flight_response = responses::sse(vec![responses::ev_response_created("resp-2")]);
+    let _seed_turn_mock = responses::mount_sse_once(&server, seed_turn_response).await;
+    let _in_flight_mock = responses::mount_sse_once(&server, in_flight_response).await;
+
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -266,11 +276,15 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let turn_start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
+    let TurnStartResponse {
+        turn: in_flight_turn,
+    } = to_response::<TurnStartResponse>(turn_start_resp)?;
+    assert_eq!(in_flight_turn.status, TurnStatus::InProgress);
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -283,17 +297,35 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    timeout(
+    let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         secondary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        current_turn_events,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    let snapshot_includes_in_flight_turn = current_turn_events.iter().any(|event| {
+        event
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|event_type| event_type == "turn_started")
+            && event
+                .get("turn_id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|turn_id| turn_id == in_flight_turn.id)
+    });
+    let persisted_turn_present = resumed_thread
+        .turns
+        .iter()
+        .any(|turn| turn.id == in_flight_turn.id);
+    assert!(
+        snapshot_includes_in_flight_turn || persisted_turn_present,
+        "expected thread/resume to include in-flight turn {} via currentTurnEvents or persisted turns",
+        in_flight_turn.id
+    );
 
     Ok(())
 }

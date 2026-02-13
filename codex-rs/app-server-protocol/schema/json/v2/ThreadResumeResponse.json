@@ -1585,6 +1585,11 @@
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
+    "currentTurnEvents": {
+      "description": "Event stream snapshot for the active in-flight turn, if any. Older turns remain in `thread.turns` and are disk-authoritative.",
+      "items": true,
+      "type": "array"
+    },
     "cwd": {
       "type": "string"
     },
@@ -1613,6 +1618,7 @@
   },
   "required": [
     "approvalPolicy",
+    "currentTurnEvents",
     "cwd",
     "model",
     "modelProvider",

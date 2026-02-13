@@ -142,6 +142,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) single_client_mode: bool,
     pub(crate) feedback: CodexFeedback,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
 }
@@ -157,6 +158,7 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            single_client_mode,
             feedback,
             config_warnings,
         } = args;
@@ -183,6 +185,7 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            single_client_mode,
             feedback,
         });
         let config_api = ConfigApi::new(

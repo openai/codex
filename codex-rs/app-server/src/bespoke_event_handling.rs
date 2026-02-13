@@ -1154,7 +1154,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-
         _ => {}
     }
 }
@@ -1233,9 +1232,10 @@ async fn complete_file_change_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    state.turn_summary.file_change_started.remove(&item_id);
-    drop(state);
+    {
+        let mut state = thread_state.lock().await;
+        state.turn_summary.file_change_started.remove(&item_id);
+    }
 
     let item = ThreadItem::FileChange {
         id: item_id,

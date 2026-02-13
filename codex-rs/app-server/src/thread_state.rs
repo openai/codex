@@ -1,13 +1,16 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::RolloutItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -15,6 +18,14 @@ type PendingInterruptQueue = Vec<(
     ConnectionRequestId,
     crate::codex_message_processor::ApiVersion,
 )>;
+
+pub(crate) enum ThreadListenerCommand {
+    SendThreadResumeResponse {
+        request_id: ConnectionRequestId,
+        response: ThreadResumeResponse,
+        ack_tx: oneshot::Sender<()>,
+    },
+}
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -27,9 +38,11 @@ pub(crate) struct TurnSummary {
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
+    pub(crate) active_turn_state_rollout_items: Vec<RolloutItem>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
+    pub(crate) listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     listener_thread: Option<Weak<CodexThread>>,
     subscribed_connections: HashSet<ConnectionId>,
 }
@@ -45,12 +58,15 @@ impl ThreadState {
     pub(crate) fn set_listener(
         &mut self,
         cancel_tx: oneshot::Sender<()>,
+        listener_command_tx: mpsc::UnboundedSender<ThreadListenerCommand>,
         conversation: &Arc<CodexThread>,
     ) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
         self.listener_thread = Some(Arc::downgrade(conversation));
+        self.listener_command_tx = Some(listener_command_tx);
+        self.active_turn_state_rollout_items.clear();
     }
 
     pub(crate) fn clear_listener(&mut self) {
@@ -58,6 +74,8 @@ impl ThreadState {
             let _ = cancel_tx.send(());
         }
         self.listener_thread = None;
+        self.listener_command_tx = None;
+        self.active_turn_state_rollout_items.clear();
     }
 
     pub(crate) fn add_connection(&mut self, connection_id: ConnectionId) {
@@ -74,6 +92,12 @@ impl ThreadState {
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
         self.experimental_raw_events = enabled;
+    }
+
+    pub(crate) fn listener_command_tx(
+        &self,
+    ) -> Option<mpsc::UnboundedSender<ThreadListenerCommand>> {
+        self.listener_command_tx.clone()
     }
 }
 
@@ -199,6 +223,31 @@ impl ThreadStateManager {
             }
         }
         thread_state
+    }
+
+    pub(crate) async fn ensure_connection_subscribed_with_listener_command_tx(
+        &mut self,
+        thread_id: ThreadId,
+        connection_id: ConnectionId,
+        experimental_raw_events: bool,
+    ) -> (
+        Arc<Mutex<ThreadState>>,
+        Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
+    ) {
+        self.thread_ids_by_connection
+            .entry(connection_id)
+            .or_default()
+            .insert(thread_id);
+        let thread_state = self.thread_state(thread_id);
+        let listener_command_tx = {
+            let mut thread_state_guard = thread_state.lock().await;
+            thread_state_guard.add_connection(connection_id);
+            if experimental_raw_events {
+                thread_state_guard.set_experimental_raw_events(true);
+            }
+            thread_state_guard.listener_command_tx()
+        };
+        (thread_state, listener_command_tx)
     }
 
     pub(crate) async fn remove_connection(&mut self, connection_id: ConnectionId) {

@@ -1525,7 +1525,7 @@ pub struct ThreadResumeParams {
     pub persist_extended_history: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
@@ -1536,6 +1536,9 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Event stream snapshot for the active in-flight turn, if any.
+    /// Older turns remain in `thread.turns` and are disk-authoritative.
+    pub current_turn_events: Vec<JsonValue>,
 }
 
 #[derive(

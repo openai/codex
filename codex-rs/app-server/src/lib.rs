@@ -441,6 +441,7 @@ pub async fn run_main_with_transport(
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
+            single_client_mode: shutdown_when_no_connections,
             feedback: feedback.clone(),
             config_warnings,
         });
