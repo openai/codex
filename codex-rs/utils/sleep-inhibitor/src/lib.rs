@@ -3,15 +3,23 @@
 //! On macOS this uses native IOKit power assertions instead of spawning
 //! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod dummy;
+#[cfg(target_os = "linux")]
+mod linux_inhibitor;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows_inhibitor;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use dummy as imp;
+#[cfg(target_os = "linux")]
+use linux_inhibitor as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
+#[cfg(target_os = "windows")]
+use windows_inhibitor as imp;
 
 /// Keeps the machine awake while a turn is in progress when enabled.
 #[derive(Debug)]
