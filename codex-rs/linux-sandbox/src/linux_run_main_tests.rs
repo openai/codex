@@ -83,6 +83,13 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 }
 
 #[test]
+fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
+    let mode = bwrap_network_mode(&SandboxPolicy::DangerFullAccess, true);
+    let argv = build_preflight_bwrap_argv(Path::new("/"), &SandboxPolicy::DangerFullAccess, mode);
+    assert_eq!(argv.contains(&"--".to_string()), true);
+}
+
+#[test]
 fn managed_proxy_inner_command_includes_route_spec() {
     let args = build_inner_seccomp_command(
         Path::new("/tmp"),

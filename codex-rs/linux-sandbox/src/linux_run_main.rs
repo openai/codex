@@ -183,13 +183,14 @@ fn run_bwrap_with_proc_fallback(
     allow_network_for_proxy: bool,
 ) -> ! {
     let mut mount_proc = mount_proc;
+    let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
 
-    if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy) {
+    if mount_proc && !preflight_proc_mount_support(sandbox_policy_cwd, sandbox_policy, network_mode)
+    {
         eprintln!("codex-linux-sandbox: bwrap could not mount /proc; retrying with --no-proc");
         mount_proc = false;
     }
 
-    let network_mode = bwrap_network_mode(sandbox_policy, allow_network_for_proxy);
     let options = BwrapOptions {
         mount_proc,
         network_mode,
@@ -237,19 +238,29 @@ fn build_bwrap_argv(
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
     sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    network_mode: BwrapNetworkMode,
 ) -> bool {
+    let preflight_argv =
+        build_preflight_bwrap_argv(sandbox_policy_cwd, sandbox_policy, network_mode);
+    let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
+    !is_proc_mount_failure(stderr.as_str())
+}
+
+fn build_preflight_bwrap_argv(
+    sandbox_policy_cwd: &Path,
+    sandbox_policy: &codex_core::protocol::SandboxPolicy,
+    network_mode: BwrapNetworkMode,
+) -> Vec<String> {
     let preflight_command = vec![resolve_true_command()];
-    let preflight_argv = build_bwrap_argv(
+    build_bwrap_argv(
         preflight_command,
         sandbox_policy,
         sandbox_policy_cwd,
         BwrapOptions {
             mount_proc: true,
-            network_mode: BwrapNetworkMode::FullAccess,
+            network_mode,
         },
-    );
-    let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
-    !is_proc_mount_failure(stderr.as_str())
+    )
 }
 
 fn resolve_true_command() -> String {
