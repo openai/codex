@@ -22,7 +22,7 @@ fn memory_root_uses_shared_global_path() {
 }
 
 #[test]
-fn stage_one_output_schema_requires_all_declared_properties() {
+fn stage_one_output_schema_keeps_rollout_slug_optional() {
     let schema = crate::memories::phase1::output_schema();
     let properties = schema
         .get("properties")
@@ -33,16 +33,17 @@ fn stage_one_output_schema_requires_all_declared_properties() {
         .and_then(Value::as_array)
         .expect("required array");
 
-    let mut property_keys = properties.keys().map(String::as_str).collect::<Vec<_>>();
-    property_keys.sort_unstable();
-
     let mut required_keys = required
         .iter()
         .map(|key| key.as_str().expect("required key string"))
         .collect::<Vec<_>>();
     required_keys.sort_unstable();
 
-    assert_eq!(required_keys, property_keys);
+    assert!(
+        properties.contains_key("rollout_slug"),
+        "schema should declare rollout_slug"
+    );
+    assert_eq!(required_keys, vec!["raw_memory", "rollout_summary"]);
 }
 
 #[tokio::test]
@@ -67,6 +68,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         source_updated_at: Utc.timestamp_opt(100, 0).single().expect("timestamp"),
         raw_memory: "raw memory".to_string(),
         rollout_summary: "short summary".to_string(),
+        rollout_slug: None,
         cwd: PathBuf::from("/tmp/workspace"),
         generated_at: Utc.timestamp_opt(101, 0).single().expect("timestamp"),
     }];
@@ -95,6 +97,83 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     assert!(raw_memories.contains("raw memory"));
     assert!(raw_memories.contains(&keep_id));
     assert!(raw_memories.contains("cwd: /tmp/workspace"));
+}
+
+#[tokio::test]
+async fn sync_rollout_summaries_uses_thread_id_and_sanitized_slug_filename() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    ensure_layout(&root).await.expect("ensure layout");
+
+    let thread_id = ThreadId::new();
+    let stale_unslugged_path = rollout_summaries_dir(&root).join(format!("{thread_id}.md"));
+    let stale_old_slug_path =
+        rollout_summaries_dir(&root).join(format!("{thread_id}--old-slug.md"));
+    tokio::fs::write(&stale_unslugged_path, "stale")
+        .await
+        .expect("write stale unslugged file");
+    tokio::fs::write(&stale_old_slug_path, "stale")
+        .await
+        .expect("write stale old-slug file");
+
+    let memories = vec![Stage1Output {
+        thread_id,
+        source_updated_at: Utc.timestamp_opt(200, 0).single().expect("timestamp"),
+        raw_memory: "raw memory".to_string(),
+        rollout_summary: "short summary".to_string(),
+        rollout_slug: Some("Unsafe Slug/With Spaces & Symbols + EXTRA_LONG_12345".to_string()),
+        cwd: PathBuf::from("/tmp/workspace"),
+        generated_at: Utc.timestamp_opt(201, 0).single().expect("timestamp"),
+    }];
+
+    sync_rollout_summaries_from_memories(
+        &root,
+        &memories,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+    )
+    .await
+    .expect("sync rollout summaries");
+
+    let mut dir = tokio::fs::read_dir(rollout_summaries_dir(&root))
+        .await
+        .expect("open rollout summaries dir");
+    let mut files = Vec::new();
+    while let Some(entry) = dir.next_entry().await.expect("read dir entry") {
+        files.push(entry.file_name().to_string_lossy().to_string());
+    }
+    files.sort_unstable();
+
+    assert_eq!(files.len(), 1);
+    let file_name = &files[0];
+    let stem = file_name
+        .strip_suffix(".md")
+        .expect("rollout summary file should end with .md");
+    let slug = stem
+        .strip_prefix(&format!("{thread_id}-"))
+        .expect("rollout summary filename should include thread id and slug");
+    assert!(slug.len() <= 20, "slug should be capped at 20 chars");
+    assert!(
+        slug.chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'),
+        "slug should be file-safe lowercase ascii with underscores"
+    );
+
+    let summary = tokio::fs::read_to_string(rollout_summaries_dir(&root).join(file_name))
+        .await
+        .expect("read rollout summary");
+    assert!(summary.contains(&format!("thread_id: {thread_id}")));
+    assert!(
+        !tokio::fs::try_exists(&stale_unslugged_path)
+            .await
+            .expect("check stale unslugged path"),
+        "slugged sync should prune stale unslugged filename for same thread"
+    );
+    assert!(
+        !tokio::fs::try_exists(&stale_old_slug_path)
+            .await
+            .expect("check stale old slug path"),
+        "slugged sync should prune stale slugged filename for same thread"
+    );
 }
 
 mod phase2 {
@@ -130,6 +209,7 @@ mod phase2 {
                 .expect("valid source_updated_at timestamp"),
             raw_memory: "raw memory".to_string(),
             rollout_summary: "rollout summary".to_string(),
+            rollout_slug: None,
             cwd: PathBuf::from("/tmp/workspace"),
             generated_at: chrono::DateTime::<Utc>::from_timestamp(source_updated_at + 1, 0)
                 .expect("valid generated_at timestamp"),
@@ -220,6 +300,7 @@ mod phase2 {
                         source_updated_at,
                         "raw memory",
                         "rollout summary",
+                        None,
                     )
                     .await
                     .expect("mark stage-1 success"),
@@ -572,6 +653,7 @@ mod phase2 {
                     100,
                     "raw memory",
                     "rollout summary",
+                    None,
                 )
                 .await
                 .expect("mark stage-1 success"),
