@@ -27,6 +27,9 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+const SEARCH_TOOL_BM25_DESCRIPTION: &str =
+    include_str!("../../templates/search_tool/developer_instructions.md");
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
@@ -900,7 +903,7 @@ fn create_search_tool_bm25_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "search_tool_bm25".to_string(),
-        description: "Searches MCP tool metadata with BM25 and exposes matching tools for the next model call.".to_string(),
+        description: SEARCH_TOOL_BM25_DESCRIPTION.to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,

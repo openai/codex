@@ -132,6 +132,7 @@ impl ToolHandler for SearchToolBm25Handler {
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
+            .filter(|(_, info)| info.server_name == CODEX_APPS_MCP_SERVER_NAME)
             .map(|(name, info)| ToolEntry::new(name, info))
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));

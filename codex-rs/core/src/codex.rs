@@ -144,6 +144,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::instructions::UserInstructions;
+#[cfg(test)]
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
@@ -521,9 +522,6 @@ pub(crate) struct Session {
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
-
-const SEARCH_TOOL_DEVELOPER_INSTRUCTIONS: &str =
-    include_str!("../templates/search_tool/developer_instructions.md");
 
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
@@ -2508,11 +2506,6 @@ impl Session {
         );
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             items.push(DeveloperInstructions::new(developer_instructions.to_string()).into());
-        }
-        if turn_context.tools_config.search_tool {
-            items.push(
-                DeveloperInstructions::new(SEARCH_TOOL_DEVELOPER_INSTRUCTIONS.to_string()).into(),
-            );
         }
         // Add developer instructions for memories.
         if let Some(memory_prompt) =
@@ -4623,32 +4616,6 @@ fn connector_inserted_in_messages(
     connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&mention_slug)
 }
 
-fn filter_codex_apps_mcp_tools(
-    mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    connectors: &[connectors::AppInfo],
-) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
-    let allowed: HashSet<&str> = connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
-
-    mcp_tools.retain(|_, tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return true;
-        }
-        let Some(connector_id) = codex_apps_connector_id(tool) else {
-            return false;
-        };
-        allowed.contains(connector_id)
-    });
-
-    mcp_tools
-}
-
-fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
-    tool.connector_id.as_deref()
-}
-
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -4804,7 +4771,7 @@ async fn built_tools(
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
-    let connectors_for_tools = if turn_context.config.features.enabled(Feature::Apps) {
+    if turn_context.features.enabled(Feature::Apps) {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
@@ -4812,17 +4779,13 @@ async fn built_tools(
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
             &turn_context.config,
         );
-        Some(filter_connectors_for_input(
+        let connectors_for_tools = filter_connectors_for_input(
             connectors,
             input,
             &effective_explicitly_enabled_connectors,
             &skill_name_counts_lower,
-        ))
-    } else {
-        None
-    };
+        );
 
-    if turn_context.config.features.enabled(Feature::Apps) {
         let mut selected_mcp_tools =
             if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
                 filter_mcp_tools_by_name(mcp_tools.clone(), &selected_tools)
@@ -4830,14 +4793,11 @@ async fn built_tools(
                 HashMap::new()
             };
 
-        if let Some(connectors) = connectors_for_tools.as_ref() {
-            let apps_mcp_tools = filter_codex_apps_mcp_tools_only(mcp_tools, connectors);
-            selected_mcp_tools.extend(apps_mcp_tools);
-        }
+        let apps_mcp_tools =
+            filter_codex_apps_mcp_tools_only(mcp_tools, connectors_for_tools.as_ref());
+        selected_mcp_tools.extend(apps_mcp_tools);
 
         mcp_tools = selected_mcp_tools;
-    } else if let Some(connectors) = connectors_for_tools.as_ref() {
-        mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, connectors);
     }
 
     Ok(Arc::new(ToolRouter::from_config(
