@@ -2705,6 +2705,116 @@ impl CodexMessageProcessor {
             persist_extended_history,
         } = params;
 
+        let resume_thread_id = if history.is_none() && path.is_none() {
+            Some(match ThreadId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            })
+        } else {
+            None
+        };
+
+        if let Some(existing_thread_id) = resume_thread_id
+            && let Ok(existing_thread) = self.thread_manager.get_thread(existing_thread_id).await
+        {
+            let agent_status = existing_thread.agent_status().await;
+            if matches!(agent_status, AgentStatus::Running) {
+                let config_snapshot = existing_thread.config_snapshot().await;
+                let rollout_path = existing_thread.rollout_path();
+                let fallback_model_provider = config_snapshot.model_provider_id.clone();
+                let mut thread = build_thread_from_snapshot(
+                    existing_thread_id,
+                    &config_snapshot,
+                    rollout_path.clone(),
+                );
+
+                if let Some(rollout_path) = rollout_path.as_ref() {
+                    match read_summary_from_rollout(
+                        rollout_path.as_path(),
+                        fallback_model_provider.as_str(),
+                    )
+                    .await
+                    {
+                        Ok(summary) => {
+                            thread = summary_to_thread(summary);
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => {
+                            self.send_internal_error(
+                                request_id,
+                                format!(
+                                    "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                                    rollout_path.display()
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+
+                    match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                        Ok(items) => {
+                            thread.turns = build_turns_from_rollout_items(&items);
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(err) => {
+                            self.send_internal_error(
+                                request_id,
+                                format!(
+                                    "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                                    rollout_path.display()
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
+                }
+
+                // Keep using the existing running thread so in-flight state and events are preserved.
+                if let Err(err) = self
+                    .ensure_conversation_listener(
+                        existing_thread_id,
+                        request_id.connection_id,
+                        false,
+                        ApiVersion::V2,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to attach listener for thread {}: {}",
+                        existing_thread_id,
+                        err.message
+                    );
+                }
+
+                let current_turn_status =
+                    current_turn_status_from_agent_status(&thread, agent_status);
+
+                let response = ThreadResumeResponse {
+                    thread,
+                    model: config_snapshot.model,
+                    model_provider: config_snapshot.model_provider_id,
+                    cwd: config_snapshot.cwd,
+                    approval_policy: config_snapshot.approval_policy.into(),
+                    sandbox: config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: config_snapshot.reasoning_effort,
+                    current_turn_status,
+                };
+
+                self.outgoing.send_response(request_id, response).await;
+                return;
+            }
+        }
+
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
                 self.send_invalid_request_error(
@@ -2728,17 +2838,20 @@ impl CodexMessageProcessor {
                 }
             }
         } else {
-            let existing_thread_id = match ThreadId::from_string(&thread_id) {
-                Ok(id) => id,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
+            let existing_thread_id = match resume_thread_id {
+                Some(id) => id,
+                None => match ThreadId::from_string(&thread_id) {
+                    Ok(id) => id,
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid thread id: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                },
             };
 
             let path = match find_thread_path_by_id_str(
@@ -2828,6 +2941,7 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
+                thread: conversation,
                 session_configured,
                 ..
             }) => {
@@ -2893,6 +3007,11 @@ impl CodexMessageProcessor {
                     }
                 }
 
+                let current_turn_status = current_turn_status_from_agent_status(
+                    &thread,
+                    conversation.agent_status().await,
+                );
+
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
@@ -2901,6 +3020,7 @@ impl CodexMessageProcessor {
                     approval_policy: session_configured.approval_policy.into(),
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
+                    current_turn_status,
                 };
 
                 self.outgoing.send_response(request_id, response).await;
@@ -6364,6 +6484,20 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         source: source.into(),
         git_info,
         turns: Vec::new(),
+    }
+}
+
+fn current_turn_status_from_agent_status(
+    thread: &Thread,
+    agent_status: AgentStatus,
+) -> Option<TurnStatus> {
+    match agent_status {
+        AgentStatus::Running => Some(TurnStatus::InProgress),
+        AgentStatus::Completed(_) => Some(TurnStatus::Completed),
+        AgentStatus::Errored(_) => Some(TurnStatus::Failed),
+        AgentStatus::PendingInit | AgentStatus::Shutdown | AgentStatus::NotFound => {
+            thread.turns.last().map(|turn| turn.status.clone())
+        }
     }
 }
 

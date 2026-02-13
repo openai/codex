@@ -1584,6 +1584,16 @@
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
+    "currentTurnStatus": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TurnStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cwd": {
       "type": "string"
     },

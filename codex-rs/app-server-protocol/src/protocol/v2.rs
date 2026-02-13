@@ -1536,6 +1536,7 @@ pub struct ThreadResumeResponse {
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub current_turn_status: Option<TurnStatus>,
 }
 
 #[derive(

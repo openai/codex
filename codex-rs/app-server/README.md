@@ -191,14 +191,14 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape is the same as `thread/start` plus `currentTurnStatus`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
     "personality": "friendly"
 } }
-{ "id": 11, "result": { "thread": { "id": "thr_123", … } } }
+{ "id": 11, "result": { "thread": { "id": "thr_123", … }, "currentTurnStatus": "inProgress" } }
 ```
 
 To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it:
