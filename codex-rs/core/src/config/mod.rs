@@ -7,6 +7,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::MemoriesConfig;
+use crate::config::types::MemoriesToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -45,6 +47,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
+use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
@@ -118,6 +121,22 @@ pub(crate) fn test_config() -> Config {
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
+pub struct Permissions {
+    /// Approval policy for executing commands.
+    pub approval_policy: Constrained<AskForApproval>,
+    /// Effective sandbox policy used for shell/unified exec.
+    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective network configuration applied to all spawned processes.
+    pub network: Option<NetworkProxySpec>,
+    /// Policy used to build process environments for shell/unified exec.
+    pub shell_environment_policy: ShellEnvironmentPolicy,
+    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
+    /// legacy feature keys.
+    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+}
+
+/// Application configuration loaded from disk and merged with overrides.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Provenance for how this [`Config`] was derived (merged layers + enforced
     /// requirements).
@@ -147,24 +166,17 @@ pub struct Config {
     /// Optionally specify the personality of the model
     pub personality: Option<Personality>,
 
-    /// Approval policy for executing commands.
-    pub approval_policy: Constrained<AskForApproval>,
-
-    pub sandbox_policy: Constrained<SandboxPolicy>,
+    /// Effective permission configuration for shell tool execution.
+    pub permissions: Permissions,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
     pub enforce_residency: Constrained<Option<ResidencyRequirement>>,
 
-    /// Effective network configuration applied to all spawned processes.
-    pub network: Option<NetworkProxySpec>,
-
     /// True if the user passed in an override or set a value in config.toml
     /// for either of approval_policy or sandbox_mode.
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
-
-    pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -279,6 +291,9 @@ pub struct Config {
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
 
+    /// Memories subsystem settings.
+    pub memories: MemoriesConfig,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
@@ -343,10 +358,6 @@ pub struct Config {
 
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
-
-    /// Effective Windows sandbox mode derived from `[windows].sandbox` or
-    /// legacy feature keys.
-    pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -1000,6 +1011,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// Memories subsystem settings.
+    pub memories: Option<MemoriesToml>,
+
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
 
@@ -1198,6 +1212,7 @@ impl ConfigToml {
                     exclude_slash_tmp,
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -1724,12 +1739,15 @@ impl Config {
             model_provider,
             cwd: resolved_cwd,
             startup_warnings,
-            approval_policy: constrained_approval_policy.value,
-            sandbox_policy: constrained_sandbox_policy.value,
+            permissions: Permissions {
+                approval_policy: constrained_approval_policy.value,
+                sandbox_policy: constrained_sandbox_policy.value,
+                network,
+                shell_environment_policy,
+                windows_sandbox_mode,
+            },
             enforce_residency: enforce_residency.value,
-            network,
             did_user_set_custom_approval_policy_or_sandbox_mode,
-            shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1761,6 +1779,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
             log_dir,
             config_layer_stack,
@@ -1794,7 +1813,6 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
-            windows_sandbox_mode,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
@@ -1900,28 +1918,28 @@ impl Config {
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Unelevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Unelevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
     }
 
     pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
-        self.windows_sandbox_mode = if value {
+        self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Elevated)
         } else if matches!(
-            self.windows_sandbox_mode,
+            self.permissions.windows_sandbox_mode,
             Some(WindowsSandboxModeToml::Elevated)
         ) {
             None
         } else {
-            self.windows_sandbox_mode
+            self.permissions.windows_sandbox_mode
         };
     }
 }
@@ -1976,6 +1994,8 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::MemoriesConfig;
+    use crate::config::types::MemoriesToml;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2059,6 +2079,47 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+
+        let memories = r#"
+[memories]
+max_raw_memories_for_global = 512
+max_rollout_age_days = 42
+max_rollouts_per_startup = 9
+min_rollout_idle_hours = 24
+phase_1_model = "gpt-5-mini"
+phase_2_model = "gpt-5"
+"#;
+        let memories_cfg =
+            toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(MemoriesToml {
+                max_raw_memories_for_global: Some(512),
+                max_rollout_age_days: Some(42),
+                max_rollouts_per_startup: Some(9),
+                min_rollout_idle_hours: Some(24),
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }),
+            memories_cfg.memories
+        );
+
+        let config = Config::load_from_base_config_with_overrides(
+            memories_cfg,
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config from memories settings");
+        assert_eq!(
+            config.memories,
+            MemoriesConfig {
+                max_raw_memories_for_global: 512,
+                max_rollout_age_days: 42,
+                max_rollouts_per_startup: 9,
+                min_rollout_idle_hours: 24,
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -2122,7 +2183,7 @@ network_access = true  # This should be ignored.
             &PathBuf::from("/tmp/test"),
             None,
         );
-        assert_eq!(resolution, SandboxPolicy::ReadOnly);
+        assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
 
         let writable_root = test_absolute_path("/my/workspace");
         let sandbox_workspace_write = format!(
@@ -2150,12 +2211,13 @@ exclude_slash_tmp = true
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root.clone()],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2191,12 +2253,13 @@ trust_level = "trusted"
             None,
         );
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(
                 resolution,
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root],
+                    read_only_access: ReadOnlyAccess::FullAccess,
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2362,12 +2425,12 @@ trust_level = "trusted"
 
         let expected_backend = AbsolutePathBuf::try_from(backend).unwrap();
         if cfg!(target_os = "windows") {
-            match config.sandbox_policy.get() {
-                &SandboxPolicy::ReadOnly => {}
+            match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::ReadOnly { .. } => {}
                 other => panic!("expected read-only policy on Windows, got {other:?}"),
             }
         } else {
-            match config.sandbox_policy.get() {
+            match config.permissions.sandbox_policy.get() {
                 SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
                     assert_eq!(
                         writable_roots
@@ -2509,7 +2572,10 @@ trust_level = "trusted"
     #[test]
     fn web_search_mode_for_turn_uses_preference_for_read_only() {
         let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
-        let mode = resolve_web_search_mode_for_turn(&web_search_mode, &SandboxPolicy::ReadOnly);
+        let mode = resolve_web_search_mode_for_turn(
+            &web_search_mode,
+            &SandboxPolicy::new_read_only_policy(),
+        );
 
         assert_eq!(mode, WebSearchMode::Cached);
     }
@@ -2653,7 +2719,7 @@ profile = "project"
         )?;
 
         assert!(matches!(
-            config.sandbox_policy.get(),
+            config.permissions.sandbox_policy.get(),
             &SandboxPolicy::DangerFullAccess
         ));
         assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
@@ -2691,12 +2757,12 @@ profile = "project"
 
         if cfg!(target_os = "windows") {
             assert!(matches!(
-                config.sandbox_policy.get(),
-                SandboxPolicy::ReadOnly
+                config.permissions.sandbox_policy.get(),
+                SandboxPolicy::ReadOnly { .. }
             ));
         } else {
             assert!(matches!(
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 SandboxPolicy::WorkspaceWrite { .. }
             ));
         }
@@ -4012,12 +4078,15 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                permissions: Permissions {
+                    approval_policy: Constrained::allow_any(AskForApproval::Never),
+                    sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                    network: None,
+                    shell_environment_policy: ShellEnvironmentPolicy::default(),
+                    windows_sandbox_mode: None,
+                },
                 enforce_residency: Constrained::allow_any(None),
-                network: None,
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -4030,6 +4099,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
@@ -4060,7 +4130,6 @@ model_verbosity = "high"
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
-                windows_sandbox_mode: None,
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -4119,12 +4188,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-custom".to_string(),
             model_provider: fixture.openai_custom_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4137,6 +4209,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4167,7 +4240,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4224,12 +4296,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4242,6 +4317,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4272,7 +4348,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4315,12 +4390,15 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
-            approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
-            sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+            },
             enforce_residency: Constrained::allow_any(None),
-            network: None,
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4333,6 +4411,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4363,7 +4442,6 @@ model_verbosity = "high"
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
-            windows_sandbox_mode: None,
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4666,7 +4744,7 @@ trust_level = "untrusted"
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(resolution, SandboxPolicy::ReadOnly),
+                matches!(resolution, SandboxPolicy::ReadOnly { .. }),
                 "Expected ReadOnly on Windows, got {resolution:?}"
             );
         } else {
@@ -4757,7 +4835,7 @@ trust_level = "untrusted"
         );
 
         if cfg!(target_os = "windows") {
-            assert_eq!(resolution, SandboxPolicy::ReadOnly);
+            assert_eq!(resolution, SandboxPolicy::new_read_only_policy());
         } else {
             assert_eq!(resolution, SandboxPolicy::new_workspace_write_policy());
         }
@@ -4896,7 +4974,7 @@ mcp_oauth_callback_port = 5678
 
         // Verify that untrusted projects get UnlessTrusted approval policy
         assert_eq!(
-            config.approval_policy.value(),
+            config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted,
             "Expected UnlessTrusted approval policy for untrusted project"
         );
@@ -4904,13 +4982,16 @@ mcp_oauth_callback_port = 5678
         // Verify that untrusted projects still get WorkspaceWrite sandbox (or ReadOnly on Windows)
         if cfg!(target_os = "windows") {
             assert!(
-                matches!(config.sandbox_policy.get(), SandboxPolicy::ReadOnly),
+                matches!(
+                    config.permissions.sandbox_policy.get(),
+                    SandboxPolicy::ReadOnly { .. }
+                ),
                 "Expected ReadOnly on Windows"
             );
         } else {
             assert!(
                 matches!(
-                    config.sandbox_policy.get(),
+                    config.permissions.sandbox_policy.get(),
                     SandboxPolicy::WorkspaceWrite { .. }
                 ),
                 "Expected WorkspaceWrite sandbox for untrusted project"
@@ -4937,8 +5018,10 @@ mcp_oauth_callback_port = 5678
             }))
             .build()
             .await?;
-
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.permissions.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 
@@ -4972,7 +5055,10 @@ mcp_oauth_callback_port = 5678
             ))
             .build()
             .await?;
-        assert_eq!(*config.sandbox_policy.get(), SandboxPolicy::ReadOnly);
+        assert_eq!(
+            *config.permissions.sandbox_policy.get(),
+            SandboxPolicy::new_read_only_policy()
+        );
         Ok(())
     }
 
@@ -5002,7 +5088,10 @@ mcp_oauth_callback_port = 5678
 
         assert_eq!(config.web_search_mode.value(), WebSearchMode::Cached);
         assert_eq!(
-            resolve_web_search_mode_for_turn(&config.web_search_mode, config.sandbox_policy.get()),
+            resolve_web_search_mode_for_turn(
+                &config.web_search_mode,
+                config.permissions.sandbox_policy.get(),
+            ),
             WebSearchMode::Cached,
         );
         Ok(())
@@ -5036,7 +5125,10 @@ trust_level = "untrusted"
             .build()
             .await?;
 
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 
@@ -5061,7 +5153,10 @@ trust_level = "untrusted"
             }))
             .build()
             .await?;
-        assert_eq!(config.approval_policy.value(), AskForApproval::OnRequest);
+        assert_eq!(
+            config.permissions.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
         Ok(())
     }
 }

@@ -365,6 +365,13 @@ fn should_show_model_migration_prompt(
         return false;
     }
 
+    if !available_models
+        .iter()
+        .any(|preset| preset.model == target_model && preset.show_in_picker)
+    {
+        return false;
+    }
+
     if available_models
         .iter()
         .any(|preset| preset.model == current_model && preset.upgrade.is_some())
@@ -401,7 +408,7 @@ fn target_preset_for_upgrade<'a>(
 ) -> Option<&'a ModelPreset> {
     available_models
         .iter()
-        .find(|preset| preset.model == target_model)
+        .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -626,9 +633,16 @@ impl App {
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
     }
 
+    async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
+        let mut config = self.rebuild_config_for_cwd(self.config.cwd.clone()).await?;
+        self.apply_runtime_policy_overrides(&mut config);
+        self.config = config;
+        Ok(())
+    }
+
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.approval_policy.set(*policy)
+            && let Err(err) = config.permissions.approval_policy.set(*policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
@@ -636,7 +650,7 @@ impl App {
             ));
         }
         if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.sandbox_policy.set(policy.clone())
+            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
             self.chat_widget.add_error_message(format!(
@@ -1078,7 +1092,7 @@ impl App {
             SessionSelection::Fork(path) => {
                 otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -1156,9 +1170,9 @@ impl App {
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && matches!(
-                    app.config.sandbox_policy.get(),
+                    app.config.permissions.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1170,7 +1184,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.get().clone();
+                let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
@@ -1465,7 +1479,7 @@ impl App {
                     if path.exists() {
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
                             .await
                         {
                             Ok(forked) => {
@@ -1600,19 +1614,24 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAppLink {
+                app_id,
                 title,
                 description,
                 instructions,
                 url,
                 is_installed,
+                is_enabled,
             } => {
-                self.chat_widget.open_app_link_view(
-                    title,
-                    description,
-                    instructions,
-                    url,
-                    is_installed,
-                );
+                self.chat_widget
+                    .open_app_link_view(crate::bottom_pane::AppLinkViewParams {
+                        app_id,
+                        title,
+                        description,
+                        instructions,
+                        url,
+                        is_installed,
+                        is_enabled,
+                    });
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
@@ -1828,6 +1847,63 @@ impl App {
                     let _ = preset;
                 }
             }
+            AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Granting sandbox read access to {path} ..."),
+                            None,
+                        ));
+
+                    let policy = self.config.permissions.sandbox_policy.get().clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = self.config.cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    tokio::task::spawn_blocking(move || {
+                        let requested_path = PathBuf::from(path);
+                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                            requested_path.as_path(),
+                        ) {
+                            Ok(canonical_path) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: canonical_path,
+                                error: None,
+                            },
+                            Err(err) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: requested_path,
+                                error: Some(err.to_string()),
+                            },
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = path;
+                }
+            }
+            AppEvent::WindowsSandboxGrantReadRootCompleted { path, error } => match error {
+                Some(err) => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(format!("Error: {err}")));
+                }
+                None => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Sandbox read access granted for {}", path.display()),
+                            None,
+                        ));
+                }
+            },
             AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
                 #[cfg(target_os = "windows")]
                 {
@@ -1858,8 +1934,9 @@ impl App {
                                 self.config.set_windows_sandbox_enabled(true);
                                 self.config.set_windows_elevated_sandbox_enabled(false);
                             }
-                            self.chat_widget
-                                .set_windows_sandbox_mode(self.config.windows_sandbox_mode);
+                            self.chat_widget.set_windows_sandbox_mode(
+                                self.config.permissions.windows_sandbox_mode,
+                            );
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -2005,7 +2082,7 @@ impl App {
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
-                if let Err(err) = self.config.approval_policy.set(policy) {
+                if let Err(err) = self.config.permissions.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set approval policy: {err}"));
@@ -2018,18 +2095,16 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
-                #[cfg(target_os = "windows")]
                 let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy) {
+                if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                #[cfg(target_os = "windows")]
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
@@ -2037,7 +2112,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
-                    Some(self.config.sandbox_policy.get().clone());
+                    Some(self.config.permissions.sandbox_policy.get().clone());
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -2058,7 +2133,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.get().clone();
+                        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -2232,11 +2307,66 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after skill toggle"
+                            );
+                        }
                     }
                     Err(err) => {
                         let path_display = path.display();
                         self.chat_widget.add_error_message(format!(
                             "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::SetAppEnabled { id, enabled } => {
+                let edits = if enabled {
+                    vec![
+                        ConfigEdit::ClearPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                        },
+                        ConfigEdit::ClearPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                        },
+                    ]
+                } else {
+                    vec![
+                        ConfigEdit::SetPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                            value: false.into(),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                            value: "user".into(),
+                        },
+                    ]
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_connector_enabled(&id, enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(error = %err, "failed to refresh config after app toggle");
+                        }
+                        self.chat_widget.submit_op(Op::ReloadUserConfig);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update app config for {id}: {err}"
                         ));
                     }
                 }
@@ -2891,6 +3021,19 @@ mod tests {
         )
     }
 
+    fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
+        config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("apps"))
+            .and_then(TomlValue::as_table)
+            .and_then(|apps| apps.get(app_id))
+            .and_then(TomlValue::as_table)
+            .and_then(|app| app.get("enabled"))
+            .and_then(TomlValue::as_bool)
+    }
+
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::test_support::all_model_presets().clone()
     }
@@ -2921,25 +3064,25 @@ mod tests {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
-            "gpt-5.1",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex",
-            "gpt-5.1-codex",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
-            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
-            "gpt-5.1-codex-max",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
@@ -2970,7 +3113,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_migration_prompt_skips_when_target_missing() {
+    async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         let mut available = all_model_presets();
         let mut current = available
             .iter()
@@ -2988,7 +3131,7 @@ mod tests {
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
 
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             &current.model,
             "missing-target",
             &BTreeMap::new(),
@@ -2996,6 +3139,21 @@ mod tests {
         ));
 
         assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
+
+        let mut with_hidden_target = all_model_presets();
+        let target = with_hidden_target
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2-codex")
+            .expect("target preset present");
+        target.show_in_picker = false;
+
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.2-codex",
+            &BTreeMap::new(),
+            &with_hidden_target,
+        ));
+        assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.2-codex").is_none());
     }
 
     #[tokio::test]
@@ -3071,6 +3229,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let app_id = "connector_1".to_string();
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([
+                ConfigEdit::SetPath {
+                    segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
+                    value: false.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "apps".to_string(),
+                        app_id.clone(),
+                        "disabled_reason".to_string(),
+                    ],
+                    value: "user".into(),
+                },
+            ])
+            .apply()
+            .await
+            .expect("persist app toggle");
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app_enabled_in_effective_config(&app.config, &app_id),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
@@ -3099,7 +3296,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3154,7 +3351,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3203,7 +3400,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3282,7 +3479,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3406,7 +3603,7 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,

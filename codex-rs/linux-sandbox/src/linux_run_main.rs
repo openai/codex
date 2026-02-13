@@ -412,7 +412,7 @@ mod tests {
     fn inserts_bwrap_argv0_before_command_separator() {
         let argv = build_bwrap_argv(
             vec!["/bin/true".to_string()],
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
@@ -446,7 +446,7 @@ mod tests {
     fn inserts_unshare_net_when_network_isolation_requested() {
         let argv = build_bwrap_argv(
             vec!["/bin/true".to_string()],
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
@@ -460,7 +460,7 @@ mod tests {
     fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
         let argv = build_bwrap_argv(
             vec!["/bin/true".to_string()],
-            &SandboxPolicy::ReadOnly,
+            &SandboxPolicy::new_read_only_policy(),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,

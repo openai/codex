@@ -44,6 +44,7 @@ mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
+pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
