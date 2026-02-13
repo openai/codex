@@ -5508,6 +5508,11 @@ mod tests {
     use crate::CodexAuth;
     use crate::config::ConfigBuilder;
     use crate::config::test_config;
+    use crate::config_loader::ConfigLayerStack;
+    use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::config_loader::NetworkConstraints;
+    use crate::config_loader::RequirementSource;
+    use crate::config_loader::Sourced;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::mcp_connection_manager::ToolInfo;
@@ -7136,6 +7141,61 @@ mod tests {
             sess.previous_model().await,
             Some(tc.model_info.slug.clone())
         );
+    }
+
+    #[tokio::test]
+    async fn build_settings_update_items_emits_environment_item_for_network_changes() {
+        let (session, previous_context) = make_session_and_context().await;
+        let previous_context = Arc::new(previous_context);
+        let mut current_context = previous_context
+            .with_model(
+                previous_context.model_info.slug.clone(),
+                &session.services.models_manager,
+            )
+            .await;
+
+        let mut config = (*current_context.config).clone();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                allowed_domains: Some(vec!["api.example.com".to_string()]),
+                denied_domains: Some(vec!["blocked.example.com".to_string()]),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let layers = config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .into_iter()
+            .cloned()
+            .collect();
+        config.config_layer_stack = ConfigLayerStack::new(
+            layers,
+            requirements,
+            config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("rebuild config layer stack with network requirements");
+        current_context.config = Arc::new(config);
+
+        let update_items =
+            session.build_settings_update_items(Some(&previous_context), None, &current_context);
+
+        let environment_update = update_items
+            .iter()
+            .find_map(|item| match item {
+                ResponseItem::Message { role, content, .. } if role == "user" => {
+                    let [ContentItem::InputText { text }] = content.as_slice() else {
+                        return None;
+                    };
+                    text.contains("<environment_context>").then_some(text)
+                }
+                _ => None,
+            })
+            .expect("environment update item should be emitted");
+        assert!(environment_update.contains("<network enabled=\"true\">"));
+        assert!(environment_update.contains("<allowed>api.example.com</allowed>"));
+        assert!(environment_update.contains("<denied>blocked.example.com</denied>"));
     }
 
     #[derive(Clone, Copy)]
