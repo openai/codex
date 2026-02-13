@@ -44,6 +44,8 @@ pub enum NetworkApprovalProtocol {
     // decisions expose websocket traffic as a distinct approval context.
     Http,
     Https,
+    Socks5Tcp,
+    Socks5Udp,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

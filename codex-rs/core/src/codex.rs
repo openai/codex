@@ -1235,14 +1235,17 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let (inline_network_decider_session, inline_network_decider) =
-            if config.permissions.network.is_some() {
-                let inline_network_decider_session =
-                    Arc::new(RwLock::new(std::sync::Weak::<Session>::new()));
-                let inline_network_decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
-                    let inline_network_decider_session =
-                        Arc::clone(&inline_network_decider_session);
-                    move |request: NetworkPolicyRequest| {
+        let inline_network_decider_session = config
+            .permissions
+            .network
+            .as_ref()
+            .map(|_| Arc::new(RwLock::new(std::sync::Weak::<Session>::new())));
+        let inline_network_decider =
+            inline_network_decider_session
+                .as_ref()
+                .map(|inline_network_decider_session| {
+                    let inline_network_decider_session = Arc::clone(inline_network_decider_session);
+                    Arc::new(move |request: NetworkPolicyRequest| {
                         let inline_network_decider_session =
                             Arc::clone(&inline_network_decider_session);
                         async move {
@@ -1253,15 +1256,8 @@ impl Session {
                             };
                             session.handle_inline_network_policy_request(request).await
                         }
-                    }
+                    }) as Arc<dyn NetworkPolicyDecider>
                 });
-                (
-                    Some(inline_network_decider_session),
-                    Some(inline_network_decider),
-                )
-            } else {
-                (None, None)
-            };
         let network_proxy = match config.permissions.network.as_ref() {
             Some(spec) => Some(
                 spec.start_proxy(
@@ -2305,9 +2301,8 @@ impl Session {
         let protocol = match request.protocol {
             NetworkProtocol::Http => NetworkApprovalProtocol::Http,
             NetworkProtocol::HttpsConnect => NetworkApprovalProtocol::Https,
-            NetworkProtocol::Socks5Tcp | NetworkProtocol::Socks5Udp => {
-                return NetworkDecision::deny(REASON_NOT_ALLOWED);
-            }
+            NetworkProtocol::Socks5Tcp => NetworkApprovalProtocol::Socks5Tcp,
+            NetworkProtocol::Socks5Udp => NetworkApprovalProtocol::Socks5Udp,
         };
 
         let Some(turn_context) = self.turn_context_for_sub_id(&attempt.turn_id).await else {

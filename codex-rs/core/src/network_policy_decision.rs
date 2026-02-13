@@ -86,6 +86,8 @@ pub(crate) fn network_approval_context_from_payload(
         Some("https") | Some("https_connect") | Some("http-connect") => {
             NetworkApprovalProtocol::Https
         }
+        Some("socks5_tcp") => NetworkApprovalProtocol::Socks5Tcp,
+        Some("socks5_udp") => NetworkApprovalProtocol::Socks5Udp,
         _ => return None,
     };
 
@@ -149,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn network_approval_context_maps_http_and_https_protocols() {
+    fn network_approval_context_maps_http_https_and_socks_protocols() {
         let http_payload = NetworkPolicyDecisionPayload {
             decision: NetworkPolicyDecision::Ask,
             source: NetworkDecisionSource::Decider,
@@ -195,6 +197,38 @@ mod tests {
             Some(NetworkApprovalContext {
                 host: "example.com".to_string(),
                 protocol: NetworkApprovalProtocol::Https,
+            })
+        );
+
+        let socks5_tcp_payload = NetworkPolicyDecisionPayload {
+            decision: NetworkPolicyDecision::Ask,
+            source: NetworkDecisionSource::Decider,
+            protocol: Some("socks5_tcp".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
+        assert_eq!(
+            network_approval_context_from_payload(&socks5_tcp_payload),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Socks5Tcp,
+            })
+        );
+
+        let socks5_udp_payload = NetworkPolicyDecisionPayload {
+            decision: NetworkPolicyDecision::Ask,
+            source: NetworkDecisionSource::Decider,
+            protocol: Some("socks5_udp".to_string()),
+            host: Some("example.com".to_string()),
+            reason: Some("not_allowed".to_string()),
+            port: Some(443),
+        };
+        assert_eq!(
+            network_approval_context_from_payload(&socks5_udp_payload),
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Socks5Udp,
             })
         );
     }
