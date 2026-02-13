@@ -13,6 +13,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
+    // This is an experimental field.
     pub permission_profile: Option<Permissions>,
     pub path: PathBuf,
     pub scope: SkillScope,
