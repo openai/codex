@@ -197,7 +197,9 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        turn_context.cancel_turn_metadata_enrichment_task();
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
 
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
@@ -262,7 +264,9 @@ impl Session {
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
-        task.turn_context.cancel_turn_metadata_enrichment_task();
+        task.turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
         let session_task = task.task;
 
         select! {

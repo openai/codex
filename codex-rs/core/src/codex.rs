@@ -31,7 +31,6 @@ use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
-use crate::sandbox_tags::sandbox_tag;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -556,7 +555,7 @@ pub(crate) struct TurnContext {
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -685,18 +684,6 @@ impl TurnContext {
             allowed_domains: network.allowed_domains.clone().unwrap_or_default(),
             denied_domains: network.denied_domains.clone().unwrap_or_default(),
         })
-    }
-
-    pub fn current_turn_metadata_header(&self) -> Option<String> {
-        self.turn_metadata_state.current_header_value()
-    }
-
-    pub fn spawn_turn_metadata_enrichment_task(self: &Arc<Self>) {
-        self.turn_metadata_state.spawn_git_enrichment_task();
-    }
-
-    pub fn cancel_turn_metadata_enrichment_task(&self) {
-        self.turn_metadata_state.cancel_git_enrichment_task();
     }
 }
 
@@ -926,13 +913,8 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             sub_id.clone(),
             cwd.clone(),
-            Some(
-                sandbox_tag(
-                    session_configuration.sandbox_policy.get(),
-                    session_configuration.windows_sandbox_level,
-                )
-                .to_string(),
-            ),
+            session_configuration.sandbox_policy.get(),
+            session_configuration.windows_sandbox_level,
         ));
         TurnContext {
             sub_id,
@@ -1758,7 +1740,7 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        turn_context.spawn_turn_metadata_enrichment_task();
+        turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
     }
 
@@ -4009,13 +3991,8 @@ async fn spawn_review_thread(
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
-        Some(
-            sandbox_tag(
-                &parent_turn_context.sandbox_policy,
-                parent_turn_context.windows_sandbox_level,
-            )
-            .to_string(),
-        ),
+        &parent_turn_context.sandbox_policy,
+        parent_turn_context.windows_sandbox_level,
     ));
 
     let review_turn_context = TurnContext {
@@ -4058,7 +4035,7 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
-    tc.spawn_turn_metadata_enrichment_task();
+    tc.turn_metadata_state.spawn_git_enrichment_task();
     sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
 
     // Announce entering review mode so UIs can switch modes.
@@ -4341,7 +4318,7 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
-        let turn_metadata_header = turn_context.current_turn_metadata_header();
+        let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
