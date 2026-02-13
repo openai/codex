@@ -4,7 +4,6 @@
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
-mod dispatch;
 mod phase1;
 mod phase2;
 pub(crate) mod prompts;

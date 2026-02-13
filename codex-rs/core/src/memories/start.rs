@@ -2,6 +2,7 @@ use crate::codex::Session;
 use crate::config::Config;
 use crate::features::Feature;
 use crate::memories::phase1;
+use crate::memories::phase2;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 use tracing::warn;
@@ -36,6 +37,6 @@ pub(crate) fn start_memories_startup_task(
         // Run phase 1.
         phase1::run(&session).await;
         // Run phase 2.
-        crate::memories::dispatch::run_global_memory_consolidation(&session, config).await;
+        phase2::run(&session, config).await;
     });
 }

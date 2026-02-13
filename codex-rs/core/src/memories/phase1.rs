@@ -43,7 +43,7 @@ enum PhaseOneJobOutcome {
     Failed,
 }
 
-struct PhaseOneOutcomeCounts {
+struct Counters {
     claimed: usize,
     succeeded_with_output: usize,
     succeeded_no_output: usize,
@@ -407,7 +407,7 @@ mod job {
     }
 }
 
-fn count_outcomes(outcomes: Vec<PhaseOneJobOutcome>) -> PhaseOneOutcomeCounts {
+fn count_outcomes(outcomes: Vec<PhaseOneJobOutcome>) -> Counters {
     let succeeded_with_output = outcomes
         .iter()
         .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::SucceededWithOutput))
@@ -421,7 +421,7 @@ fn count_outcomes(outcomes: Vec<PhaseOneJobOutcome>) -> PhaseOneOutcomeCounts {
         .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::Failed))
         .count();
 
-    PhaseOneOutcomeCounts {
+    Counters {
         claimed: outcomes.len(),
         succeeded_with_output,
         succeeded_no_output,
@@ -429,7 +429,7 @@ fn count_outcomes(outcomes: Vec<PhaseOneJobOutcome>) -> PhaseOneOutcomeCounts {
     }
 }
 
-fn emit_metrics(session: &Session, counts: &PhaseOneOutcomeCounts) {
+fn emit_metrics(session: &Session, counts: &Counters) {
     if counts.claimed > 0 {
         session.services.otel_manager.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
