@@ -25,17 +25,29 @@ pub(crate) struct SkillManifestPermissions {
     #[serde(default)]
     pub(crate) network: bool,
     #[serde(default)]
-    pub(crate) fs_read: Vec<String>,
+    pub(crate) file_system: SkillManifestFileSystemPermissions,
     #[serde(default)]
-    pub(crate) fs_write: Vec<String>,
+    pub(crate) macos: SkillManifestMacOsPermissions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+pub(crate) struct SkillManifestFileSystemPermissions {
     #[serde(default)]
-    pub(crate) macos_preferences: Option<MacOsPreferencesValue>,
+    pub(crate) read: Vec<String>,
     #[serde(default)]
-    pub(crate) macos_automation: Option<MacOsAutomationValue>,
+    pub(crate) write: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+pub(crate) struct SkillManifestMacOsPermissions {
     #[serde(default)]
-    pub(crate) macos_accessibility: bool,
+    pub(crate) preferences: Option<MacOsPreferencesValue>,
     #[serde(default)]
-    pub(crate) macos_calendar: bool,
+    pub(crate) automations: Option<MacOsAutomationValue>,
+    #[serde(default)]
+    pub(crate) accessibility: bool,
+    #[serde(default)]
+    pub(crate) calendar: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -57,10 +69,16 @@ pub(crate) fn compile_permission_profile(
     permissions: Option<SkillManifestPermissions>,
 ) -> Option<Permissions> {
     let permissions = permissions?;
-    let fs_read =
-        normalize_permission_paths(skill_dir, &permissions.fs_read, "permissions.fs_read");
-    let fs_write =
-        normalize_permission_paths(skill_dir, &permissions.fs_write, "permissions.fs_write");
+    let fs_read = normalize_permission_paths(
+        skill_dir,
+        &permissions.file_system.read,
+        "permissions.file_system.read",
+    );
+    let fs_write = normalize_permission_paths(
+        skill_dir,
+        &permissions.file_system.write,
+        "permissions.file_system.write",
+    );
     let sandbox_policy = if !fs_write.is_empty() {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: fs_write,
@@ -87,7 +105,8 @@ pub(crate) fn compile_permission_profile(
         // Default sandbox policy
         SandboxPolicy::new_read_only_policy()
     };
-    let macos_seatbelt_profile_extensions = build_macos_seatbelt_profile_extensions(&permissions);
+    let macos_seatbelt_profile_extensions =
+        build_macos_seatbelt_profile_extensions(&permissions.macos);
 
     Some(Permissions {
         approval_policy: Constrained::allow_any(AskForApproval::Never),
@@ -165,21 +184,21 @@ fn expand_home(path: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn build_macos_seatbelt_profile_extensions(
-    permissions: &SkillManifestPermissions,
+    permissions: &SkillManifestMacOsPermissions,
 ) -> Option<MacOsSeatbeltProfileExtensions> {
     let defaults = MacOsSeatbeltProfileExtensions::default();
 
     let extensions = MacOsSeatbeltProfileExtensions {
         macos_preferences: resolve_macos_preferences_permission(
-            permissions.macos_preferences.as_ref(),
+            permissions.preferences.as_ref(),
             defaults.macos_preferences,
         ),
         macos_automation: resolve_macos_automation_permission(
-            permissions.macos_automation.as_ref(),
+            permissions.automations.as_ref(),
             defaults.macos_automation,
         ),
-        macos_accessibility: permissions.macos_accessibility,
-        macos_calendar: permissions.macos_calendar,
+        macos_accessibility: permissions.accessibility,
+        macos_calendar: permissions.calendar,
     };
     Some(extensions)
 }
@@ -204,7 +223,7 @@ fn resolve_macos_preferences_permission(
                 MacOsPreferencesPermission::ReadWrite
             } else {
                 warn!(
-                    "ignoring permissions.macos_preferences: expected true/false, readonly, or readwrite"
+                    "ignoring permissions.macos.preferences: expected true/false, readonly, or readwrite"
                 );
                 MacOsPreferencesPermission::None
             }
@@ -242,7 +261,7 @@ fn resolve_macos_automation_permission(
 
 #[cfg(not(target_os = "macos"))]
 fn build_macos_seatbelt_profile_extensions(
-    _: &SkillManifestPermissions,
+    _: &SkillManifestMacOsPermissions,
 ) -> Option<MacOsSeatbeltProfileExtensions> {
     None
 }
@@ -265,6 +284,8 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::SkillManifestFileSystemPermissions;
+    use super::SkillManifestMacOsPermissions;
     use super::SkillManifestPermissions;
     use super::compile_permission_profile;
     use crate::config::Constrained;
@@ -289,12 +310,14 @@ mod tests {
             &skill_dir,
             Some(SkillManifestPermissions {
                 network: true,
-                fs_read: vec![
-                    "./data".to_string(),
-                    "./data".to_string(),
-                    "scripts/../data".to_string(),
-                ],
-                fs_write: vec!["./output".to_string()],
+                file_system: SkillManifestFileSystemPermissions {
+                    read: vec![
+                        "./data".to_string(),
+                        "./data".to_string(),
+                        "scripts/../data".to_string(),
+                    ],
+                    write: vec!["./output".to_string()],
+                },
                 ..Default::default()
             }),
         )
@@ -356,14 +379,14 @@ mod tests {
         let profile = compile_permission_profile(
             &skill_dir,
             Some(SkillManifestPermissions {
-                macos_preferences: Some(super::MacOsPreferencesValue::Mode(
-                    "readwrite".to_string(),
-                )),
-                macos_automation: Some(super::MacOsAutomationValue::BundleIds(vec![
-                    "com.apple.Notes".to_string(),
-                ])),
-                macos_accessibility: true,
-                macos_calendar: true,
+                macos: SkillManifestMacOsPermissions {
+                    preferences: Some(super::MacOsPreferencesValue::Mode("readwrite".to_string())),
+                    automations: Some(super::MacOsAutomationValue::BundleIds(vec![
+                        "com.apple.Notes".to_string(),
+                    ])),
+                    accessibility: true,
+                    calendar: true,
+                },
                 ..Default::default()
             }),
         )

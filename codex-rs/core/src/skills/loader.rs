@@ -1322,11 +1322,12 @@ policy: {}
             r#"
 permissions:
   network: true
-  fs_read:
-    - "./data"
-    - "./data"
-  fs_write:
-    - "./output"
+  file_system:
+    read:
+      - "./data"
+      - "./data"
+    write:
+      - "./output"
 "#,
         );
 
@@ -1438,11 +1439,12 @@ permissions: {}
             skill_dir,
             r#"
 permissions:
-  macos_preferences: "readwrite"
-  macos_automation:
-    - "com.apple.Notes"
-  macos_accessibility: true
-  macos_calendar: true
+  macos:
+    preferences: "readwrite"
+    automations:
+      - "com.apple.Notes"
+    accessibility: true
+    calendar: true
 "#,
         );
 
@@ -1487,11 +1489,12 @@ permissions:
             skill_dir,
             r#"
 permissions:
-  macos_preferences: "readwrite"
-  macos_automation:
-    - "com.apple.Notes"
-  macos_accessibility: true
-  macos_calendar: true
+  macos:
+    preferences: "readwrite"
+    automations:
+      - "com.apple.Notes"
+    accessibility: true
+    calendar: true
 "#,
         );
 
