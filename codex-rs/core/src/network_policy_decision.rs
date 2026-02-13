@@ -1,4 +1,6 @@
 use codex_network_proxy::BlockedRequest;
+use codex_network_proxy::NetworkDecisionSource;
+use codex_network_proxy::NetworkPolicyDecision;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use serde::Deserialize;
@@ -16,7 +18,11 @@ pub struct NetworkPolicyDecisionPayload {
 
 impl NetworkPolicyDecisionPayload {
     pub(crate) fn is_ask_from_decider(&self) -> bool {
-        self.decision.eq_ignore_ascii_case("ask") && self.source.eq_ignore_ascii_case("decider")
+        self.decision
+            .eq_ignore_ascii_case(NetworkPolicyDecision::Ask.as_str())
+            && self
+                .source
+                .eq_ignore_ascii_case(NetworkDecisionSource::Decider.as_str())
     }
 }
 
@@ -50,7 +56,7 @@ pub(crate) fn denied_network_policy_message(blocked: &BlockedRequest) -> Option<
     if !blocked
         .decision
         .as_deref()
-        .is_some_and(|decision| decision.eq_ignore_ascii_case("deny"))
+        .is_some_and(|decision| decision.eq_ignore_ascii_case(NetworkPolicyDecision::Deny.as_str()))
     {
         return None;
     }
