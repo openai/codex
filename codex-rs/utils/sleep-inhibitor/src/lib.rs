@@ -3,11 +3,11 @@
 //! On macOS this uses native IOKit power assertions instead of spawning
 //! `caffeinate`, so assertion lifecycle is tied directly to Rust object lifetime.
 
+#[cfg(not(target_os = "macos"))]
 mod dummy;
+#[cfg(target_os = "macos")]
 mod macos_inhibitor;
 
-use crate::dummy::DummySleepInhibitor;
-use macos_inhibitor::MacOsSleepInhibitor;
 use std::fmt::Debug;
 
 /// Keeps the machine awake while a turn is in progress when enabled.
@@ -24,11 +24,11 @@ pub(crate) trait PlatformSleepInhibitor: Debug {
 
 impl SleepInhibitor {
     pub fn new(enabled: bool) -> Self {
-        let platform: Box<dyn PlatformSleepInhibitor> = if cfg!(target_os = "macos") {
-            Box::new(MacOsSleepInhibitor::new())
-        } else {
-            Box::new(DummySleepInhibitor::new())
-        };
+        #[cfg(target_os = "macos")]
+        let platform: Box<dyn PlatformSleepInhibitor> =
+            Box::new(macos_inhibitor::MacOsSleepInhibitor::new());
+        #[cfg(not(target_os = "macos"))]
+        let platform: Box<dyn PlatformSleepInhibitor> = Box::new(dummy::DummySleepInhibitor::new());
 
         Self { enabled, platform }
     }
