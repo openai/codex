@@ -40,7 +40,6 @@ pub struct UnifiedExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
-    pub network_attempt_id: Option<String>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -111,7 +110,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         command,
                         cwd,
                         reason,
-                        ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -167,7 +165,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env_for_attempt(&mut env, req.network_attempt_id.as_deref());
+            network.apply_to_env(&mut env);
         }
         let spec = build_command_spec(
             &command,

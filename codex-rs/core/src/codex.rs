@@ -1174,13 +1174,16 @@ impl Session {
             };
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
-        let network_proxy =
-            match config.permissions.network.as_ref() {
-                Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
-                    anyhow::anyhow!("failed to start managed network proxy: {err}")
-                })?),
-                None => None,
-            };
+        let network_proxy = match config.permissions.network.as_ref() {
+            Some(spec) => Some(
+                spec.start_proxy(config.permissions.sandbox_policy.get(), None)
+                    .await
+                    .map_err(|err| {
+                        anyhow::anyhow!("failed to start managed network proxy: {err}")
+                    })?,
+            ),
+            None => None,
+        };
         let session_network_proxy = network_proxy.as_ref().map(|started| {
             let proxy = started.proxy();
             SessionNetworkProxyRuntime {
@@ -2118,6 +2121,7 @@ impl Session {
             command,
             cwd,
             reason,
+            network_approval_context: None,
             proposed_execpolicy_amendment,
             parsed_cmd,
         });

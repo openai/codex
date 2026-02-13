@@ -490,6 +490,7 @@ fn finalize_exec_result(
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
+                    network_policy_decision: None,
                 }));
             }
 

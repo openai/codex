@@ -4,11 +4,9 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
-use crate::codex::NetworkApprovalOutcome;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
-use crate::network_policy_decision::denied_network_policy_message;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -30,7 +28,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -65,25 +62,6 @@ impl ShellRuntime {
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
-    }
-}
-
-async fn network_policy_denial_message_for_attempt(
-    network: Option<&NetworkProxy>,
-    attempt_id: Option<&str>,
-) -> Option<String> {
-    let (Some(network), Some(attempt_id)) = (network, attempt_id) else {
-        return None;
-    };
-    match network.latest_blocked_request_for_attempt(attempt_id).await {
-        Ok(Some(blocked)) => denied_network_policy_message(&blocked),
-        Ok(None) => None,
-        Err(err) => {
-            tracing::debug!(
-                "failed to read blocked network telemetry for attempt {attempt_id}: {err}"
-            );
-            None
-        }
     }
 }
 
@@ -131,7 +109,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         command,
                         cwd,
                         reason,
-                        ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -190,52 +167,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.sandbox_permissions,
             req.justification.clone(),
         )?;
-        let mut env = attempt
+        let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-
-        let network_attempt_id = req.network.as_ref().map(|_| Uuid::new_v4().to_string());
-        if let Some(attempt_id) = network_attempt_id.as_ref() {
-            ctx.session
-                .register_network_approval_attempt(
-                    attempt_id.clone(),
-                    ctx.turn.sub_id.clone(),
-                    ctx.call_id.clone(),
-                    req.command.clone(),
-                    req.cwd.clone(),
-                )
-                .await;
-        }
-        env.network_attempt_id = network_attempt_id.clone();
-
         let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
             .await
-            .map_err(ToolError::Codex);
-        let approval_outcome = if let Some(attempt_id) = network_attempt_id.as_deref() {
-            ctx.session.take_network_approval_outcome(attempt_id).await
-        } else {
-            None
-        };
-        let network_policy_denial_message = network_policy_denial_message_for_attempt(
-            req.network.as_ref(),
-            network_attempt_id.as_deref(),
-        )
-        .await;
-
-        if let Some(attempt_id) = network_attempt_id.as_deref() {
-            ctx.session
-                .unregister_network_approval_attempt(attempt_id)
-                .await;
-        }
-
-        if approval_outcome == Some(NetworkApprovalOutcome::DeniedByUser) {
-            return Err(ToolError::Rejected("rejected by user".to_string()));
-        }
-        if let Some(message) = network_policy_denial_message {
-            return Err(ToolError::Rejected(message));
-        }
-
-        let out = out?;
+            .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }

@@ -1682,7 +1682,10 @@ impl CodexMessageProcessor {
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
         let started_network_proxy = match self.config.permissions.network.as_ref() {
-            Some(spec) => match spec.start_proxy().await {
+            Some(spec) => match spec
+                .start_proxy(self.config.permissions.sandbox_policy.get(), None)
+                .await
+            {
                 Ok(started) => Some(started),
                 Err(err) => {
                     let error = JSONRPCErrorError {

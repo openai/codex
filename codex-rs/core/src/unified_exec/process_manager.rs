@@ -540,7 +540,6 @@ impl UnifiedExecProcessManager {
             cwd,
             env,
             network: request.network.clone(),
-            network_attempt_id: None,
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             justification: request.justification.clone(),

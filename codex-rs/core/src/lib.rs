@@ -50,6 +50,7 @@ mod memories;
 mod mentions;
 mod message_history;
 mod model_provider_info;
+mod network_policy_decision;
 pub mod path_utils;
 pub mod personality_migration;
 mod proposed_plan_parser;

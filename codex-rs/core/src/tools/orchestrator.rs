@@ -123,10 +123,14 @@ impl ToolOrchestrator {
                 // We have a successful initial result
                 Ok(out)
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                output,
+                network_policy_decision,
+            }))) => {
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
+                        network_policy_decision,
                     })));
                 }
                 // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
@@ -134,6 +138,7 @@ impl ToolOrchestrator {
                 if !tool.wants_no_sandbox_approval(approval_policy) {
                     return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                         output,
+                        network_policy_decision,
                     })));
                 }
 
