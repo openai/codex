@@ -7,6 +7,17 @@
 
 name: rust-release
 on:
+  workflow_call:
+    inputs:
+      release_ref_name:
+        description: Release ref name in the format rust-vX.Y.Z[-alpha.N|-beta.N].
+        required: true
+        type: string
+      publish:
+        description: Whether to run publish/sign/release side effects.
+        required: false
+        default: true
+        type: boolean
   push:
     tags:
       - "rust-v*.*.*"
@@ -18,23 +29,23 @@ concurrency:
 jobs:
   tag-check:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_REF_NAME: ${{ github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.92
-      - name: Validate tag matches Cargo.toml version
+      - name: Validate release ref matches Cargo.toml version
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Tag validation"
+          echo "::group::Release ref validation"
 
-          # 1. Must be a tag and match the regex
-          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
-            || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
-            || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+          # 1. Must match expected format
+          [[ "${RELEASE_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "❌  Release ref '${RELEASE_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          tag_ver="${RELEASE_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -42,7 +53,7 @@ jobs:
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
-          echo "✅  Tag and Cargo.toml agree (${tag_ver})"
+          echo "✅  Release ref and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
 
   build:
@@ -57,7 +68,9 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      RELEASE_REF_NAME: ${{ github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name }}
+      PUBLISH_ENABLED: ${{ github.event_name != 'workflow_call' || inputs.publish }}
+      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name, '-alpha') && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false
@@ -214,14 +227,14 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
-      - if: ${{ contains(matrix.target, 'linux') }}
+      - if: ${{ env.PUBLISH_ENABLED == 'true' && contains(matrix.target, 'linux') }}
         name: Cosign Linux artifacts
         uses: ./.github/actions/linux-code-sign
         with:
           target: ${{ matrix.target }}
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ env.PUBLISH_ENABLED == 'true' && runner.os == 'macOS' }}
         name: MacOS code signing (binaries)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -280,7 +293,7 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' }}
+      - if: ${{ env.PUBLISH_ENABLED == 'true' && runner.os == 'macOS' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
@@ -359,7 +372,8 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
-      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      release-lto: ${{ contains(github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name, '-alpha') && 'thin' || 'fat' }}
+      publish: ${{ github.event_name != 'workflow_call' || inputs.publish }}
     secrets: inherit
 
   shell-tool-mcp:
@@ -367,8 +381,8 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
     with:
-      release-tag: ${{ github.ref_name }}
-      publish: true
+      release-tag: ${{ github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name }}
+      publish: ${{ github.event_name != 'workflow_call' || inputs.publish }}
     secrets: inherit
 
   release:
@@ -383,9 +397,12 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.release_name.outputs.name }}
-      tag: ${{ github.ref_name }}
+      tag: ${{ github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
+    env:
+      RELEASE_REF_NAME: ${{ github.event_name == 'workflow_call' && inputs.release_ref_name || github.ref_name }}
+      PUBLISH_ENABLED: ${{ github.event_name != 'workflow_call' || inputs.publish }}
 
     steps:
       - name: Checkout repository
@@ -441,7 +458,7 @@ jobs:
         run: |
           # Extract the version from the tag name, which is in the format
           # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          version="${RELEASE_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
@@ -451,6 +468,13 @@ jobs:
         run: |
           set -euo pipefail
           version="${VERSION}"
+          publish_enabled="${PUBLISH_ENABLED}"
+
+          if [[ "${publish_enabled}" != "true" ]]; then
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
@@ -482,17 +506,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          workflow_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           ./scripts/stage_npm_packages.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
+            --workflow-url "${workflow_url}" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
 
       - name: Create GitHub Release
+        if: ${{ env.PUBLISH_ENABLED == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_REF_NAME }}
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           # Mark as prerelease only when the version has a suffix after x.y.z
@@ -500,22 +527,23 @@ jobs:
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
       - uses: facebook/dotslash-publish-release@v2
+        if: ${{ env.PUBLISH_ENABLED == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag: ${{ github.ref_name }}
+          tag: ${{ env.RELEASE_REF_NAME }}
           config: .github/dotslash-config.json
 
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.
         # The deploy is used to update the developers.openai.com website with the new config schema json file.
-        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        if: ${{ env.PUBLISH_ENABLED == 'true' && !contains(steps.release_name.outputs.name, '-') }}
         continue-on-error: true
         env:
           DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
         run: |
           if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
-            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${RELEASE_REF_NAME}"
             exit 1
           fi
 
@@ -619,6 +647,7 @@ jobs:
     permissions:
       contents: write
     needs: release
+    if: ${{ github.event_name != 'workflow_call' || inputs.publish }}
     runs-on: ubuntu-latest
 
     steps:

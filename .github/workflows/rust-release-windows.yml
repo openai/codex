@@ -6,19 +6,23 @@ on:
       release-lto:
         required: true
         type: string
+      publish:
+        required: false
+        default: true
+        type: boolean
     secrets:
       AZURE_TRUSTED_SIGNING_CLIENT_ID:
-        required: true
+        required: false
       AZURE_TRUSTED_SIGNING_TENANT_ID:
-        required: true
+        required: false
       AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID:
-        required: true
+        required: false
       AZURE_TRUSTED_SIGNING_ENDPOINT:
-        required: true
+        required: false
       AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
-        required: true
+        required: false
       AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME:
-        required: true
+        required: false
 
 jobs:
   build-windows-binaries:
@@ -171,6 +175,7 @@ jobs:
           ls -lh target/${{ matrix.target }}/release/codex-command-runner.exe
 
       - name: Sign Windows binaries with Azure Trusted Signing
+        if: ${{ inputs.publish }}
         uses: ./.github/actions/windows-code-sign
         with:
           target: ${{ matrix.target }}

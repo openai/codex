@@ -1,0 +1,50 @@
+name: rust-release-dry-run
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+
+jobs:
+  prepare:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_ref_name: ${{ steps.release_ref.outputs.release_ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compute release ref from Cargo version
+        id: release_ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version' codex-rs/Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          echo "release_ref_name=rust-v${version}" >> "$GITHUB_OUTPUT"
+
+  release-dry-run:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: prepare
+    uses: ./.github/workflows/rust-release.yml
+    with:
+      release_ref_name: ${{ needs.prepare.outputs.release_ref_name }}
+      publish: false
+    secrets: inherit
+
+  release-dry-run-status:
+    name: release-dry-run-status
+    if: ${{ always() }}
+    needs:
+      - prepare
+      - release-dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify dry run result
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="${{ needs.release-dry-run.result }}"
+          if [[ "${result}" == "failure" || "${result}" == "cancelled" ]]; then
+            echo "Release dry run failed with result: ${result}"
+            exit 1
+          fi
+          echo "Release dry run result: ${result}"
