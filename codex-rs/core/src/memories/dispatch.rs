@@ -95,7 +95,8 @@ pub(in crate::memories) async fn run_global_memory_consolidation(
     let consolidation_config = {
         let mut consolidation_config = config.as_ref().clone();
         consolidation_config.cwd = root.clone();
-        consolidation_config.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        consolidation_config.permissions.approval_policy =
+            Constrained::allow_only(AskForApproval::Never);
         let mut writable_roots = Vec::new();
         match AbsolutePathBuf::from_absolute_path(consolidation_config.codex_home.clone()) {
             Ok(codex_home) => writable_roots.push(codex_home),
@@ -112,6 +113,7 @@ pub(in crate::memories) async fn run_global_memory_consolidation(
             exclude_slash_tmp: false,
         };
         if let Err(err) = consolidation_config
+            .permissions
             .sandbox_policy
             .set(consolidation_sandbox_policy)
         {

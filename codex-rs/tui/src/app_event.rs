@@ -107,11 +107,13 @@ pub(crate) enum AppEvent {
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {
+        app_id: String,
         title: String,
         description: Option<String>,
         instructions: String,
         url: String,
         is_installed: bool,
+        is_enabled: bool,
     },
 
     /// Open the provided URL in the user's browser.
@@ -294,6 +296,12 @@ pub(crate) enum AppEvent {
     /// Enable or disable a skill by path.
     SetSkillEnabled {
         path: PathBuf,
+        enabled: bool,
+    },
+
+    /// Enable or disable an app by connector ID.
+    SetAppEnabled {
+        id: String,
         enabled: bool,
     },
 

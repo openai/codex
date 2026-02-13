@@ -114,6 +114,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
@@ -246,6 +247,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 
@@ -389,8 +391,8 @@ impl Codex {
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -932,7 +934,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
-            shell_environment_policy: per_turn_config.shell_environment_policy.clone(),
+            shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             tools_config,
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
@@ -1099,6 +1101,14 @@ impl Session {
             });
         }
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
+        if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
+            post_session_configured_events.push(Event {
+                id: "".to_owned(),
+                msg: EventMsg::Warning(WarningEvent {
+                    message: "`on-failure` approval policy is deprecated and will be removed in a future release. Use `on-request` for interactive approvals or `never` for non-interactive runs.".to_string(),
+                }),
+            });
+        }
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
@@ -1134,8 +1144,8 @@ impl Session {
             config.model_reasoning_summary,
             config.model_context_window,
             config.model_auto_compact_token_limit,
-            config.approval_policy.value(),
-            config.sandbox_policy.get().clone(),
+            config.permissions.approval_policy.value(),
+            config.permissions.sandbox_policy.get().clone(),
             mcp_servers.keys().map(String::as_str).collect(),
             config.active_profile.clone(),
         );
@@ -1167,7 +1177,7 @@ impl Session {
         session_configuration.thread_name = thread_name.clone();
         let mut state = SessionState::new(session_configuration.clone());
         let network_proxy =
-            match config.network.as_ref() {
+            match config.permissions.network.as_ref() {
                 Some(spec) => Some(spec.start_proxy().await.map_err(|err| {
                     anyhow::anyhow!("failed to start managed network proxy: {err}")
                 })?),
@@ -1689,7 +1699,7 @@ impl Session {
 
         if sandbox_policy_changed {
             let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
+                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
                 use_linux_sandbox_bwrap: per_turn_config
@@ -1755,6 +1765,48 @@ impl Session {
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn reload_user_config_layer(&self) {
+        let config_toml_path = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .codex_home
+                .join(CONFIG_TOML_FILE)
+        };
+
+        let user_config = match std::fs::read_to_string(&config_toml_path) {
+            Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
+                Ok(config) => config,
+                Err(err) => {
+                    warn!("failed to parse user config while reloading layer: {err}");
+                    return;
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                toml::Value::Table(Default::default())
+            }
+            Err(err) => {
+                warn!("failed to read user config while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let config_toml_path = match AbsolutePathBuf::try_from(config_toml_path) {
+            Ok(path) => path,
+            Err(err) => {
+                warn!("failed to resolve user config path while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.config_layer_stack = config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
@@ -3042,6 +3094,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::RefreshMcpServers { config } => {
                 handlers::refresh_mcp_servers(&sess, config).await;
             }
+            Op::ReloadUserConfig => {
+                handlers::reload_user_config(&sess).await;
+            }
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
@@ -3464,6 +3519,10 @@ mod handlers {
     pub async fn refresh_mcp_servers(sess: &Arc<Session>, refresh_config: McpServerRefreshConfig) {
         let mut guard = sess.pending_mcp_server_refresh_config.lock().await;
         *guard = Some(refresh_config);
+    }
+
+    pub async fn reload_user_config(sess: &Arc<Session>) {
+        sess.reload_user_config_layer().await;
     }
 
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
@@ -4106,7 +4165,10 @@ pub(crate) async fn run_turn(
             Ok(mcp_tools) => mcp_tools,
             Err(_) => return None,
         };
-        connectors::accessible_connectors_from_mcp_tools(&mcp_tools)
+        connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn_context.config,
+        )
     } else {
         Vec::new()
     };
@@ -4456,6 +4518,14 @@ fn filter_connectors_for_input(
     explicitly_enabled_connectors: &HashSet<String>,
     skill_name_counts_lower: &HashMap<String, usize>,
 ) -> Vec<connectors::AppInfo> {
+    let connectors = connectors
+        .into_iter()
+        .filter(|connector| connector.is_enabled)
+        .collect::<Vec<_>>();
+    if connectors.is_empty() {
+        return Vec::new();
+    }
+
     let user_messages = collect_user_messages(input);
     if user_messages.is_empty() && explicitly_enabled_connectors.is_empty() {
         return Vec::new();
@@ -4702,7 +4772,10 @@ async fn built_tools(
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
-        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn_context.config,
+        );
         Some(filter_connectors_for_input(
             connectors,
             input,
@@ -5507,6 +5580,7 @@ mod tests {
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::registry::ToolHandler;
+    use crate::tools::router::ToolCallSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
     use codex_otel::TelemetryAuthMode;
@@ -5568,6 +5642,7 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: true,
+            is_enabled: true,
         }
     }
 
@@ -5653,6 +5728,42 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn reload_user_config_layer_updates_effective_apps_config() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let codex_home = session.codex_home().await;
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        let config_toml_path = codex_home.join(CONFIG_TOML_FILE);
+        std::fs::write(
+            &config_toml_path,
+            "[apps.calendar]\nenabled = false\ndisabled_reason = \"user\"\n",
+        )
+        .expect("write user config");
+
+        session.reload_user_config_layer().await;
+
+        let config = session.get_config().await;
+        let apps_toml = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("apps"))
+            .cloned()
+            .expect("apps table");
+        let apps = crate::config::types::AppsConfigToml::deserialize(apps_toml)
+            .expect("deserialize apps config");
+        let app = apps
+            .apps
+            .get("calendar")
+            .expect("calendar app config exists");
+
+        assert!(!app.enabled);
+        assert_eq!(
+            app.disabled_reason,
+            Some(crate::config::types::AppDisabledReason::User)
+        );
+    }
+
     #[test]
     fn filter_connectors_for_input_skips_duplicate_slug_mentions() {
         let connectors = vec![
@@ -5685,6 +5796,22 @@ mod tests {
             &input,
             &explicitly_enabled_connectors,
             &skill_name_counts_lower,
+        );
+
+        assert_eq!(selected, Vec::new());
+    }
+
+    #[test]
+    fn filter_connectors_for_input_skips_disabled_connectors() {
+        let mut connector = make_connector("calendar", "Calendar");
+        connector.is_enabled = false;
+        let input = vec![user_message("use $calendar")];
+        let explicitly_enabled_connectors = HashSet::new();
+        let selected = filter_connectors_for_input(
+            vec![connector],
+            &input,
+            &explicitly_enabled_connectors,
+            &HashMap::new(),
         );
 
         assert_eq!(selected, Vec::new());
@@ -6304,8 +6431,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6395,8 +6522,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6705,8 +6832,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6758,8 +6885,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -6904,8 +7031,8 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
             compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.approval_policy.clone(),
-            sandbox_policy: config.sandbox_policy.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -7444,6 +7571,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                ToolCallSource::Direct,
             )
             .await
             .expect_err("expected fatal error");

@@ -12,9 +12,10 @@ pub enum ApprovalModeCliArg {
     /// is not in the "trusted" set.
     Untrusted,
 
-    /// Run all commands without asking for user approval.
+    /// DEPRECATED: Run all commands without asking for user approval.
     /// Only asks for approval if a command fails to execute, in which case it
     /// will escalate to the user to ask for un-sandboxed execution.
+    /// Prefer `on-request` for interactive runs or `never` for non-interactive runs.
     OnFailure,
 
     /// The model decides when to ask the user for approval.
