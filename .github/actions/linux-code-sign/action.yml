@@ -21,10 +21,11 @@ runs:
         COSIGN_YES: "true"
         COSIGN_OIDC_CLIENT_ID: "sigstore"
         COSIGN_OIDC_ISSUER: "https://oauth2.sigstore.dev/auth"
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
       run: |
         set -euo pipefail
 
-        dest="${{ inputs.artifacts-dir }}"
+        dest="${ARTIFACTS_DIR}"
         if [[ ! -d "$dest" ]]; then
           echo "Destination $dest does not exist"
           exit 1

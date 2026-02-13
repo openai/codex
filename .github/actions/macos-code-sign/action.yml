@@ -117,6 +117,8 @@ runs:
     - name: Sign macOS binaries
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
+      env:
+        INPUT_TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
 
@@ -131,7 +133,7 @@ runs:
         fi
 
         for binary in codex codex-responses-api-proxy; do
-          path="codex-rs/target/${{ inputs.target }}/release/${binary}"
+          path="codex-rs/target/${INPUT_TARGET}/release/${binary}"
           codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
         done
 
@@ -163,7 +165,7 @@ runs:
 
         notarize_binary() {
           local binary="$1"
-          local source_path="codex-rs/target/${{ inputs.target }}/release/${binary}"
+          local source_path="codex-rs/target/${INPUT_TARGET}/release/${binary}"
           local archive_path="${RUNNER_TEMP}/${binary}.zip"
 
           if [[ ! -f "$source_path" ]]; then
@@ -206,7 +208,7 @@ runs:
 
         source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
-        dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
+        dmg_path="codex-rs/target/${INPUT_TARGET}/release/codex-${INPUT_TARGET}.dmg"
 
         if [[ ! -f "$dmg_path" ]]; then
           echo "dmg $dmg_path not found"
@@ -219,7 +221,7 @@ runs:
         fi
 
         codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
-        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path" "$notary_key_path"
+        notarize_submission "codex-${INPUT_TARGET}.dmg" "$dmg_path" "$notary_key_path"
         xcrun stapler staple "$dmg_path"
 
     - name: Remove signing keychain

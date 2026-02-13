@@ -31,11 +31,14 @@ jobs:
     steps:
       - name: Compute version and tags
         id: compute
+        env:
+          INPUT_VERSION: ${{ inputs.release-version }}
+          INPUT_TAG: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
 
-          version="${{ inputs.release-version }}"
-          release_tag="${{ inputs.release-tag }}"
+          version="${INPUT_VERSION}"
+          release_tag="${INPUT_TAG}"
 
           if [[ -z "$version" ]]; then
             if [[ -n "$release_tag" && "$release_tag" =~ ^rust-v.+ ]]; then
