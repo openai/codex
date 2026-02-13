@@ -1,6 +1,6 @@
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
-pub(crate) fn commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {
+fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {
     let value = resolve_attribution_value(config_attribution)?;
     Some(format!("Co-authored-by: {value}"))
 }
@@ -8,7 +8,7 @@ pub(crate) fn commit_message_trailer(config_attribution: Option<&str>) -> Option
 pub(crate) fn commit_message_trailer_instruction(
     config_attribution: Option<&str>,
 ) -> Option<String> {
-    let trailer = commit_message_trailer(config_attribution)?;
+    let trailer = build_commit_message_trailer(config_attribution)?;
     Some(format!(
         "When you write or edit a git commit message, ensure the message ends with this trailer exactly once:\n{trailer}\n\nRules:\n- Keep existing trailers and append this trailer at the end if missing.\n- Do not duplicate this trailer if it already exists.\n- Keep one blank line between the commit body and trailer block."
     ))
@@ -30,20 +30,20 @@ fn resolve_attribution_value(config_attribution: Option<&str>) -> Option<String>
 
 #[cfg(test)]
 mod tests {
-    use super::commit_message_trailer;
+    use super::build_commit_message_trailer;
     use super::commit_message_trailer_instruction;
     use super::resolve_attribution_value;
 
     #[test]
     fn blank_attribution_disables_trailer_prompt() {
-        assert_eq!(commit_message_trailer(Some("")), None);
+        assert_eq!(build_commit_message_trailer(Some("")), None);
         assert_eq!(commit_message_trailer_instruction(Some("   ")), None);
     }
 
     #[test]
     fn default_attribution_uses_codex_trailer() {
         assert_eq!(
-            commit_message_trailer(None).as_deref(),
+            build_commit_message_trailer(None).as_deref(),
             Some("Co-authored-by: Codex <noreply@openai.com>")
         );
     }
