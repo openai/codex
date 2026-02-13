@@ -217,36 +217,6 @@ impl ToolOrchestrator {
                     }
                 }
 
-                let temporary_allowed_host = if let Some(network_approval_context) =
-                    retry_details.network_approval_context.as_ref()
-                {
-                    if let Some(network) = turn_ctx.network.as_ref() {
-                        let granted_host = network
-                            .grant_temporary_allowed_host(&network_approval_context.host)
-                            .await;
-                        if granted_host.is_none() {
-                            tracing::warn!(
-                                host = %network_approval_context.host,
-                                "failed to grant temporary network host allowance; retry may remain blocked"
-                            );
-                        } else {
-                            tracing::debug!(
-                                "granted temporary network host allowance for retry: {}",
-                                network_approval_context.host
-                            );
-                        }
-                        granted_host.map(|host| (network.clone(), host))
-                    } else {
-                        tracing::warn!(
-                            host = %network_approval_context.host,
-                            "network approval context is present but no managed network proxy is available"
-                        );
-                        None
-                    }
-                } else {
-                    None
-                };
-
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
@@ -260,10 +230,6 @@ impl ToolOrchestrator {
 
                 // Second attempt.
                 let second_attempt = (*tool).run(req, &escalated_attempt, tool_ctx).await;
-                if let Some((network, host)) = temporary_allowed_host {
-                    network.revoke_temporary_allowed_host(&host).await;
-                    tracing::debug!("revoked temporary network host allowance after retry: {host}");
-                }
                 second_attempt
             }
             other => other,
