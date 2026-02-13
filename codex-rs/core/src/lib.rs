@@ -101,7 +101,6 @@ pub mod seatbelt;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
-pub mod sleep_inhibitor;
 pub mod spawn;
 pub mod state_db;
 pub mod terminal;

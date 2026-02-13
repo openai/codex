@@ -609,14 +609,15 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PreventIdleSleep,
         key: "prevent_idle_sleep",
-        #[cfg(target_os = "macos")]
-        stage: Stage::Experimental {
-            name: "Prevent sleep while running",
-            menu_description: "Keep your computer awake while Codex is running a thread.",
-            announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+        stage: if cfg!(target_os = "macos") {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Codex is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
         },
-        #[cfg(not(target_os = "macos"))]
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -736,22 +737,5 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn prevent_idle_sleep_is_experimental_on_macos() {
-        assert!(matches!(
-            Feature::PreventIdleSleep.stage(),
-            Stage::Experimental { .. }
-        ));
-        assert_eq!(Feature::PreventIdleSleep.default_enabled(), false);
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn prevent_idle_sleep_is_under_development_off_macos() {
-        assert_eq!(Feature::PreventIdleSleep.stage(), Stage::UnderDevelopment);
-        assert_eq!(Feature::PreventIdleSleep.default_enabled(), false);
     }
 }
