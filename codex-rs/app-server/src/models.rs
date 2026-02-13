@@ -8,11 +8,16 @@ use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Config) -> Vec<Model> {
+pub async fn supported_models(
+    thread_manager: Arc<ThreadManager>,
+    config: &Config,
+    include_hidden: bool,
+) -> Vec<Model> {
     thread_manager
         .list_models(config, RefreshStrategy::OnlineIfUncached)
         .await
         .into_iter()
+        .filter(|preset| include_hidden || preset.show_in_picker)
         .map(model_from_preset)
         .collect()
 }
