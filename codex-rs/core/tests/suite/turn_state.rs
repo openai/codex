@@ -18,6 +18,7 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 
 const TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const TURN_ID_HEADER: &str = "x-codex-turn-id";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_turn_state_persists_within_turn_and_resets_after() -> Result<()> {
@@ -64,6 +65,18 @@ async fn responses_turn_state_persists_within_turn_and_resets_after() -> Result<
         Some("ts-1".to_string())
     );
     assert_eq!(requests[2].header(TURN_STATE_HEADER), None);
+
+    let first_turn_request_id = requests[0]
+        .header(TURN_ID_HEADER)
+        .expect("first request should include x-codex-turn-id");
+    let first_turn_follow_up_id = requests[1]
+        .header(TURN_ID_HEADER)
+        .expect("follow-up request should include x-codex-turn-id");
+    let second_turn_id = requests[2]
+        .header(TURN_ID_HEADER)
+        .expect("second turn request should include x-codex-turn-id");
+    assert_eq!(first_turn_request_id, first_turn_follow_up_id);
+    assert_ne!(first_turn_request_id, second_turn_id);
 
     Ok(())
 }
@@ -119,6 +132,16 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
         Some("ts-1".to_string())
     );
     assert_eq!(handshakes[2].header(TURN_STATE_HEADER), None);
+
+    // First handshake is startup preconnect; no turn id is available yet.
+    assert_eq!(handshakes[0].header(TURN_ID_HEADER), None);
+    let first_turn_follow_up_id = handshakes[1]
+        .header(TURN_ID_HEADER)
+        .expect("turn-time reconnect should include x-codex-turn-id");
+    let second_turn_id = handshakes[2]
+        .header(TURN_ID_HEADER)
+        .expect("second turn handshake should include x-codex-turn-id");
+    assert_ne!(first_turn_follow_up_id, second_turn_id);
 
     server.shutdown().await;
     Ok(())

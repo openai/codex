@@ -111,7 +111,15 @@ async fn responses_stream_includes_subagent_header_on_review() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -217,7 +225,15 @@ async fn responses_stream_includes_subagent_header_on_other() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -322,7 +338,15 @@ async fn responses_respects_model_info_overrides_from_config() {
     }];
 
     let mut stream = client_session
-        .stream(&prompt, &model_info, &otel_manager, effort, summary, None)
+        .stream(
+            &prompt,
+            &model_info,
+            &otel_manager,
+            effort,
+            summary,
+            None,
+            None,
+        )
         .await
         .expect("stream failed");
     while let Some(event) = stream.next().await {
@@ -357,30 +381,19 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
     core_test_support::skip_if_no_network!();
 
     let server = responses::start_mock_server().await;
-    let response_body = responses::sse(vec![
+    let first_response = responses::sse(vec![
         responses::ev_response_created("resp-1"),
+        responses::ev_shell_command_call("call-1", "sleep 1"),
         responses::ev_completed("resp-1"),
+    ]);
+    let second_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-2"),
     ]);
 
     let test = test_codex().build(&server).await.expect("build test codex");
     let cwd = test.cwd_path();
-
-    let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
-    test.submit_turn("hello")
-        .await
-        .expect("submit first turn prompt");
-    let initial_header = first_request
-        .single_request()
-        .header("x-codex-turn-metadata")
-        .expect("x-codex-turn-metadata header should be present");
-    let initial_parsed: serde_json::Value =
-        serde_json::from_str(&initial_header).expect("x-codex-turn-metadata should be valid JSON");
-    assert_eq!(
-        initial_parsed
-            .get("sandbox")
-            .and_then(serde_json::Value::as_str),
-        Some("none")
-    );
 
     let git_config_global = cwd.join("empty-git-config");
     std::fs::write(&git_config_global, "").expect("write empty git config");
@@ -423,57 +436,111 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         .expect("git remote get-url output should be valid UTF-8")
         .trim()
         .to_string();
+    let expected_repo_root = std::fs::canonicalize(cwd)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let request_recorder = responses::mount_sse_once(&server, response_body.clone()).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        test.submit_turn("hello")
-            .await
-            .expect("submit post-git turn prompt");
+    let clean_turn_recorder = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(first_response.clone()),
+            responses::sse_response(second_response.clone()),
+        ],
+    )
+    .await;
+    test.submit_turn("run a shell command")
+        .await
+        .expect("submit clean turn prompt");
 
-        let maybe_metadata = request_recorder
-            .single_request()
-            .header("x-codex-turn-metadata")
-            .and_then(|header_value| {
-                let parsed: serde_json::Value = serde_json::from_str(&header_value).ok()?;
-                let workspace = parsed
-                    .get("workspaces")
-                    .and_then(serde_json::Value::as_object)
-                    .and_then(|workspaces| workspaces.values().next())
-                    .cloned()?;
-                Some((parsed, workspace))
-            });
-        let Some((parsed, workspace)) = maybe_metadata else {
-            if tokio::time::Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            continue;
-        };
+    let clean_requests = clean_turn_recorder.requests();
+    assert_eq!(clean_requests.len(), 2);
+    let clean_turn_id_initial = clean_requests[0]
+        .header("x-codex-turn-id")
+        .expect("x-codex-turn-id should be present on initial request");
+    let clean_turn_id_follow_up = clean_requests[1]
+        .header("x-codex-turn-id")
+        .expect("x-codex-turn-id should be present on follow-up request");
+    assert_eq!(clean_turn_id_initial, clean_turn_id_follow_up);
 
-        assert_eq!(
-            parsed.get("sandbox").and_then(serde_json::Value::as_str),
-            Some("none")
-        );
-        assert_eq!(
-            workspace
-                .get("latest_git_commit_hash")
-                .and_then(serde_json::Value::as_str),
-            Some(expected_head.as_str())
-        );
-        assert_eq!(
-            workspace
-                .get("associated_remote_urls")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|remotes| remotes.get("origin"))
-                .and_then(serde_json::Value::as_str),
-            Some(expected_origin.as_str())
-        );
-        return;
-    }
+    let clean_metadata_header = clean_requests[1]
+        .header("x-codex-turn-metadata")
+        .expect("follow-up request should include x-codex-turn-metadata");
+    let clean_parsed: serde_json::Value = serde_json::from_str(&clean_metadata_header)
+        .expect("x-codex-turn-metadata should be valid JSON");
+    let clean_workspace = clean_parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| {
+            workspaces
+                .get(&expected_repo_root)
+                .or_else(|| workspaces.values().next())
+        })
+        .expect("metadata should include expected repository root");
+    assert_eq!(
+        clean_workspace
+            .get("latest_git_commit_hash")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_head.as_str())
+    );
+    assert_eq!(
+        clean_workspace
+            .get("associated_remote_urls")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(serde_json::Value::as_str),
+        Some(expected_origin.as_str())
+    );
+    assert_eq!(
+        clean_workspace
+            .get("has_changes")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
 
-    panic!(
-        "x-codex-turn-metadata with git workspace info was never observed within 5s after git setup"
+    std::fs::write(cwd.join("untracked.txt"), "new file").expect("write untracked file");
+
+    let dirty_turn_recorder = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(first_response),
+            responses::sse_response(second_response),
+        ],
+    )
+    .await;
+    test.submit_turn("run a shell command")
+        .await
+        .expect("submit dirty turn prompt");
+
+    let dirty_requests = dirty_turn_recorder.requests();
+    assert_eq!(dirty_requests.len(), 2);
+    let dirty_turn_id_initial = dirty_requests[0]
+        .header("x-codex-turn-id")
+        .expect("x-codex-turn-id should be present on initial dirty request");
+    let dirty_turn_id_follow_up = dirty_requests[1]
+        .header("x-codex-turn-id")
+        .expect("x-codex-turn-id should be present on follow-up dirty request");
+    assert_eq!(dirty_turn_id_initial, dirty_turn_id_follow_up);
+    assert_ne!(clean_turn_id_initial, dirty_turn_id_initial);
+
+    let dirty_metadata_header = dirty_requests[1]
+        .header("x-codex-turn-metadata")
+        .expect("dirty follow-up request should include x-codex-turn-metadata");
+    let dirty_parsed: serde_json::Value = serde_json::from_str(&dirty_metadata_header)
+        .expect("x-codex-turn-metadata should be valid JSON");
+    let dirty_workspace = dirty_parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| {
+            workspaces
+                .get(&expected_repo_root)
+                .or_else(|| workspaces.values().next())
+        })
+        .expect("metadata should include expected repository root");
+    assert_eq!(
+        dirty_workspace
+            .get("has_changes")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
     );
 }

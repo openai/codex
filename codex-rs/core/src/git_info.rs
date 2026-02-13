@@ -150,6 +150,18 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
     }
 }
 
+/// Return whether the repository has tracked or untracked modifications.
+///
+/// Uses `git status --porcelain` where empty output means the working tree is clean.
+pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
+    let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(!output.stdout.is_empty())
+}
+
 fn parse_git_remote_urls(stdout: &str) -> Option<BTreeMap<String, String>> {
     let mut remotes = BTreeMap::new();
     for line in stdout.lines() {
@@ -254,7 +266,11 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     let mut command = Command::new("git");
-    command.args(args).current_dir(cwd).kill_on_drop(true);
+    command
+        .arg("--no-optional-locks")
+        .args(args)
+        .current_dir(cwd)
+        .kill_on_drop(true);
     let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
 
     match result {
@@ -960,6 +976,43 @@ mod tests {
 
         // Should have the new branch name
         assert_eq!(git_info.branch, Some("feature-branch".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_has_changes_clean_repo_returns_false() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        let has_changes = get_has_changes(&repo_path)
+            .await
+            .expect("git status should succeed");
+        assert!(!has_changes);
+    }
+
+    #[tokio::test]
+    async fn test_get_has_changes_returns_true_for_tracked_modifications() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        fs::write(repo_path.join("test.txt"), "modified tracked file").expect("write tracked file");
+
+        let has_changes = get_has_changes(&repo_path)
+            .await
+            .expect("git status should succeed");
+        assert!(has_changes);
+    }
+
+    #[tokio::test]
+    async fn test_get_has_changes_returns_true_for_untracked_files() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        fs::write(repo_path.join("new-file.txt"), "new untracked file").expect("write new file");
+
+        let has_changes = get_has_changes(&repo_path)
+            .await
+            .expect("git status should succeed");
+        assert!(has_changes);
     }
 
     #[tokio::test]
