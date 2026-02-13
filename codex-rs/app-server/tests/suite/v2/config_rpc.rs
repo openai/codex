@@ -31,6 +31,8 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV: &str =
+    "CODEX_TEST_DISABLE_WINDOWS_MANAGED_CONFIG";
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
     Ok(std::fs::write(
@@ -52,7 +54,11 @@ sandbox_mode = "workspace-write"
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -101,7 +107,11 @@ view_image = false
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -162,7 +172,11 @@ disabled_reason = "user"
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -233,7 +247,11 @@ model_reasoning_effort = "high"
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
     let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -305,10 +323,13 @@ writable_roots = [{}]
 
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
-        &[(
-            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
-            Some(&managed_path_str),
-        )],
+        &[
+            (DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1")),
+            (
+                "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+                Some(&managed_path_str),
+            ),
+        ],
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -397,7 +418,11 @@ model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new_with_env(
+        &codex_home,
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -462,7 +487,11 @@ model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let write_id = mcp
@@ -497,7 +526,11 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(&tmp_dir, "")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = McpProcess::new_with_env(
+        &codex_home,
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let writable_root = test_tmp_path_buf();

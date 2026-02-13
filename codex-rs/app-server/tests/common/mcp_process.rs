@@ -95,19 +95,28 @@ impl McpProcess {
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
+        const DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV: &str =
+            "CODEX_TEST_DISABLE_WINDOWS_MANAGED_CONFIG";
+        #[cfg(target_os = "windows")]
+        let disable_windows_managed_config_override = env_overrides.iter().any(|(key, value)| {
+            *key == DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV && *value == Some("1")
+        });
+
         #[cfg(target_os = "windows")]
         {
-            // Shell snapshotting is flaky in Windows CI and not relevant to app-server protocol
-            // behavior covered by this harness. Disable it via managed config for stability.
-            let managed_config = codex_home.join("managed_config.toml");
-            std::fs::write(&managed_config, "[features]\nshell_snapshot = false\n").with_context(
-                || {
-                    format!(
-                        "failed to write managed config at {}",
-                        managed_config.display()
-                    )
-                },
-            )?;
+            if !disable_windows_managed_config_override {
+                // Shell snapshotting is flaky in Windows CI and not relevant to app-server
+                // protocol behavior covered by this harness. Disable it via managed config for
+                // stability, unless a test explicitly opts out.
+                let managed_config = codex_home.join("managed_config.toml");
+                std::fs::write(&managed_config, "[features]\nshell_snapshot = false\n")
+                    .with_context(|| {
+                        format!(
+                            "failed to write managed config at {}",
+                            managed_config.display()
+                        )
+                    })?;
+            }
         }
 
         let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
@@ -122,6 +131,9 @@ impl McpProcess {
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
+            if *k == DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV {
+                continue;
+            }
             match v {
                 Some(val) => {
                     cmd.env(k, val);

@@ -16,11 +16,17 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV: &str =
+    "CODEX_TEST_DISABLE_WINDOWS_MANAGED_CONFIG";
 
 #[tokio::test]
 async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(DISABLE_WINDOWS_MANAGED_CONFIG_OVERRIDE_ENV, Some("1"))],
+    )
+    .await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
