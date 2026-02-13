@@ -105,7 +105,27 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     // This uses POSIX shell syntax and avoids `mktemp` so it works across
     // common Unix systems where Bash/Zsh/sh are available.
     let rewritten_script = format!(
-        "__codex_tmp_dir=\"${{TMPDIR:-/tmp}}\"; __codex_restore_env_file=\"$__codex_tmp_dir/codex-restore-env-$$\"; __codex_current_env_file=\"$__codex_tmp_dir/codex-current-env-$$\"; if export -p > \"$__codex_restore_env_file\" 2>/dev/null; then :; fi; if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; if env > \"$__codex_current_env_file\" 2>/dev/null; then while IFS='=' read -r __codex_name __codex_value; do unset \"$__codex_name\" 2>/dev/null || true; done < \"$__codex_current_env_file\"; fi; if [ -r \"$__codex_restore_env_file\" ]; then . \"$__codex_restore_env_file\" >/dev/null 2>&1 || true; fi; rm -f \"$__codex_restore_env_file\" \"$__codex_current_env_file\" >/dev/null 2>&1 || true; exec '{original_shell}' -c '{original_script}'{trailing_args}"
+        r#"__codex_tmp_dir="${{TMPDIR:-/tmp}}"
+__codex_restore_env_file="$__codex_tmp_dir/codex-restore-env-$$"
+__codex_current_env_file="$__codex_tmp_dir/codex-current-env-$$"
+
+if export -p > "$__codex_restore_env_file" 2>/dev/null; then :; fi
+
+if . '{snapshot_path}' >/dev/null 2>&1; then :; fi
+
+if env > "$__codex_current_env_file" 2>/dev/null; then
+  while IFS='=' read -r __codex_name __codex_value; do
+    unset "$__codex_name" 2>/dev/null || true
+  done < "$__codex_current_env_file"
+fi
+
+if [ -r "$__codex_restore_env_file" ]; then
+  . "$__codex_restore_env_file" >/dev/null 2>&1 || true
+fi
+
+rm -f "$__codex_restore_env_file" "$__codex_current_env_file" >/dev/null 2>&1 || true
+
+exec '{original_shell}' -c '{original_script}'{trailing_args}"#
     );
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
