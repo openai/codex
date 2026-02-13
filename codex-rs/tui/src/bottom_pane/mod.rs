@@ -1333,6 +1333,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                permission_profile: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use codex_protocol::protocol::SkillScope;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::config::Permissions;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
@@ -11,6 +13,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
+    pub permission_profile: Option<Permissions>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
