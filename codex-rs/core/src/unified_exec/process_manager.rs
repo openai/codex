@@ -568,6 +568,14 @@ impl UnifiedExecProcessManager {
                                     "terminating unified exec process {process_id} after delayed network denial for attempt {network_attempt_id}"
                                 );
                                 process.terminate();
+                                session
+                                    .services
+                                    .unified_exec_manager
+                                    .release_process_id(&process_id)
+                                    .await;
+                                session
+                                    .unregister_network_approval_attempt(&network_attempt_id)
+                                    .await;
                                 break;
                             }
                         }
