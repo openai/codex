@@ -7,6 +7,7 @@ use codex_protocol::protocol::McpAuthStatus;
 use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
+use reqwest::header::AUTHORIZATION;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
@@ -33,11 +34,14 @@ pub async fn determine_streamable_http_auth_status(
         return Ok(McpAuthStatus::BearerToken);
     }
 
+    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    if default_headers.contains_key(AUTHORIZATION) {
+        return Ok(McpAuthStatus::BearerToken);
+    }
+
     if has_oauth_tokens(server_name, url, store_mode)? {
         return Ok(McpAuthStatus::OAuth);
     }
-
-    let default_headers = build_default_headers(http_headers, env_http_headers)?;
 
     match supports_oauth_login_with_headers(url, &default_headers).await {
         Ok(true) => Ok(McpAuthStatus::NotLoggedIn),
@@ -138,4 +142,85 @@ fn discovery_paths(base_path: &str) -> Vec<String> {
     push_unique(canonical);
 
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serial_test::serial;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
+    struct EnvVarGuard {
+        key: String,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                unsafe {
+                    std::env::set_var(&self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(&self.key);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn determine_auth_status_uses_bearer_token_when_authorization_header_present() {
+        let status = determine_streamable_http_auth_status(
+            "server",
+            "not-a-url",
+            None,
+            Some(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer token".to_string(),
+            )])),
+            None,
+            OAuthCredentialsStoreMode::Keyring,
+        )
+        .await
+        .expect("status should compute");
+
+        assert_eq!(status, McpAuthStatus::BearerToken);
+    }
+
+    #[tokio::test]
+    #[serial(auth_status_env)]
+    async fn determine_auth_status_uses_bearer_token_when_env_authorization_header_present() {
+        let _guard = EnvVarGuard::set("CODEX_RMCP_CLIENT_AUTH_STATUS_TEST_TOKEN", "Bearer token");
+        let status = determine_streamable_http_auth_status(
+            "server",
+            "not-a-url",
+            None,
+            None,
+            Some(HashMap::from([(
+                "Authorization".to_string(),
+                "CODEX_RMCP_CLIENT_AUTH_STATUS_TEST_TOKEN".to_string(),
+            )])),
+            OAuthCredentialsStoreMode::Keyring,
+        )
+        .await
+        .expect("status should compute");
+
+        assert_eq!(status, McpAuthStatus::BearerToken);
+    }
 }
