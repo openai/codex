@@ -1290,6 +1290,14 @@ pub struct AppInfo {
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
+    /// Whether this app is enabled in config.toml.
+    /// Example:
+    /// ```toml
+    /// [apps.bad_app]
+    /// enabled = false
+    /// ```
+    #[serde(default = "default_enabled")]
+    pub is_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

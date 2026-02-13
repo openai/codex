@@ -1141,22 +1141,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_app_link_view(
-        &mut self,
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-    ) {
-        let view = crate::bottom_pane::AppLinkView::new(
-            title,
-            description,
-            instructions,
-            url,
-            is_installed,
-            self.app_event_tx.clone(),
-        );
+    pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {
+        let view = crate::bottom_pane::AppLinkView::new(params, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -3781,7 +3767,7 @@ impl ChatWidget {
                 if !selected_app_ids.insert(app_id.to_string()) {
                     continue;
                 }
-                if let Some(app) = apps.iter().find(|app| app.id == app_id) {
+                if let Some(app) = apps.iter().find(|app| app.id == app_id && app.is_enabled) {
                     items.push(UserInput::Mention {
                         name: app.name.clone(),
                         path: binding.path.clone(),
@@ -6414,6 +6400,7 @@ impl ChatWidget {
             let connector_title = connector_label.clone();
             let link_description = Self::connector_description(connector);
             let description = Self::connector_brief_description(connector);
+            let status_label = Self::connector_status_label(connector);
             let search_value = format!("{connector_label} {}", connector.id);
             let mut item = SelectionItem {
                 name: connector_label,
@@ -6422,42 +6409,47 @@ impl ChatWidget {
                 ..Default::default()
             };
             let is_installed = connector.is_accessible;
-            let (selected_label, missing_label, instructions) = if connector.is_accessible {
-                (
-                    "Press Enter to view the app link.",
-                    "App link unavailable.",
-                    "Manage this app in your browser.",
+            let selected_label = if is_installed {
+                format!(
+                    "{status_label}. Press Enter to open the app page to install, manage, or enable/disable this app."
                 )
             } else {
-                (
-                    "Press Enter to view the install link.",
-                    "Install link unavailable.",
-                    "Install this app in your browser, then reload Codex.",
-                )
+                format!("{status_label}. Press Enter to open the app page to install this app.")
+            };
+            let missing_label = format!("{status_label}. App link unavailable.");
+            let instructions = if connector.is_accessible {
+                "Manage this app in your browser."
+            } else {
+                "Install this app in your browser, then reload Codex."
             };
             if let Some(install_url) = connector.install_url.clone() {
+                let app_id = connector.id.clone();
+                let is_enabled = connector.is_enabled;
                 let title = connector_title.clone();
                 let instructions = instructions.to_string();
                 let description = link_description.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenAppLink {
+                        app_id: app_id.clone(),
                         title: title.clone(),
                         description: description.clone(),
                         instructions: instructions.clone(),
                         url: install_url.clone(),
                         is_installed,
+                        is_enabled,
                     });
                 })];
                 item.dismiss_on_select = true;
-                item.selected_description = Some(selected_label.to_string());
+                item.selected_description = Some(selected_label);
             } else {
+                let missing_label_for_action = missing_label.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(missing_label.to_string(), None),
+                        history_cell::new_info_event(missing_label_for_action.clone(), None),
                     )));
                 })];
                 item.dismiss_on_select = true;
-                item.selected_description = Some(missing_label.to_string());
+                item.selected_description = Some(missing_label);
             }
             items.push(item);
         }
@@ -6490,14 +6482,22 @@ impl ChatWidget {
     }
 
     fn connector_brief_description(connector: &connectors::AppInfo) -> String {
-        let status_label = if connector.is_accessible {
-            "Connected"
-        } else {
-            "Can be installed"
-        };
+        let status_label = Self::connector_status_label(connector);
         match Self::connector_description(connector) {
             Some(description) => format!("{status_label} · {description}"),
             None => status_label.to_string(),
+        }
+    }
+
+    fn connector_status_label(connector: &connectors::AppInfo) -> &'static str {
+        if connector.is_accessible {
+            if connector.is_enabled {
+                "Installed"
+            } else {
+                "Installed · Disabled"
+            }
+        } else {
+            "Can be installed"
         }
     }
 
@@ -6727,7 +6727,27 @@ impl ChatWidget {
         }
 
         match result {
-            Ok(snapshot) => {
+            Ok(mut snapshot) => {
+                if !is_final {
+                    snapshot.connectors = connectors::merge_connectors_with_accessible(
+                        Vec::new(),
+                        snapshot.connectors,
+                    );
+                }
+                snapshot.connectors =
+                    connectors::with_app_enabled_state(snapshot.connectors, &self.config);
+                if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors_cache {
+                    let enabled_by_id: HashMap<&str, bool> = existing_snapshot
+                        .connectors
+                        .iter()
+                        .map(|connector| (connector.id.as_str(), connector.is_enabled))
+                        .collect();
+                    for connector in &mut snapshot.connectors {
+                        if let Some(is_enabled) = enabled_by_id.get(connector.id.as_str()) {
+                            connector.is_enabled = *is_enabled;
+                        }
+                    }
+                }
                 self.refresh_connectors_popup_if_open(&snapshot.connectors);
                 if is_final || !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
                     self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
@@ -6744,6 +6764,29 @@ impl ChatWidget {
                 self.bottom_pane.set_connectors_snapshot(None);
             }
         }
+    }
+
+    pub(crate) fn update_connector_enabled(&mut self, connector_id: &str, enabled: bool) {
+        let ConnectorsCacheState::Ready(mut snapshot) = self.connectors_cache.clone() else {
+            return;
+        };
+
+        let mut changed = false;
+        for connector in &mut snapshot.connectors {
+            if connector.id == connector_id {
+                changed = connector.is_enabled != enabled;
+                connector.is_enabled = enabled;
+                break;
+            }
+        }
+
+        if !changed {
+            return;
+        }
+
+        self.refresh_connectors_popup_if_open(&snapshot.connectors);
+        self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
+        self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
     pub(crate) fn open_review_popup(&mut self) {

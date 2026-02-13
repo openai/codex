@@ -260,6 +260,12 @@ pub enum Op {
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
 
+    /// Reload user config layer overrides for the active session.
+    ///
+    /// This updates runtime config-derived behavior (for example app
+    /// enable/disable state) without restarting the thread.
+    ReloadUserConfig,
+
     /// Request the list of available custom prompts.
     ListCustomPrompts,
 

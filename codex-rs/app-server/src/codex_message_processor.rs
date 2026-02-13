@@ -4603,8 +4603,9 @@ impl CodexMessageProcessor {
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
 
+        let all_config = config.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&config, force_refetch)
+            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
                 .await
                 .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
@@ -4667,9 +4668,12 @@ impl CodexMessageProcessor {
                 }
             }
 
-            let merged = Self::merge_loaded_apps(
-                all_connectors.as_deref(),
-                accessible_connectors.as_deref(),
+            let merged = connectors::with_app_enabled_state(
+                Self::merge_loaded_apps(
+                    all_connectors.as_deref(),
+                    accessible_connectors.as_deref(),
+                ),
+                &config,
             );
             Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
 
@@ -5152,10 +5156,13 @@ impl CodexMessageProcessor {
         &mut self,
         request_id: &ConnectionRequestId,
         parent_thread_id: ThreadId,
+        parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let rollout_path =
+        let rollout_path = if let Some(path) = parent_thread.rollout_path() {
+            path
+        } else {
             find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
                 .await
                 .map_err(|err| JSONRPCErrorError {
@@ -5167,7 +5174,8 @@ impl CodexMessageProcessor {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: format!("no rollout found for thread id {parent_thread_id}"),
                     data: None,
-                })?;
+                })?
+        };
 
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
@@ -5290,6 +5298,7 @@ impl CodexMessageProcessor {
                     .start_detached_review(
                         &request_id,
                         parent_thread_id,
+                        parent_thread,
                         review_request,
                         display_text.as_str(),
                     )

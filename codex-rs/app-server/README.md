@@ -763,7 +763,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -782,7 +782,8 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrlDark": null,
             "distributionChannel": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-            "isAccessible": true
+            "isAccessible": true,
+            "isEnabled": true
         }
     ],
     "nextCursor": null
@@ -808,7 +809,8 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrlDark": null,
         "distributionChannel": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-        "isAccessible": true
+        "isAccessible": true,
+        "isEnabled": true
       }
     ]
   }

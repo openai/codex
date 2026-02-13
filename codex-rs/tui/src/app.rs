@@ -626,6 +626,13 @@ impl App {
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
     }
 
+    async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
+        let mut config = self.rebuild_config_for_cwd(self.config.cwd.clone()).await?;
+        self.apply_runtime_policy_overrides(&mut config);
+        self.config = config;
+        Ok(())
+    }
+
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
             && let Err(err) = config.permissions.approval_policy.set(*policy)
@@ -1598,19 +1605,24 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAppLink {
+                app_id,
                 title,
                 description,
                 instructions,
                 url,
                 is_installed,
+                is_enabled,
             } => {
-                self.chat_widget.open_app_link_view(
-                    title,
-                    description,
-                    instructions,
-                    url,
-                    is_installed,
-                );
+                self.chat_widget
+                    .open_app_link_view(crate::bottom_pane::AppLinkViewParams {
+                        app_id,
+                        title,
+                        description,
+                        instructions,
+                        url,
+                        is_installed,
+                        is_enabled,
+                    });
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
@@ -2286,11 +2298,66 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after skill toggle"
+                            );
+                        }
                     }
                     Err(err) => {
                         let path_display = path.display();
                         self.chat_widget.add_error_message(format!(
                             "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::SetAppEnabled { id, enabled } => {
+                let edits = if enabled {
+                    vec![
+                        ConfigEdit::ClearPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                        },
+                        ConfigEdit::ClearPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                        },
+                    ]
+                } else {
+                    vec![
+                        ConfigEdit::SetPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                            value: false.into(),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                            value: "user".into(),
+                        },
+                    ]
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_connector_enabled(&id, enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(error = %err, "failed to refresh config after app toggle");
+                        }
+                        self.chat_widget.submit_op(Op::ReloadUserConfig);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update app config for {id}: {err}"
                         ));
                     }
                 }
@@ -2929,6 +2996,19 @@ mod tests {
         )
     }
 
+    fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
+        config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("apps"))
+            .and_then(TomlValue::as_table)
+            .and_then(|apps| apps.get(app_id))
+            .and_then(TomlValue::as_table)
+            .and_then(|app| app.get("enabled"))
+            .and_then(TomlValue::as_bool)
+    }
+
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::test_support::all_model_presets().clone()
     }
@@ -3106,6 +3186,45 @@ mod tests {
             app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let app_id = "connector_1".to_string();
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([
+                ConfigEdit::SetPath {
+                    segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
+                    value: false.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "apps".to_string(),
+                        app_id.clone(),
+                        "disabled_reason".to_string(),
+                    ],
+                    value: "user".into(),
+                },
+            ])
+            .apply()
+            .await
+            .expect("persist app toggle");
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app_enabled_in_effective_config(&app.config, &app_id),
+            Some(false)
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -10201,6 +10201,11 @@
             "default": false,
             "type": "boolean"
           },
+          "isEnabled": {
+            "default": true,
+            "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
+            "type": "boolean"
+          },
           "logoUrl": {
             "type": [
               "string",
