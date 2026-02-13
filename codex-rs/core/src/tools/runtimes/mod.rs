@@ -95,8 +95,17 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
+    // Preserve command-process environment precedence:
+    // 1) Save the current exported environment before snapshot sourcing.
+    // 2) Source the snapshot (best effort).
+    // 3) Unset all currently exported names to drop snapshot-added values.
+    // 4) Restore the original exported environment.
+    // 5) Exec the original shell command.
+    //
+    // This uses POSIX shell syntax and avoids `mktemp` so it works across
+    // common Unix systems where Bash/Zsh/sh are available.
     let rewritten_script = format!(
-        "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; exec '{original_shell}' -c '{original_script}'{trailing_args}"
+        "__codex_tmp_dir=\"${{TMPDIR:-/tmp}}\"; __codex_restore_env_file=\"$__codex_tmp_dir/codex-restore-env-$$\"; __codex_current_env_file=\"$__codex_tmp_dir/codex-current-env-$$\"; if export -p > \"$__codex_restore_env_file\" 2>/dev/null; then :; fi; if . '{snapshot_path}' >/dev/null 2>&1; then :; fi; if env > \"$__codex_current_env_file\" 2>/dev/null; then while IFS='=' read -r __codex_name __codex_value; do unset \"$__codex_name\" 2>/dev/null || true; done < \"$__codex_current_env_file\"; fi; if [ -r \"$__codex_restore_env_file\" ]; then . \"$__codex_restore_env_file\" >/dev/null 2>&1 || true; fi; rm -f \"$__codex_restore_env_file\" \"$__codex_current_env_file\" >/dev/null 2>&1 || true; exec '{original_shell}' -c '{original_script}'{trailing_args}"
     );
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
@@ -113,6 +122,7 @@ mod tests {
     use crate::shell_snapshot::ShellSnapshot;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::watch;
@@ -305,5 +315,37 @@ mod tests {
         assert_eq!(rewritten[1], "-c");
         assert!(rewritten[2].contains("if . '"));
         assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+    }
+
+    #[test]
+    fn maybe_wrap_shell_lc_with_snapshot_restores_original_environment() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(
+            &snapshot_path,
+            "# Snapshot file\nexport TEST_ENV_SNAPSHOT=global\nexport SNAPSHOT_ONLY=from_snapshot\n",
+        )
+        .expect("write snapshot");
+        let session_shell = shell_with_snapshot(
+            ShellType::Bash,
+            "/bin/bash",
+            snapshot_path,
+            dir.path().to_path_buf(),
+        );
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "printf '%s|%s' \"$TEST_ENV_SNAPSHOT\" \"${SNAPSHOT_ONLY-unset}\"".to_string(),
+        ];
+
+        let rewritten = maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path());
+        let output = Command::new(&rewritten[0])
+            .args(&rewritten[1..])
+            .env("TEST_ENV_SNAPSHOT", "worktree")
+            .output()
+            .expect("run rewritten command");
+
+        assert!(output.status.success(), "command failed: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "worktree|unset");
     }
 }
