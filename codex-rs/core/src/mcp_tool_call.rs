@@ -585,13 +585,14 @@ mod tests {
             question.question,
             "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data. Allow this action?"
         );
-        let option_labels = question
-            .options
-            .expect("options")
-            .into_iter()
-            .map(|option| option.label)
-            .collect::<Vec<_>>();
-        assert!(option_labels.contains(&MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string()));
+        assert!(
+            question
+                .options
+                .expect("options")
+                .into_iter()
+                .map(|option| option.label)
+                .any(|label| label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+        );
     }
 
     #[test]
