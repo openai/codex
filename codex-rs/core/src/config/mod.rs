@@ -187,12 +187,12 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
-    /// Optional command attribution text for commit message co-author trailers.
+    /// Optional commit attribution text for commit message co-author trailers.
     ///
     /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
-    /// - `Some("")` or whitespace-only: disable command attribution
+    /// - `Some("")` or whitespace-only: disable commit attribution
     /// - `Some("...")`: use the provided attribution text verbatim
-    pub command_attribution: Option<String>,
+    pub commit_attribution: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -903,10 +903,10 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// Optional command attribution text for commit message co-author trailers.
+    /// Optional commit attribution text for commit message co-author trailers.
     ///
-    /// Set to an empty string to disable automatic command attribution.
-    pub command_attribution: Option<String>,
+    /// Set to an empty string to disable automatic commit attribution.
+    pub commit_attribution: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
@@ -1632,7 +1632,7 @@ impl Config {
             }
         });
 
-        let command_attribution = cfg.command_attribution;
+        let commit_attribution = cfg.commit_attribution;
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -1750,7 +1750,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
-            command_attribution,
+            commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -4065,7 +4065,7 @@ model_verbosity = "high"
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
-                command_attribution: None,
+                commit_attribution: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -4173,7 +4173,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            command_attribution: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4279,7 +4279,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            command_attribution: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4371,7 +4371,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
-            command_attribution: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
