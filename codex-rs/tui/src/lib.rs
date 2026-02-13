@@ -290,7 +290,9 @@ pub async fn run_main(
     .await;
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
+    if let Some(warning) =
+        add_dir_warning_message(&cli.add_dir, config.permissions.sandbox_policy.get())
+    {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -1004,8 +1006,9 @@ mod tests {
         TurnContextItem {
             turn_id: None,
             cwd,
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            network: None,
             model,
             personality: None,
             collaboration_mode: None,
@@ -1123,7 +1126,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            trusted_config.approval_policy.value(),
+            trusted_config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
         );
 
@@ -1137,7 +1140,7 @@ trust_level = "untrusted"
             .build()
             .await?;
         assert_eq!(
-            untrusted_config.approval_policy.value(),
+            untrusted_config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
         );
         Ok(())

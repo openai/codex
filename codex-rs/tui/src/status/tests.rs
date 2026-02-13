@@ -98,6 +98,7 @@ async fn status_snapshot_includes_reasoning_details() {
     config.model_provider_id = "openai".to_string();
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     config
+        .permissions
         .sandbox_policy
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -177,10 +178,12 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
     config
+        .permissions
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("set approval policy");
     config
+        .permissions
         .sandbox_policy
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),

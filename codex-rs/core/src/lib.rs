@@ -77,6 +77,7 @@ pub use model_provider_info::create_oss_provider_with_base_url;
 mod event_mapping;
 pub mod review_format;
 pub mod review_prompts;
+mod seatbelt_permissions;
 mod thread_manager;
 pub mod web_search;
 pub mod windows_sandbox_read_grants;
