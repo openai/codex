@@ -118,10 +118,10 @@ pub fn output_schema() -> Value {
         "type": "object",
         "properties": {
             "rollout_summary": { "type": "string" },
-            "rollout_slug": { "type": "string" },
+            "rollout_slug": { "type": ["string", "null"] },
             "raw_memory": { "type": "string" }
         },
-        "required": ["rollout_summary", "raw_memory"],
+        "required": ["rollout_summary", "rollout_slug", "raw_memory"],
         "additionalProperties": false
     })
 }
