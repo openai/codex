@@ -8,7 +8,7 @@ use serde::Serialize;
 const ORCHESTRATOR_PROMPT: &str = include_str!("../../templates/agents/orchestrator.md");
 /// Default model override used.
 // TODO(jif) update when we have something smarter.
-const EXPLORER_MODEL: &str = "gpt-5.3-codex-spark";
+const EXPLORER_MODEL: &str = "gpt-5.1-codex-mini";
 
 /// Enumerated list of all supported agent roles.
 const ALL_ROLES: [AgentRole; 3] = [
