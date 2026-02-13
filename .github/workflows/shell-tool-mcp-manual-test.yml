@@ -1,0 +1,18 @@
+name: shell-tool-mcp manual test
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Version string for packaging (for example, 0.0.0-alpha.1)
+        required: true
+        default: "0.0.0-alpha.1"
+        type: string
+
+jobs:
+  test-shell-tool-mcp:
+    uses: ./.github/workflows/shell-tool-mcp.yml
+    with:
+      release-version: ${{ inputs.release_version }}
+      publish: false
+    secrets: inherit
