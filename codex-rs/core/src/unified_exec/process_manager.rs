@@ -144,17 +144,15 @@ impl UnifiedExecProcessManager {
     }
 
     async fn unregister_network_attempt_for_entry(entry: &ProcessEntry) {
-        let Some(attempt_id) = entry.network_attempt_id.as_deref() else {
-            return;
-        };
-        let Some(session) = entry.session.upgrade() else {
-            return;
-        };
-        session
-            .services
-            .network_approval
-            .unregister_attempt(attempt_id)
-            .await;
+        if let Some(attempt_id) = entry.network_attempt_id.as_deref()
+            && let Some(session) = entry.session.upgrade()
+        {
+            session
+                .services
+                .network_approval
+                .unregister_attempt(attempt_id)
+                .await;
+        }
     }
 
     pub(crate) async fn exec_command(
