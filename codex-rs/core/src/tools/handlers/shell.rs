@@ -254,7 +254,14 @@ impl ShellHandler {
         let mut exec_params = exec_params;
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
-            exec_params.env.extend(dependency_env);
+            exec_params.env.extend(dependency_env.clone());
+        }
+
+        let mut explicit_env_overrides = turn.shell_environment_policy.r#set.clone();
+        for key in dependency_env.keys() {
+            if let Some(value) = exec_params.env.get(key) {
+                explicit_env_overrides.insert(key.clone(), value.clone());
+            }
         }
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
@@ -315,6 +322,7 @@ impl ShellHandler {
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
+            explicit_env_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: exec_params.sandbox_permissions,
             justification: exec_params.justification.clone(),
