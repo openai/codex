@@ -7,7 +7,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::unbounded;
+pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
+pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -320,6 +322,9 @@ where
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some(connector_install_url(&connector_name, &connector_id)),
             is_accessible: true,
             is_enabled: true,

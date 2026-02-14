@@ -6,9 +6,13 @@ export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUp
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AgentMessageDeltaNotification } from "./AgentMessageDeltaNotification";
 export type { AnalyticsConfig } from "./AnalyticsConfig";
+export type { AppBranding } from "./AppBranding";
 export type { AppDisabledReason } from "./AppDisabledReason";
 export type { AppInfo } from "./AppInfo";
 export type { AppListUpdatedNotification } from "./AppListUpdatedNotification";
+export type { AppMetadata } from "./AppMetadata";
+export type { AppReview } from "./AppReview";
+export type { AppScreenshot } from "./AppScreenshot";
 export type { AppsConfig } from "./AppsConfig";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";
