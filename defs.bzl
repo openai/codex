@@ -32,7 +32,6 @@ def codex_rust_crate(
         name,
         crate_name,
         crate_features = [],
-        deps_override = None,
         crate_srcs = None,
         crate_edition = None,
         proc_macro = False,
@@ -82,7 +81,7 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
-    deps = (deps_override if deps_override != None else all_crate_deps(normal = True)) + deps_extra
+    deps = all_crate_deps(normal = True) + deps_extra
     dev_deps = all_crate_deps(normal_dev = True)
     proc_macro_deps = all_crate_deps(proc_macro = True)
     proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
