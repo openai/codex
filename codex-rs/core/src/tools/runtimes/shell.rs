@@ -176,6 +176,26 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             command
         };
 
+        if ctx.session.features().enabled(Feature::ShellZshFork) {
+            let spec = build_command_spec(
+                &command,
+                &req.cwd,
+                &req.env,
+                req.timeout_ms.into(),
+                req.sandbox_permissions,
+                req.justification.clone(),
+            )?;
+            let env = attempt
+                .env_for(spec, req.network.as_ref())
+                .map_err(|err| ToolError::Codex(err.into()))?;
+            return ctx
+                .session
+                .services
+                .zsh_sidecar_manager
+                .execute_shell_request(&env, ctx.session, ctx.turn, &ctx.call_id)
+                .await;
+        }
+
         let spec = build_command_spec(
             &command,
             &req.cwd,
