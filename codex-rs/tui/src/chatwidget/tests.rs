@@ -4967,9 +4967,15 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_snapshot!("permissions_selection_history_full_access_to_default", rendered);
+    });
+    #[cfg(not(target_os = "windows"))]
     assert_snapshot!(
         "permissions_selection_history_full_access_to_default",
-        lines_to_single_string(&cells[0])
+        rendered
     );
 }
 
