@@ -124,7 +124,9 @@ impl ComposerInput {
 
     fn handle_slash_command(&mut self, cmd: SlashCommand) {
         match cmd {
-            SlashCommand::Vim => self.inner.set_vim_enabled(true),
+            SlashCommand::Vim => {
+                self.inner.toggle_vim_enabled();
+            }
             _ => {}
         }
     }

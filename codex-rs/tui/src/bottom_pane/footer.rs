@@ -597,7 +597,11 @@ fn footer_from_props_lines(
             };
             shortcut_overlay_lines(state)
         }
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::EscHint => vec![esc_hint_left_line(
+            props.esc_backtrack_hint,
+            collaboration_mode_indicator,
+            show_cycle_hint,
+        )],
         FooterMode::ComposerHasDraft => {
             let state = LeftSideState {
                 hint: if show_queue_hint {
@@ -676,6 +680,19 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
         ])
         .dim()
     }
+}
+
+fn esc_hint_left_line(
+    esc_backtrack_hint: bool,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) -> Line<'static> {
+    let mut line = esc_hint_line(esc_backtrack_hint);
+    if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
+        line.push_span(" · ".dim());
+        line.push_span(collaboration_mode_indicator.styled_span(show_cycle_hint));
+    }
+    line
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
@@ -1145,9 +1162,7 @@ mod tests {
                     let show_context = can_show_left_and_context
                         && !matches!(
                             props.mode,
-                            FooterMode::EscHint
-                                | FooterMode::QuitShortcutReminder
-                                | FooterMode::ShortcutOverlay
+                            FooterMode::QuitShortcutReminder | FooterMode::ShortcutOverlay
                         );
                     if show_context && let Some(line) = &right_line {
                         render_context_right(area, f.buffer_mut(), line);
@@ -1574,6 +1589,44 @@ mod tests {
         assert!(
             screen.contains('…'),
             "status line should be truncated with ellipsis to keep mode indicator"
+        );
+    }
+
+    #[test]
+    fn footer_esc_hint_keeps_right_context() {
+        let props = FooterProps {
+            mode: FooterMode::EscHint,
+            esc_backtrack_hint: true,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: Some(50),
+            context_window_used_tokens: None,
+            status_line_value: None,
+            status_line_enabled: false,
+        };
+
+        let screen = render_footer_with_mode_indicator(120, &props, None);
+        let expected_context = context_window_line(
+            props.context_window_percent,
+            props.context_window_used_tokens,
+        );
+        let expected_context_text = expected_context
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(
+            screen.contains("again to edit previous message"),
+            "left esc hint should be visible"
+        );
+        assert!(
+            screen.contains(&expected_context_text),
+            "right-side context should still be visible during Esc hint"
         );
     }
 

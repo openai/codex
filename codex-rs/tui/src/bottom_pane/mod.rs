@@ -287,9 +287,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
-        self.composer.set_vim_enabled(enabled);
+    pub(crate) fn toggle_vim_enabled(&mut self) -> bool {
+        let enabled = self.composer.toggle_vim_enabled();
         self.request_redraw();
+        enabled
     }
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {

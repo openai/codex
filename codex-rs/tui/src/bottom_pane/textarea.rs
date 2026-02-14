@@ -140,12 +140,26 @@ impl TextArea {
         };
     }
 
+    pub(crate) fn is_vim_enabled(&self) -> bool {
+        self.vim_enabled
+    }
+
     pub(crate) fn allows_paste_burst(&self) -> bool {
         !self.vim_enabled || self.vim_mode == VimMode::Insert
     }
 
     pub(crate) fn is_vim_insert(&self) -> bool {
         self.vim_enabled && self.vim_mode == VimMode::Insert
+    }
+
+    pub(crate) fn vim_mode_label(&self) -> Option<&'static str> {
+        if !self.vim_enabled {
+            return None;
+        }
+        Some(match self.vim_mode {
+            VimMode::Normal => "Normal",
+            VimMode::Insert => "Insert",
+        })
     }
 
     pub fn text(&self) -> &str {
