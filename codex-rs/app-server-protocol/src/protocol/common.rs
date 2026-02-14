@@ -239,11 +239,11 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
-    SkillsRemoteRead => "skills/remote/read" {
+    SkillsRemoteList => "skills/remote/list" {
         params: v2::SkillsRemoteReadParams,
         response: v2::SkillsRemoteReadResponse,
     },
-    SkillsRemoteWrite => "skills/remote/write" {
+    SkillsRemoteExport => "skills/remote/export" {
         params: v2::SkillsRemoteWriteParams,
         response: v2::SkillsRemoteWriteResponse,
     },
