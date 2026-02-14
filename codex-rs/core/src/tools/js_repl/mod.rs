@@ -306,15 +306,15 @@ impl JsReplManager {
 
     async fn wait_for_exec_tool_calls(&self, exec_id: &str) {
         loop {
-            let notify = {
+            let notified = {
                 let calls = self.exec_tool_calls.lock().await;
                 calls
                     .get(exec_id)
                     .filter(|state| state.in_flight > 0)
-                    .map(|state| Arc::clone(&state.notify))
+                    .map(|state| Arc::clone(&state.notify).notified_owned())
             };
-            match notify {
-                Some(notify) => notify.notified().await,
+            match notified {
+                Some(notified) => notified.await,
                 None => return,
             }
         }
@@ -322,15 +322,15 @@ impl JsReplManager {
 
     async fn wait_for_all_exec_tool_calls(&self) {
         loop {
-            let notify = {
+            let notified = {
                 let calls = self.exec_tool_calls.lock().await;
                 calls
                     .values()
                     .find(|state| state.in_flight > 0)
-                    .map(|state| Arc::clone(&state.notify))
+                    .map(|state| Arc::clone(&state.notify).notified_owned())
             };
-            match notify {
-                Some(notify) => notify.notified().await,
+            match notified {
+                Some(notified) => notified.await,
                 None => return,
             }
         }
@@ -377,15 +377,15 @@ impl JsReplManager {
         exec_id: &str,
     ) {
         loop {
-            let notify = {
+            let notified = {
                 let calls = exec_tool_calls.lock().await;
                 calls
                     .get(exec_id)
                     .filter(|state| state.in_flight > 0)
-                    .map(|state| Arc::clone(&state.notify))
+                    .map(|state| Arc::clone(&state.notify).notified_owned())
             };
-            match notify {
-                Some(notify) => notify.notified().await,
+            match notified {
+                Some(notified) => notified.await,
                 None => return,
             }
         }
@@ -1407,6 +1407,40 @@ mod tests {
         assert!(!is_js_repl_internal_tool("list_mcp_resources"));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_exec_tool_calls_map_drains_inflight_calls_without_hanging() {
+        let exec_tool_calls = Arc::new(Mutex::new(HashMap::new()));
+
+        for _ in 0..128 {
+            let exec_id = Uuid::new_v4().to_string();
+            exec_tool_calls
+                .lock()
+                .await
+                .insert(exec_id.clone(), ExecToolCalls::default());
+            assert!(JsReplManager::begin_exec_tool_call(&exec_tool_calls, &exec_id).await);
+
+            let wait_map = Arc::clone(&exec_tool_calls);
+            let wait_exec_id = exec_id.clone();
+            let waiter = tokio::spawn(async move {
+                JsReplManager::wait_for_exec_tool_calls_map(&wait_map, &wait_exec_id).await;
+            });
+
+            let finish_map = Arc::clone(&exec_tool_calls);
+            let finish_exec_id = exec_id.clone();
+            let finisher = tokio::spawn(async move {
+                tokio::task::yield_now().await;
+                JsReplManager::finish_exec_tool_call(&finish_map, &finish_exec_id).await;
+            });
+
+            tokio::time::timeout(Duration::from_secs(1), waiter)
+                .await
+                .expect("wait_for_exec_tool_calls_map should not hang")
+                .expect("wait task should not panic");
+            finisher.await.expect("finish task should not panic");
+
+            JsReplManager::clear_exec_tool_calls_map(&exec_tool_calls, &exec_id).await;
+        }
+    }
     async fn can_run_js_repl_runtime_tests() -> bool {
         if std::env::var_os("CODEX_SANDBOX").is_some() {
             return false;
