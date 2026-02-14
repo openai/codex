@@ -36,37 +36,34 @@ pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bo
     provider.is_openai()
 }
 
-pub(crate) fn strip_trailing_model_switch_update_for_compaction_request(
+pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
     history: &mut ContextManager,
-) {
+) -> Option<ResponseItem> {
     let history_items = history.raw_items();
     let last_user_turn_boundary_index = history_items
         .iter()
         .rposition(crate::context_manager::is_user_turn_boundary);
-    if let Some(model_switch_index) =
-        history_items
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, item)| {
-                let is_trailing = last_user_turn_boundary_index.is_none_or(|boundary| i > boundary);
-                if is_trailing && Session::is_model_switch_developer_message(item) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-    {
-        let mut replacement = history_items.to_vec();
-        replacement.remove(model_switch_index);
-        history.replace(replacement);
-    }
+    let model_switch_index = history_items
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, item)| {
+            let is_trailing = last_user_turn_boundary_index.is_none_or(|boundary| i > boundary);
+            if is_trailing && Session::is_model_switch_developer_message(item) {
+                Some(i)
+            } else {
+                None
+            }
+        })?;
+    let mut replacement = history_items.to_vec();
+    let model_switch_item = replacement.remove(model_switch_index);
+    history.replace(replacement);
+    Some(model_switch_item)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    strip_trailing_model_switch_update: bool,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
@@ -75,13 +72,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(
-        sess,
-        turn_context,
-        input,
-        strip_trailing_model_switch_update,
-    )
-    .await?;
+    run_compact_task_inner(sess, turn_context, input).await?;
     Ok(())
 }
 
@@ -96,14 +87,13 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input, false).await
+    run_compact_task_inner(sess.clone(), turn_context, input).await
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    strip_trailing_model_switch_update: bool,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
@@ -111,9 +101,10 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
-    if strip_trailing_model_switch_update {
-        strip_trailing_model_switch_update_for_compaction_request(&mut history);
-    }
+    // Keep compaction prompts in-distribution: if a model-switch update was injected at the
+    // tail of history (between turns), exclude it from the compaction request payload.
+    let stripped_model_switch_item =
+        extract_trailing_model_switch_update_for_compaction_request(&mut history);
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -219,6 +210,11 @@ async fn run_compact_task_inner(
 
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    // Reattach the stripped model-switch update only after successful compaction so the model
+    // still sees the switch instructions on the next real sampling request.
+    if let Some(model_switch_item) = stripped_model_switch_item {
+        new_history.push(model_switch_item);
+    }
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -483,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_trailing_model_switch_update_for_compaction_request_removes_trailing_item() {
+    fn extract_trailing_model_switch_update_for_compaction_request_removes_trailing_item() {
         let mut history = ContextManager::new();
         history.replace(vec![
             ResponseItem::Message {
@@ -515,9 +511,11 @@ mod tests {
             },
         ]);
 
-        strip_trailing_model_switch_update_for_compaction_request(&mut history);
+        let model_switch_item =
+            extract_trailing_model_switch_update_for_compaction_request(&mut history);
 
         assert_eq!(history.raw_items().len(), 2);
+        assert!(model_switch_item.is_some());
         assert!(
             history
                 .raw_items()
@@ -527,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_trailing_model_switch_update_for_compaction_request_keeps_historical_item() {
+    fn extract_trailing_model_switch_update_for_compaction_request_keeps_historical_item() {
         let mut history = ContextManager::new();
         history.replace(vec![
             ResponseItem::Message {
@@ -568,9 +566,11 @@ mod tests {
             },
         ]);
 
-        strip_trailing_model_switch_update_for_compaction_request(&mut history);
+        let model_switch_item =
+            extract_trailing_model_switch_update_for_compaction_request(&mut history);
 
         assert_eq!(history.raw_items().len(), 4);
+        assert!(model_switch_item.is_none());
         assert!(
             history
                 .raw_items()
