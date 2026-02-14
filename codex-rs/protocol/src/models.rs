@@ -720,15 +720,18 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => vec![
-                        ContentItem::InputText {
-                            text: image_open_tag_text(),
-                        },
-                        ContentItem::InputImage { image_url },
-                        ContentItem::InputText {
-                            text: image_close_tag_text(),
-                        },
-                    ],
+                    UserInput::Image { image_url } => {
+                        image_index += 1;
+                        vec![
+                            ContentItem::InputText {
+                                text: image_open_tag_text(),
+                            },
+                            ContentItem::InputImage { image_url },
+                            ContentItem::InputText {
+                                text: image_close_tag_text(),
+                            },
+                        ]
+                    }
                     UserInput::LocalImage { path } => {
                         image_index += 1;
                         local_image_content_items_with_label_number(&path, Some(image_index))
@@ -1602,6 +1605,65 @@ mod tests {
                     },
                 ];
                 assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_remote_and_local_images_share_label_sequence() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        // A tiny valid PNG (1x1) so this test doesn't depend on cross-crate file paths, which
+        // break under Bazel sandboxing.
+        const TINY_PNG_BYTES: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
+            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let item = ResponseInputItem::from(vec![
+            UserInput::Image {
+                image_url: image_url.clone(),
+            },
+            UserInput::LocalImage { path: local_path },
+        ]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content.first(),
+                    Some(&ContentItem::InputText {
+                        text: image_open_tag_text(),
+                    })
+                );
+                assert_eq!(content.get(1), Some(&ContentItem::InputImage { image_url }));
+                assert_eq!(
+                    content.get(2),
+                    Some(&ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    })
+                );
+                assert_eq!(
+                    content.get(3),
+                    Some(&ContentItem::InputText {
+                        text: local_image_open_tag_text(2),
+                    })
+                );
+                assert!(matches!(
+                    content.get(4),
+                    Some(ContentItem::InputImage { .. })
+                ));
+                assert_eq!(
+                    content.get(5),
+                    Some(&ContentItem::InputText {
+                        text: image_close_tag_text(),
+                    })
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::anyhow;
 use app_test_support::McpProcess;
+use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -13,6 +14,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const SHORT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
 const SESSION_UPDATED_METHOD: &str = "fuzzyFileSearch/sessionUpdated";
+const SESSION_COMPLETED_METHOD: &str = "fuzzyFileSearch/sessionCompleted";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileExpectation {
@@ -58,6 +60,29 @@ async fn wait_for_session_updated(
     anyhow::bail!(
         "did not receive expected session update for sessionId={session_id}, query={query}"
     );
+}
+
+async fn wait_for_session_completed(
+    mcp: &mut McpProcess,
+    session_id: &str,
+) -> Result<FuzzyFileSearchSessionCompletedNotification> {
+    for _ in 0..20 {
+        let notification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message(SESSION_COMPLETED_METHOD),
+        )
+        .await??;
+        let params = notification
+            .params
+            .ok_or_else(|| anyhow!("missing notification params"))?;
+        let payload =
+            serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(params)?;
+        if payload.session_id == session_id {
+            return Ok(payload);
+        }
+    }
+
+    anyhow::bail!("did not receive expected session completion for sessionId={session_id}");
 }
 
 async fn assert_update_request_fails_for_missing_session(
@@ -271,8 +296,37 @@ async fn test_fuzzy_file_search_session_streams_updates() -> Result<()> {
     assert_eq!(payload.files.len(), 1);
     assert_eq!(payload.files[0].root, root_path);
     assert_eq!(payload.files[0].path, "alpha.txt");
+    let completed = wait_for_session_completed(&mut mcp, session_id).await?;
+    assert_eq!(completed.session_id, session_id);
 
     mcp.stop_fuzzy_file_search_session(session_id).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_session_no_updates_after_complete_until_query_edited() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let root = TempDir::new()?;
+    std::fs::write(root.path().join("alpha.txt"), "contents")?;
+    let mut mcp = initialized_mcp(&codex_home).await?;
+
+    let root_path = root.path().to_string_lossy().to_string();
+    let session_id = "session-complete-invariant";
+    mcp.start_fuzzy_file_search_session(session_id, vec![root_path])
+        .await?;
+
+    mcp.update_fuzzy_file_search_session(session_id, "alp")
+        .await?;
+    wait_for_session_updated(&mut mcp, session_id, "alp", FileExpectation::NonEmpty).await?;
+    wait_for_session_completed(&mut mcp, session_id).await?;
+    assert_no_session_updates_for(&mut mcp, session_id, STOP_GRACE_PERIOD, SHORT_READ_TIMEOUT)
+        .await?;
+
+    mcp.update_fuzzy_file_search_session(session_id, "alpha")
+        .await?;
+    wait_for_session_updated(&mut mcp, session_id, "alpha", FileExpectation::NonEmpty).await?;
 
     Ok(())
 }
@@ -345,6 +399,7 @@ async fn test_fuzzy_file_search_session_multiple_query_updates_work() -> Result<
         alp_payload.files.iter().all(|file| file.root == root_path),
         true
     );
+    wait_for_session_completed(&mut mcp, session_id).await?;
 
     mcp.update_fuzzy_file_search_session(session_id, "zzzz")
         .await?;
@@ -352,6 +407,7 @@ async fn test_fuzzy_file_search_session_multiple_query_updates_work() -> Result<
         wait_for_session_updated(&mut mcp, session_id, "zzzz", FileExpectation::Any).await?;
     assert_eq!(zzzz_payload.query, "zzzz");
     assert_eq!(zzzz_payload.files.is_empty(), true);
+    wait_for_session_completed(&mut mcp, session_id).await?;
 
     Ok(())
 }
