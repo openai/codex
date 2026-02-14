@@ -225,7 +225,7 @@ fn resolve_macos_preferences_permission(
                 warn!(
                     "ignoring permissions.macos.preferences: expected true/false, readonly, or readwrite"
                 );
-                MacOsPreferencesPermission::None
+                default
             }
         }
         None => default,

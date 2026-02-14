@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use codex_protocol::protocol::SkillScope;
-
 use crate::config::Permissions;
+use codex_protocol::protocol::SkillScope;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -14,7 +13,7 @@ pub struct SkillMetadata {
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
     // This is an experimental field.
-    pub permission_profile: Option<Permissions>,
+    pub permissions: Option<Permissions>,
     pub path: PathBuf,
     pub scope: SkillScope,
 }
