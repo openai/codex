@@ -66,6 +66,7 @@ use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
+use codex_app_server_protocol::HazelnutScope as ApiHazelnutScope;
 use codex_app_server_protocol::InputItem as WireInputItem;
 use codex_app_server_protocol::InterruptConversationParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -92,6 +93,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RemoveConversationListenerParams;
 use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
 use codex_app_server_protocol::ResumeConversationParams;
@@ -207,7 +209,7 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::skills::remote::download_remote_skill;
+use codex_core::skills::remote::export_remote_skill;
 use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
@@ -229,6 +231,8 @@ use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
+use codex_protocol::protocol::RemoteSkillHazelnutScope;
+use codex_protocol::protocol::RemoteSkillProductSurface;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
@@ -289,6 +293,24 @@ enum CancelLoginError {
 enum AppListLoadResult {
     Accessible(Result<Vec<AppInfo>, String>),
     Directory(Result<Vec<AppInfo>, String>),
+}
+
+fn convert_remote_scope(scope: ApiHazelnutScope) -> RemoteSkillHazelnutScope {
+    match scope {
+        ApiHazelnutScope::WorkspaceShared => RemoteSkillHazelnutScope::WorkspaceShared,
+        ApiHazelnutScope::AllShared => RemoteSkillHazelnutScope::AllShared,
+        ApiHazelnutScope::Personal => RemoteSkillHazelnutScope::Personal,
+        ApiHazelnutScope::Example => RemoteSkillHazelnutScope::Example,
+    }
+}
+
+fn convert_remote_product_surface(product_surface: ApiProductSurface) -> RemoteSkillProductSurface {
+    match product_surface {
+        ApiProductSurface::Chatgpt => RemoteSkillProductSurface::Chatgpt,
+        ApiProductSurface::Codex => RemoteSkillProductSurface::Codex,
+        ApiProductSurface::Api => RemoteSkillProductSurface::Api,
+        ApiProductSurface::Atlas => RemoteSkillProductSurface::Atlas,
+    }
 }
 
 impl Drop for ActiveLogin {
@@ -549,12 +571,12 @@ impl CodexMessageProcessor {
                 self.skills_list(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::SkillsRemoteRead { request_id, params } => {
-                self.skills_remote_read(to_connection_request_id(request_id), params)
+            ClientRequest::SkillsRemoteList { request_id, params } => {
+                self.skills_remote_list(to_connection_request_id(request_id), params)
                     .await;
             }
-            ClientRequest::SkillsRemoteWrite { request_id, params } => {
-                self.skills_remote_write(to_connection_request_id(request_id), params)
+            ClientRequest::SkillsRemoteExport { request_id, params } => {
+                self.skills_remote_export(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::AppsList { request_id, params } => {
@@ -5048,12 +5070,25 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn skills_remote_read(
+    async fn skills_remote_list(
         &self,
         request_id: ConnectionRequestId,
-        _params: SkillsRemoteReadParams,
+        params: SkillsRemoteReadParams,
     ) {
-        match list_remote_skills(&self.config).await {
+        let hazelnut_scope = convert_remote_scope(params.hazelnut_scope);
+        let product_surface = convert_remote_product_surface(params.product_surface);
+        let enabled = if params.enabled { Some(true) } else { None };
+
+        let auth = self.auth_manager.auth().await;
+        match list_remote_skills(
+            &self.config,
+            auth.as_ref(),
+            hazelnut_scope,
+            product_surface,
+            enabled,
+        )
+        .await
+        {
             Ok(skills) => {
                 let data = skills
                     .into_iter()
@@ -5070,23 +5105,21 @@ impl CodexMessageProcessor {
             Err(err) => {
                 self.send_internal_error(
                     request_id,
-                    format!("failed to read remote skills: {err}"),
+                    format!("failed to list remote skills: {err}"),
                 )
                 .await;
             }
         }
     }
 
-    async fn skills_remote_write(
+    async fn skills_remote_export(
         &self,
         request_id: ConnectionRequestId,
         params: SkillsRemoteWriteParams,
     ) {
-        let SkillsRemoteWriteParams {
-            hazelnut_id,
-            is_preload,
-        } = params;
-        let response = download_remote_skill(&self.config, hazelnut_id.as_str(), is_preload).await;
+        let SkillsRemoteWriteParams { hazelnut_id } = params;
+        let auth = self.auth_manager.auth().await;
+        let response = export_remote_skill(&self.config, auth.as_ref(), hazelnut_id.as_str()).await;
 
         match response {
             Ok(downloaded) => {
@@ -5095,7 +5128,6 @@ impl CodexMessageProcessor {
                         request_id,
                         SkillsRemoteWriteResponse {
                             id: downloaded.id,
-                            name: downloaded.name,
                             path: downloaded.path,
                         },
                     )
