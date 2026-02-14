@@ -863,35 +863,29 @@ impl Session {
     }
 
     async fn start_managed_network_proxy(
-        config: &Config,
+        spec: &crate::config::NetworkProxySpec,
+        sandbox_policy: &SandboxPolicy,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
         managed_network_requirements_enabled: bool,
-    ) -> anyhow::Result<(
-        Option<StartedNetworkProxy>,
-        Option<SessionNetworkProxyRuntime>,
-    )> {
-        let network_proxy = match config.permissions.network.as_ref() {
-            Some(spec) => Some(
-                spec.start_proxy(
-                    config.permissions.sandbox_policy.get(),
-                    network_policy_decider,
-                    blocked_request_observer,
-                    managed_network_requirements_enabled,
-                )
-                .await
-                .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
-            ),
-            None => None,
-        };
-        let session_network_proxy = network_proxy.as_ref().map(|started| {
-            let proxy = started.proxy();
+    ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
+        let network_proxy = spec
+            .start_proxy(
+                sandbox_policy,
+                network_policy_decider,
+                blocked_request_observer,
+                managed_network_requirements_enabled,
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?;
+        let session_network_proxy = {
+            let proxy = network_proxy.proxy();
             SessionNetworkProxyRuntime {
                 http_addr: proxy.http_addr().to_string(),
                 socks_addr: proxy.socks_addr().to_string(),
                 admin_addr: proxy.admin_addr().to_string(),
             }
-        });
+        };
         Ok((network_proxy, session_network_proxy))
     }
 
@@ -1275,13 +1269,20 @@ impl Session {
                         Arc::clone(network_policy_decider_session),
                     )
                 });
-        let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
-            config.as_ref(),
-            network_policy_decider.as_ref().map(Arc::clone),
-            blocked_request_observer.as_ref().map(Arc::clone),
-            managed_network_requirements_enabled,
-        )
-        .await?;
+        let (network_proxy, session_network_proxy) =
+            if let Some(spec) = config.permissions.network.as_ref() {
+                let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
+                    spec,
+                    config.permissions.sandbox_policy.get(),
+                    network_policy_decider.as_ref().map(Arc::clone),
+                    blocked_request_observer.as_ref().map(Arc::clone),
+                    managed_network_requirements_enabled,
+                )
+                .await?;
+                (Some(network_proxy), Some(session_network_proxy))
+            } else {
+                (None, None)
+            };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),

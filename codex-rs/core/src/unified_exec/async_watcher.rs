@@ -21,7 +21,6 @@ use crate::protocol::ExecOutputStream;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
-use crate::tools::network_approval::NetworkApprovalOutcome;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
@@ -160,9 +159,8 @@ pub(crate) fn spawn_network_denial_watcher(
                     if session
                         .services
                         .network_approval
-                        .take_outcome(&network_attempt_id)
+                        .take_user_denial_outcome(&network_attempt_id)
                         .await
-                        == Some(NetworkApprovalOutcome::DeniedByUser)
                     {
                         process.terminate();
                         session
