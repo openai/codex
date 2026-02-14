@@ -12578,6 +12578,9 @@
           "displayName": {
             "type": "string"
           },
+          "hidden": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -12596,9 +12599,6 @@
           },
           "model": {
             "type": "string"
-          },
-          "showInPicker": {
-            "type": "boolean"
           },
           "supportedReasoningEfforts": {
             "items": {
@@ -12621,10 +12621,10 @@
           "defaultReasoningEffort",
           "description",
           "displayName",
+          "hidden",
           "id",
           "isDefault",
           "model",
-          "showInPicker",
           "supportedReasoningEfforts"
         ],
         "type": "object"

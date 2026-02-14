@@ -29,7 +29,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         upgrade: preset.upgrade.map(|upgrade| upgrade.id),
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
-        show_in_picker: preset.show_in_picker,
+        hidden: !preset.show_in_picker,
         supported_reasoning_efforts: reasoning_efforts_from_preset(
             preset.supported_reasoning_efforts,
         ),

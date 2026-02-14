@@ -55,7 +55,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: None,
             display_name: "gpt-5.2-codex".to_string(),
             description: "Latest frontier agentic coding model.".to_string(),
-            show_in_picker: true,
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -86,7 +86,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: Some("gpt-5.2-codex".to_string()),
             display_name: "gpt-5.1-codex-max".to_string(),
             description: "Codex-optimized flagship for deep and fast reasoning.".to_string(),
-            show_in_picker: true,
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -117,7 +117,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             upgrade: Some("gpt-5.2-codex".to_string()),
             display_name: "gpt-5.1-codex-mini".to_string(),
             description: "Optimized for codex. Cheaper, faster, but less capable.".to_string(),
-            show_in_picker: true,
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Medium,
@@ -142,7 +142,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
             description:
                 "Latest frontier model with improvements across knowledge, reasoning and coding"
                     .to_string(),
-            show_in_picker: true,
+            hidden: false,
             supported_reasoning_efforts: vec![
                 ReasoningEffortOption {
                     reasoning_effort: ReasoningEffort::Low,
@@ -205,7 +205,7 @@ async fn list_models_includes_hidden_models() -> Result<()> {
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
-    assert!(items.iter().any(|item| !item.show_in_picker));
+    assert!(items.iter().any(|item| item.hidden));
     assert!(next_cursor.is_none());
     Ok(())
 }

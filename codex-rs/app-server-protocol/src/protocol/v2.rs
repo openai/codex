@@ -1124,7 +1124,7 @@ pub struct Model {
     pub upgrade: Option<String>,
     pub display_name: String,
     pub description: String,
-    pub show_in_picker: bool,
+    pub hidden: bool,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
     #[serde(default = "default_input_modalities")]
