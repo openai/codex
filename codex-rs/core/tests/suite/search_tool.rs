@@ -26,8 +26,9 @@ use serde_json::json;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
     "apps tools (`mcp__codex_apps__...`) are hidden until you search for them.",
-    "Matching tools are added to available `tools` and available for the remainder of the current turn.",
+    "Matching tools are added to available `tools` and available for the remainder of the current session/thread.",
 ];
+const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -51,7 +52,7 @@ fn search_tool_description(body: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|tools| {
             tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some("search_tool_bm25") {
+                if tool.get("name").and_then(Value::as_str) == Some(SEARCH_TOOL_BM25_TOOL_NAME) {
                     tool.get("description")
                         .and_then(Value::as_str)
                         .map(str::to_string)
@@ -65,9 +66,13 @@ fn search_tool_description(body: &Value) -> Option<String> {
 fn search_tool_output_payload(request: &ResponsesRequest, call_id: &str) -> Value {
     let (content, _success) = request
         .function_call_output_content_and_success(call_id)
-        .expect("search_tool_bm25 function_call_output should be present");
-    let content = content.expect("search_tool_bm25 output should include content");
-    serde_json::from_str(&content).expect("search_tool_bm25 content should be valid JSON")
+        .unwrap_or_else(|| {
+            panic!("{SEARCH_TOOL_BM25_TOOL_NAME} function_call_output should be present")
+        });
+    let content = content
+        .unwrap_or_else(|| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} output should include content"));
+    serde_json::from_str(&content)
+        .unwrap_or_else(|_| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} content should be valid JSON"))
 }
 
 fn active_selected_tools(payload: &Value) -> Vec<String> {
@@ -125,8 +130,8 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        tools.iter().any(|name| name == "search_tool_bm25"),
-        "tools list should include search_tool_bm25 when enabled: {tools:?}"
+        tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
+        "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
     );
 
     Ok(())
@@ -228,8 +233,8 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        tools.iter().any(|name| name == "search_tool_bm25"),
-        "tools list should include search_tool_bm25 when enabled: {tools:?}"
+        tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
+        "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
     );
     assert!(
         !tools.iter().any(|name| name == "mcp__rmcp__echo"),
@@ -244,19 +249,23 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Result<()> {
+async fn search_tool_selection_persists_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let call_id = "tool-search";
     let args = json!({
-        "query": "echo",
+        "query": "codex_apps",
         "limit": 1,
     });
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "search_tool_bm25", &serde_json::to_string(&args)?),
+            ev_function_call(
+                call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&args)?,
+            ),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -356,12 +365,15 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
             .any(|tool_name| tool_name.starts_with("mcp__rmcp__")),
         "search should not add rmcp tools to active selection: {search_output_payload:?}"
     );
+    let selected_tools = active_selected_tools(&search_output_payload);
 
     let third_tools = tool_names(&requests[2].body_json());
-    assert!(
-        !third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should not include MCP tools after turn reset: {third_tools:?}"
-    );
+    for selected_tool in &selected_tools {
+        assert!(
+            third_tools.iter().any(|name| name == selected_tool),
+            "third request should include selected tool {selected_tool:?}: {third_tools:?}"
+        );
+    }
 
     Ok(())
 }
@@ -386,7 +398,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
-                "search_tool_bm25",
+                SEARCH_TOOL_BM25_TOOL_NAME,
                 &serde_json::to_string(&first_args)?,
             ),
             ev_completed("resp-1"),
@@ -395,7 +407,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
-                "search_tool_bm25",
+                SEARCH_TOOL_BM25_TOOL_NAME,
                 &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-2"),
@@ -497,6 +509,150 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             .any(|tool_name| tool_name.starts_with("mcp__rmcp__")),
         "search should not add rmcp tools to active selection: {second_search_payload:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn search_tool_selection_restores_when_resumed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "tool-search";
+    let args = json!({
+        "query": "codex_apps",
+        "limit": 1,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-2", "resumed done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::Apps);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "rmcp".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+    });
+    let test = builder.build(&server).await?;
+
+    let home = test.home.clone();
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path should be available for resume");
+
+    test.submit_turn_with_policies(
+        "find the codex apps tools",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests after initial turn, got {}",
+        requests.len()
+    );
+    let search_output_payload = search_tool_output_payload(&requests[1], call_id);
+    let selected_tools = active_selected_tools(&search_output_payload);
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let mut resume_builder = test_codex().with_config(move |config| {
+        config.features.enable(Feature::Apps);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert(
+            "rmcp".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: rmcp_test_server_bin,
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: Some(Duration::from_secs(10)),
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+            },
+        );
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .submit_turn_with_policies(
+            "hello after resume",
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+        )
+        .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected 3 requests after resumed turn, got {}",
+        requests.len()
+    );
+    let resumed_tools = tool_names(&requests[2].body_json());
+    for selected_tool in &selected_tools {
+        assert!(
+            resumed_tools.iter().any(|name| name == selected_tool),
+            "resumed request should include restored selected tool {selected_tool:?}: {resumed_tools:?}"
+        );
+    }
 
     Ok(())
 }
