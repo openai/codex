@@ -1,3 +1,5 @@
+module(name = "codex")
+
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.5.3")
 single_version_override(
@@ -16,8 +18,12 @@ osx.framework(name = "CoreFoundation")
 osx.framework(name = "CoreGraphics")
 osx.framework(name = "CoreServices")
 osx.framework(name = "CoreText")
+osx.framework(name = "AudioToolbox")
 osx.framework(name = "CFNetwork")
 osx.framework(name = "FontServices")
+osx.framework(name = "AudioUnit")
+osx.framework(name = "CoreAudio")
+osx.framework(name = "CoreAudioTypes")
 osx.framework(name = "Foundation")
 osx.framework(name = "ImageIO")
 osx.framework(name = "Kernel")
@@ -144,6 +150,23 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
+llvm = use_extension("@toolchains_llvm_bootstrapped//extensions:llvm.bzl", "llvm")
+use_repo(llvm, "llvm-project")
+
+crate.annotation(
+    # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
+    build_script_data = [
+        "@@toolchains_llvm_bootstrapped++osx+macosx15.4.sdk//sysroot",
+    ],
+    build_script_tools = ["@codex//:clang"],
+    build_script_env = {
+        "COREAUDIO_SDK_PATH": "$(execpath @@toolchains_llvm_bootstrapped++osx+macosx15.4.sdk//sysroot)",
+        "LIBCLANG_PATH": "$(location @codex//:clang)",
+    },
+    crate = "coreaudio-sys",
+)
+inject_repo(crate, "codex")
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
@@ -174,6 +197,17 @@ crate.annotation(
     gen_build_script = "off",
     deps = [":windows_import_lib"],
 )
+
+bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
+
+crate.annotation(
+    crate = "alsa-sys",
+    gen_build_script = "off",
+    deps = ["@alsa_lib"],
+)
+
+inject_repo(crate, "alsa_lib")
+
 use_repo(crate, "crates")
 
 rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")

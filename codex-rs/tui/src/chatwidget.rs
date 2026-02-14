@@ -2172,6 +2172,10 @@ impl ChatWidget {
         self.set_status(message, additional_details);
     }
 
+    pub(crate) fn pre_draw_tick(&mut self) {
+        self.bottom_pane.pre_draw_tick();
+    }
+
     /// Handle completion of an `AgentMessage` turn item.
     ///
     /// Commentary completion sets a deferred restore flag so the status row
@@ -7127,6 +7131,29 @@ impl ChatWidget {
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl ChatWidget {
+    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
+        self.bottom_pane.replace_transcription(id, text);
+        // Ensure the UI redraws to reflect the updated transcription.
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_transcription_placeholder(id);
+        // Ensure the UI redraws to reflect placeholder removal.
+        self.request_redraw();
     }
 }
 

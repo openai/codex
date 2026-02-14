@@ -200,8 +200,8 @@ impl BottomPane {
             placeholder_text,
             disable_paste_burst,
         );
+        composer.set_frame_requester(frame_requester.clone());
         composer.set_skill_mentions(skills);
-
         Self {
             composer,
             view_stack: Vec::new(),
@@ -316,6 +316,17 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
+        // Do not globally intercept space; only composer handles hold-to-talk.
+        // While recording, route all keys to the composer so it can stop on release or next key.
+        #[cfg(not(target_os = "linux"))]
+        if self.composer.is_recording() {
+            let (_ir, needs_redraw) = self.composer.handle_key_event(key_event);
+            if needs_redraw {
+                self.request_redraw();
+            }
+            return InputResult::None;
+        }
+
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
             // We need three pieces of information after routing the key:
@@ -421,6 +432,7 @@ impl BottomPane {
             }
         } else {
             let needs_redraw = self.composer.handle_paste(pasted);
+            self.composer.sync_popups();
             if needs_redraw {
                 self.request_redraw();
             }
@@ -429,7 +441,16 @@ impl BottomPane {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
+        self.composer.sync_popups();
         self.request_redraw();
+    }
+
+    // Space hold timeout is handled inside ChatComposer via an internal timer.
+    pub(crate) fn pre_draw_tick(&mut self) {
+        // Allow composer to process any time-based transitions before drawing
+        #[cfg(not(target_os = "linux"))]
+        self.composer.process_space_hold_trigger();
+        self.composer.sync_popups();
     }
 
     /// Replace the composer text with `text`.
@@ -878,6 +899,7 @@ impl BottomPane {
             .on_history_entry_response(log_id, offset, entry);
 
         if updated {
+            self.composer.sync_popups();
             self.request_redraw();
         }
     }
@@ -953,6 +975,30 @@ impl BottomPane {
         if self.composer.set_status_line_enabled(enabled) {
             self.request_redraw();
         }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl BottomPane {
+    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
+        self.composer.replace_transcription(id, text);
+        self.composer.sync_popups();
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.composer.update_transcription_in_place(id, text);
+        if updated {
+            self.composer.sync_popups();
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        self.composer.remove_transcription_placeholder(id);
+        self.composer.sync_popups();
+        self.request_redraw();
     }
 }
 
