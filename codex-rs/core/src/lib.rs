@@ -25,6 +25,7 @@ pub mod config;
 pub mod config_loader;
 pub mod connectors;
 mod context_manager;
+mod context_updates;
 pub mod custom_prompts;
 pub mod env;
 mod environment_context;
