@@ -12,8 +12,6 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -324,14 +322,7 @@ impl ManagedClient {
 #[derive(Clone)]
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
-    startup_snapshot: StartupToolSnapshot,
-    startup_poll_spawned: Arc<AtomicBool>,
-}
-
-#[derive(Clone)]
-enum StartupToolSnapshot {
-    CacheHit(Vec<ToolInfo>),
-    Unavailable,
+    startup_snapshot: Option<Vec<ToolInfo>>,
 }
 
 impl AsyncManagedClient {
@@ -345,15 +336,11 @@ impl AsyncManagedClient {
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
-        let startup_snapshot = match load_startup_cached_codex_apps_tools_snapshot(
+        let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
-        ) {
-            StartupToolSnapshot::CacheHit(tools) => {
-                StartupToolSnapshot::CacheHit(filter_tools(tools, tool_filter.clone()))
-            }
-            StartupToolSnapshot::Unavailable => StartupToolSnapshot::Unavailable,
-        };
+        )
+        .map(|tools| filter_tools(tools, tool_filter.clone()));
         let startup_tool_filter = tool_filter;
         let fut = async move {
             if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -379,10 +366,17 @@ impl AsyncManagedClient {
                 Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
             }
         };
+        let client = fut.boxed().shared();
+        if startup_snapshot.is_some() {
+            let startup_task = client.clone();
+            tokio::spawn(async move {
+                let _ = startup_task.await;
+            });
+        }
+
         Self {
-            client: fut.boxed().shared(),
+            client,
             startup_snapshot,
-            startup_poll_spawned: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -392,16 +386,6 @@ impl AsyncManagedClient {
 
     fn try_client(&self) -> Option<Result<ManagedClient, StartupOutcomeError>> {
         self.client.clone().now_or_never()
-    }
-
-    fn ensure_startup_polled(&self) {
-        if self.startup_poll_spawned.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let startup = self.client.clone();
-        tokio::spawn(async move {
-            let _ = startup.await;
-        });
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -647,14 +631,14 @@ impl McpConnectionManager {
             let ready_client = match managed_client.try_client() {
                 Some(Ok(client)) => Some(client),
                 Some(Err(_)) => None,
-                None => match &managed_client.startup_snapshot {
-                    StartupToolSnapshot::CacheHit(tools_from_cache) => {
-                        managed_client.ensure_startup_polled();
+                None => {
+                    if let Some(tools_from_cache) = &managed_client.startup_snapshot {
                         tools.extend(qualify_tools(tools_from_cache.clone()));
                         None
+                    } else {
+                        managed_client.client().await.ok()
                     }
-                    StartupToolSnapshot::Unavailable => managed_client.client().await.ok(),
-                },
+                }
             };
 
             let Some(ready_client) = ready_client else {
@@ -1289,20 +1273,16 @@ fn refresh_codex_apps_tools_cache_async(
 fn load_startup_cached_codex_apps_tools_snapshot(
     server_name: &str,
     cache_context: Option<&CodexAppsToolsCacheContext>,
-) -> StartupToolSnapshot {
+) -> Option<Vec<ToolInfo>> {
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return StartupToolSnapshot::Unavailable;
+        return None;
     }
 
-    let Some(cache_context) = cache_context else {
-        return StartupToolSnapshot::Unavailable;
-    };
+    let cache_context = cache_context?;
 
     match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit(tools) => StartupToolSnapshot::CacheHit(tools),
-        CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => {
-            StartupToolSnapshot::Unavailable
-        }
+        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
+        CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
     }
 }
 
@@ -1768,9 +1748,7 @@ mod tests {
             CODEX_APPS_MCP_SERVER_NAME,
             Some(&cache_context),
         );
-        let StartupToolSnapshot::CacheHit(startup_tools) = startup_snapshot else {
-            panic!("expected startup snapshot to load from cache");
-        };
+        let startup_tools = startup_snapshot.expect("expected startup snapshot to load from cache");
 
         assert_eq!(startup_tools.len(), 1);
         assert_eq!(startup_tools[0].server_name, CODEX_APPS_MCP_SERVER_NAME);
@@ -1792,8 +1770,7 @@ mod tests {
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
                 client: pending_client,
-                startup_snapshot: StartupToolSnapshot::CacheHit(startup_tools),
-                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
+                startup_snapshot: Some(startup_tools),
             },
         );
 
@@ -1816,8 +1793,7 @@ mod tests {
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
                 client: pending_client,
-                startup_snapshot: StartupToolSnapshot::Unavailable,
-                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
+                startup_snapshot: None,
             },
         );
 
@@ -1837,8 +1813,7 @@ mod tests {
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             AsyncManagedClient {
                 client: pending_client,
-                startup_snapshot: StartupToolSnapshot::CacheHit(Vec::new()),
-                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
+                startup_snapshot: Some(Vec::new()),
             },
         );
 
