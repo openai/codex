@@ -142,6 +142,15 @@ fn assert_pre_sampling_switch_compaction_requests(
         body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
         "pre-sampling compact request should include summarization prompt"
     );
+    assert!(
+        !compact_body.contains("<model_switch>"),
+        "pre-sampling compact request should strip trailing model-switch update item"
+    );
+    let follow_up_body = follow_up.to_string();
+    assert!(
+        follow_up_body.contains("<model_switch>"),
+        "follow-up request after successful model-switch compaction should include model-switch update item"
+    );
 }
 
 async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_core::CodexThread>) {

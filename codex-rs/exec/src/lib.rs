@@ -20,6 +20,7 @@ use codex_core::NewThread;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
+use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -28,6 +29,7 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
@@ -267,6 +269,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+
+    #[allow(clippy::print_stderr)]
+    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
+        Ok(None) => {}
+        Ok(Some(err)) | Err(err) => {
+            eprintln!(
+                "Error loading rules:\n{}",
+                format_exec_policy_error_with_source(&err)
+            );
+            std::process::exit(1);
+        }
+    }
+
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Err(err) = enforce_login_restrictions(&config) {

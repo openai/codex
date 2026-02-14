@@ -15,6 +15,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
+use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -27,6 +28,7 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
+use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
@@ -288,6 +290,19 @@ pub async fn run_main(
         cloud_requirements.clone(),
     )
     .await;
+
+    #[allow(clippy::print_stderr)]
+    match check_execpolicy_for_warnings(&config.config_layer_stack).await {
+        Ok(None) => {}
+        Ok(Some(err)) | Err(err) => {
+            eprintln!(
+                "Error loading rules:\n{}",
+                format_exec_policy_error_with_source(&err)
+            );
+            std::process::exit(1);
+        }
+    }
+
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Some(warning) =

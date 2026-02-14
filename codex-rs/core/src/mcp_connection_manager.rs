@@ -89,6 +89,9 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
+const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
+const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
@@ -1104,15 +1107,42 @@ async fn list_tools_for_client(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
+    let total_start = Instant::now();
     if server_name == CODEX_APPS_MCP_SERVER_NAME
         && let Some(cached_tools) = read_cached_codex_apps_tools()
     {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            total_start.elapsed(),
+            &[("cache", "hit")],
+        );
         return Ok(cached_tools);
     }
 
+    let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
+    emit_duration(
+        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+        fetch_start.elapsed(),
+        &[],
+    );
+
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(&tools);
+        emit_duration(
+            MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
+            cache_write_start.elapsed(),
+            &[],
+        );
+    }
+
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            total_start.elapsed(),
+            &[("cache", "miss")],
+        );
     }
     Ok(tools)
 }
@@ -1146,6 +1176,12 @@ fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
         expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
         tools: tools.to_vec(),
     });
+}
+
+fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let _ = metrics.record_duration(metric, duration, tags);
+    }
 }
 
 async fn list_tools_for_client_uncached(
