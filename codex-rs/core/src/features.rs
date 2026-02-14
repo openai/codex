@@ -80,6 +80,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -119,6 +121,8 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
+    /// Route apps MCP calls through the configured gateway.
+    AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -129,6 +133,8 @@ pub enum Feature {
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Prevent idle system sleep while a turn is actively running.
+    PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -322,6 +328,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            features.disable(Feature::JsReplToolsOnly);
+        }
 
         features
     }
@@ -427,6 +437,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -555,6 +571,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::AppsMcpGateway,
+        key: "apps_mcp_gateway",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
@@ -583,6 +605,20 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(target_os = "macos") {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Codex is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
@@ -663,6 +699,21 @@ mod tests {
                     spec.default_enabled, false,
                     "feature `{}` is under development and must be disabled by default",
                     spec.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_enabled_features_are_stable() {
+        for spec in FEATURES {
+            if spec.default_enabled {
+                assert_eq!(
+                    spec.stage,
+                    Stage::Stable,
+                    "feature `{}` is enabled by default but is not stable ({:?})",
+                    spec.key,
+                    spec.stage
                 );
             }
         }

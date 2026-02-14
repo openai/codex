@@ -193,6 +193,11 @@
           "default": false,
           "type": "boolean"
         },
+        "isEnabled": {
+          "default": true,
+          "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
+          "type": "boolean"
+        },
         "logoUrl": {
           "type": [
             "string",
@@ -3747,6 +3752,17 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchSessionCompletedNotification": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "type": "object"
+    },
     "FuzzyFileSearchSessionUpdatedNotification": {
       "properties": {
         "files": {
@@ -5992,7 +6008,8 @@
         {
           "enum": [
             "review",
-            "compact"
+            "compact",
+            "memory_consolidation"
           ],
           "type": "string"
         },
@@ -8282,6 +8299,26 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionUpdatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "fuzzyFileSearch/sessionCompleted"
+          ],
+          "title": "FuzzyFileSearch/sessionCompletedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FuzzyFileSearchSessionCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "FuzzyFileSearch/sessionCompletedNotification",
       "type": "object"
     },
     {

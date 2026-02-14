@@ -882,7 +882,7 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
 }
 
 pub(crate) fn filter_codex_apps_mcp_tools_only(
-    mut mcp_tools: HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
     connectors: &[crate::connectors::AppInfo],
 ) -> HashMap<String, ToolInfo> {
     let allowed: HashSet<&str> = connectors
@@ -890,26 +890,32 @@ pub(crate) fn filter_codex_apps_mcp_tools_only(
         .map(|connector| connector.id.as_str())
         .collect();
 
-    mcp_tools.retain(|_, tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return false;
-        }
-        let Some(connector_id) = tool.connector_id.as_deref() else {
-            return false;
-        };
-        allowed.contains(connector_id)
-    });
-
     mcp_tools
+        .iter()
+        .filter(|(_, tool)| {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return false;
+            }
+            let Some(connector_id) = tool.connector_id.as_deref() else {
+                return false;
+            };
+            allowed.contains(connector_id)
+        })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 pub(crate) fn filter_mcp_tools_by_name(
-    mut mcp_tools: HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
     selected_tools: &[String],
 ) -> HashMap<String, ToolInfo> {
     let allowed: HashSet<&str> = selected_tools.iter().map(String::as_str).collect();
-    mcp_tools.retain(|name, _| allowed.contains(name.as_str()));
+
     mcp_tools
+        .iter()
+        .filter(|(name, _)| allowed.contains(name.as_str()))
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 fn normalize_codex_apps_tool_title(
@@ -1123,7 +1129,12 @@ fn read_cached_codex_apps_tools() -> Option<Vec<ToolInfo>> {
         return Some(cached.tools.clone());
     }
 
-    *cache_guard = None;
+    if cache_guard
+        .as_ref()
+        .is_some_and(|cached| now >= cached.expires_at)
+    {
+        *cache_guard = None;
+    }
     None
 }
 
@@ -1270,6 +1281,21 @@ mod tests {
             connector_id: None,
             connector_name: None,
         }
+    }
+
+    fn with_clean_codex_apps_tools_cache<T>(f: impl FnOnce() -> T) -> T {
+        let previous_cache = {
+            let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache_guard.take()
+        };
+        let result = f();
+        let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cache_guard = previous_cache;
+        result
     }
 
     #[test]
@@ -1422,6 +1448,47 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].server_name, "server1");
         assert_eq!(filtered[0].tool_name, "tool_a");
+    }
+
+    #[test]
+    fn codex_apps_tools_cache_is_overwritten_by_last_write() {
+        with_clean_codex_apps_tools_cache(|| {
+            let tools_gateway_1 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "one")];
+            let tools_gateway_2 = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "two")];
+
+            write_cached_codex_apps_tools(&tools_gateway_1);
+            let cached_gateway_1 =
+                read_cached_codex_apps_tools().expect("cache entry exists for first write");
+            assert_eq!(cached_gateway_1[0].tool_name, "one");
+
+            write_cached_codex_apps_tools(&tools_gateway_2);
+            let cached_gateway_2 =
+                read_cached_codex_apps_tools().expect("cache entry exists for second write");
+            assert_eq!(cached_gateway_2[0].tool_name, "two");
+        });
+    }
+
+    #[test]
+    fn codex_apps_tools_cache_is_cleared_when_expired() {
+        with_clean_codex_apps_tools_cache(|| {
+            let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "stale_tool")];
+            write_cached_codex_apps_tools(&tools);
+
+            {
+                let mut cache_guard = CODEX_APPS_TOOLS_CACHE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cache_guard.as_mut().expect("cache exists").expires_at =
+                    Instant::now() - Duration::from_secs(1);
+            }
+
+            assert!(read_cached_codex_apps_tools().is_none());
+
+            let cache_guard = CODEX_APPS_TOOLS_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(cache_guard.is_none());
+        });
     }
 
     #[test]

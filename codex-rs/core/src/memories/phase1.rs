@@ -2,6 +2,8 @@ use crate::Prompt;
 use crate::RolloutRecorder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
+use crate::config::types::MemoriesConfig;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
@@ -17,6 +19,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TokenUsage;
 use codex_utils_sanitizer::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -28,7 +31,7 @@ use tracing::info;
 use tracing::warn;
 
 #[derive(Clone, Debug)]
-pub(in crate::memories) struct Phase1RequestContext {
+pub(in crate::memories) struct RequestContext {
     pub(in crate::memories) model_info: ModelInfo,
     pub(in crate::memories) otel_manager: OtelManager,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -36,18 +39,24 @@ pub(in crate::memories) struct Phase1RequestContext {
     pub(in crate::memories) turn_metadata_header: Option<String>,
 }
 
+struct JobResult {
+    outcome: JobOutcome,
+    token_usage: Option<TokenUsage>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PhaseOneJobOutcome {
+enum JobOutcome {
     SucceededWithOutput,
     SucceededNoOutput,
     Failed,
 }
 
-struct PhaseOneOutcomeCounts {
+struct Stats {
     claimed: usize,
     succeeded_with_output: usize,
     succeeded_no_output: usize,
     failed: usize,
+    total_token_usage: Option<TokenUsage>,
 }
 
 /// Phase 1 model output payload.
@@ -60,10 +69,9 @@ struct StageOneOutput {
     /// Compact summary line used for routing and indexing.
     #[serde(rename = "rollout_summary")]
     pub(crate) rollout_summary: String,
-    /// Optional slug accepted from stage-1 output for forward compatibility.
-    /// This is currently ignored by downstream storage and naming, which remain thread-id based.
+    /// Optional slug used to derive rollout summary artifact filenames.
     #[serde(default, rename = "rollout_slug")]
-    pub(crate) _rollout_slug: Option<String>,
+    pub(crate) rollout_slug: Option<String>,
 }
 
 /// Runs memory phase 1 in strict step order:
@@ -71,9 +79,9 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub(in crate::memories) async fn run(session: &Arc<Session>) {
+pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     // 1. Claim startup job.
-    let Some(claimed_candidates) = claim_startup_jobs(session).await else {
+    let Some(claimed_candidates) = claim_startup_jobs(session, &config.memories).await else {
         return;
     };
     if claimed_candidates.is_empty() {
@@ -86,13 +94,13 @@ pub(in crate::memories) async fn run(session: &Arc<Session>) {
     }
 
     // 2. Build request.
-    let stage_one_context = build_request_context(session).await;
+    let stage_one_context = build_request_context(session, config).await;
 
     // 3. Run the parallel sampling.
     let outcomes = run_jobs(session, claimed_candidates, stage_one_context).await;
 
     // 4. Metrics and logs.
-    let counts = count_outcomes(outcomes);
+    let counts = aggregate_stats(outcomes);
     emit_metrics(session, &counts);
     info!(
         "memory stage-1 extraction complete: {} job(s) claimed, {} succeeded ({} with output, {} no output), {} failed",
@@ -110,7 +118,7 @@ pub fn output_schema() -> Value {
         "type": "object",
         "properties": {
             "rollout_summary": { "type": "string" },
-            "rollout_slug": { "type": "string" },
+            "rollout_slug": { "type": ["string", "null"] },
             "raw_memory": { "type": "string" }
         },
         "required": ["rollout_summary", "rollout_slug", "raw_memory"],
@@ -118,22 +126,26 @@ pub fn output_schema() -> Value {
     })
 }
 
-impl Phase1RequestContext {
+impl RequestContext {
     pub(in crate::memories) fn from_turn_context(
         turn_context: &TurnContext,
         turn_metadata_header: Option<String>,
+        model_info: ModelInfo,
     ) -> Self {
         Self {
-            model_info: turn_context.model_info.clone(),
+            model_info,
+            turn_metadata_header,
             otel_manager: turn_context.otel_manager.clone(),
             reasoning_effort: turn_context.reasoning_effort,
             reasoning_summary: turn_context.reasoning_summary,
-            turn_metadata_header,
         }
     }
 }
 
-async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::Stage1JobClaim>> {
+async fn claim_startup_jobs(
+    session: &Arc<Session>,
+    memories_config: &MemoriesConfig,
+) -> Option<Vec<codex_state::Stage1JobClaim>> {
     let Some(state_db) = session.services.state_db.as_deref() else {
         // This should not happen.
         warn!("state db unavailable while claiming phase-1 startup jobs; skipping");
@@ -150,9 +162,9 @@ async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::S
             session.conversation_id,
             codex_state::Stage1StartupClaimParams {
                 scan_limit: phase_one::THREAD_SCAN_LIMIT,
-                max_claimed: phase_one::MAX_ROLLOUTS_PER_STARTUP,
-                max_age_days: phase_one::MAX_ROLLOUT_AGE_DAYS,
-                min_rollout_idle_hours: phase_one::MIN_ROLLOUT_IDLE_HOURS,
+                max_claimed: memories_config.max_rollouts_per_startup,
+                max_age_days: memories_config.max_rollout_age_days,
+                min_rollout_idle_hours: memories_config.min_rollout_idle_hours,
                 allowed_sources: allowed_sources.as_slice(),
                 lease_seconds: phase_one::JOB_LEASE_SECONDS,
             },
@@ -172,19 +184,30 @@ async fn claim_startup_jobs(session: &Arc<Session>) -> Option<Vec<codex_state::S
     }
 }
 
-async fn build_request_context(session: &Arc<Session>) -> Phase1RequestContext {
+async fn build_request_context(session: &Arc<Session>, config: &Config) -> RequestContext {
+    let model_name = config
+        .memories
+        .phase_1_model
+        .clone()
+        .unwrap_or(phase_one::MODEL.to_string());
+    let model = session
+        .services
+        .models_manager
+        .get_model_info(&model_name, config)
+        .await;
     let turn_context = session.new_default_turn().await;
-    Phase1RequestContext::from_turn_context(
+    RequestContext::from_turn_context(
         turn_context.as_ref(),
-        turn_context.resolve_turn_metadata_header().await,
+        turn_context.turn_metadata_state.current_header_value(),
+        model,
     )
 }
 
 async fn run_jobs(
     session: &Arc<Session>,
     claimed_candidates: Vec<codex_state::Stage1JobClaim>,
-    stage_one_context: Phase1RequestContext,
-) -> Vec<PhaseOneJobOutcome> {
+    stage_one_context: RequestContext,
+) -> Vec<JobResult> {
     futures::stream::iter(claimed_candidates.into_iter())
         .map(|claim| {
             let session = Arc::clone(session);
@@ -202,10 +225,10 @@ mod job {
     pub(in crate::memories) async fn run(
         session: &Session,
         claim: codex_state::Stage1JobClaim,
-        stage_one_context: &Phase1RequestContext,
-    ) -> PhaseOneJobOutcome {
+        stage_one_context: &RequestContext,
+    ) -> JobResult {
         let thread = claim.thread;
-        let stage_one_output = match sample(
+        let (stage_one_output, token_usage) = match sample(
             session,
             &thread.rollout_path,
             &thread.cwd,
@@ -222,23 +245,33 @@ mod job {
                     &reason.to_string(),
                 )
                 .await;
-                return PhaseOneJobOutcome::Failed;
+                return JobResult {
+                    outcome: JobOutcome::Failed,
+                    token_usage: None,
+                };
             }
         };
 
         if stage_one_output.raw_memory.is_empty() || stage_one_output.rollout_summary.is_empty() {
-            return result::no_output(session, thread.id, &claim.ownership_token).await;
+            return JobResult {
+                outcome: result::no_output(session, thread.id, &claim.ownership_token).await,
+                token_usage,
+            };
         }
 
-        result::success(
-            session,
-            thread.id,
-            &claim.ownership_token,
-            thread.updated_at.timestamp(),
-            &stage_one_output.raw_memory,
-            &stage_one_output.rollout_summary,
-        )
-        .await
+        JobResult {
+            outcome: result::success(
+                session,
+                thread.id,
+                &claim.ownership_token,
+                thread.updated_at.timestamp(),
+                &stage_one_output.raw_memory,
+                &stage_one_output.rollout_summary,
+                stage_one_output.rollout_slug.as_deref(),
+            )
+            .await,
+            token_usage,
+        }
     }
 
     /// Extract the rollout and perform the actual sampling.
@@ -246,8 +279,8 @@ mod job {
         session: &Session,
         rollout_path: &Path,
         rollout_cwd: &Path,
-        stage_one_context: &Phase1RequestContext,
-    ) -> anyhow::Result<StageOneOutput> {
+        stage_one_context: &RequestContext,
+    ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
         let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
 
@@ -290,6 +323,7 @@ mod job {
         // TODO(jif) we should have a shared helper somewhere for this.
         // Unwrap the stream.
         let mut result = String::new();
+        let mut token_usage = None;
         while let Some(message) = stream.next().await.transpose()? {
             match message {
                 ResponseEvent::OutputTextDelta(delta) => result.push_str(&delta),
@@ -301,7 +335,12 @@ mod job {
                         result.push_str(&text);
                     }
                 }
-                ResponseEvent::Completed { .. } => break,
+                ResponseEvent::Completed {
+                    token_usage: usage, ..
+                } => {
+                    token_usage = usage;
+                    break;
+                }
                 _ => {}
             }
         }
@@ -309,8 +348,9 @@ mod job {
         let mut output: StageOneOutput = serde_json::from_str(&result)?;
         output.raw_memory = redact_secrets(output.raw_memory);
         output.rollout_summary = redact_secrets(output.rollout_summary);
+        output.rollout_slug = output.rollout_slug.map(redact_secrets);
 
-        Ok(output)
+        Ok((output, token_usage))
     }
 
     mod result {
@@ -339,9 +379,9 @@ mod job {
             session: &Session,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
-        ) -> PhaseOneJobOutcome {
+        ) -> JobOutcome {
             let Some(state_db) = session.services.state_db.as_deref() else {
-                return PhaseOneJobOutcome::Failed;
+                return JobOutcome::Failed;
             };
 
             if state_db
@@ -349,9 +389,9 @@ mod job {
                 .await
                 .unwrap_or(false)
             {
-                PhaseOneJobOutcome::SucceededNoOutput
+                JobOutcome::SucceededNoOutput
             } else {
-                PhaseOneJobOutcome::Failed
+                JobOutcome::Failed
             }
         }
 
@@ -362,9 +402,10 @@ mod job {
             source_updated_at: i64,
             raw_memory: &str,
             rollout_summary: &str,
-        ) -> PhaseOneJobOutcome {
+            rollout_slug: Option<&str>,
+        ) -> JobOutcome {
             let Some(state_db) = session.services.state_db.as_deref() else {
-                return PhaseOneJobOutcome::Failed;
+                return JobOutcome::Failed;
             };
 
             if state_db
@@ -374,13 +415,14 @@ mod job {
                     source_updated_at,
                     raw_memory,
                     rollout_summary,
+                    rollout_slug,
                 )
                 .await
                 .unwrap_or(false)
             {
-                PhaseOneJobOutcome::SucceededWithOutput
+                JobOutcome::SucceededWithOutput
             } else {
-                PhaseOneJobOutcome::Failed
+                JobOutcome::Failed
             }
         }
     }
@@ -407,29 +449,37 @@ mod job {
     }
 }
 
-fn count_outcomes(outcomes: Vec<PhaseOneJobOutcome>) -> PhaseOneOutcomeCounts {
-    let succeeded_with_output = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::SucceededWithOutput))
-        .count();
-    let succeeded_no_output = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::SucceededNoOutput))
-        .count();
-    let failed = outcomes
-        .iter()
-        .filter(|outcome| matches!(outcome, PhaseOneJobOutcome::Failed))
-        .count();
+fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
+    let claimed = outcomes.len();
+    let mut succeeded_with_output = 0;
+    let mut succeeded_no_output = 0;
+    let mut failed = 0;
+    let mut total_token_usage = TokenUsage::default();
+    let mut has_token_usage = false;
 
-    PhaseOneOutcomeCounts {
-        claimed: outcomes.len(),
+    for outcome in outcomes {
+        match outcome.outcome {
+            JobOutcome::SucceededWithOutput => succeeded_with_output += 1,
+            JobOutcome::SucceededNoOutput => succeeded_no_output += 1,
+            JobOutcome::Failed => failed += 1,
+        }
+
+        if let Some(token_usage) = outcome.token_usage {
+            total_token_usage.add_assign(&token_usage);
+            has_token_usage = true;
+        }
+    }
+
+    Stats {
+        claimed,
         succeeded_with_output,
         succeeded_no_output,
         failed,
+        total_token_usage: has_token_usage.then_some(total_token_usage),
     }
 }
 
-fn emit_metrics(session: &Session, counts: &PhaseOneOutcomeCounts) {
+fn emit_metrics(session: &Session, counts: &Stats) {
     if counts.claimed > 0 {
         session.services.otel_manager.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
@@ -462,5 +512,103 @@ fn emit_metrics(session: &Session, counts: &PhaseOneOutcomeCounts) {
             counts.failed as i64,
             &[("status", "failed")],
         );
+    }
+    if let Some(token_usage) = counts.total_token_usage.as_ref() {
+        session.services.otel_manager.histogram(
+            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+            token_usage.total_tokens.max(0),
+            &[("token_type", "total")],
+        );
+        session.services.otel_manager.histogram(
+            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+            token_usage.input_tokens.max(0),
+            &[("token_type", "input")],
+        );
+        session.services.otel_manager.histogram(
+            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+            token_usage.cached_input(),
+            &[("token_type", "cached_input")],
+        );
+        session.services.otel_manager.histogram(
+            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+            token_usage.output_tokens.max(0),
+            &[("token_type", "output")],
+        );
+        session.services.otel_manager.histogram(
+            metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
+            token_usage.reasoning_output_tokens.max(0),
+            &[("token_type", "reasoning_output")],
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JobOutcome;
+    use super::JobResult;
+    use super::aggregate_stats;
+    use codex_protocol::protocol::TokenUsage;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn count_outcomes_sums_token_usage_across_all_jobs() {
+        let counts = aggregate_stats(vec![
+            JobResult {
+                outcome: JobOutcome::SucceededWithOutput,
+                token_usage: Some(TokenUsage {
+                    input_tokens: 10,
+                    cached_input_tokens: 2,
+                    output_tokens: 3,
+                    reasoning_output_tokens: 1,
+                    total_tokens: 13,
+                }),
+            },
+            JobResult {
+                outcome: JobOutcome::SucceededNoOutput,
+                token_usage: Some(TokenUsage {
+                    input_tokens: 7,
+                    cached_input_tokens: 1,
+                    output_tokens: 2,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 9,
+                }),
+            },
+            JobResult {
+                outcome: JobOutcome::Failed,
+                token_usage: None,
+            },
+        ]);
+
+        assert_eq!(counts.claimed, 3);
+        assert_eq!(counts.succeeded_with_output, 1);
+        assert_eq!(counts.succeeded_no_output, 1);
+        assert_eq!(counts.failed, 1);
+        assert_eq!(
+            counts.total_token_usage,
+            Some(TokenUsage {
+                input_tokens: 17,
+                cached_input_tokens: 3,
+                output_tokens: 5,
+                reasoning_output_tokens: 1,
+                total_tokens: 22,
+            })
+        );
+    }
+
+    #[test]
+    fn count_outcomes_keeps_usage_empty_when_no_job_reports_it() {
+        let counts = aggregate_stats(vec![
+            JobResult {
+                outcome: JobOutcome::SucceededWithOutput,
+                token_usage: None,
+            },
+            JobResult {
+                outcome: JobOutcome::Failed,
+                token_usage: None,
+            },
+        ]);
+
+        assert_eq!(counts.claimed, 2);
+        assert_eq!(counts.total_token_usage, None);
     }
 }

@@ -564,6 +564,7 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
             cwd: PathBuf::from("/"),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: None,
             model: model.to_string(),
             personality: None,
             collaboration_mode: None,

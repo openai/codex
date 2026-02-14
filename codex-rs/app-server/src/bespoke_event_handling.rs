@@ -4,6 +4,7 @@ use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -1408,12 +1409,25 @@ async fn handle_error(
 
 async fn on_patch_approval_response(
     call_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            if let Err(submit_err) = codex
+                .submit(Op::PatchApproval {
+                    id: call_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
+            }
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
@@ -1451,12 +1465,16 @@ async fn on_patch_approval_response(
 async fn on_exec_approval_response(
     call_id: String,
     turn_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             return;
@@ -1488,12 +1506,28 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            let empty = CoreRequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::UserInputAnswer {
+                    id: event_turn_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit UserInputAnswer: {err}");
+            }
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             let empty = CoreRequestUserInputResponse {
@@ -1628,14 +1662,14 @@ async fn on_file_change_request_approval_response(
     conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
-        Ok(value) => {
+        Ok(Ok(value)) => {
             let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
@@ -1649,6 +1683,10 @@ async fn on_file_change_request_approval_response(
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
         }
         Err(err) => {
             error!("request failed: {err:?}");
@@ -1688,13 +1726,13 @@ async fn on_command_execution_request_approval_response(
     command: String,
     cwd: PathBuf,
     command_actions: Vec<V2ParsedCommand>,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
-        Ok(value) => {
+        Ok(Ok(value)) => {
             let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
@@ -1728,6 +1766,10 @@ async fn on_command_execution_request_approval_response(
                 ),
             };
             (decision, completion_status)
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }
         Err(err) => {
             error!("request failed: {err:?}");

@@ -3,6 +3,8 @@ use std::time::Instant;
 
 use tracing::error;
 
+use crate::analytics_client::AppInvocation;
+use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -102,6 +104,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     tool_call_end_event.clone(),
                 )
                 .await;
+                maybe_track_codex_app_used(sess.as_ref(), turn_context, &server, &tool_name).await;
                 result
             }
             McpToolApprovalDecision::Decline => {
@@ -166,6 +169,7 @@ pub(crate) async fn handle_mcp_tool_call(
     });
 
     notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_end_event.clone()).await;
+    maybe_track_codex_app_used(sess.as_ref(), turn_context, &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
@@ -208,6 +212,50 @@ fn sanitize_mcp_tool_result_for_model(
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
     sess.send_event(turn_context, event).await;
+}
+
+struct McpAppUsageMetadata {
+    connector_id: Option<String>,
+    app_name: Option<String>,
+}
+
+async fn maybe_track_codex_app_used(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    tool_name: &str,
+) {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return;
+    }
+    let metadata = lookup_mcp_app_usage_metadata(sess, server, tool_name).await;
+    let (connector_id, app_name) = metadata
+        .map(|metadata| (metadata.connector_id, metadata.app_name))
+        .unwrap_or((None, None));
+    let invoke_type = if let Some(connector_id) = connector_id.as_deref() {
+        let mentioned_connector_ids = sess.get_connector_selection().await;
+        if mentioned_connector_ids.contains(connector_id) {
+            "explicit"
+        } else {
+            "implicit"
+        }
+    } else {
+        "implicit"
+    };
+
+    let tracking = build_track_events_context(
+        turn_context.model_info.slug.clone(),
+        sess.conversation_id.to_string(),
+        turn_context.sub_id.clone(),
+    );
+    sess.services.analytics_events_client.track_app_used(
+        tracking,
+        AppInvocation {
+            connector_id,
+            app_name,
+            invoke_type: Some(invoke_type.to_string()),
+        },
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,6 +374,31 @@ async fn lookup_mcp_tool_metadata(
                     connector_name: tool_info.connector_name,
                     tool_title: tool_info.tool.title,
                 })
+        } else {
+            None
+        }
+    })
+}
+
+async fn lookup_mcp_app_usage_metadata(
+    sess: &Session,
+    server: &str,
+    tool_name: &str,
+) -> Option<McpAppUsageMetadata> {
+    let tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await;
+
+    tools.into_values().find_map(|tool_info| {
+        if tool_info.server_name == server && tool_info.tool_name == tool_name {
+            Some(McpAppUsageMetadata {
+                connector_id: tool_info.connector_id,
+                app_name: tool_info.connector_name,
+            })
         } else {
             None
         }
