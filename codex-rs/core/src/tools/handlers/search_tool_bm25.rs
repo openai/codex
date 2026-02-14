@@ -23,6 +23,7 @@ use crate::tools::registry::ToolKind;
 
 pub struct SearchToolBm25Handler;
 
+pub(crate) const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 pub(crate) const DEFAULT_LIMIT: usize = 8;
 
 fn default_limit() -> usize {
@@ -91,9 +92,9 @@ impl ToolHandler for SearchToolBm25Handler {
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
-                return Err(FunctionCallError::Fatal(
-                    "search_tool_bm25 handler received unsupported payload".to_string(),
-                ));
+                return Err(FunctionCallError::Fatal(format!(
+                    "{SEARCH_TOOL_BM25_TOOL_NAME} handler received unsupported payload"
+                )));
             }
         };
 

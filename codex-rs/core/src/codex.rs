@@ -223,6 +223,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
@@ -1672,7 +1673,7 @@ impl Session {
             };
             match response_item {
                 ResponseItem::FunctionCall { name, call_id, .. } => {
-                    if name == "search_tool_bm25" {
+                    if name == SEARCH_TOOL_BM25_TOOL_NAME {
                         search_call_ids.insert(call_id.clone());
                     }
                 }
@@ -6139,7 +6140,7 @@ mod tests {
     #[test]
     fn extract_mcp_tool_selection_from_rollout_reads_search_tool_output() {
         let rollout_items = vec![
-            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_rollout_item(SEARCH_TOOL_BM25_TOOL_NAME, "search-1"),
             function_call_output_rollout_item(
                 "search-1",
                 &json!({
@@ -6165,7 +6166,7 @@ mod tests {
     #[test]
     fn extract_mcp_tool_selection_from_rollout_latest_valid_payload_wins() {
         let rollout_items = vec![
-            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_rollout_item(SEARCH_TOOL_BM25_TOOL_NAME, "search-1"),
             function_call_output_rollout_item(
                 "search-1",
                 &json!({
@@ -6173,7 +6174,7 @@ mod tests {
                 })
                 .to_string(),
             ),
-            function_call_rollout_item("search_tool_bm25", "search-2"),
+            function_call_rollout_item(SEARCH_TOOL_BM25_TOOL_NAME, "search-2"),
             function_call_output_rollout_item(
                 "search-2",
                 &json!({
@@ -6201,7 +6202,7 @@ mod tests {
                 })
                 .to_string(),
             ),
-            function_call_rollout_item("search_tool_bm25", "search-1"),
+            function_call_rollout_item(SEARCH_TOOL_BM25_TOOL_NAME, "search-1"),
             function_call_output_rollout_item("search-1", "{not-json"),
             function_call_output_rollout_item(
                 "unknown-search-call",
@@ -6228,7 +6229,10 @@ mod tests {
 
     #[test]
     fn extract_mcp_tool_selection_from_rollout_returns_none_without_valid_search_output() {
-        let rollout_items = vec![function_call_rollout_item("search_tool_bm25", "search-1")];
+        let rollout_items = vec![function_call_rollout_item(
+            SEARCH_TOOL_BM25_TOOL_NAME,
+            "search-1",
+        )];
         let selected = Session::extract_mcp_tool_selection_from_rollout(&rollout_items);
         assert_eq!(selected, None);
     }

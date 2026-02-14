@@ -28,6 +28,7 @@ const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
     "apps tools (`mcp__codex_apps__...`) are hidden until you search for them.",
     "Matching tools are added to available `tools` and available for the remainder of the current session/thread.",
 ];
+const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -51,7 +52,7 @@ fn search_tool_description(body: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|tools| {
             tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(Value::as_str) == Some("search_tool_bm25") {
+                if tool.get("name").and_then(Value::as_str) == Some(SEARCH_TOOL_BM25_TOOL_NAME) {
                     tool.get("description")
                         .and_then(Value::as_str)
                         .map(str::to_string)
@@ -65,9 +66,13 @@ fn search_tool_description(body: &Value) -> Option<String> {
 fn search_tool_output_payload(request: &ResponsesRequest, call_id: &str) -> Value {
     let (content, _success) = request
         .function_call_output_content_and_success(call_id)
-        .expect("search_tool_bm25 function_call_output should be present");
-    let content = content.expect("search_tool_bm25 output should include content");
-    serde_json::from_str(&content).expect("search_tool_bm25 content should be valid JSON")
+        .unwrap_or_else(|| {
+            panic!("{SEARCH_TOOL_BM25_TOOL_NAME} function_call_output should be present")
+        });
+    let content = content
+        .unwrap_or_else(|| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} output should include content"));
+    serde_json::from_str(&content)
+        .unwrap_or_else(|_| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} content should be valid JSON"))
 }
 
 fn active_selected_tools(payload: &Value) -> Vec<String> {
@@ -125,8 +130,8 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        tools.iter().any(|name| name == "search_tool_bm25"),
-        "tools list should include search_tool_bm25 when enabled: {tools:?}"
+        tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
+        "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
     );
 
     Ok(())
@@ -228,8 +233,8 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        tools.iter().any(|name| name == "search_tool_bm25"),
-        "tools list should include search_tool_bm25 when enabled: {tools:?}"
+        tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
+        "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
     );
     assert!(
         !tools.iter().any(|name| name == "mcp__rmcp__echo"),
@@ -256,7 +261,11 @@ async fn search_tool_selection_persists_across_turns() -> Result<()> {
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "search_tool_bm25", &serde_json::to_string(&args)?),
+            ev_function_call(
+                call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&args)?,
+            ),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -389,7 +398,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
-                "search_tool_bm25",
+                SEARCH_TOOL_BM25_TOOL_NAME,
                 &serde_json::to_string(&first_args)?,
             ),
             ev_completed("resp-1"),
@@ -398,7 +407,7 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
             ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
-                "search_tool_bm25",
+                SEARCH_TOOL_BM25_TOOL_NAME,
                 &serde_json::to_string(&second_args)?,
             ),
             ev_completed("resp-2"),
@@ -517,7 +526,11 @@ async fn search_tool_selection_restores_when_resumed() -> Result<()> {
     let responses = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "search_tool_bm25", &serde_json::to_string(&args)?),
+            ev_function_call(
+                call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&args)?,
+            ),
             ev_completed("resp-1"),
         ]),
         sse(vec![
