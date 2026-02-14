@@ -12,6 +12,8 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -323,6 +325,7 @@ impl ManagedClient {
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     startup_snapshot: StartupToolSnapshot,
+    startup_poll_spawned: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -351,7 +354,7 @@ impl AsyncManagedClient {
             }
             StartupToolSnapshot::Unavailable => StartupToolSnapshot::Unavailable,
         };
-        let startup_tool_filter = tool_filter.clone();
+        let startup_tool_filter = tool_filter;
         let fut = async move {
             if let Err(error) = validate_mcp_server_name(&server_name) {
                 return Err(error.into());
@@ -379,6 +382,7 @@ impl AsyncManagedClient {
         Self {
             client: fut.boxed().shared(),
             startup_snapshot,
+            startup_poll_spawned: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -388,6 +392,16 @@ impl AsyncManagedClient {
 
     fn try_client(&self) -> Option<Result<ManagedClient, StartupOutcomeError>> {
         self.client.clone().now_or_never()
+    }
+
+    fn ensure_startup_polled(&self) {
+        if self.startup_poll_spawned.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let startup = self.client.clone();
+        tokio::spawn(async move {
+            let _ = startup.await;
+        });
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -635,6 +649,7 @@ impl McpConnectionManager {
                 Some(Err(_)) => None,
                 None => match &managed_client.startup_snapshot {
                     StartupToolSnapshot::CacheHit(tools_from_cache) => {
+                        managed_client.ensure_startup_polled();
                         tools.extend(qualify_tools(tools_from_cache.clone()));
                         None
                     }
@@ -1778,6 +1793,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: StartupToolSnapshot::CacheHit(startup_tools),
+                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
             },
         );
 
@@ -1801,6 +1817,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: StartupToolSnapshot::Unavailable,
+                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
             },
         );
 
@@ -1821,6 +1838,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: StartupToolSnapshot::CacheHit(Vec::new()),
+                startup_poll_spawned: Arc::new(AtomicBool::new(false)),
             },
         );
 

@@ -46,10 +46,20 @@ struct CachedAccessibleConnectors {
 static ACCESSIBLE_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAccessibleConnectors>>> =
     LazyLock::new(|| StdMutex::new(None));
 
+#[derive(Debug, Clone)]
+pub struct AccessibleConnectorsStatus {
+    pub connectors: Vec<AppInfo>,
+    pub codex_apps_ready: bool,
+}
+
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
-    list_accessible_connectors_from_mcp_tools_with_options(config, false).await
+    Ok(
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, false)
+            .await?
+            .connectors,
+    )
 }
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
@@ -69,8 +79,22 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
+    Ok(
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, force_refetch)
+            .await?
+            .connectors,
+    )
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
+    config: &Config,
+    force_refetch: bool,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     if !config.features.enabled(Feature::Apps) {
-        return Ok(Vec::new());
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: true,
+        });
     }
 
     let auth_manager = auth_manager_from_config(config);
@@ -78,12 +102,18 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
-        return Ok(cached_connectors);
+        return Ok(AccessibleConnectorsStatus {
+            connectors: cached_connectors,
+            codex_apps_ready: true,
+        });
     }
 
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
     if mcp_servers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(AccessibleConnectorsStatus {
+            connectors: Vec::new(),
+            codex_apps_ready: true,
+        });
     }
 
     let auth_status_entries =
@@ -138,7 +168,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
-    Ok(accessible_connectors)
+    Ok(AccessibleConnectorsStatus {
+        connectors: accessible_connectors,
+        codex_apps_ready,
+    })
 }
 
 fn accessible_connectors_cache_key(
