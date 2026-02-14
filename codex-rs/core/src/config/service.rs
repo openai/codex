@@ -835,6 +835,28 @@ remote_models = true
             .await
             .expect("write apps.app1.disabled_reason succeeds");
 
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps.app1.tools.issues/create.enabled".to_string(),
+                value: serde_json::json!(false),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps.app1.tools.issues/create.enabled succeeds");
+
+        service
+            .write_value(ConfigValueWriteParams {
+                file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+                key_path: "apps.app1.tools.issues/create.disabled_reason".to_string(),
+                value: serde_json::json!("admin_policy"),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await
+            .expect("write apps.app1.tools.issues/create.disabled_reason succeeds");
+
         let read = service
             .read(ConfigReadParams {
                 include_layers: false,
@@ -846,11 +868,28 @@ remote_models = true
         assert_eq!(
             read.config.apps,
             Some(AppsConfig {
+                default: codex_app_server_protocol::AppsDefaultConfig {
+                    disable_destructive: false,
+                    disable_open_world: false,
+                },
                 apps: std::collections::HashMap::from([(
                     "app1".to_string(),
                     AppConfig {
                         enabled: false,
                         disabled_reason: Some(AppDisabledReason::User),
+                        disable_destructive: None,
+                        disable_open_world: None,
+                        tools: Some(codex_app_server_protocol::AppToolsConfig {
+                            default: codex_app_server_protocol::AppToolDefaults { approval: None },
+                            tools: std::collections::HashMap::from([(
+                                "issues/create".to_string(),
+                                codex_app_server_protocol::AppToolConfig {
+                                    enabled: Some(false),
+                                    disabled_reason: Some(AppDisabledReason::AdminPolicy),
+                                    approval: None,
+                                },
+                            )]),
+                        }),
                     },
                 )]),
             })

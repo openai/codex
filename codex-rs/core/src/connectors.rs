@@ -9,7 +9,6 @@ use std::time::Instant;
 use async_channel::unbounded;
 pub use codex_app_server_protocol::AppInfo;
 use codex_protocol::protocol::SandboxPolicy;
-use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -17,7 +16,6 @@ use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
-use crate::config::types::AppsConfigToml;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -281,19 +279,13 @@ pub fn merge_connectors(
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
+    let apps = crate::app_tool_policy::read_apps_config(config).map(|apps_config| apps_config.apps);
     for connector in &mut connectors {
         if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
             connector.is_enabled = app.enabled;
         }
     }
     connectors
-}
-
-fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
-    let effective_config = config.config_layer_stack.effective_config();
-    let apps_config = effective_config.as_table()?.get("apps")?.clone();
-    AppsConfigToml::deserialize(apps_config).ok()
 }
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>

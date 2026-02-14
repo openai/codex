@@ -7,6 +7,7 @@
 
 mod analytics_client;
 pub mod api_bridge;
+mod app_tool_policy;
 mod apply_patch;
 mod apps;
 pub mod auth;

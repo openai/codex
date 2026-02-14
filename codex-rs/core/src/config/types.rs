@@ -428,6 +428,7 @@ impl From<MemoriesToml> for MemoriesConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AppDisabledReason {
+    AdminPolicy,
     Unknown,
     User,
 }
@@ -435,10 +436,72 @@ pub enum AppDisabledReason {
 impl fmt::Display for AppDisabledReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            AppDisabledReason::AdminPolicy => write!(f, "admin_policy"),
             AppDisabledReason::Unknown => write!(f, "unknown"),
             AppDisabledReason::User => write!(f, "user"),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AppToolApproval {
+    #[default]
+    Auto,
+    Prompt,
+    Approve,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppsDefaultConfig {
+    /// Disable tools with `destructive_hint = true` unless app-level override says otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_destructive: bool,
+
+    /// Disable tools with `open_world_hint = true` unless app-level override says otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_open_world: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolDefaults {
+    /// Default approval mode for tools in this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolConfig {
+    /// When `false`, this individual tool is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+
+    /// Reason this tool was disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<AppDisabledReason>,
+
+    /// Approval behavior for this specific tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AppToolsConfigToml {
+    /// Default tool settings under `[apps.<id>.tools._default]`.
+    #[serde(
+        default,
+        rename = "_default",
+        skip_serializing_if = "app_tool_defaults_is_empty"
+    )]
+    pub default: AppToolDefaults,
+
+    /// Per-tool overrides keyed by MCP tool name.
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
 }
 
 /// Config values for a single app/connector.
@@ -452,15 +515,43 @@ pub struct AppConfig {
     /// Reason this app was disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<AppDisabledReason>,
+
+    /// App-level override for disabling destructive tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_destructive: Option<bool>,
+
+    /// App-level override for disabling open-world tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_open_world: Option<bool>,
+
+    /// Per-tool policy for this app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<AppToolsConfigToml>,
 }
 
 /// App/connector settings loaded from `config.toml`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AppsConfigToml {
+    /// Defaults shared by all apps unless overridden by app-specific config.
+    #[serde(
+        default,
+        rename = "_default",
+        skip_serializing_if = "apps_default_config_is_empty"
+    )]
+    pub default: AppsDefaultConfig,
+
     /// Per-app settings keyed by app ID (for example `[apps.google_drive]`).
     #[serde(default, flatten)]
     pub apps: HashMap<String, AppConfig>,
+}
+
+fn apps_default_config_is_empty(config: &AppsDefaultConfig) -> bool {
+    !config.disable_destructive && !config.disable_open_world
+}
+
+fn app_tool_defaults_is_empty(config: &AppToolDefaults) -> bool {
+    config.approval.is_none()
 }
 
 // ===== OTEL configuration =====
@@ -1091,6 +1182,84 @@ mod tests {
         assert!(
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn deserialize_apps_config_with_defaults_and_tool_overrides() {
+        let cfg: AppsConfigToml = toml::from_str(
+            r#"
+            [_default]
+            disable_destructive = true
+            disable_open_world = false
+
+            [connector_123]
+            enabled = false
+            disabled_reason = "admin_policy"
+            disable_destructive = false
+            disable_open_world = true
+
+            [connector_123.tools._default]
+            approval = "prompt"
+
+            [connector_123.tools."repos/list"]
+            approval = "approve"
+
+            [connector_123.tools."issues/create"]
+            enabled = false
+            disabled_reason = "admin_policy"
+        "#,
+        )
+        .expect("deserialize apps config");
+
+        assert_eq!(
+            cfg,
+            AppsConfigToml {
+                default: AppsDefaultConfig {
+                    disable_destructive: true,
+                    disable_open_world: false,
+                },
+                apps: HashMap::from([(
+                    "connector_123".to_string(),
+                    AppConfig {
+                        enabled: false,
+                        disabled_reason: Some(AppDisabledReason::AdminPolicy),
+                        disable_destructive: Some(false),
+                        disable_open_world: Some(true),
+                        tools: Some(AppToolsConfigToml {
+                            default: AppToolDefaults {
+                                approval: Some(AppToolApproval::Prompt),
+                            },
+                            tools: HashMap::from([
+                                (
+                                    "repos/list".to_string(),
+                                    AppToolConfig {
+                                        enabled: None,
+                                        disabled_reason: None,
+                                        approval: Some(AppToolApproval::Approve),
+                                    },
+                                ),
+                                (
+                                    "issues/create".to_string(),
+                                    AppToolConfig {
+                                        enabled: Some(false),
+                                        disabled_reason: Some(AppDisabledReason::AdminPolicy),
+                                        approval: None,
+                                    },
+                                ),
+                            ]),
+                        }),
+                    },
+                )]),
+            }
+        );
+    }
+
+    #[test]
+    fn app_disabled_reason_display_admin_policy() {
+        assert_eq!(
+            AppDisabledReason::AdminPolicy.to_string(),
+            "admin_policy".to_string()
         );
     }
 }

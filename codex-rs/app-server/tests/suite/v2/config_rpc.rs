@@ -185,11 +185,18 @@ disabled_reason = "user"
     assert_eq!(
         config.apps,
         Some(AppsConfig {
+            default: codex_app_server_protocol::AppsDefaultConfig {
+                disable_destructive: false,
+                disable_open_world: false,
+            },
             apps: std::collections::HashMap::from([(
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
                     disabled_reason: Some(AppDisabledReason::User),
+                    disable_destructive: None,
+                    disable_open_world: None,
+                    tools: None,
                 },
             )]),
         })

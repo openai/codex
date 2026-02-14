@@ -818,6 +818,30 @@ The server also emits `app/list/updated` notifications whenever either source (a
 }
 ```
 
+App behavior can be configured in `config.toml` under `[apps]`, including app-level and tool-level controls:
+
+```toml
+[apps._default]
+disable_destructive = false
+disable_open_world = false
+
+[apps.connector_123]
+enabled = false
+disabled_reason = "admin_policy"
+disable_destructive = true
+disable_open_world = true
+
+[apps.connector_123.tools._default]
+approval = "prompt" # "auto" | "prompt" | "approve"
+
+[apps.connector_123.tools."repos/list"]
+approval = "approve"
+
+[apps.connector_123.tools."issues/create"]
+enabled = false
+disabled_reason = "admin_policy"
+```
+
 Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name.
 
 Example:

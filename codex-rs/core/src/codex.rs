@@ -16,6 +16,7 @@ use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::build_track_events_context;
+use crate::app_tool_policy;
 use crate::apps::render_apps_section;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -4633,6 +4634,7 @@ fn connector_inserted_in_messages(
 fn filter_codex_apps_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
+    apps_config: Option<&crate::config::types::AppsConfigToml>,
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
@@ -4648,7 +4650,11 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = codex_apps_connector_id(tool) else {
                 return false;
             };
-            allowed.contains(connector_id)
+            if !allowed.contains(connector_id) {
+                return false;
+            }
+
+            app_tool_policy::resolve_app_tool_policy(apps_config, tool).is_allowed()
         })
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
@@ -4809,6 +4815,7 @@ async fn built_tools(
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
+    let apps_config = app_tool_policy::read_apps_config(&turn_context.config);
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -4845,12 +4852,13 @@ async fn built_tools(
             filter_codex_apps_mcp_tools_only(&mcp_tools, explicitly_enabled.as_ref());
         selected_mcp_tools.extend(apps_mcp_tools);
 
-        mcp_tools = selected_mcp_tools;
+        mcp_tools =
+            filter_codex_apps_mcp_tools(&selected_mcp_tools, connectors, apps_config.as_ref());
     }
 
-    let app_tools = connectors
-        .as_ref()
-        .map(|connectors| filter_codex_apps_mcp_tools(&mcp_tools, connectors));
+    let app_tools = connectors.as_ref().map(|connectors| {
+        filter_codex_apps_mcp_tools(&mcp_tools, connectors, apps_config.as_ref())
+    });
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -5638,6 +5646,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Tool;
+    use rmcp::model::ToolAnnotations;
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
@@ -5703,6 +5712,36 @@ mod tests {
                 input_schema: Arc::new(JsonObject::default()),
                 output_schema: None,
                 annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: connector_id.map(str::to_string),
+            connector_name: connector_name.map(str::to_string),
+        }
+    }
+
+    fn make_mcp_tool_with_open_world_hint(
+        tool_name: &str,
+        connector_id: Option<&str>,
+        connector_name: Option<&str>,
+    ) -> ToolInfo {
+        ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool_name: tool_name.to_string(),
+            tool: Tool {
+                name: tool_name.to_string().into(),
+                title: None,
+                description: Some(format!("Test tool: {tool_name}").into()),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: Some(ToolAnnotations {
+                    destructive_hint: None,
+                    idempotent_hint: None,
+                    open_world_hint: Some(true),
+                    read_only_hint: None,
+                    title: None,
+                }),
                 execution: None,
                 icons: None,
                 meta: None,
@@ -5985,6 +6024,32 @@ mod tests {
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 "mcp__rmcp__echo".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn filter_codex_apps_mcp_tools_applies_policy() {
+        let mcp_tools = HashMap::from([(
+            "mcp__codex_apps__calendar_search".to_string(),
+            make_mcp_tool_with_open_world_hint(
+                "calendar_search",
+                Some("calendar"),
+                Some("Calendar"),
+            ),
+        )]);
+        let connectors = vec![make_connector("calendar", "Calendar")];
+        let apps_config = crate::config::types::AppsConfigToml {
+            default: crate::config::types::AppsDefaultConfig {
+                disable_destructive: false,
+                disable_open_world: true,
+            },
+            apps: HashMap::new(),
+        };
+
+        let filtered = filter_codex_apps_mcp_tools(&mcp_tools, &connectors, Some(&apps_config));
+        assert_eq!(
+            filtered.into_keys().collect::<Vec<_>>(),
+            Vec::<String>::new()
         );
     }
 

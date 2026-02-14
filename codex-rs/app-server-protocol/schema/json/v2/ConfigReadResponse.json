@@ -19,6 +19,18 @@
     },
     "AppConfig": {
       "properties": {
+        "disable_destructive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "disable_open_world": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "disabled_reason": {
           "anyOf": [
             {
@@ -32,18 +44,124 @@
         "enabled": {
           "default": true,
           "type": "boolean"
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "type": "object"
     },
     "AppDisabledReason": {
       "enum": [
+        "admin_policy",
         "unknown",
         "user"
       ],
       "type": "string"
     },
+    "AppToolApproval": {
+      "enum": [
+        "auto",
+        "prompt",
+        "approve"
+      ],
+      "type": "string"
+    },
+    "AppToolConfig": {
+      "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppDisabledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AppToolDefaults": {
+      "properties": {
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AppToolsConfig": {
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolDefaults"
+            }
+          ],
+          "default": {
+            "approval": null
+          }
+        }
+      },
+      "type": "object"
+    },
     "AppsConfig": {
+      "properties": {
+        "_default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppsDefaultConfig"
+            }
+          ],
+          "default": {
+            "disable_destructive": false,
+            "disable_open_world": false
+          }
+        }
+      },
+      "type": "object"
+    },
+    "AppsDefaultConfig": {
+      "properties": {
+        "disable_destructive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "disable_open_world": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AskForApproval": {
