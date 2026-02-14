@@ -1114,40 +1114,18 @@ async fn list_tools_for_client(
         emit_duration(
             MCP_TOOLS_LIST_DURATION_METRIC,
             total_start.elapsed(),
-            &[("result", "ok"), ("cache", "hit")],
+            &[("cache", "hit")],
         );
         return Ok(cached_tools);
     }
 
     let fetch_start = Instant::now();
-    let tools = match list_tools_for_client_uncached(server_name, client, timeout).await {
-        Ok(tools) => {
-            emit_duration(
-                MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-                fetch_start.elapsed(),
-                &[("result", "ok")],
-            );
-            tools
-        }
-        Err(err) => {
-            let cache = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-                "miss"
-            } else {
-                "bypass"
-            };
-            emit_duration(
-                MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
-                fetch_start.elapsed(),
-                &[("result", "error")],
-            );
-            emit_duration(
-                MCP_TOOLS_LIST_DURATION_METRIC,
-                total_start.elapsed(),
-                &[("result", "error"), ("cache", cache)],
-            );
-            return Err(err);
-        }
-    };
+    let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
+    emit_duration(
+        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+        fetch_start.elapsed(),
+        &[],
+    );
 
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
         let cache_write_start = Instant::now();
@@ -1155,20 +1133,17 @@ async fn list_tools_for_client(
         emit_duration(
             MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
             cache_write_start.elapsed(),
-            &[("result", "ok")],
+            &[],
         );
     }
 
-    let cache = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        "miss"
-    } else {
-        "bypass"
-    };
-    emit_duration(
-        MCP_TOOLS_LIST_DURATION_METRIC,
-        total_start.elapsed(),
-        &[("result", "ok"), ("cache", cache)],
-    );
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            total_start.elapsed(),
+            &[("cache", "miss")],
+        );
+    }
     Ok(tools)
 }
 
