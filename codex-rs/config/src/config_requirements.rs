@@ -135,6 +135,7 @@ pub struct NetworkRequirementsToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
@@ -150,6 +151,7 @@ pub struct NetworkConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
@@ -165,6 +167,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_non_loopback_admin,
+            dangerously_allow_all_unix_sockets,
             allowed_domains,
             denied_domains,
             allow_unix_sockets,
@@ -177,6 +180,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_non_loopback_admin,
+            dangerously_allow_all_unix_sockets,
             allowed_domains,
             denied_domains,
             allow_unix_sockets,
@@ -1040,6 +1044,7 @@ mod tests {
             [experimental_network]
             enabled = true
             allow_upstream_proxy = false
+            dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
@@ -1058,6 +1063,10 @@ mod tests {
         assert_eq!(sourced_network.source, source);
         assert_eq!(sourced_network.value.enabled, Some(true));
         assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
+        assert_eq!(
+            sourced_network.value.dangerously_allow_all_unix_sockets,
+            Some(true)
+        );
         assert_eq!(
             sourced_network.value.allowed_domains.as_ref(),
             Some(&vec![

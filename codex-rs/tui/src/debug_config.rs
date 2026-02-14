@@ -332,6 +332,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_non_loopback_admin,
+        dangerously_allow_all_unix_sockets,
         allowed_domains,
         denied_domains,
         allow_unix_sockets,
@@ -358,6 +359,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
         parts.push(format!(
             "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
+        ));
+    }
+    if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
+        parts.push(format!(
+            "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
         ));
     }
     if let Some(allowed_domains) = allowed_domains {

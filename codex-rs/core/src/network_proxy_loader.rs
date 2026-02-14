@@ -127,6 +127,12 @@ fn network_constraints_from_trusted_layers(
             constraints.dangerously_allow_non_loopback_admin =
                 Some(dangerously_allow_non_loopback_admin);
         }
+        if let Some(dangerously_allow_all_unix_sockets) =
+            partial.network.dangerously_allow_all_unix_sockets
+        {
+            constraints.dangerously_allow_all_unix_sockets =
+                Some(dangerously_allow_all_unix_sockets);
+        }
 
         if let Some(allowed_domains) = partial.network.allowed_domains {
             constraints.allowed_domains = Some(allowed_domains);
