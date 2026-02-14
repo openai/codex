@@ -91,6 +91,9 @@ pub struct ModelProviderInfo {
     /// value is empty, the header will not be included in the request.
     pub env_http_headers: Option<HashMap<String, String>>,
 
+    /// Optional JSON object to merge into request body for provider-specific parameters.
+    pub extra_body_params: Option<HashMap<String, serde_json::Value>>,
+
     /// Maximum number of times to retry a failed HTTP request to this provider.
     pub request_max_retries: Option<u64>,
 
@@ -171,6 +174,7 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            extra_body_params: self.extra_body_params.clone(),
         })
     }
 
@@ -247,6 +251,7 @@ impl ModelProviderInfo {
                 .into_iter()
                 .collect(),
             ),
+            extra_body_params: None,
             // Use global defaults for retry/timeout unless overridden in config.toml.
             request_max_retries: None,
             stream_max_retries: None,
@@ -321,6 +326,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         query_params: None,
         http_headers: None,
         env_http_headers: None,
+        extra_body_params: None,
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
@@ -350,6 +356,7 @@ base_url = "http://localhost:11434/v1"
             query_params: None,
             http_headers: None,
             env_http_headers: None,
+            extra_body_params: None,
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
@@ -381,6 +388,7 @@ query_params = { api-version = "2025-04-01-preview" }
             }),
             http_headers: None,
             env_http_headers: None,
+            extra_body_params: None,
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
@@ -415,6 +423,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             env_http_headers: Some(maplit::hashmap! {
                 "X-Example-Env-Header".to_string() => "EXAMPLE_ENV_VAR".to_string(),
             }),
+            extra_body_params: None,
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
@@ -437,5 +446,38 @@ wire_api = "chat"
 
         let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
         assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    }
+
+    #[test]
+    fn test_deserialize_provider_with_extra_body_params() {
+        let provider_toml = r#"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+extra_body_params = { provider = { sort = "throughput" }, max_tokens = 4096 }
+        "#;
+        let expected_provider = ModelProviderInfo {
+            name: "OpenRouter".into(),
+            base_url: Some("https://openrouter.ai/api/v1".into()),
+            env_key: Some("OPENROUTER_API_KEY".into()),
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            extra_body_params: Some(maplit::hashmap! {
+                "provider".to_string() => serde_json::json!({"sort": "throughput"}),
+                "max_tokens".to_string() => serde_json::json!(4096),
+            }),
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        };
+
+        let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+        assert_eq!(expected_provider, provider);
     }
 }

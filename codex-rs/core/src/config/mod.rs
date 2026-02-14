@@ -3965,6 +3965,7 @@ model_verbosity = "high"
             query_params: None,
             http_headers: None,
             env_http_headers: None,
+            extra_body_params: None,
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),

@@ -9,6 +9,7 @@ use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -154,6 +155,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_body_params: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -172,6 +175,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             include: request.include.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
+            extra_body_params: request.extra_body_params.clone(),
         }
     }
 }
@@ -194,6 +198,8 @@ pub struct ResponseCreateWsRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip)]
+    pub extra_body_params: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,6 +233,44 @@ pub fn create_text_param_for_request(
             name: "codex_output_schema".to_string(),
         }),
     })
+}
+
+pub fn deep_merge_json(base: &mut Value, extra: &HashMap<String, Value>) {
+    if let Some(base_obj) = base.as_object_mut() {
+        for (key, value) in extra {
+            match (base_obj.get(key), value) {
+                (Some(base_val), Value::Object(extra_obj)) if base_val.is_object() => {
+                    let mut base_sub = base_val.clone();
+                    if let Some(base_sub_obj) = base_sub.as_object_mut() {
+                        deep_merge_into(base_sub_obj, extra_obj);
+                        base_obj.insert(key.clone(), Value::Object(base_sub_obj.clone()));
+                    }
+                }
+                _ => {
+                    base_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+}
+
+fn deep_merge_into(
+    base: &mut serde_json::Map<String, Value>,
+    extra: &serde_json::Map<String, Value>,
+) {
+    for (key, value) in extra {
+        match (base.get(key), value) {
+            (Some(base_val), Value::Object(extra_obj)) if base_val.is_object() => {
+                if let Value::Object(mut base_sub) = base_val.clone() {
+                    deep_merge_into(&mut base_sub, extra_obj);
+                    base.insert(key.clone(), Value::Object(base_sub));
+                }
+            }
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 pub struct ResponseStream {

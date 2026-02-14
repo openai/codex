@@ -1,6 +1,7 @@
 use crate::auth::AuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
+use crate::common::deep_merge_json;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -72,6 +73,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
         if request.store && self.session.provider().is_azure_responses_endpoint() {
             attach_item_ids(&mut body, &request.input);
+        }
+        if let Some(extra) = &request.extra_body_params {
+            deep_merge_json(&mut body, extra);
         }
 
         let mut headers = extra_headers;

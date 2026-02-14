@@ -264,6 +264,7 @@ mod tests {
                 verbosity: Some(OpenAiVerbosity::Low),
                 format: None,
             }),
+            extra_body_params: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -302,6 +303,7 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: Some(text_controls),
+            extra_body_params: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -338,6 +340,7 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: None,
+            extra_body_params: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");

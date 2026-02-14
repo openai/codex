@@ -512,6 +512,7 @@ impl ModelClientSession {
             include,
             prompt_cache_key,
             text,
+            extra_body_params: provider.extra_body_params.clone(),
         };
         Ok(request)
     }

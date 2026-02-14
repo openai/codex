@@ -205,9 +205,20 @@ impl ResponsesWebsocketConnection {
         let server_reasoning_included = self.server_reasoning_included;
         let models_etag = self.models_etag.clone();
         let telemetry = self.telemetry.clone();
-        let request_body = serde_json::to_value(&request).map_err(|err| {
+
+        let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+
+        if let ResponsesWsRequest::ResponseCreate(req) = &request {
+            if let Some(extra) = &req.extra_body_params {
+                if let Some(body_obj) = request_body.as_object_mut() {
+                    for (key, value) in extra {
+                        body_obj.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
 
         tokio::spawn(async move {
             if let Some(etag) = models_etag {

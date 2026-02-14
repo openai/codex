@@ -47,6 +47,7 @@ pub struct Provider {
     pub headers: HeaderMap,
     pub retry: RetryConfig,
     pub stream_idle_timeout: Duration,
+    pub extra_body_params: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl Provider {

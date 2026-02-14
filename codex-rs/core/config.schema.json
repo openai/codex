@@ -469,6 +469,11 @@
           "description": "Value to use with `Authorization: Bearer <token>` header. Use of this config is discouraged in favor of `env_key` for security reasons, but this may be necessary when using this programmatically.",
           "type": "string"
         },
+        "extra_body_params": {
+          "additionalProperties": true,
+          "description": "Optional JSON object to merge into request body for provider-specific parameters.",
+          "type": "object"
+        },
         "http_headers": {
           "additionalProperties": {
             "type": "string"
