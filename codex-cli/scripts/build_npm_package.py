@@ -16,8 +16,8 @@ RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / 
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 CODEX_NPM_NAME = "@openai/codex"
 
-# `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
-# The underlying package published to npm is always `@openai/codex`.
+# `npm_name` is the platform package consumed by `bin/codex.js` as an
+# optional dependency of the meta package.
 CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "codex-linux-x64": {
         "npm_name": "@openai/codex-linux-x64",
@@ -263,7 +263,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             codex_package_json = json.load(fh)
 
         package_json = {
-            "name": CODEX_NPM_NAME,
+            "name": platform_package["npm_name"],
             "version": platform_version,
             "license": codex_package_json.get("license", "Apache-2.0"),
             "os": [platform_package["os"]],
@@ -304,9 +304,8 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     if package == "codex":
         package_json["files"] = ["bin"]
         package_json["optionalDependencies"] = {
-            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
-                f"npm:{CODEX_NPM_NAME}@"
-                f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
+            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: compute_platform_package_version(
+                version, CODEX_PLATFORM_PACKAGES[platform_package]["npm_tag"]
             )
             for platform_package in PACKAGE_EXPANSIONS["codex"]
             if platform_package != "codex"
