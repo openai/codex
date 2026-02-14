@@ -326,6 +326,9 @@
         "model_reasoning_summary": {
           "$ref": "#/definitions/ReasoningSummary"
         },
+        "model_service_tier": {
+          "$ref": "#/definitions/ServiceTier"
+        },
         "model_verbosity": {
           "$ref": "#/definitions/Verbosity"
         },
@@ -994,6 +997,15 @@
       },
       "type": "object"
     },
+    "ServiceTier": {
+      "description": "Controls latency/cost class for OpenAI Responses API requests. Serialized with lowercase values to match the OpenAI API.",
+      "enum": [
+        "auto",
+        "default",
+        "flex"
+      ],
+      "type": "string"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1571,6 +1583,14 @@
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
+    },
+    "model_service_tier": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        }
+      ],
+      "description": "Optional OpenAI Responses API `service_tier` (e.g. `flex`)."
     },
     "model_supports_reasoning_summaries": {
       "description": "Override to force-enable reasoning summaries for the configured model.",

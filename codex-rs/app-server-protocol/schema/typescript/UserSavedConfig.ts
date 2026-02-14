@@ -8,7 +8,8 @@ import type { ReasoningEffort } from "./ReasoningEffort";
 import type { ReasoningSummary } from "./ReasoningSummary";
 import type { SandboxMode } from "./SandboxMode";
 import type { SandboxSettings } from "./SandboxSettings";
+import type { ServiceTier } from "./ServiceTier";
 import type { Tools } from "./Tools";
 import type { Verbosity } from "./Verbosity";
 
-export type UserSavedConfig = { approvalPolicy: AskForApproval | null, sandboxMode: SandboxMode | null, sandboxSettings: SandboxSettings | null, forcedChatgptWorkspaceId: string | null, forcedLoginMethod: ForcedLoginMethod | null, model: string | null, modelReasoningEffort: ReasoningEffort | null, modelReasoningSummary: ReasoningSummary | null, modelVerbosity: Verbosity | null, tools: Tools | null, profile: string | null, profiles: { [key in string]?: Profile }, };
+export type UserSavedConfig = { approvalPolicy: AskForApproval | null, sandboxMode: SandboxMode | null, sandboxSettings: SandboxSettings | null, forcedChatgptWorkspaceId: string | null, forcedLoginMethod: ForcedLoginMethod | null, model: string | null, modelReasoningEffort: ReasoningEffort | null, modelReasoningSummary: ReasoningSummary | null, modelVerbosity: Verbosity | null, modelServiceTier: ServiceTier | null, tools: Tools | null, profile: string | null, profiles: { [key in string]?: Profile }, };

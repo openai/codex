@@ -5,6 +5,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -367,6 +368,7 @@ pub struct UserSavedConfig {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
+    pub model_service_tier: Option<ServiceTier>,
     pub tools: Option<Tools>,
     pub profile: Option<String>,
     pub profiles: HashMap<String, Profile>,
@@ -381,6 +383,7 @@ pub struct Profile {
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
+    pub model_service_tier: Option<ServiceTier>,
     pub chatgpt_base_url: Option<String>,
 }
 

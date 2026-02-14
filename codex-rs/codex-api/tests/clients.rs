@@ -267,6 +267,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         include: Vec::new(),
         prompt_cache_key: None,
         text: None,
+        service_tier: None,
     };
     let client = ResponsesClient::new(transport.clone(), provider, NoAuth);
 
@@ -308,6 +309,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
         include: Vec::new(),
         prompt_cache_key: None,
         text: None,
+        service_tier: None,
     };
 
     let mut extra_headers = HeaderMap::new();
