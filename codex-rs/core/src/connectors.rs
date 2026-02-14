@@ -22,8 +22,8 @@ use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
-use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -109,6 +109,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
             tx_event,
             cancel_token.clone(),
             sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth.as_ref()),
         )
         .await;
 
@@ -122,16 +124,14 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
         );
     }
 
-    let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
-        let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+    let tools = mcp_connection_manager.list_all_tools().await;
+    let codex_apps_ready = if mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME) {
         mcp_connection_manager
-            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await
     } else {
         false
     };
-
-    let tools = mcp_connection_manager.list_all_tools().await;
     cancel_token.cancel();
 
     let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);

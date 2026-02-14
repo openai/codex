@@ -25,6 +25,7 @@ use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
@@ -212,6 +213,8 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
             tx_event,
             cancel_token.clone(),
             sandbox_state,
+            config.codex_home.clone(),
+            codex_apps_tools_cache_key(auth.as_ref()),
         )
         .await;
 

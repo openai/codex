@@ -149,6 +149,7 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
 use crate::mcp_connection_manager::filter_mcp_tools_by_name;
 use crate::memories;
@@ -1336,6 +1337,8 @@ impl Session {
                 tx_event.clone(),
                 cancel_token,
                 sandbox_state,
+                config.codex_home.clone(),
+                codex_apps_tools_cache_key(auth),
             )
             .await;
         if !required_mcp_servers.is_empty() {
@@ -2939,6 +2942,8 @@ impl Session {
                 self.get_tx_event(),
                 cancel_token,
                 sandbox_state,
+                config.codex_home.clone(),
+                codex_apps_tools_cache_key(auth.as_ref()),
             )
             .await;
 
