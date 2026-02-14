@@ -4,6 +4,7 @@ use std::io::Write;
 
 use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::Command;
+use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Color as CColor;
@@ -37,6 +38,11 @@ where
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
+
+    // Hide the terminal cursor while writing wrapped output into scrollback;
+    // otherwise cursor jank (jumps around / blinks randomly) is visible during
+    // streaming and scroll updates.
+    queue!(writer, Hide)?;
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.

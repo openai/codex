@@ -220,6 +220,18 @@ pub struct FlexRenderable<'a> {
     children: Vec<FlexChild<'a>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FlexAllocationMode {
+    /// Allocate flex children to their intrinsic height, capped by available extent.
+    ///
+    /// This is used by `desired_height()` so we keep content-based sizing semantics.
+    FitContent,
+    /// Allocate flex children to fill their assigned extent.
+    ///
+    /// This is used during render/cursor layout to keep fixed children anchored.
+    FillAssignedExtent,
+}
+
 /// Lays out children in a column, with the ability to specify a flex factor for each child.
 ///
 /// Children with flex factor > 0 will be allocated the remaining space after the non-flex children,
@@ -239,7 +251,7 @@ impl<'a> FlexRenderable<'a> {
     /// Loosely inspired by Flutter's Flex widget.
     ///
     /// Ref https://github.com/flutter/flutter/blob/3fd81edbf1e015221e143c92b2664f4371bdc04a/packages/flutter/lib/src/rendering/flex.dart#L1205-L1209
-    fn allocate(&self, area: Rect) -> Vec<Rect> {
+    fn allocate(&self, area: Rect, mode: FlexAllocationMode) -> Vec<Rect> {
         let mut allocated_rects = Vec::with_capacity(self.children.len());
         let mut child_sizes = vec![0; self.children.len()];
         let mut allocated_size = 0;
@@ -273,7 +285,12 @@ impl<'a> FlexRenderable<'a> {
                     } else {
                         space_per_flex * *flex as u16
                     };
-                    let child_size = child.desired_height(area.width).min(max_child_extent);
+                    let child_size = match mode {
+                        FlexAllocationMode::FitContent => {
+                            child.desired_height(area.width).min(max_child_extent)
+                        }
+                        FlexAllocationMode::FillAssignedExtent => max_child_extent,
+                    };
                     child_sizes[i] = child_size;
                     allocated_flex_space += child_size;
                 }
@@ -292,7 +309,7 @@ impl<'a> FlexRenderable<'a> {
 
 impl<'a> Renderable for FlexRenderable<'a> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.allocate(area)
+        self.allocate(area, FlexAllocationMode::FillAssignedExtent)
             .into_iter()
             .zip(self.children.iter())
             .for_each(|(rect, child)| {
@@ -301,14 +318,17 @@ impl<'a> Renderable for FlexRenderable<'a> {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.allocate(Rect::new(0, 0, width, u16::MAX))
-            .last()
-            .map(|rect| rect.bottom())
-            .unwrap_or(0)
+        self.allocate(
+            Rect::new(0, 0, width, u16::MAX),
+            FlexAllocationMode::FitContent,
+        )
+        .last()
+        .map(|rect| rect.bottom())
+        .unwrap_or(0)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.allocate(area)
+        self.allocate(area, FlexAllocationMode::FillAssignedExtent)
             .into_iter()
             .zip(self.children.iter())
             .find_map(|(rect, child)| child.child.cursor_pos(rect))
@@ -426,5 +446,70 @@ where
         let child: RenderableItem<'a> =
             RenderableItem::Owned(Box::new(self) as Box<dyn Renderable + 'a>);
         RenderableItem::Owned(Box::new(InsetRenderable { child, insets }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct SizedCursorRenderable {
+        height: u16,
+        has_cursor: bool,
+    }
+
+    impl Renderable for SizedCursorRenderable {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            self.height
+        }
+
+        fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+            self.has_cursor.then_some((area.x, area.y))
+        }
+    }
+
+    #[test]
+    fn flex_render_anchors_fixed_child_to_bottom() {
+        let mut flex = FlexRenderable::new();
+        flex.push(
+            1,
+            RenderableItem::Owned(Box::new(SizedCursorRenderable {
+                height: 1,
+                has_cursor: false,
+            })),
+        );
+        flex.push(
+            0,
+            RenderableItem::Owned(Box::new(SizedCursorRenderable {
+                height: 1,
+                has_cursor: true,
+            })),
+        );
+
+        let area = Rect::new(0, 0, 80, 10);
+        assert_eq!(flex.cursor_pos(area), Some((0, 9)));
+    }
+
+    #[test]
+    fn flex_desired_height_remains_content_based() {
+        let mut flex = FlexRenderable::new();
+        flex.push(
+            1,
+            RenderableItem::Owned(Box::new(SizedCursorRenderable {
+                height: 3,
+                has_cursor: false,
+            })),
+        );
+        flex.push(
+            0,
+            RenderableItem::Owned(Box::new(SizedCursorRenderable {
+                height: 2,
+                has_cursor: false,
+            })),
+        );
+
+        assert_eq!(flex.desired_height(80), 5);
     }
 }
