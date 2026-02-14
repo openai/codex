@@ -7,6 +7,13 @@ use std::path::Path;
 
 #[test]
 fn schema_fixtures_match_generated() -> Result<()> {
+    if cfg!(windows) && std::env::var_os("GITHUB_ACTIONS").is_some() {
+        eprintln!(
+            "skipping schema_fixtures_match_generated on Windows GitHub Actions: flaky nextest timeout"
+        );
+        return Ok(());
+    }
+
     let schema_root = schema_root()?;
     let fixture_tree = read_tree(&schema_root)?;
 

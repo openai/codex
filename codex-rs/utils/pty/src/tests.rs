@@ -151,7 +151,12 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    if cfg!(windows) {
+        // Python 3.13's default Windows REPL emits richer terminal control sequences and can
+        // defer handling scripted input in CI PTYs. Force the classic REPL for deterministic I/O.
+        env_map.insert("PYTHON_BASIC_REPL".to_string(), "1".to_string());
+    }
     let spawned = spawn_pty_process(&python, &[], Path::new("."), &env_map, &None).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = spawned.output_rx;
