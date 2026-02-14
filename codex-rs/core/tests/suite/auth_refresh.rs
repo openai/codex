@@ -17,7 +17,6 @@ use codex_core::token_data::TokenData;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -213,7 +212,7 @@ async fn refresh_token_skips_refresh_when_auth_changed() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn refresh_token_skips_reload_on_account_mismatch() -> Result<()> {
+async fn refresh_token_errors_on_account_mismatch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -223,7 +222,7 @@ async fn refresh_token_skips_reload_on_account_mismatch() -> Result<()> {
             "access_token": "recovered-access-token",
             "refresh_token": "recovered-refresh-token"
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -240,11 +239,6 @@ async fn refresh_token_skips_reload_on_account_mismatch() -> Result<()> {
 
     let mut disk_tokens = build_tokens("disk-access-token", "disk-refresh-token");
     disk_tokens.account_id = Some("other-account".to_string());
-    let expected_tokens = TokenData {
-        access_token: "recovered-access-token".to_string(),
-        refresh_token: "recovered-refresh-token".to_string(),
-        ..disk_tokens.clone()
-    };
     let disk_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -257,36 +251,28 @@ async fn refresh_token_skips_reload_on_account_mismatch() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    ctx.auth_manager
+    let err = ctx
+        .auth_manager
         .refresh_token()
         .await
-        .context("refresh should succeed using cached refresh token")?;
-
-    let requests = server.received_requests().await.unwrap_or_default();
-    let request = requests
-        .first()
-        .context("expected a refresh token request")?;
-    let body: Value =
-        serde_json::from_slice(&request.body).context("refresh request body should be json")?;
-    let refresh_token = body
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .context("refresh_token should be set")?;
-    assert_eq!(refresh_token, INITIAL_REFRESH_TOKEN);
+        .err()
+        .context("refresh should fail due to account mismatch")?;
+    assert_eq!(err.failed_reason(), Some(RefreshTokenFailedReason::Other));
 
     let stored = ctx.load_auth()?;
-    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
-    assert_eq!(tokens, &expected_tokens);
+    assert_eq!(stored, disk_auth);
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(requests.is_empty(), "expected no refresh token requests");
 
     let cached_after = ctx
         .auth_manager
-        .auth()
-        .await
+        .auth_cached()
         .context("auth should be cached after refresh")?;
     let cached_after_tokens = cached_after
         .get_token_data()
-        .context("token data should reflect refreshed tokens")?;
-    assert_eq!(cached_after_tokens, expected_tokens);
+        .context("token data should remain cached")?;
+    assert_eq!(cached_after_tokens, initial_tokens);
 
     server.verify().await;
     Ok(())
@@ -592,7 +578,7 @@ async fn unauthorized_recovery_reloads_then_refreshes_tokens() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> {
+async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -602,7 +588,7 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
             "access_token": "recovered-access-token",
             "refresh_token": "recovered-refresh-token"
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -619,11 +605,6 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
 
     let mut disk_tokens = build_tokens("disk-access-token", "disk-refresh-token");
     disk_tokens.account_id = Some("other-account".to_string());
-    let expected_tokens = TokenData {
-        access_token: "recovered-access-token".to_string(),
-        refresh_token: "recovered-refresh-token".to_string(),
-        ..disk_tokens.clone()
-    };
     let disk_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -648,34 +629,27 @@ async fn unauthorized_recovery_skips_reload_on_account_mismatch() -> Result<()> 
     let mut recovery = ctx.auth_manager.unauthorized_recovery();
     assert!(recovery.has_next());
 
-    recovery.next().await?;
+    let err = recovery
+        .next()
+        .await
+        .err()
+        .context("recovery should fail due to account mismatch")?;
+    assert_eq!(err.failed_reason(), Some(RefreshTokenFailedReason::Other));
 
     let stored = ctx.load_auth()?;
-    let tokens = stored.tokens.as_ref().context("tokens should exist")?;
-    assert_eq!(tokens, &expected_tokens);
+    assert_eq!(stored, disk_auth);
 
     let requests = server.received_requests().await.unwrap_or_default();
-    let request = requests
-        .first()
-        .context("expected a refresh token request")?;
-    let body: Value =
-        serde_json::from_slice(&request.body).context("refresh request body should be json")?;
-    let refresh_token = body
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .context("refresh_token should be set")?;
-    assert_eq!(refresh_token, INITIAL_REFRESH_TOKEN);
+    assert!(requests.is_empty(), "expected no refresh token requests");
 
     let cached_after = ctx
         .auth_manager
-        .auth()
-        .await
+        .auth_cached()
         .context("auth should remain cached after refresh")?;
     let cached_after_tokens = cached_after
         .get_token_data()
-        .context("token data should reflect refreshed tokens")?;
-    assert_eq!(cached_after_tokens, expected_tokens);
-    assert!(!recovery.has_next());
+        .context("token data should remain cached")?;
+    assert_eq!(cached_after_tokens, initial_tokens);
 
     server.verify().await;
     Ok(())

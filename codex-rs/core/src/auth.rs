@@ -100,6 +100,7 @@ const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refre
 const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
+const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 
@@ -584,8 +585,7 @@ fn load_auth(
     Ok(Some(auth))
 }
 
-// Persist refreshed tokens only when the currently stored account still matches
-// the account that initiated refresh, to avoid cross-account token overwrite.
+// Persist refreshed tokens into auth storage and update last_refresh.
 fn persist_tokens(
     storage: &Arc<dyn AuthStorageBackend>,
     id_token: Option<String>,
@@ -922,8 +922,11 @@ impl UnauthorizedRecovery {
                         self.step = UnauthorizedRecoveryStep::RefreshToken;
                     }
                     ReloadOutcome::Skipped => {
-                        self.manager.refresh_token_from_authority().await?;
                         self.step = UnauthorizedRecoveryStep::Done;
+                        return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                            RefreshTokenFailedReason::Other,
+                            REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                        )));
                     }
                 }
             }
@@ -1190,8 +1193,12 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange | ReloadOutcome::Skipped => {
-                self.refresh_token_from_authority().await
+            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority().await,
+            ReloadOutcome::Skipped => {
+                Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                    RefreshTokenFailedReason::Other,
+                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                )))
             }
         }
     }
