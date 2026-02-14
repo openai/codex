@@ -1006,6 +1006,7 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            network_approval_context: None,
             proposed_execpolicy_amendment: None,
         }
     }
@@ -1402,6 +1403,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                permissions: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

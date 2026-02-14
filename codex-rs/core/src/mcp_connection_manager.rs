@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::McpAuthStatusEntry;
@@ -90,6 +91,9 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 const CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION: u8 = 1;
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
+const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
+const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
+const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
@@ -306,11 +310,25 @@ struct ManagedClient {
 
 impl ManagedClient {
     fn listed_tools(&self) -> Vec<ToolInfo> {
+        let total_start = Instant::now();
         if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
             && let CachedCodexAppsToolsLoad::Hit(tools) =
                 load_cached_codex_apps_tools(cache_context)
         {
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                total_start.elapsed(),
+                &[("cache", "hit")],
+            );
             return filter_tools(tools, &self.tool_filter);
+        }
+
+        if self.codex_apps_tools_cache_context.is_some() {
+            emit_duration(
+                MCP_TOOLS_LIST_DURATION_METRIC,
+                total_start.elapsed(),
+                &[("cache", "miss")],
+            );
         }
 
         self.tools.clone()
@@ -654,6 +672,8 @@ impl McpConnectionManager {
             .await
             .context("failed to get client")?;
 
+        let list_start = Instant::now();
+        let fetch_start = Instant::now();
         let tools = list_tools_for_client_uncached(
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
@@ -663,11 +683,21 @@ impl McpConnectionManager {
         .with_context(|| {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
+        emit_duration(
+            MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+            fetch_start.elapsed(),
+            &[],
+        );
 
         write_cached_codex_apps_tools_if_needed(
             CODEX_APPS_MCP_SERVER_NAME,
             managed_client.codex_apps_tools_cache_context.as_ref(),
             &tools,
+        );
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            list_start.elapsed(),
+            &[("cache", "miss")],
         );
         Ok(())
     }
@@ -1137,14 +1167,28 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let list_start = Instant::now();
+    let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
         .await
         .map_err(StartupOutcomeError::from)?;
+    emit_duration(
+        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+        fetch_start.elapsed(),
+        &[],
+    );
     write_cached_codex_apps_tools_if_needed(
         &server_name,
         codex_apps_tools_cache_context.as_ref(),
         &tools,
     );
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            list_start.elapsed(),
+            &[("cache", "miss")],
+        );
+    }
     let tools = filter_tools(tools, &tool_filter);
 
     let server_supports_sandbox_state_capability = initialize_result
@@ -1218,8 +1262,15 @@ fn write_cached_codex_apps_tools_if_needed(
     if server_name != CODEX_APPS_MCP_SERVER_NAME {
         return;
     }
+
     if let Some(cache_context) = cache_context {
+        let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(cache_context, tools);
+        emit_duration(
+            MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
+            cache_write_start.elapsed(),
+            &[],
+        );
     }
 }
 
@@ -1296,6 +1347,12 @@ fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
                 .is_none_or(is_connector_id_allowed)
         })
         .collect()
+}
+
+fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let _ = metrics.record_duration(metric, duration, tags);
+    }
 }
 
 async fn list_tools_for_client_uncached(

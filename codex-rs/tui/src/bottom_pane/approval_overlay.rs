@@ -20,6 +20,7 @@ use codex_core::features::Features;
 use codex_core::protocol::ElicitationAction;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::NetworkApprovalContext;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_protocol::mcp::RequestId;
@@ -42,6 +43,7 @@ pub(crate) enum ApprovalRequest {
         id: String,
         command: Vec<String>,
         reason: Option<String>,
+        network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     ApplyPatch {
@@ -108,11 +110,23 @@ impl ApprovalOverlay {
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
+                network_approval_context,
                 proposed_execpolicy_amendment,
                 ..
             } => (
-                exec_options(proposed_execpolicy_amendment.clone()),
-                "Would you like to run the following command?".to_string(),
+                exec_options(
+                    proposed_execpolicy_amendment.clone(),
+                    network_approval_context.as_ref(),
+                ),
+                network_approval_context.as_ref().map_or_else(
+                    || "Would you like to run the following command?".to_string(),
+                    |network_approval_context| {
+                        format!(
+                            "Do you want to approve access to \"{}\"?",
+                            network_approval_context.host
+                        )
+                    },
+                ),
             ),
             ApprovalVariant::ApplyPatch { .. } => (
                 patch_options(),
@@ -342,6 +356,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 id,
                 command,
                 reason,
+                network_approval_context,
                 proposed_execpolicy_amendment,
             } => {
                 let mut header: Vec<Line<'static>> = Vec::new();
@@ -359,6 +374,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     variant: ApprovalVariant::Exec {
                         id,
                         command,
+                        network_approval_context,
                         proposed_execpolicy_amendment,
                     },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
@@ -414,6 +430,7 @@ enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
+        network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     },
     ApplyPatch {
@@ -447,7 +464,33 @@ impl ApprovalOption {
     }
 }
 
-fn exec_options(proposed_execpolicy_amendment: Option<ExecPolicyAmendment>) -> Vec<ApprovalOption> {
+fn exec_options(
+    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    network_approval_context: Option<&NetworkApprovalContext>,
+) -> Vec<ApprovalOption> {
+    if network_approval_context.is_some() {
+        return vec![
+            ApprovalOption {
+                label: "Yes, just this once".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Approved),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+            },
+            ApprovalOption {
+                label: "Yes, and allow this host for this session".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+            },
+            ApprovalOption {
+                label: "No, and tell Codex what to do differently".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::Abort),
+                display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
+            },
+        ];
+    }
+
     vec![ApprovalOption {
         label: "Yes, proceed".to_string(),
         decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -531,6 +574,7 @@ fn elicitation_options() -> Vec<ApprovalOption> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use codex_core::protocol::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -539,6 +583,7 @@ mod tests {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
             reason: Some("reason".to_string()),
+            network_approval_context: None,
             proposed_execpolicy_amendment: None,
         }
     }
@@ -581,6 +626,7 @@ mod tests {
                 id: "test".to_string(),
                 command: vec!["echo".to_string()],
                 reason: None,
+                network_approval_context: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "echo".to_string(),
                 ])),
@@ -619,6 +665,7 @@ mod tests {
             id: "test".into(),
             command,
             reason: None,
+            network_approval_context: None,
             proposed_execpolicy_amendment: None,
         };
 
@@ -638,6 +685,67 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("echo hello world")),
             "expected header to include command snippet, got {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn network_exec_options_use_expected_labels_and_hide_execpolicy_amendment() {
+        let network_context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+        };
+        let options = exec_options(
+            Some(ExecPolicyAmendment::new(vec!["curl".to_string()])),
+            Some(&network_context),
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, just this once".to_string(),
+                "Yes, and allow this host for this session".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn network_exec_prompt_title_includes_host() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            id: "test".into(),
+            command: vec!["curl".into(), "https://example.com".into()],
+            reason: Some("network request blocked".into()),
+            network_approval_context: Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            }),
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["curl".into()])),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, view.desired_height(100)));
+        view.render(Rect::new(0, 0, 100, view.desired_height(100)), &mut buf);
+
+        let rendered: Vec<String> = (0..buf.area.height)
+            .map(|row| {
+                (0..buf.area.width)
+                    .map(|col| buf[(col, row)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Do you want to approve access to \"example.com\"?")),
+            "expected network title to include host, got {rendered:?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.contains("don't ask again")),
+            "network prompt should not show execpolicy option, got {rendered:?}"
         );
     }
 
