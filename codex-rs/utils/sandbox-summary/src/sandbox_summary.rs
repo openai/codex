@@ -1,7 +1,10 @@
 use codex_core::protocol::NetworkAccess;
 use codex_core::protocol::SandboxPolicy;
 
-pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
+pub fn summarize_sandbox_policy(
+    sandbox_policy: &SandboxPolicy,
+    ignore_writable_roots: bool,
+) -> String {
     match sandbox_policy {
         SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
         SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
@@ -35,9 +38,11 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
                     .map(|p| p.to_string_lossy().to_string()),
             );
 
-            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
             if *network_access {
-                summary.push_str(" (network access enabled)");
+                summary.push_str(" with network access");
+            }
+            if !ignore_writable_roots {
+                summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
             }
             summary
         }
@@ -52,17 +57,23 @@ mod tests {
 
     #[test]
     fn summarizes_external_sandbox_without_network_access_suffix() {
-        let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Restricted,
-        });
+        let summary = summarize_sandbox_policy(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            },
+            false,
+        );
         assert_eq!(summary, "external-sandbox");
     }
 
     #[test]
     fn summarizes_external_sandbox_with_enabled_network() {
-        let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
-            network_access: NetworkAccess::Enabled,
-        });
+        let summary = summarize_sandbox_policy(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            },
+            false,
+        );
         assert_eq!(summary, "external-sandbox (network access enabled)");
     }
 
@@ -70,13 +81,16 @@ mod tests {
     fn workspace_write_summary_still_includes_network_access() {
         let root = if cfg!(windows) { "C:\\repo" } else { "/repo" };
         let writable_root = AbsolutePathBuf::try_from(root).unwrap();
-        let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![writable_root.clone()],
-            read_only_access: Default::default(),
-            network_access: true,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        });
+        let summary = summarize_sandbox_policy(
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![writable_root.clone()],
+                read_only_access: Default::default(),
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            false,
+        );
         assert_eq!(
             summary,
             format!(

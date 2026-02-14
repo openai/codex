@@ -31,7 +31,7 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
         ApprovalPreset {
             id: "auto",
             label: "Default",
-            description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
+            description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },

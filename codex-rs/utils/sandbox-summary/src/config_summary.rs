@@ -15,7 +15,7 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
         ),
         (
             "sandbox",
-            summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
+            summarize_sandbox_policy(config.permissions.sandbox_policy.get(), false),
         ),
     ];
     if config.model_provider.wire_api == WireApi::Responses {
