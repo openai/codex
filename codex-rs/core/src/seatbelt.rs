@@ -23,6 +23,7 @@ use crate::spawn::spawn_child_async;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_SEATBELT_PLATFORM_DEFAULTS: &str = include_str!("seatbelt_platform_defaults.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -314,18 +315,23 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
         build_seatbelt_extensions,
     );
 
+    let include_platform_defaults = sandbox_policy.include_platform_defaults();
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
         network_policy,
     ];
+    if include_platform_defaults {
+        policy_sections.push(MACOS_SEATBELT_PLATFORM_DEFAULTS.to_string());
+    }
     if !unix_socket_policy.is_empty() {
         policy_sections.push(unix_socket_policy);
     }
     if !seatbelt_extensions.policy.is_empty() {
         policy_sections.push(seatbelt_extensions.policy.clone());
     }
+
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [
