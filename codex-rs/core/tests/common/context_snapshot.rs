@@ -174,11 +174,13 @@ pub fn format_labeled_items_snapshot(
 }
 
 fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
-    let canonical = canonicalize_snapshot_text(text);
-    let normalized = canonical.replace('\n', "\\n");
     match options.render_mode {
-        ContextSnapshotRenderMode::RedactedText | ContextSnapshotRenderMode::FullText => normalized,
+        ContextSnapshotRenderMode::RedactedText => {
+            canonicalize_snapshot_text(text).replace('\n', "\\n")
+        }
+        ContextSnapshotRenderMode::FullText => text.replace('\n', "\\n"),
         ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
+            let normalized = canonicalize_snapshot_text(text).replace('\n', "\\n");
             if normalized.chars().count() <= max_chars {
                 normalized
             } else {
@@ -217,4 +219,54 @@ fn canonicalize_snapshot_text(text: &str) -> String {
         return format!("<COMPACTION_SUMMARY>\n{summary}");
     }
     text.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContextSnapshotOptions;
+    use super::ContextSnapshotRenderMode;
+    use super::format_response_items_snapshot;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn full_text_mode_preserves_unredacted_text() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "# AGENTS.md instructions for /tmp/example"
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::FullText),
+        );
+
+        assert_eq!(
+            rendered,
+            "00:message/user:# AGENTS.md instructions for /tmp/example"
+        );
+    }
+
+    #[test]
+    fn redacted_text_mode_keeps_canonical_placeholders() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "# AGENTS.md instructions for /tmp/example"
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
+        );
+
+        assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
+    }
 }
