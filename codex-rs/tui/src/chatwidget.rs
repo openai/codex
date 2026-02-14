@@ -5283,6 +5283,7 @@ impl ChatWidget {
         let current_sandbox = self.config.permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        let mut displayed_presets: Vec<ApprovalPreset> = Vec::new();
 
         #[cfg(target_os = "windows")]
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
@@ -5300,6 +5301,7 @@ impl ChatWidget {
             if !include_read_only && preset.id == "read-only" {
                 continue;
             }
+            displayed_presets.push(preset.clone());
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
@@ -5392,20 +5394,27 @@ impl ChatWidget {
 
         let custom_config_permissions = Self::custom_permissions_from_user_config(&self.config);
         if let Some((approval, sandbox)) = custom_config_permissions {
-            let is_current = current_approval == approval && *current_sandbox == sandbox;
-            let disabled_reason = match self.config.permissions.approval_policy.can_set(&approval) {
-                Ok(()) => None,
-                Err(err) => Some(err.to_string()),
-            };
-            items.push(SelectionItem {
-                name: "Custom".to_string(),
-                description: Some(crate::status::permissions_display_text(&self.config)),
-                is_current,
-                actions: Self::approval_preset_actions(approval, sandbox),
-                dismiss_on_select: true,
-                disabled_reason,
-                ..Default::default()
-            });
+            let matches_displayed_preset = displayed_presets
+                .iter()
+                .any(|preset| preset.approval == approval && preset.sandbox == sandbox);
+            if !matches_displayed_preset {
+                let is_current = current_approval == approval && *current_sandbox == sandbox;
+                let disabled_reason =
+                    match self.config.permissions.approval_policy.can_set(&approval) {
+                        Ok(()) => None,
+                        Err(err) => Some(err.to_string()),
+                    };
+                let description = crate::status::permissions_display_text_for(approval, &sandbox);
+                items.push(SelectionItem {
+                    name: "Custom".to_string(),
+                    description: Some(description),
+                    is_current,
+                    actions: Self::approval_preset_actions(approval, sandbox),
+                    dismiss_on_select: true,
+                    disabled_reason,
+                    ..Default::default()
+                });
+            }
         }
 
         let footer_note = show_elevate_sandbox_hint.then(|| {

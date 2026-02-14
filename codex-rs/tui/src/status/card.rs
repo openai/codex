@@ -7,7 +7,7 @@ use chrono::DateTime;
 use chrono::Local;
 use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::protocol::NetworkAccess;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -366,8 +366,18 @@ impl StatusHistoryCell {
 }
 
 pub(crate) fn permissions_display_text(config: &Config) -> String {
-    let approval = config.permissions.approval_policy.value().to_string();
-    let sandbox = summarize_sandbox_policy(config.permissions.sandbox_policy.get(), true);
+    permissions_display_text_for(
+        config.permissions.approval_policy.value(),
+        config.permissions.sandbox_policy.get(),
+    )
+}
+
+pub(crate) fn permissions_display_text_for(
+    approval: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+) -> String {
+    let approval = approval.to_string();
+    let sandbox = summarize_sandbox_policy(sandbox_policy, true);
     match (approval.as_str(), sandbox.as_str()) {
         ("on-request", "workspace-write") => "Default".to_string(),
         ("never", "danger-full-access") => "Full Access".to_string(),

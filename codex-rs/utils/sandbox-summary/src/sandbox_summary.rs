@@ -38,11 +38,11 @@ pub fn summarize_sandbox_policy(
                     .map(|p| p.to_string_lossy().to_string()),
             );
 
+            if *network_access {
+                summary.push_str(" with network access");
+            }
             if !ignore_writable_roots {
                 summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
-            }
-            if *network_access {
-                summary.push_str(" (network access enabled)");
             }
             summary
         }
