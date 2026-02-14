@@ -22,4 +22,4 @@ Scenario: Pre-turn auto-compaction with a context override emits the context dif
 03:message/user:USER_ONE
 04:message/user:USER_TWO
 05:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
-06:message/user:<image> | </image> | USER_THREE
+06:message/user:<image> | <input_image:image_url> | </image> | USER_THREE

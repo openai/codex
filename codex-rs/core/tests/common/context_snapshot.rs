@@ -68,8 +68,30 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                         .map(|content| {
                             content
                                 .iter()
-                                .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-                                .map(|text| format_snapshot_text(text, options))
+                                .map(|entry| {
+                                    if let Some(text) = entry.get("text").and_then(Value::as_str) {
+                                        return format_snapshot_text(text, options);
+                                    }
+                                    let Some(content_type) =
+                                        entry.get("type").and_then(Value::as_str)
+                                    else {
+                                        return "<UNKNOWN_CONTENT_ITEM>".to_string();
+                                    };
+                                    let Some(content_object) = entry.as_object() else {
+                                        return format!("<{content_type}>");
+                                    };
+                                    let mut extra_keys = content_object
+                                        .keys()
+                                        .filter(|key| *key != "type" && *key != "text")
+                                        .cloned()
+                                        .collect::<Vec<String>>();
+                                    extra_keys.sort();
+                                    if extra_keys.is_empty() {
+                                        format!("<{content_type}>")
+                                    } else {
+                                        format!("<{content_type}:{}>", extra_keys.join(","))
+                                    }
+                                })
                                 .collect::<Vec<String>>()
                                 .join(" | ")
                         })
@@ -268,5 +290,50 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
+    }
+
+    #[test]
+    fn image_only_message_is_rendered_as_non_text_span() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{
+                "type": "input_image",
+                "image_url": "data:image/png;base64,AAAA"
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
+
+        assert_eq!(rendered, "00:message/user:<input_image:image_url>");
+    }
+
+    #[test]
+    fn mixed_text_and_image_message_keeps_image_span() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "<image>"
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,AAAA"
+                },
+                {
+                    "type": "input_text",
+                    "text": "</image>"
+                }
+            ]
+        })];
+
+        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
+
+        assert_eq!(
+            rendered,
+            "00:message/user:<image> | <input_image:image_url> | </image>"
+        );
     }
 }
