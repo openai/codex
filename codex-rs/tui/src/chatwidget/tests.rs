@@ -4918,6 +4918,62 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
 }
 
 #[tokio::test]
+async fn permissions_selection_history_snapshot_after_mode_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    #[cfg(target_os = "windows")]
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    assert_snapshot!(
+        "permissions_selection_history_after_mode_switch",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_history_snapshot_full_access_to_default() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("set sandbox policy");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
+    assert_snapshot!(
+        "permissions_selection_history_full_access_to_default",
+        lines_to_single_string(&cells[0])
+    );
+}
+
+#[tokio::test]
 async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
