@@ -14,6 +14,14 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "model": {
+          "description": "Model override for all sub-agents (explorer, worker, default). When set, overrides the hard-coded per-role model defaults.",
+          "type": "string"
+        },
+        "reasoning": {
+          "$ref": "#/definitions/ReasoningEffort",
+          "description": "Reasoning effort override for all sub-agents. When set, overrides the hard-coded per-role reasoning effort defaults."
         }
       },
       "type": "object"

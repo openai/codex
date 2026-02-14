@@ -109,17 +109,28 @@ Rules:
     }
 
     /// Applies this role's profile onto the provided config.
+    ///
+    /// Config-level `[agents]` overrides (`subagent_model`, `subagent_reasoning_effort`)
+    /// take priority over the hard-coded per-role profile defaults.
     pub fn apply_to_config(self, config: &mut Config) -> Result<(), String> {
         let profile = self.profile();
         if let Some(base_instructions) = profile.base_instructions {
             config.base_instructions = Some(base_instructions.to_string());
         }
-        if let Some(model) = profile.model {
+
+        // Config-level [agents] model/reasoning take priority over role defaults.
+        if let Some(ref model) = config.subagent_model {
+            config.model = Some(model.clone());
+        } else if let Some(model) = profile.model {
             config.model = Some(model.to_string());
         }
-        if let Some(reasoning_effort) = profile.reasoning_effort {
-            config.model_reasoning_effort = Some(reasoning_effort)
+
+        if let Some(reasoning_effort) = config.subagent_reasoning_effort {
+            config.model_reasoning_effort = Some(reasoning_effort);
+        } else if let Some(reasoning_effort) = profile.reasoning_effort {
+            config.model_reasoning_effort = Some(reasoning_effort);
         }
+
         if profile.read_only {
             config
                 .permissions
