@@ -18,6 +18,8 @@ use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionNetworkApprovalContext as V2CommandExecutionNetworkApprovalContext;
+use codex_app_server_protocol::CommandExecutionNetworkApprovalProtocol as V2CommandExecutionNetworkApprovalProtocol;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -28,6 +30,8 @@ use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::ExecCommandNetworkApprovalContext as V1ExecCommandNetworkApprovalContext;
+use codex_app_server_protocol::ExecCommandNetworkApprovalProtocol as V1ExecCommandNetworkApprovalProtocol;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
@@ -87,6 +91,8 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
+use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -206,6 +212,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            network_approval_context,
             ..
         }) => match api_version {
             ApiVersion::V1 => {
@@ -215,6 +222,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     command,
                     cwd,
                     reason,
+                    network_approval_context: network_approval_context
+                        .clone()
+                        .map(v1_network_approval_context_from_core),
                     parsed_cmd,
                 };
                 let rx = outgoing
@@ -242,6 +252,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
+                    network_approval_context: network_approval_context
+                        .map(v2_network_approval_context_from_core),
                     command: Some(command_string.clone()),
                     cwd: Some(cwd.clone()),
                     command_actions: Some(command_actions.clone()),
@@ -1639,6 +1651,32 @@ fn format_file_change_diff(change: &CoreFileChange) -> String {
                 unified_diff.clone()
             }
         }
+    }
+}
+
+fn v1_network_approval_context_from_core(
+    value: CoreNetworkApprovalContext,
+) -> V1ExecCommandNetworkApprovalContext {
+    let protocol = match value.protocol {
+        CoreNetworkApprovalProtocol::Http => V1ExecCommandNetworkApprovalProtocol::Http,
+        CoreNetworkApprovalProtocol::Https => V1ExecCommandNetworkApprovalProtocol::Https,
+    };
+    V1ExecCommandNetworkApprovalContext {
+        host: value.host,
+        protocol,
+    }
+}
+
+fn v2_network_approval_context_from_core(
+    value: CoreNetworkApprovalContext,
+) -> V2CommandExecutionNetworkApprovalContext {
+    let protocol = match value.protocol {
+        CoreNetworkApprovalProtocol::Http => V2CommandExecutionNetworkApprovalProtocol::Http,
+        CoreNetworkApprovalProtocol::Https => V2CommandExecutionNetworkApprovalProtocol::Https,
+    };
+    V2CommandExecutionNetworkApprovalContext {
+        host: value.host,
+        protocol,
     }
 }
 

@@ -1003,6 +1003,10 @@ mod tests {
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
+            network_approval_context: Some(v1::ExecCommandNetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: v1::ExecCommandNetworkApprovalProtocol::Https,
+            }),
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
@@ -1022,6 +1026,10 @@ mod tests {
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
+                    "networkApprovalContext": {
+                        "host": "example.com",
+                        "protocol": "https"
+                    },
                     "parsedCmd": [
                         {
                             "type": "unknown",

@@ -110,6 +110,28 @@
           "type": "object"
         }
       ]
+    },
+    "CommandExecutionNetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/CommandExecutionNetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "CommandExecutionNetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -139,6 +161,17 @@
     },
     "itemId": {
       "type": "string"
+    },
+    "networkApprovalContext": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandExecutionNetworkApprovalContext"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional context for host-scoped network approvals."
     },
     "proposedExecpolicyAmendment": {
       "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",

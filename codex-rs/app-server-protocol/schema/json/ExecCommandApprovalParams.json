@@ -1,6 +1,28 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ExecCommandNetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/ExecCommandNetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "ExecCommandNetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https"
+      ],
+      "type": "string"
+    },
     "ParsedCommand": {
       "oneOf": [
         {
@@ -132,6 +154,16 @@
     },
     "cwd": {
       "type": "string"
+    },
+    "networkApprovalContext": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ExecCommandNetworkApprovalContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "parsedCmd": {
       "items": {

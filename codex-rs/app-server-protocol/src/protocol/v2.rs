@@ -3075,6 +3075,22 @@ pub struct ContextCompactedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct CommandExecutionNetworkApprovalContext {
+    pub host: String,
+    pub protocol: CommandExecutionNetworkApprovalProtocol,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum CommandExecutionNetworkApprovalProtocol {
+    Http,
+    Https,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
@@ -3082,6 +3098,9 @@ pub struct CommandExecutionRequestApprovalParams {
     /// Optional explanatory reason (e.g. request for network access).
     #[ts(optional = nullable)]
     pub reason: Option<String>,
+    /// Optional context for host-scoped network approvals.
+    #[ts(optional = nullable)]
+    pub network_approval_context: Option<CommandExecutionNetworkApprovalContext>,
     /// The command to be executed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]

@@ -29,6 +29,8 @@ export type { CommandAction } from "./CommandAction";
 export type { CommandExecParams } from "./CommandExecParams";
 export type { CommandExecResponse } from "./CommandExecResponse";
 export type { CommandExecutionApprovalDecision } from "./CommandExecutionApprovalDecision";
+export type { CommandExecutionNetworkApprovalContext } from "./CommandExecutionNetworkApprovalContext";
+export type { CommandExecutionNetworkApprovalProtocol } from "./CommandExecutionNetworkApprovalProtocol";
 export type { CommandExecutionOutputDeltaNotification } from "./CommandExecutionOutputDeltaNotification";
 export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRequestApprovalParams";
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";

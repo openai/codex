@@ -60,6 +60,8 @@ export type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
 export type { ExecCommandApprovalResponse } from "./ExecCommandApprovalResponse";
 export type { ExecCommandBeginEvent } from "./ExecCommandBeginEvent";
 export type { ExecCommandEndEvent } from "./ExecCommandEndEvent";
+export type { ExecCommandNetworkApprovalContext } from "./ExecCommandNetworkApprovalContext";
+export type { ExecCommandNetworkApprovalProtocol } from "./ExecCommandNetworkApprovalProtocol";
 export type { ExecCommandOutputDeltaEvent } from "./ExecCommandOutputDeltaEvent";
 export type { ExecCommandSource } from "./ExecCommandSource";
 export type { ExecCommandStatus } from "./ExecCommandStatus";
