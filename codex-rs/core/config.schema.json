@@ -1507,6 +1507,10 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "mcp_oauth_callback_url": {
+      "description": "Optional redirect URI to use during MCP OAuth login. When set, this URI is used in the OAuth authorization request instead of the local listener address. The local callback listener still binds to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).",
+      "type": "string"
+    },
     "mcp_oauth_credentials_store": {
       "allOf": [
         {
