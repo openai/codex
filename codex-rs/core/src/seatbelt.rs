@@ -14,7 +14,6 @@ use tokio::process::Child;
 use url::Url;
 
 use crate::protocol::SandboxPolicy;
-use crate::seatbelt_permissions::MacOsPreferencesPermission;
 use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::seatbelt_permissions::build_seatbelt_extensions;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
@@ -299,10 +298,7 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
     let seatbelt_extensions = extensions.map_or_else(
         || {
             // Backward-compatibility default when no extension profile is provided.
-            build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
-                macos_preferences: MacOsPreferencesPermission::ReadOnly,
-                ..Default::default()
-            })
+            build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions::default())
         },
         build_seatbelt_extensions,
     );
@@ -480,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn seatbelt_args_omit_macos_extensions_when_profile_is_empty() {
+    fn seatbelt_args_default_extension_profile_keeps_preferences_read_access() {
         let cwd = std::env::temp_dir();
         let args = create_seatbelt_command_args_with_extensions(
             vec!["echo".to_string(), "ok".to_string()],
@@ -494,7 +490,7 @@ mod tests {
         assert!(!policy.contains("appleevent-send"));
         assert!(!policy.contains("com.apple.axserver"));
         assert!(!policy.contains("com.apple.CalendarAgent"));
-        assert!(!policy.contains("user-preference-read"));
+        assert!(policy.contains("(allow user-preference-read)"));
         assert!(!policy.contains("user-preference-write"));
     }
 

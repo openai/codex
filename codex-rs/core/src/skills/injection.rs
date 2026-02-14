@@ -476,6 +476,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            permissions: None,
             path: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,
         }

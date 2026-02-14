@@ -26,7 +26,8 @@ impl NetworkProtocol {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum NetworkPolicyDecision {
     Deny,
     Ask,
@@ -41,7 +42,8 @@ impl NetworkPolicyDecision {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum NetworkDecisionSource {
     BaselinePolicy,
     ModeGuard,
