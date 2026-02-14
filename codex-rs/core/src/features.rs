@@ -356,7 +356,8 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                 }
                 _ => alias,
             };
-            let summary = format!("`{label}` is deprecated. Use `web_search` instead.");
+            let summary =
+                format!("`{label}` is deprecated because web search is enabled by default.");
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
@@ -374,7 +375,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
