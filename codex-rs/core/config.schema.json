@@ -227,6 +227,9 @@
             "js_repl": {
               "type": "boolean"
             },
+            "js_repl_polling": {
+              "type": "boolean"
+            },
             "js_repl_tools_only": {
               "type": "boolean"
             },
@@ -1355,6 +1358,9 @@
           "type": "boolean"
         },
         "js_repl": {
+          "type": "boolean"
+        },
+        "js_repl_polling": {
           "type": "boolean"
         },
         "js_repl_tools_only": {
