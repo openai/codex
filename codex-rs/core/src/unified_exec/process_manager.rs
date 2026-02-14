@@ -15,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::AskForApproval;
+use crate::skills::permissions::resolve_effective_command_permissions;
 use crate::sandboxing::ExecRequest;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -521,6 +523,37 @@ impl UnifiedExecProcessManager {
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         ));
+        let skills_outcome = context
+            .session
+            .services
+            .skills_manager
+            .skills_for_cwd(&context.turn.cwd, false)
+            .await;
+        let effective_permissions = resolve_effective_command_permissions(
+            &request.command,
+            cwd.as_path(),
+            context.turn.approval_policy,
+            &context.turn.sandbox_policy,
+            context.turn.cwd.as_path(),
+            context
+                .turn
+                .config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+            &skills_outcome.skills,
+            &skills_outcome.disabled_paths,
+        );
+
+        if request.sandbox_permissions.requires_escalated_permissions()
+            && !matches!(effective_permissions.approval_policy, AskForApproval::OnRequest)
+        {
+            let approval_policy = effective_permissions.approval_policy;
+            return Err(UnifiedExecError::create_process(format!(
+                "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
+            )));
+        }
+
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
         let exec_approval_requirement = context
@@ -529,8 +562,8 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy,
-                sandbox_policy: &context.turn.sandbox_policy,
+                approval_policy: effective_permissions.approval_policy,
+                sandbox_policy: &effective_permissions.sandbox_policy,
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
             })
@@ -557,7 +590,12 @@ impl UnifiedExecProcessManager {
                 &req,
                 &tool_ctx,
                 context.turn.as_ref(),
-                context.turn.approval_policy,
+                effective_permissions.approval_policy,
+                &effective_permissions.sandbox_policy,
+                effective_permissions.sandbox_cwd.as_path(),
+                effective_permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
             )
             .await
             .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))

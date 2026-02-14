@@ -19,9 +19,15 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use std::path::Path;
+
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -41,6 +47,9 @@ impl ToolOrchestrator {
         tool_ctx: &ToolCtx<'_>,
         turn_ctx: &crate::codex::TurnContext,
         approval_policy: AskForApproval,
+        sandbox_policy: &crate::protocol::SandboxPolicy,
+        sandbox_cwd: &Path,
+        macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
     ) -> Result<Out, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
@@ -55,7 +64,7 @@ impl ToolOrchestrator {
         let mut already_approved = false;
 
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+            default_exec_approval_requirement(approval_policy, sandbox_policy)
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
@@ -97,7 +106,7 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
+                sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 has_managed_network_requirements,
@@ -109,10 +118,11 @@ impl ToolOrchestrator {
         let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
-            policy: &turn_ctx.sandbox_policy,
+            policy: sandbox_policy,
             enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
-            sandbox_cwd: &turn_ctx.cwd,
+            sandbox_cwd,
+            macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
             use_linux_sandbox_bwrap,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
@@ -162,10 +172,11 @@ impl ToolOrchestrator {
 
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
-                    policy: &turn_ctx.sandbox_policy,
+                    policy: sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
-                    sandbox_cwd: &turn_ctx.cwd,
+                    sandbox_cwd,
+                    macos_seatbelt_profile_extensions,
                     codex_linux_sandbox_exe: None,
                     use_linux_sandbox_bwrap,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,

@@ -12,6 +12,7 @@ use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
+use crate::skills::permissions::resolve_effective_command_permissions;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -255,16 +256,35 @@ impl ShellHandler {
             exec_params.env.extend(dependency_env);
         }
 
+        let skills_outcome = session
+            .services
+            .skills_manager
+            .skills_for_cwd(&turn.cwd, false)
+            .await;
+        let effective_permissions = resolve_effective_command_permissions(
+            &exec_params.command,
+            exec_params.cwd.as_path(),
+            turn.approval_policy,
+            &turn.sandbox_policy,
+            turn.cwd.as_path(),
+            turn.config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+            &skills_outcome.skills,
+            &skills_outcome.disabled_paths,
+        );
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
             .requires_escalated_permissions()
             && !matches!(
-                turn.approval_policy,
+                effective_permissions.approval_policy,
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
-            let approval_policy = turn.approval_policy;
+            let approval_policy = effective_permissions.approval_policy;
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
@@ -301,8 +321,8 @@ impl ShellHandler {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &exec_params.command,
-                approval_policy: turn.approval_policy,
-                sandbox_policy: &turn.sandbox_policy,
+                approval_policy: effective_permissions.approval_policy,
+                sandbox_policy: &effective_permissions.sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
             })
@@ -327,7 +347,18 @@ impl ShellHandler {
             tool_name,
         };
         let out = orchestrator
-            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn,
+                effective_permissions.approval_policy,
+                &effective_permissions.sandbox_policy,
+                effective_permissions.sandbox_cwd.as_path(),
+                effective_permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
+            )
             .await;
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;

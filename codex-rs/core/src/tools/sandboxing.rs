@@ -11,6 +11,8 @@ use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::state::SessionServices;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -24,6 +26,9 @@ use std::path::Path;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
+
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -275,6 +280,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
+    pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_linux_sandbox_bwrap: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
@@ -294,6 +300,7 @@ impl<'a> SandboxAttempt<'a> {
                 enforce_managed_network: self.enforce_managed_network,
                 network,
                 sandbox_policy_cwd: self.sandbox_cwd,
+                macos_seatbelt_profile_extensions: self.macos_seatbelt_profile_extensions,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
                 windows_sandbox_level: self.windows_sandbox_level,

@@ -145,7 +145,19 @@ impl ToolHandler for ApplyPatchHandler {
                             tool_name: tool_name.to_string(),
                         };
                         let out = orchestrator
-                            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+                            .run(
+                                &mut runtime,
+                                &req,
+                                &tool_ctx,
+                                &turn,
+                                turn.approval_policy,
+                                &turn.sandbox_policy,
+                                turn.cwd.as_path(),
+                                turn.config
+                                    .permissions
+                                    .macos_seatbelt_profile_extensions
+                                    .as_ref(),
+                            )
                             .await;
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
@@ -234,7 +246,19 @@ pub(crate) async fn intercept_apply_patch(
                         tool_name: tool_name.to_string(),
                     };
                     let out = orchestrator
-                        .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy)
+                        .run(
+                            &mut runtime,
+                            &req,
+                            &tool_ctx,
+                            turn,
+                            turn.approval_policy,
+                            &turn.sandbox_policy,
+                            turn.cwd.as_path(),
+                            turn.config
+                                .permissions
+                                .macos_seatbelt_profile_extensions
+                                .as_ref(),
+                        )
                         .await;
                     let event_ctx =
                         ToolEventCtx::new(session, turn, call_id, tracker.as_ref().copied());
