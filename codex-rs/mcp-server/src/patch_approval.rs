@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::CodexThread;
 use codex_core::protocol::FileChange;
@@ -16,6 +17,11 @@ use serde_json::json;
 use tracing::error;
 
 use crate::outgoing_message::OutgoingMessageSender;
+
+/// Timeout for waiting on an elicitation response from the MCP client.
+/// If the client does not support elicitation or fails to respond within this
+/// duration, the approval request is automatically denied.
+const ELICITATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PatchApprovalElicitRequestParams {
@@ -105,11 +111,10 @@ pub(crate) async fn on_patch_approval_response(
     receiver: tokio::sync::oneshot::Receiver<serde_json::Value>,
     codex: Arc<CodexThread>,
 ) {
-    let response = receiver.await;
-    let value = match response {
-        Ok(value) => value,
-        Err(err) => {
-            error!("request failed: {err:?}");
+    let value = match tokio::time::timeout(ELICITATION_TIMEOUT, receiver).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("elicitation request failed (channel closed): {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
                     id: approval_id.clone(),
@@ -118,6 +123,23 @@ pub(crate) async fn on_patch_approval_response(
                 .await
             {
                 error!("failed to submit denied PatchApproval after request failure: {submit_err}");
+            }
+            return;
+        }
+        Err(_elapsed) => {
+            error!(
+                "elicitation request timed out after {}s — the MCP client may not support \
+                 elicitation. Denying patch for safety.",
+                ELICITATION_TIMEOUT.as_secs()
+            );
+            if let Err(submit_err) = codex
+                .submit(Op::PatchApproval {
+                    id: approval_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied PatchApproval after timeout: {submit_err}");
             }
             return;
         }
