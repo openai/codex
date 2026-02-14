@@ -3592,10 +3592,15 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ModelListParams,
     ) {
-        let ModelListParams { limit, cursor } = params;
+        let ModelListParams {
+            limit,
+            cursor,
+            include_hidden,
+        } = params;
         let mut config = (*config).clone();
         config.features.enable(Feature::RemoteModels);
-        let models = supported_models(thread_manager, &config).await;
+        let models =
+            supported_models(thread_manager, &config, include_hidden.unwrap_or(false)).await;
         let total = models.len();
 
         if total == 0 {
