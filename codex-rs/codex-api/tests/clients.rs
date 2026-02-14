@@ -330,7 +330,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let req = &requests[0];
 
     assert_eq!(
-        req.headers.get("session_id").and_then(|v| v.to_str().ok()),
+        req.headers.get("session-id").and_then(|v| v.to_str().ok()),
         Some("sess_123")
     );
     assert_eq!(

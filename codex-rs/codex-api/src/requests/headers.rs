@@ -5,7 +5,7 @@ use http::HeaderValue;
 pub fn build_conversation_headers(conversation_id: Option<String>) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Some(id) = conversation_id {
-        insert_header(&mut headers, "session_id", &id);
+        insert_header(&mut headers, "session-id", &id);
     }
     headers
 }

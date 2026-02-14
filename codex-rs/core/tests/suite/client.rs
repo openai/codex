@@ -407,7 +407,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-    let request_session_id = request.header("session_id").expect("session_id header");
+    let request_session_id = request.header("session-id").expect("session-id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -515,7 +515,7 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
 
-    let session_id = request.header("session_id").expect("session_id header");
+    let session_id = request.header("session-id").expect("session-id header");
     assert_eq!(session_id, thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
