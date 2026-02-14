@@ -18,6 +18,7 @@ pub use codex_core::connectors::AppInfo;
 use codex_core::connectors::CONNECTORS_CACHE_TTL;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
+use codex_core::connectors::filter_disallowed_connectors;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status;
@@ -99,7 +100,7 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     }
     let token_data = get_chatgpt_token_data()?;
     let cache_key = all_connectors_cache_key(config, &token_data);
-    read_cached_all_connectors(&cache_key)
+    read_cached_all_connectors(&cache_key).map(filter_disallowed_connectors)
 }
 
 pub async fn list_all_connectors_with_options(
@@ -116,7 +117,7 @@ pub async fn list_all_connectors_with_options(
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
     let cache_key = all_connectors_cache_key(config, &token_data);
     if !force_refetch && let Some(cached_connectors) = read_cached_all_connectors(&cache_key) {
-        return Ok(cached_connectors);
+        return Ok(filter_disallowed_connectors(cached_connectors));
     }
 
     let mut apps = list_directory_connectors(config).await?;
@@ -142,6 +143,7 @@ pub async fn list_all_connectors_with_options(
             .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
+    let connectors = filter_disallowed_connectors(connectors);
     write_cached_all_connectors(cache_key, &connectors);
     Ok(connectors)
 }
@@ -337,30 +339,6 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
-    "asdk_app_6938a94a61d881918ef32cb999ff937c",
-    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
-    "connector_68de829bf7648191acd70a907364c67c",
-];
-const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
-
-fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
-    connectors
-        .into_iter()
-        .filter(is_connector_allowed)
-        .collect()
-}
-
-fn is_connector_allowed(connector: &AppInfo) -> bool {
-    let connector_id = connector.id.as_str();
-    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
-        || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
-    {
-        return false;
-    }
-    true
 }
 
 #[cfg(test)]

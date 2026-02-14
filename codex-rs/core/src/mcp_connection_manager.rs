@@ -72,6 +72,7 @@ use tracing::warn;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
+use crate::connectors::is_connector_id_allowed;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -1266,7 +1267,7 @@ fn load_cached_codex_apps_tools(
     if cache.schema_version != CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION {
         return CachedCodexAppsToolsLoad::Invalid;
     }
-    CachedCodexAppsToolsLoad::Hit(cache.tools)
+    CachedCodexAppsToolsLoad::Hit(filter_disallowed_codex_apps_tools(cache.tools))
 }
 
 fn write_cached_codex_apps_tools(cache_context: &CodexAppsToolsCacheContext, tools: &[ToolInfo]) {
@@ -1276,13 +1277,25 @@ fn write_cached_codex_apps_tools(cache_context: &CodexAppsToolsCacheContext, too
     {
         return;
     }
+    let tools = filter_disallowed_codex_apps_tools(tools.to_vec());
     let Ok(bytes) = serde_json::to_vec_pretty(&CodexAppsToolsDiskCache {
         schema_version: CODEX_APPS_TOOLS_CACHE_SCHEMA_VERSION,
-        tools: tools.to_vec(),
+        tools,
     }) else {
         return;
     };
     let _ = std::fs::write(cache_path, bytes);
+}
+
+fn filter_disallowed_codex_apps_tools(tools: Vec<ToolInfo>) -> Vec<ToolInfo> {
+    tools
+        .into_iter()
+        .filter(|tool| {
+            tool.connector_id
+                .as_deref()
+                .is_none_or(is_connector_id_allowed)
+        })
+        .collect()
 }
 
 async fn list_tools_for_client_uncached(
@@ -1291,7 +1304,7 @@ async fn list_tools_for_client_uncached(
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client.list_tools_with_connector_ids(None, timeout).await?;
-    Ok(resp
+    let tools = resp
         .tools
         .into_iter()
         .map(|tool| {
@@ -1312,7 +1325,11 @@ async fn list_tools_for_client_uncached(
                 connector_name,
             }
         })
-        .collect())
+        .collect();
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        return Ok(filter_disallowed_codex_apps_tools(tools));
+    }
+    Ok(tools)
 }
 
 fn validate_mcp_server_name(server_name: &str) -> Result<()> {
@@ -1419,6 +1436,18 @@ mod tests {
             connector_id: None,
             connector_name: None,
         }
+    }
+
+    fn create_test_tool_with_connector(
+        server_name: &str,
+        tool_name: &str,
+        connector_id: &str,
+        connector_name: Option<&str>,
+    ) -> ToolInfo {
+        let mut tool = create_test_tool(server_name, tool_name);
+        tool.connector_id = Some(connector_id.to_string());
+        tool.connector_name = connector_name.map(ToOwned::to_owned);
+        tool
     }
 
     fn create_codex_apps_tools_cache_context(
@@ -1641,6 +1670,38 @@ mod tests {
             cache_context_user_2.cache_path(),
             "each user should get an isolated cache file"
         );
+    }
+
+    #[test]
+    fn codex_apps_tools_cache_filters_disallowed_connectors() {
+        let codex_home = tempdir().expect("tempdir");
+        let cache_context = create_codex_apps_tools_cache_context(
+            codex_home.path().to_path_buf(),
+            Some("account-one"),
+            Some("user-one"),
+        );
+        let tools = vec![
+            create_test_tool_with_connector(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "blocked_tool",
+                "connector_openai_hidden",
+                Some("Hidden"),
+            ),
+            create_test_tool_with_connector(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "allowed_tool",
+                "calendar",
+                Some("Calendar"),
+            ),
+        ];
+
+        write_cached_codex_apps_tools(&cache_context, &tools);
+        let cached =
+            read_cached_codex_apps_tools(&cache_context).expect("cache entry exists for user");
+
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].tool_name, "allowed_tool");
+        assert_eq!(cached[0].connector_id.as_deref(), Some("calendar"));
     }
 
     #[test]

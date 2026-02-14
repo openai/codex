@@ -72,7 +72,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    read_cached_accessible_connectors(&cache_key)
+    read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
@@ -102,6 +102,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
+        let cached_connectors = filter_disallowed_connectors(cached_connectors);
         return Ok(AccessibleConnectorsStatus {
             connectors: cached_connectors,
             codex_apps_ready: true,
@@ -164,7 +165,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     };
     cancel_token.cancel();
 
-    let accessible_connectors = accessible_connectors_from_mcp_tools(&tools);
+    let accessible_connectors =
+        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(&tools));
     if codex_apps_ready || !accessible_connectors.is_empty() {
         write_cached_accessible_connectors(cache_key, &accessible_connectors);
     }
@@ -323,6 +325,33 @@ pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> 
     connectors
 }
 
+const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
+    "asdk_app_6938a94a61d881918ef32cb999ff937c",
+    "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
+    "connector_68de829bf7648191acd70a907364c67c",
+];
+const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
+
+pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
+    connectors
+        .into_iter()
+        .filter(is_connector_allowed)
+        .collect()
+}
+
+pub(crate) fn is_connector_id_allowed(connector_id: &str) -> bool {
+    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
+    {
+        return false;
+    }
+    true
+}
+
+fn is_connector_allowed(connector: &AppInfo) -> bool {
+    is_connector_id_allowed(connector.id.as_str())
+}
+
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
     let apps_config = effective_config.as_table()?.get("apps")?.clone();
@@ -399,4 +428,49 @@ pub fn connector_name_slug(name: &str) -> String {
 
 fn format_connector_label(name: &str, _id: &str) -> String {
     name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn app(id: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: true,
+        }
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
+        let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
+        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_openai_prefix() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma"),
+        ]);
+        assert_eq!(filtered, vec![app("gamma")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+            app("delta"),
+        ]);
+        assert_eq!(filtered, vec![app("delta")]);
+    }
 }
