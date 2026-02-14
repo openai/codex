@@ -272,6 +272,8 @@ impl Eq for NetworkProxy {}
 pub const PROXY_URL_ENV_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
     "ALL_PROXY",
     "FTP_PROXY",
     "YARN_HTTP_PROXY",
@@ -290,6 +292,7 @@ pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
+const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
 
 pub const NO_PROXY_ENV_KEYS: &[&str] = &[
     "NO_PROXY",
@@ -375,6 +378,9 @@ fn apply_proxy_env_overrides(
         ],
         &http_proxy_url,
     );
+    // Some websocket clients look for dedicated WS/WSS proxy environment variables instead of
+    // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
+    set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
     // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
@@ -729,6 +735,14 @@ mod tests {
     }
 
     #[test]
+    fn has_proxy_url_env_vars_detects_websocket_proxy_keys() {
+        let mut env = HashMap::new();
+        env.insert("wss_proxy".to_string(), "http://127.0.0.1:3128".to_string());
+
+        assert_eq!(has_proxy_url_env_vars(&env), true);
+    }
+
+    #[test]
     fn apply_proxy_env_overrides_sets_common_tool_vars() {
         let mut env = HashMap::new();
         apply_proxy_env_overrides(
@@ -742,6 +756,14 @@ mod tests {
 
         assert_eq!(
             env.get("HTTP_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(
@@ -808,6 +830,14 @@ mod tests {
         );
         assert_eq!(
             env.get("HTTPS_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WS_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("WSS_PROXY"),
             Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
         );
         assert_eq!(

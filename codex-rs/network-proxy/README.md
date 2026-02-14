@@ -62,6 +62,8 @@ For HTTP(S) traffic:
 ```bash
 export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
+export WS_PROXY="http://127.0.0.1:3128"
+export WSS_PROXY="http://127.0.0.1:3128"
 ```
 
 For SOCKS5 traffic (when `enable_socks5 = true`):
@@ -82,6 +84,9 @@ When a request is blocked, the proxy responds with `403` and includes:
 
 In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` and SOCKS5 are
 blocked because they would bypass method enforcement.
+
+Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
+through the same host allowlist/denylist checks.
 
 ## Library API
 
