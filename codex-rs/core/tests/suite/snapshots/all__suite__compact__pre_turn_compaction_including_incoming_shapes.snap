@@ -1,0 +1,25 @@
+---
+source: core/tests/suite/compact.rs
+expression: "format_labeled_requests_snapshot(\"Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.\",\n&[(\"Local Compaction Request\", &requests[2]),\n(\"Local Post-Compaction History Layout\", &requests[3]),])"
+---
+Scenario: Pre-turn auto-compaction with a context override emits the context diff in the compact request while the incoming user message is still excluded.
+
+## Local Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+03:message/user:USER_ONE
+04:message/assistant:FIRST_REPLY
+05:message/user:USER_TWO
+06:message/assistant:SECOND_REPLY
+07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+08:message/user:<SUMMARIZATION_PROMPT>
+
+## Local Post-Compaction History Layout
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<AGENTS_MD>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
+03:message/user:USER_ONE
+04:message/user:USER_TWO
+05:message/user:<COMPACTION_SUMMARY>\nPRE_TURN_SUMMARY
+06:message/user:<image> | <input_image:image_url> | </image> | USER_THREE
