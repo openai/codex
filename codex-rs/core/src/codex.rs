@@ -1932,6 +1932,19 @@ impl Session {
         Some(DeveloperInstructions::model_switch_message(model_instructions).into())
     }
 
+    pub(crate) fn is_model_switch_developer_message(item: &ResponseItem) -> bool {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        role == "developer"
+            && content.iter().any(|content_item| {
+                matches!(
+                    content_item,
+                    ContentItem::InputText { text } if text.starts_with("<model_switch>")
+                )
+            })
+    }
+
     fn build_settings_update_items(
         &self,
         previous_context: Option<&Arc<TurnContext>>,
@@ -4355,7 +4368,7 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
-                    if run_auto_compact(&sess, &turn_context).await.is_err() {
+                    if run_auto_compact(&sess, &turn_context, false).await.is_err() {
                         return None;
                     }
                     continue;
@@ -4420,12 +4433,23 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
+    let previous_model = sess.previous_model().await;
+    let previous_model_compaction_ran = maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
         total_usage_tokens_before_compaction,
     )
     .await?;
+    if previous_model_compaction_ran
+        && let Some(model_switch_item) = sess.build_model_instructions_update_item(
+            None,
+            previous_model.as_deref(),
+            turn_context.as_ref(),
+        )
+    {
+        sess.record_conversation_items(turn_context.as_ref(), &[model_switch_item])
+            .await;
+    }
     let total_usage_tokens = sess.get_total_token_usage().await;
     let auto_compact_limit = turn_context
         .model_info
@@ -4433,7 +4457,7 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than the auto compact limit
     if total_usage_tokens >= auto_compact_limit {
-        run_auto_compact(sess, turn_context).await?;
+        run_auto_compact(sess, turn_context, false).await?;
     }
     Ok(())
 }
@@ -4442,9 +4466,9 @@ async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     let Some(previous_model) = sess.previous_model().await else {
-        return Ok(());
+        return Ok(false);
     };
     let previous_turn_context = Arc::new(
         turn_context
@@ -4453,10 +4477,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
+        return Ok(false);
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -4466,16 +4490,31 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if should_run {
-        run_auto_compact(sess, &previous_turn_context).await?;
+        run_auto_compact(sess, &previous_turn_context, true).await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
-async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> CodexResult<()> {
+async fn run_auto_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    strip_trailing_model_switch_update: bool,
+) -> CodexResult<()> {
     if should_use_remote_compact_task(&turn_context.provider) {
-        run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
+        run_inline_remote_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            strip_trailing_model_switch_update,
+        )
+        .await?;
     } else {
-        run_inline_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await?;
+        run_inline_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            strip_trailing_model_switch_update,
+        )
+        .await?;
     }
     Ok(())
 }
