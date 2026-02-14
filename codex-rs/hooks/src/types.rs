@@ -10,24 +10,53 @@ use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::Serializer;
 
-pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookOutcome> + Send + Sync>;
+pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookResult> + Send + Sync>;
+
+#[derive(Debug)]
+pub enum HookResult {
+    /// Success: hook completed successfully.
+    Success,
+    /// FailedContinue: hook failed, but other subsequent hooks should still execute and the
+    /// operation should continue.
+    FailedContinue(Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// FailedAbort: hook failed, other subsequent hooks should not execute, and the operation
+    /// should be aborted.
+    FailedAbort(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl HookResult {
+    pub fn should_abort_operation(&self) -> bool {
+        matches!(self, Self::FailedAbort(_))
+    }
+}
+
+#[derive(Debug)]
+pub struct HookResponse {
+    pub hook_name: String,
+    pub result: HookResult,
+}
 
 #[derive(Clone)]
 pub struct Hook {
+    pub name: String,
     pub func: HookFn,
 }
 
 impl Default for Hook {
     fn default() -> Self {
         Self {
-            func: Arc::new(|_| Box::pin(async { HookOutcome::Continue })),
+            name: "default".to_string(),
+            func: Arc::new(|_| Box::pin(async { HookResult::Success })),
         }
     }
 }
 
 impl Hook {
-    pub async fn execute(&self, payload: &HookPayload) -> HookOutcome {
-        (self.func)(payload).await
+    pub async fn execute(&self, payload: &HookPayload) -> HookResponse {
+        HookResponse {
+            hook_name: self.name.clone(),
+            result: (self.func)(payload).await,
+        }
     }
 }
 
@@ -124,13 +153,6 @@ pub enum HookEvent {
         #[serde(flatten)]
         event: HookEventAfterToolUse,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookOutcome {
-    Continue,
-    #[allow(dead_code)]
-    Stop,
 }
 
 #[cfg(test)]

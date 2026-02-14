@@ -2,8 +2,8 @@ use tokio::process::Command;
 
 use crate::types::Hook;
 use crate::types::HookEvent;
-use crate::types::HookOutcome;
 use crate::types::HookPayload;
+use crate::types::HookResponse;
 
 #[derive(Default, Clone)]
 pub struct HooksConfig {
@@ -45,14 +45,19 @@ impl Hooks {
         }
     }
 
-    pub async fn dispatch(&self, hook_payload: HookPayload) {
-        // TODO(gt): support interrupting program execution by returning a result here.
-        for hook in self.hooks_for_event(&hook_payload.hook_event) {
+    pub async fn dispatch(&self, hook_payload: HookPayload) -> Vec<HookResponse> {
+        let hooks = self.hooks_for_event(&hook_payload.hook_event);
+        let mut outcomes = Vec::with_capacity(hooks.len());
+        for hook in hooks {
             let outcome = hook.execute(&hook_payload).await;
-            if matches!(outcome, HookOutcome::Stop) {
+            let should_abort_operation = outcome.result.should_abort_operation();
+            outcomes.push(outcome);
+            if should_abort_operation {
                 break;
             }
         }
+
+        outcomes
     }
 }
 
@@ -88,6 +93,7 @@ mod tests {
     use super::*;
     use crate::types::HookEventAfterAgent;
     use crate::types::HookEventAfterToolUse;
+    use crate::types::HookResult;
     use crate::types::HookToolInput;
     use crate::types::HookToolKind;
 
@@ -113,14 +119,50 @@ mod tests {
         }
     }
 
-    fn counting_hook(calls: &Arc<AtomicUsize>, outcome: HookOutcome) -> Hook {
+    fn counting_success_hook(calls: &Arc<AtomicUsize>, name: &str) -> Hook {
+        let hook_name = name.to_string();
         let calls = Arc::clone(calls);
         Hook {
+            name: hook_name,
             func: Arc::new(move |_| {
                 let calls = Arc::clone(&calls);
                 Box::pin(async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    outcome
+                    HookResult::Success
+                })
+            }),
+        }
+    }
+
+    fn failing_continue_hook(calls: &Arc<AtomicUsize>, name: &str, message: &str) -> Hook {
+        let hook_name = name.to_string();
+        let message = message.to_string();
+        let calls = Arc::clone(calls);
+        Hook {
+            name: hook_name,
+            func: Arc::new(move |_| {
+                let calls = Arc::clone(&calls);
+                let message = message.clone();
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    HookResult::FailedContinue(std::io::Error::other(message).into())
+                })
+            }),
+        }
+    }
+
+    fn failing_abort_hook(calls: &Arc<AtomicUsize>, name: &str, message: &str) -> Hook {
+        let hook_name = name.to_string();
+        let message = message.to_string();
+        let calls = Arc::clone(calls);
+        Hook {
+            name: hook_name,
+            func: Arc::new(move |_| {
+                let calls = Arc::clone(&calls);
+                let message = message.clone();
+                Box::pin(async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    HookResult::FailedAbort(std::io::Error::other(message).into())
                 })
             }),
         }
@@ -212,11 +254,14 @@ mod tests {
     async fn dispatch_executes_hook() {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
-            after_agent: vec![counting_hook(&calls, HookOutcome::Continue)],
+            after_agent: vec![counting_success_hook(&calls, "counting")],
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("1")).await;
+        let outcomes = hooks.dispatch(hook_payload("1")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -224,7 +269,8 @@ mod tests {
     async fn default_hook_is_noop_and_continues() {
         let payload = hook_payload("d");
         let outcome = Hook::default().execute(&payload).await;
-        assert_eq!(outcome, HookOutcome::Continue);
+        assert_eq!(outcome.hook_name, "default");
+        assert!(matches!(outcome.result, HookResult::Success));
     }
 
     #[tokio::test]
@@ -232,28 +278,36 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
             after_agent: vec![
-                counting_hook(&calls, HookOutcome::Continue),
-                counting_hook(&calls, HookOutcome::Continue),
+                counting_success_hook(&calls, "counting-1"),
+                counting_success_hook(&calls, "counting-2"),
             ],
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("2")).await;
+        let outcomes = hooks.dispatch(hook_payload("2")).await;
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].hook_name, "counting-1");
+        assert_eq!(outcomes[1].hook_name, "counting-2");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert!(matches!(outcomes[1].result, HookResult::Success));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
-    async fn dispatch_stops_when_hook_returns_stop() {
+    async fn dispatch_stops_when_hook_requests_abort() {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
             after_agent: vec![
-                counting_hook(&calls, HookOutcome::Stop),
-                counting_hook(&calls, HookOutcome::Continue),
+                failing_abort_hook(&calls, "abort", "hook failed"),
+                counting_success_hook(&calls, "counting"),
             ],
             ..Hooks::default()
         };
 
-        hooks.dispatch(hook_payload("3")).await;
+        let outcomes = hooks.dispatch(hook_payload("3")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "abort");
+        assert!(matches!(outcomes[0].result, HookResult::FailedAbort(_)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -261,11 +315,53 @@ mod tests {
     async fn dispatch_executes_after_tool_use_hooks() {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
-            after_tool_use: vec![counting_hook(&calls, HookOutcome::Continue)],
+            after_tool_use: vec![counting_success_hook(&calls, "counting")],
             ..Hooks::default()
         };
 
-        hooks.dispatch(after_tool_use_payload("p")).await;
+        let outcomes = hooks.dispatch(after_tool_use_payload("p")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_continues_after_continueable_failure() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_agent: vec![
+                failing_continue_hook(&calls, "failing", "hook failed"),
+                counting_success_hook(&calls, "counting"),
+            ],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(hook_payload("err")).await;
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].hook_name, "failing");
+        assert!(matches!(outcomes[0].result, HookResult::FailedContinue(_)));
+        assert_eq!(outcomes[1].hook_name, "counting");
+        assert!(matches!(outcomes[1].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn dispatch_returns_after_tool_use_failure_outcome() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_tool_use: vec![failing_continue_hook(
+                &calls,
+                "failing",
+                "after_tool_use hook failed",
+            )],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(after_tool_use_payload("err-tool")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "failing");
+        assert!(matches!(outcomes[0].result, HookResult::FailedContinue(_)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -276,6 +372,7 @@ mod tests {
         let payload_path = temp_dir.path().join("payload.json");
         let payload_path_arg = payload_path.to_string_lossy().into_owned();
         let hook = Hook {
+            name: "write_payload".to_string(),
             func: Arc::new(move |payload: &HookPayload| {
                 let payload_path_arg = payload_path_arg.clone();
                 Box::pin(async move {
@@ -290,7 +387,7 @@ mod tests {
                     ])
                     .expect("build command");
                     command.status().await.expect("run hook command");
-                    HookOutcome::Continue
+                    HookResult::Success
                 })
             }),
         };
@@ -302,7 +399,9 @@ mod tests {
             after_agent: vec![hook],
             ..Hooks::default()
         };
-        hooks.dispatch(payload).await;
+        let outcomes = hooks.dispatch(payload).await;
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(outcomes[0].result, HookResult::Success));
 
         let contents = timeout(Duration::from_secs(2), async {
             loop {
@@ -330,6 +429,7 @@ mod tests {
         fs::write(&script_path, "[IO.File]::WriteAllText($args[0], $args[1])")?;
         let script_path_arg = script_path.to_string_lossy().into_owned();
         let hook = Hook {
+            name: "write_payload".to_string(),
             func: Arc::new(move |payload: &HookPayload| {
                 let payload_path_arg = payload_path_arg.clone();
                 let script_path_arg = script_path_arg.clone();
@@ -348,7 +448,7 @@ mod tests {
                     ])
                     .expect("build command");
                     command.status().await.expect("run hook command");
-                    HookOutcome::Continue
+                    HookResult::Success
                 })
             }),
         };
@@ -360,7 +460,9 @@ mod tests {
             after_agent: vec![hook],
             ..Hooks::default()
         };
-        hooks.dispatch(payload).await;
+        let outcomes = hooks.dispatch(payload).await;
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(outcomes[0].result, HookResult::Success));
 
         let contents = timeout(Duration::from_secs(2), async {
             loop {
