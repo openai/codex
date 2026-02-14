@@ -449,7 +449,16 @@ impl ReadOnlyAccess {
                 if *include_platform_defaults {
                     #[cfg(target_os = "macos")]
                     for platform_path in [
-                        "/bin", "/dev", "/etc", "/Library", "/private", "/sbin", "/System", "/tmp",
+                        "/bin",
+                        "/dev",
+                        "/etc",
+                        "/Library",
+                        "/private",
+                        "/sbin",
+                        "/System/Library",
+                        "/System/Cryptexes/OS/System",
+                        "/System/Cryptexes/OS/usr",
+                        "/tmp",
                         "/usr",
                     ] {
                         #[allow(clippy::expect_used)]
