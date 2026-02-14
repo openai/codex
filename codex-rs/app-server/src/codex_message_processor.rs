@@ -1688,12 +1688,8 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
-        let managed_network_requirements_enabled = self
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let managed_network_requirements_enabled =
+            self.config.managed_network_requirements_enabled();
         let started_network_proxy = match self.config.permissions.network.as_ref() {
             Some(spec) => match spec
                 .start_proxy(

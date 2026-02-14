@@ -135,6 +135,22 @@ impl NetworkApprovalService {
         outcome.take()
     }
 
+    pub(crate) async fn take_user_denial_outcome(&self, attempt_id: &str) -> bool {
+        let attempt = {
+            let attempts = self.attempts.lock().await;
+            attempts.get(attempt_id).cloned()
+        };
+        let Some(attempt) = attempt else {
+            return false;
+        };
+        let mut outcome = attempt.outcome.lock().await;
+        if matches!(outcome.as_ref(), Some(NetworkApprovalOutcome::DeniedByUser)) {
+            outcome.take();
+            return true;
+        }
+        false
+    }
+
     async fn resolve_attempt_for_request(
         &self,
         request: &NetworkPolicyRequest,
@@ -530,6 +546,42 @@ mod tests {
             Some(NetworkApprovalOutcome::DeniedByUser)
         );
         assert_eq!(service.take_outcome("attempt-1").await, None);
+    }
+
+    #[tokio::test]
+    async fn take_user_denial_outcome_preserves_policy_denial() {
+        let service = NetworkApprovalService::default();
+        service
+            .register_attempt(
+                "attempt-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "example.com".to_string()],
+                std::env::temp_dir(),
+            )
+            .await;
+
+        let attempt = {
+            let attempts = service.attempts.lock().await;
+            attempts
+                .get("attempt-1")
+                .cloned()
+                .expect("attempt should exist")
+        };
+        {
+            let mut outcome = attempt.outcome.lock().await;
+            *outcome = Some(NetworkApprovalOutcome::DeniedByPolicy(
+                "policy denied".to_string(),
+            ));
+        }
+
+        assert!(!service.take_user_denial_outcome("attempt-1").await);
+        assert_eq!(
+            service.take_outcome("attempt-1").await,
+            Some(NetworkApprovalOutcome::DeniedByPolicy(
+                "policy denied".to_string(),
+            ))
+        );
     }
 
     #[tokio::test]
