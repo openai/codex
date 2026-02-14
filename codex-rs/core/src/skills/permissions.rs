@@ -285,6 +285,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::SkillManifestFileSystemPermissions;
+    #[cfg(target_os = "macos")]
     use super::SkillManifestMacOsPermissions;
     use super::SkillManifestPermissions;
     use super::compile_permission_profile;
@@ -367,6 +368,87 @@ mod tests {
         let profile = compile_permission_profile(&skill_dir, None);
 
         assert_eq!(profile, None);
+    }
+
+    #[test]
+    fn compile_permission_profile_with_network_only_uses_read_only_policy() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skill");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+
+        let profile = compile_permission_profile(
+            &skill_dir,
+            Some(SkillManifestPermissions {
+                network: true,
+                ..Default::default()
+            }),
+        )
+        .expect("profile");
+
+        assert_eq!(
+            profile,
+            Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: Some(
+                    crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
+                ),
+                #[cfg(not(target_os = "macos"))]
+                macos_seatbelt_profile_extensions: None,
+            }
+        );
+    }
+
+    #[test]
+    fn compile_permission_profile_with_network_and_read_only_paths_uses_read_only_policy() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = tempdir.path().join("skill");
+        let read_dir = skill_dir.join("data");
+        fs::create_dir_all(&read_dir).expect("read dir");
+
+        let profile = compile_permission_profile(
+            &skill_dir,
+            Some(SkillManifestPermissions {
+                network: true,
+                file_system: SkillManifestFileSystemPermissions {
+                    read: vec!["./data".to_string()],
+                    write: Vec::new(),
+                },
+                ..Default::default()
+            }),
+        )
+        .expect("profile");
+
+        assert_eq!(
+            profile,
+            Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
+                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
+                    access: ReadOnlyAccess::Restricted {
+                        include_platform_defaults: true,
+                        readable_roots: vec![
+                            AbsolutePathBuf::try_from(
+                                dunce::canonicalize(&read_dir).unwrap_or(read_dir)
+                            )
+                            .expect("absolute read path")
+                        ],
+                    },
+                }),
+                network: None,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: Some(
+                    crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
+                ),
+                #[cfg(not(target_os = "macos"))]
+                macos_seatbelt_profile_extensions: None,
+            }
+        );
     }
 
     #[cfg(target_os = "macos")]
