@@ -12,6 +12,8 @@ use std::env;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -302,6 +304,17 @@ struct ManagedClient {
 }
 
 impl ManagedClient {
+    fn listed_tools(&self) -> Vec<ToolInfo> {
+        if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
+            && let CachedCodexAppsToolsLoad::Hit(tools) =
+                load_cached_codex_apps_tools(cache_context)
+        {
+            return filter_tools(tools, &self.tool_filter);
+        }
+
+        self.tools.clone()
+    }
+
     /// Returns once the server has ack'd the sandbox state update.
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
         if !self.server_supports_sandbox_state_capability {
@@ -323,6 +336,7 @@ impl ManagedClient {
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     startup_snapshot: Option<Vec<ToolInfo>>,
+    startup_complete: Arc<AtomicBool>,
 }
 
 impl AsyncManagedClient {
@@ -340,31 +354,39 @@ impl AsyncManagedClient {
             &server_name,
             codex_apps_tools_cache_context.as_ref(),
         )
-        .map(|tools| filter_tools(tools, tool_filter.clone()));
+        .map(|tools| filter_tools(tools, &tool_filter));
         let startup_tool_filter = tool_filter;
+        let startup_complete = Arc::new(AtomicBool::new(false));
+        let startup_complete_for_fut = Arc::clone(&startup_complete);
         let fut = async move {
-            if let Err(error) = validate_mcp_server_name(&server_name) {
-                return Err(error.into());
-            }
+            let outcome = async {
+                if let Err(error) = validate_mcp_server_name(&server_name) {
+                    return Err(error.into());
+                }
 
-            let client =
-                Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
-            match start_server_task(
-                server_name,
-                client,
-                config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                startup_tool_filter,
-                tx_event,
-                elicitation_requests,
-                codex_apps_tools_cache_context,
-            )
-            .or_cancel(&cancel_token)
-            .await
-            {
-                Ok(result) => result,
-                Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+                let client =
+                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                match start_server_task(
+                    server_name,
+                    client,
+                    config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                    config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                    startup_tool_filter,
+                    tx_event,
+                    elicitation_requests,
+                    codex_apps_tools_cache_context,
+                )
+                .or_cancel(&cancel_token)
+                .await
+                {
+                    Ok(result) => result,
+                    Err(CancelErr::Cancelled) => Err(StartupOutcomeError::Cancelled),
+                }
             }
+            .await;
+
+            startup_complete_for_fut.store(true, Ordering::Release);
+            outcome
         };
         let client = fut.boxed().shared();
         if startup_snapshot.is_some() {
@@ -377,6 +399,7 @@ impl AsyncManagedClient {
         Self {
             client,
             startup_snapshot,
+            startup_complete,
         }
     }
 
@@ -384,8 +407,22 @@ impl AsyncManagedClient {
         self.client.clone().await
     }
 
-    fn try_client(&self) -> Option<Result<ManagedClient, StartupOutcomeError>> {
-        self.client.clone().now_or_never()
+    fn startup_snapshot_while_initializing(&self) -> Option<Vec<ToolInfo>> {
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return self.startup_snapshot.clone();
+        }
+        None
+    }
+
+    async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+        if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
+            return Some(startup_tools);
+        }
+
+        match self.client().await {
+            Ok(client) => Some(client.listed_tools()),
+            Err(_) => self.startup_snapshot.clone(),
+        }
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -589,62 +626,15 @@ impl McpConnectionManager {
         failures
     }
 
-    async fn list_tools_for_ready_client(
-        server_name: &str,
-        client: ManagedClient,
-    ) -> Vec<ToolInfo> {
-        let rmcp_client = client.client;
-        let tool_timeout = client.tool_timeout;
-        let tool_filter = client.tool_filter;
-        let mut server_tools = client.tools;
-
-        if server_name == CODEX_APPS_MCP_SERVER_NAME {
-            match list_tools_for_client(
-                server_name,
-                &rmcp_client,
-                tool_timeout,
-                client.codex_apps_tools_cache_context.as_ref(),
-                false,
-            )
-            .await
-            {
-                Ok(fresh_or_cached_tools) => {
-                    server_tools = fresh_or_cached_tools;
-                }
-                Err(err) => {
-                    warn!(
-                        "Failed to refresh tools for MCP server '{server_name}', using startup snapshot: {err:#}"
-                    );
-                }
-            }
-        }
-
-        filter_tools(server_tools, tool_filter)
-    }
-
     /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
-        for (server_name, managed_client) in &self.clients {
-            let ready_client = match managed_client.try_client() {
-                Some(Ok(client)) => Some(client),
-                Some(Err(_)) => None,
-                None => {
-                    if let Some(tools_from_cache) = &managed_client.startup_snapshot {
-                        tools.extend(qualify_tools(tools_from_cache.clone()));
-                        None
-                    } else {
-                        managed_client.client().await.ok()
-                    }
-                }
-            };
-
-            let Some(ready_client) = ready_client else {
+        for managed_client in self.clients.values() {
+            let Some(server_tools) = managed_client.listed_tools().await else {
                 continue;
             };
-            let server_tools = Self::list_tools_for_ready_client(server_name, ready_client).await;
             tools.extend(qualify_tools(server_tools));
         }
         tools
@@ -673,9 +663,11 @@ impl McpConnectionManager {
             format!("failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}'")
         })?;
 
-        if let Some(cache_context) = managed_client.codex_apps_tools_cache_context.as_ref() {
-            write_cached_codex_apps_tools(cache_context, &tools);
-        }
+        write_cached_codex_apps_tools_if_needed(
+            CODEX_APPS_MCP_SERVER_NAME,
+            managed_client.codex_apps_tools_cache_context.as_ref(),
+            &tools,
+        );
         Ok(())
     }
 
@@ -984,7 +976,7 @@ impl ToolFilter {
     }
 }
 
-fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
+fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
     tools
         .into_iter()
         .filter(|tool| filter.allows(&tool.tool_name))
@@ -1144,15 +1136,15 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
-    let tools = list_tools_for_client(
+    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
+        .await
+        .map_err(StartupOutcomeError::from)?;
+    write_cached_codex_apps_tools_if_needed(
         &server_name,
-        &client,
-        startup_timeout,
         codex_apps_tools_cache_context.as_ref(),
-        true,
-    )
-    .await
-    .map_err(StartupOutcomeError::from)?;
+        &tools,
+    );
+    let tools = filter_tools(tools, &tool_filter);
 
     let server_supports_sandbox_state_capability = initialize_result
         .capabilities
@@ -1217,57 +1209,17 @@ async fn make_rmcp_client(
     }
 }
 
-async fn list_tools_for_client(
+fn write_cached_codex_apps_tools_if_needed(
     server_name: &str,
-    client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
-    codex_apps_tools_cache_context: Option<&CodexAppsToolsCacheContext>,
-    refresh_in_background: bool,
-) -> Result<Vec<ToolInfo>> {
-    if server_name != CODEX_APPS_MCP_SERVER_NAME {
-        return list_tools_for_client_uncached(server_name, client, timeout).await;
-    }
-
-    let Some(cache_context) = codex_apps_tools_cache_context.cloned() else {
-        return list_tools_for_client_uncached(server_name, client, timeout).await;
-    };
-
-    let cached = load_cached_codex_apps_tools(&cache_context);
-    if refresh_in_background
-        && matches!(
-            cached,
-            CachedCodexAppsToolsLoad::Hit(_) | CachedCodexAppsToolsLoad::Invalid
-        )
-    {
-        refresh_codex_apps_tools_cache_async(Arc::clone(client), timeout, cache_context.clone());
-    }
-
-    match cached {
-        CachedCodexAppsToolsLoad::Hit(tools) => Ok(tools),
-        CachedCodexAppsToolsLoad::Invalid if refresh_in_background => Ok(Vec::new()),
-        CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => {
-            let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
-            write_cached_codex_apps_tools(&cache_context, &tools);
-            Ok(tools)
-        }
-    }
-}
-
-fn refresh_codex_apps_tools_cache_async(
-    client: Arc<RmcpClient>,
-    timeout: Option<Duration>,
-    cache_context: CodexAppsToolsCacheContext,
+    cache_context: Option<&CodexAppsToolsCacheContext>,
+    tools: &[ToolInfo],
 ) {
-    tokio::spawn(async move {
-        match list_tools_for_client_uncached(CODEX_APPS_MCP_SERVER_NAME, &client, timeout).await {
-            Ok(tools) => write_cached_codex_apps_tools(&cache_context, &tools),
-            Err(err) => {
-                warn!(
-                    "Failed to refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}': {err:#}"
-                );
-            }
-        }
-    });
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return;
+    }
+    if let Some(cache_context) = cache_context {
+        write_cached_codex_apps_tools(cache_context, tools);
+    }
 }
 
 fn load_startup_cached_codex_apps_tools_snapshot(
@@ -1626,9 +1578,9 @@ mod tests {
             disabled: HashSet::from(["tool_a".to_string()]),
         };
 
-        let filtered: Vec<_> = filter_tools(server1_tools, server1_filter)
+        let filtered: Vec<_> = filter_tools(server1_tools, &server1_filter)
             .into_iter()
-            .chain(filter_tools(server2_tools, server2_filter))
+            .chain(filter_tools(server2_tools, &server2_filter))
             .collect();
 
         assert_eq!(filtered.len(), 1);
@@ -1771,6 +1723,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: Some(startup_tools),
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         );
 
@@ -1794,6 +1747,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: None,
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         );
 
@@ -1814,6 +1768,7 @@ mod tests {
             AsyncManagedClient {
                 client: pending_client,
                 startup_snapshot: Some(Vec::new()),
+                startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         );
 
@@ -1821,6 +1776,38 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
         let tools = timeout_result.expect("cache-hit startup snapshot should not block");
         assert!(tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
+        let startup_tools = vec![create_test_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+        )];
+        let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(
+            Err(StartupOutcomeError::Failed {
+                error: "startup failed".to_string(),
+            }),
+        )
+        .boxed()
+        .shared();
+        let mut manager = McpConnectionManager::default();
+        let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        manager.clients.insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            AsyncManagedClient {
+                client: failed_client,
+                startup_snapshot: Some(startup_tools),
+                startup_complete,
+            },
+        );
+
+        let tools = manager.list_all_tools().await;
+        let tool = tools
+            .get("mcp__codex_apps__calendar_create_event")
+            .expect("tool from startup cache");
+        assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
+        assert_eq!(tool.tool_name, "calendar_create_event");
     }
 
     #[test]
