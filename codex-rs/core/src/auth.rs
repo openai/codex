@@ -1068,10 +1068,29 @@ impl AuthManager {
         }
 
         tracing::info!("Reloading auth for account {expected_account_id}");
-        if self.set_cached_auth(new_auth) {
+        let cached_before_reload = self.auth_cached();
+        let auth_changed =
+            !Self::auths_equal_for_refresh(cached_before_reload.as_ref(), new_auth.as_ref());
+        self.set_cached_auth(new_auth);
+        if auth_changed {
             ReloadOutcome::ReloadedChanged
         } else {
             ReloadOutcome::ReloadedNoChange
+        }
+    }
+
+    fn auths_equal_for_refresh(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => match (a.api_auth_mode(), b.api_auth_mode()) {
+                (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
+                (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
+                | (ApiAuthMode::ChatgptAuthTokens, ApiAuthMode::ChatgptAuthTokens) => {
+                    a.get_current_auth_json() == b.get_current_auth_json()
+                }
+                _ => false,
+            },
+            _ => false,
         }
     }
 
