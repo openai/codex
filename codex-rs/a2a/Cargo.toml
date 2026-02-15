@@ -1,0 +1,22 @@
+[package]
+name = "a2a-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A2A (Agent-to-Agent) RC v1 protocol types and server — built from the official specification."
+
+[lib]
+name = "a2a_rs"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true, features = ["json", "tokio", "http1"] }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "net"] }
+tracing = { workspace = true, features = ["log"] }
+uuid = { workspace = true, features = ["v4"] }

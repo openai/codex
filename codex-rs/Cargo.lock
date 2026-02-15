@@ -13,6 +13,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "a2a-rs"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "http 1.4.0",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "actix-codec"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,13 +2023,18 @@ dependencies = [
 name = "codex-mcp-server"
 version = "0.0.0"
 dependencies = [
+ "a2a-rs",
  "anyhow",
+ "axum",
+ "bytes",
+ "clap",
  "codex-arg0",
  "codex-core",
  "codex-protocol",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
+ "http 1.4.0",
  "mcp_test_support",
  "os_info",
  "pretty_assertions",
@@ -2027,8 +2045,10 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 

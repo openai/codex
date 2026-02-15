@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "a2a",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -76,6 +77,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
+a2a-rs = { path = "a2a" }
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }

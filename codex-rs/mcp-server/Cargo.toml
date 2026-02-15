@@ -17,11 +17,16 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+a2a-rs = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+axum = { workspace = true, features = ["json", "tokio"] }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+http = { workspace = true }
 rmcp = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
@@ -30,12 +35,17 @@ shlex = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
+    "net",
     "process",
     "rt-multi-thread",
     "signal",
+    "sync",
 ] }
+tokio-stream = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["v4"] }
+
 
 [dev-dependencies]
 core_test_support = { workspace = true }
