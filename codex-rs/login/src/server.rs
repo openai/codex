@@ -24,6 +24,7 @@ use codex_core::token_data::parse_chatgpt_jwt_claims;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
+use tiny_http::Method;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -159,8 +160,21 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                         };
 
                         let url_raw = req.url().to_string();
-                        let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+                        let method = req.method().clone();
+                        let response = match tokio::time::timeout(
+                            Duration::from_secs(30),
+                            process_request(&method, &url_raw, &opts, &redirect_uri, &pkce, actual_port, &state),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                eprintln!("Request timed out: {url_raw}");
+                                HandledRequest::Response(
+                                    Response::from_string("Request Timeout").with_status_code(408),
+                                )
+                            }
+                        };
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
@@ -217,7 +231,11 @@ enum HandledRequest {
     },
 }
 
+const MAX_URL_LENGTH: usize = 8192;
+const MAX_PARAM_LENGTH: usize = 4096;
+
 async fn process_request(
+    method: &Method,
     url_raw: &str,
     opts: &ServerOptions,
     redirect_uri: &str,
@@ -225,6 +243,18 @@ async fn process_request(
     actual_port: u16,
     state: &str,
 ) -> HandledRequest {
+    if *method != Method::Get {
+        return HandledRequest::Response(
+            Response::from_string("Method Not Allowed").with_status_code(405),
+        );
+    }
+
+    if url_raw.len() > MAX_URL_LENGTH {
+        return HandledRequest::Response(
+            Response::from_string("URI Too Long").with_status_code(414),
+        );
+    }
+
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
         Err(e) => {
@@ -240,6 +270,11 @@ async fn process_request(
         "/auth/callback" => {
             let params: std::collections::HashMap<String, String> =
                 parsed_url.query_pairs().into_owned().collect();
+            if params.values().any(|v| v.len() > MAX_PARAM_LENGTH) {
+                return HandledRequest::Response(
+                    Response::from_string("Bad Request").with_status_code(400),
+                );
+            }
             if params.get("state").map(String::as_str) != Some(state) {
                 return HandledRequest::Response(
                     Response::from_string("State mismatch").with_status_code(400),
@@ -281,7 +316,7 @@ async fn process_request(
                     {
                         eprintln!("Persist error: {err}");
                         return HandledRequest::Response(
-                            Response::from_string(format!("Unable to persist auth file: {err}"))
+                            Response::from_string("Internal Server Error")
                                 .with_status_code(500),
                         );
                     }
@@ -302,7 +337,7 @@ async fn process_request(
                 Err(err) => {
                     eprintln!("Token exchange error: {err}");
                     HandledRequest::Response(
-                        Response::from_string(format!("Token exchange failed: {err}"))
+                        Response::from_string("Internal Server Error")
                             .with_status_code(500),
                     )
                 }
@@ -506,7 +541,10 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(io::Error::other)?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -697,7 +735,10 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(io::Error::other)?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
