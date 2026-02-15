@@ -4902,12 +4902,12 @@ async fn built_tools(
             &skill_name_counts_lower,
         );
 
-        let mut selected_mcp_tools =
-            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(&mcp_tools, &selected_tools)
-            } else {
-                HashMap::new()
-            };
+        let selected_tools = sess.get_mcp_tool_selection().await;
+        let mut selected_mcp_tools = if let Some(selected_tools) = selected_tools.as_ref() {
+            filter_mcp_tools_by_name(&mcp_tools, selected_tools)
+        } else {
+            HashMap::new()
+        };
         selected_mcp_tools.extend(
             mcp_tools
                 .iter()

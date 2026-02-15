@@ -173,7 +173,7 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
+async fn search_tool_keeps_non_codex_apps_mcp_tools_without_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -232,12 +232,12 @@ async fn search_tool_hides_mcp_tools_without_search() -> Result<()> {
         "tools list should include search_tool_bm25 when enabled: {tools:?}"
     );
     assert!(
-        !tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "tools list should not include MCP tools before search: {tools:?}"
+        tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "tools list should include non-codex_apps MCP tools before search: {tools:?}"
     );
     assert!(
-        !tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "tools list should not include MCP tools before search: {tools:?}"
+        tools.iter().any(|name| name == "mcp__rmcp__image"),
+        "tools list should include non-codex_apps MCP tools before search: {tools:?}"
     );
 
     Ok(())
@@ -324,18 +324,18 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
 
     let first_tools = tool_names(&requests[0].body_json());
     assert!(
-        !first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "first request should not include MCP tools before search: {first_tools:?}"
+        first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "first request should include non-codex_apps MCP tools before search: {first_tools:?}"
     );
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should not include rmcp MCP tools after search: {second_tools:?}"
+        second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "second request should include non-codex_apps MCP tools after search: {second_tools:?}"
     );
     assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should not include rmcp MCP tools after search: {second_tools:?}"
+        second_tools.iter().any(|name| name == "mcp__rmcp__image"),
+        "second request should include non-codex_apps MCP tools after search: {second_tools:?}"
     );
 
     let search_output_payload = search_tool_output_payload(&requests[1], call_id);
@@ -359,8 +359,8 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
 
     let third_tools = tool_names(&requests[2].body_json());
     assert!(
-        !third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should not include MCP tools after turn reset: {third_tools:?}"
+        third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "third request should include non-codex_apps MCP tools after turn reset: {third_tools:?}"
     );
 
     Ok(())
@@ -455,28 +455,28 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
 
     let first_tools = tool_names(&requests[0].body_json());
     assert!(
-        !first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "first request should not include MCP tools before search: {first_tools:?}"
+        first_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "first request should include non-codex_apps MCP tools before search: {first_tools:?}"
     );
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should not include rmcp tools after first search: {second_tools:?}"
+        second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "second request should include non-codex_apps MCP tools after first search: {second_tools:?}"
     );
     assert!(
-        !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should not include rmcp tools after first search: {second_tools:?}"
+        second_tools.iter().any(|name| name == "mcp__rmcp__image"),
+        "second request should include non-codex_apps MCP tools after first search: {second_tools:?}"
     );
 
     let third_tools = tool_names(&requests[2].body_json());
     assert!(
-        !third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should not include rmcp tools: {third_tools:?}"
+        third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "third request should include non-codex_apps MCP tools: {third_tools:?}"
     );
     assert!(
-        !third_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "third request should not include rmcp tools: {third_tools:?}"
+        third_tools.iter().any(|name| name == "mcp__rmcp__image"),
+        "third request should include non-codex_apps MCP tools: {third_tools:?}"
     );
 
     let second_search_payload = search_tool_output_payload(&requests[2], second_call_id);
