@@ -1322,6 +1322,8 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
 // TODO(ccunningham): Update once remote pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_user_message()
 -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -1426,6 +1428,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
 // TODO(ccunningham): Update once remote pre-turn compaction context-overflow handling includes
 // incoming user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceeded() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -1524,6 +1528,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -1597,6 +1603,8 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
 // TODO(ccunningham): Update once manual remote /compact with no prior user turn becomes a no-op.
 async fn snapshot_request_shape_remote_manual_compact_without_previous_user_messages() -> Result<()>
 {
+    skip_if_no_network!(Ok(()));
+
     let harness = TestCodexHarness::with_builder(
         test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
     )

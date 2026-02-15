@@ -2925,6 +2925,8 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 // TODO(ccunningham): Update once pre-turn compaction includes incoming user input.
 async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_message() {
+    skip_if_no_network!();
+
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
@@ -3041,6 +3043,8 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 // TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
 // user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
+    skip_if_no_network!();
+
     let server = start_mock_server().await;
 
     let first_turn = sse(vec![
@@ -3126,6 +3130,8 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_manual_compact_without_previous_user_messages() {
+    skip_if_no_network!();
+
     let server = start_mock_server().await;
 
     let compact_turn = sse(vec![
