@@ -2312,9 +2312,6 @@ async fn manual_compact_retries_after_context_window_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
-// Current main behavior around non-context manual /compact failures is known-incorrect.
-#[ignore = "behavior change covered in follow-up compaction PR"]
 async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
     skip_if_no_network!();
 
@@ -3180,8 +3177,6 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once pre-turn compaction context-overflow handling includes incoming
-// user input and emits richer oversized-input messaging.
 async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch() {
     skip_if_no_network!();
 
