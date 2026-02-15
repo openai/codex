@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
 
-use crate::bash::parse_shell_lc_plain_commands;
+use crate::bash::parse_shell_lc_commands_for_exec_policy;
 use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -469,7 +469,7 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 }
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
-    if let Some(commands) = parse_shell_lc_plain_commands(command)
+    if let Some(commands) = parse_shell_lc_commands_for_exec_policy(command)
         && !commands.is_empty()
     {
         return (commands, false);
@@ -994,6 +994,40 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         );
     }
 
+    #[tokio::test]
+    async fn evaluates_redirected_shell_script_against_prefix_rules() {
+        let policy_src = r#"prefix_rule(pattern=["gh", "run", "view"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "gh run view 123 --log > /tmp/out.log && echo saved".to_string(),
+        ];
+
+        let requirement = ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
     #[test]
     fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
         let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
@@ -1010,6 +1044,32 @@ prefix_rule(pattern=["rm"], decision="forbidden")
         ];
 
         assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+    }
+
+    #[test]
+    fn commands_for_exec_policy_parses_redirected_sequences() {
+        let command = vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "gh run view 123 --log > /tmp/out.log && echo saved".to_string(),
+        ];
+
+        assert_eq!(
+            commands_for_exec_policy(&command),
+            (
+                vec![
+                    vec![
+                        "gh".to_string(),
+                        "run".to_string(),
+                        "view".to_string(),
+                        "123".to_string(),
+                        "--log".to_string(),
+                    ],
+                    vec!["echo".to_string(), "saved".to_string()],
+                ],
+                false,
+            )
+        );
     }
 
     #[tokio::test]

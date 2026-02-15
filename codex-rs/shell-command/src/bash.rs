@@ -27,27 +27,83 @@ pub fn try_parse_shell(shell_lc_arg: &str) -> Option<Tree> {
 /// (parentheses, redirections, substitutions, control flow, etc.). Otherwise
 /// returns `None`.
 pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<Vec<Vec<String>>> {
+    parse_commands_sequence(
+        tree,
+        src,
+        CommandSequenceMode {
+            allowed_kinds: &[
+                // top level containers
+                "program",
+                "list",
+                "pipeline",
+                // commands & words
+                "command",
+                "command_name",
+                "word",
+                "string",
+                "string_content",
+                "raw_string",
+                "number",
+                "concatenation",
+            ],
+            allow_any_punctuation: false,
+            allow_command_attachments: false,
+        },
+    )
+}
+
+/// Parse a shell script for execpolicy command matching.
+///
+/// This is intentionally a superset of [`parse_shell_lc_plain_commands`]:
+/// it still rejects substitutions/control-flow constructs, but allows
+/// redirections and redirected statements so prefixes can match commands like
+/// `gh run view ... --log > /tmp/log && echo saved`.
+pub fn parse_shell_lc_commands_for_exec_policy(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let (_, script) = extract_bash_command(command)?;
+
+    let tree = try_parse_shell(script)?;
+    parse_commands_sequence(
+        &tree,
+        script,
+        CommandSequenceMode {
+            allowed_kinds: &[
+                "program",
+                "list",
+                "pipeline",
+                "redirected_statement",
+                "command",
+                "command_name",
+                "word",
+                "string",
+                "string_content",
+                "raw_string",
+                "number",
+                "concatenation",
+                "file_redirect",
+                "variable_assignment",
+                "comment",
+            ],
+            allow_any_punctuation: true,
+            allow_command_attachments: true,
+        },
+    )
+}
+
+struct CommandSequenceMode<'a> {
+    allowed_kinds: &'a [&'a str],
+    allow_any_punctuation: bool,
+    allow_command_attachments: bool,
+}
+
+fn parse_commands_sequence(
+    tree: &Tree,
+    src: &str,
+    mode: CommandSequenceMode<'_>,
+) -> Option<Vec<Vec<String>>> {
     if tree.root_node().has_error() {
         return None;
     }
 
-    // List of allowed (named) node kinds for a "word only commands sequence".
-    // If we encounter a named node that is not in this list we reject.
-    const ALLOWED_KINDS: &[&str] = &[
-        // top level containers
-        "program",
-        "list",
-        "pipeline",
-        // commands & words
-        "command",
-        "command_name",
-        "word",
-        "string",
-        "string_content",
-        "raw_string",
-        "number",
-        "concatenation",
-    ];
     // Allow only safe punctuation / operator tokens; anything else causes reject.
     const ALLOWED_PUNCT_TOKENS: &[&str] = &["&&", "||", ";", "|", "\"", "'"];
 
@@ -58,21 +114,24 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     while let Some(node) = stack.pop() {
         let kind = node.kind();
         if node.is_named() {
-            if !ALLOWED_KINDS.contains(&kind) {
+            if !mode.allowed_kinds.contains(&kind) {
                 return None;
             }
             if kind == "command" {
                 command_nodes.push(node);
             }
         } else {
-            // Reject any punctuation / operator tokens that are not explicitly allowed.
-            if kind.chars().any(|c| "&;|".contains(c)) && !ALLOWED_PUNCT_TOKENS.contains(&kind) {
-                return None;
-            }
-            if !(ALLOWED_PUNCT_TOKENS.contains(&kind) || kind.trim().is_empty()) {
-                // If it's a quote token or operator it's allowed above; we also allow whitespace tokens.
-                // Any other punctuation like parentheses, braces, redirects, backticks, etc are rejected.
-                return None;
+            if !mode.allow_any_punctuation {
+                // Reject any punctuation / operator tokens that are not explicitly allowed.
+                if kind.chars().any(|c| "&;|".contains(c)) && !ALLOWED_PUNCT_TOKENS.contains(&kind)
+                {
+                    return None;
+                }
+                if !(ALLOWED_PUNCT_TOKENS.contains(&kind) || kind.trim().is_empty()) {
+                    // If it's a quote token or operator it's allowed above; we also allow whitespace tokens.
+                    // Any other punctuation like parentheses, braces, redirects, backticks, etc are rejected.
+                    return None;
+                }
             }
         }
         for child in node.children(&mut cursor) {
@@ -85,7 +144,9 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
 
     let mut commands = Vec::new();
     for node in command_nodes {
-        if let Some(words) = parse_plain_command_from_node(node, src) {
+        if let Some(words) =
+            parse_plain_command_from_node(node, src, mode.allow_command_attachments)
+        {
             commands.push(words);
         } else {
             return None;
@@ -136,7 +197,11 @@ pub fn parse_shell_lc_single_command_prefix(command: &[String]) -> Option<Vec<St
     parse_heredoc_command_words(command_node, script)
 }
 
-fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
+fn parse_plain_command_from_node(
+    cmd: tree_sitter::Node,
+    src: &str,
+    allow_command_attachments: bool,
+) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;
     }
@@ -188,6 +253,9 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                 }
                 words.push(concatenated);
             }
+            kind
+                if allow_command_attachments
+                    && matches!(kind, "file_redirect" | "variable_assignment" | "comment") => {}
             _ => return None,
         }
     }
@@ -451,6 +519,39 @@ mod tests {
         let command = vec!["zsh".to_string(), "-lc".to_string(), "ls".to_string()];
         let parsed = parse_shell_lc_plain_commands(&command).unwrap();
         assert_eq!(parsed, vec![vec!["ls".to_string()]]);
+    }
+
+    #[test]
+    fn parse_shell_lc_commands_for_exec_policy_supports_redirects() {
+        let command = vec![
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "gh run view 123 --log > /tmp/out.log && echo saved".to_string(),
+        ];
+        let parsed = parse_shell_lc_commands_for_exec_policy(&command).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                vec![
+                    "gh".to_string(),
+                    "run".to_string(),
+                    "view".to_string(),
+                    "123".to_string(),
+                    "--log".to_string(),
+                ],
+                vec!["echo".to_string(), "saved".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_shell_lc_commands_for_exec_policy_rejects_substitutions() {
+        let command = vec![
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "gh run view \"$RUN_ID\" --log > /tmp/out.log".to_string(),
+        ];
+        assert_eq!(parse_shell_lc_commands_for_exec_policy(&command), None);
     }
 
     #[test]
