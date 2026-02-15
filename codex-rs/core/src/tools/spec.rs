@@ -190,10 +190,7 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             JsonSchema::String {
                 description: Some(
                     r#"Only set if sandbox_permissions is \"require_escalated\".
-                    Request approval from the user to run this command outside the sandbox.
-                    Phrased as a simple question that summarizes the purpose of the
-                    command as it relates to the task at hand - e.g. 'Do you want to
-                    fetch and pull the latest version of this git branch?'"#
+                    Request approval from the user to run the command with escalated permissions."#
                     .to_string(),
                 ),
             },
@@ -206,9 +203,8 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
             JsonSchema::Array {
                 items: Box::new(JsonSchema::String { description: None }),
                 description: Some(
-                    r#"Only specify when sandbox_permissions is `require_escalated`.
-                    Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
-                    Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
+                    r#"Optionally specify if sandbox_permissions is \"require_escalated\".
+                    Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future."#.to_string(),
                 ),
             });
     }
