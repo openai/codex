@@ -2068,42 +2068,19 @@ impl CodexMessageProcessor {
         params: ThreadArchiveParams,
     ) {
         // TODO(jif) mostly rewrite this using sqlite after phase 1
-        let thread_id = match ThreadId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let Some(thread_id) = self
+            .parse_thread_id(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for thread id {thread_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("failed to locate thread id {thread_id}: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let Some(rollout_path) = self
+            .find_thread_rollout_path(request_id.clone(), &thread_id, false)
+            .await
+        else {
+            return;
+        };
 
         match self.archive_thread_common(thread_id, &rollout_path).await {
             Ok(()) => {
@@ -2152,44 +2129,18 @@ impl CodexMessageProcessor {
         params: ThreadUnarchiveParams,
     ) {
         // TODO(jif) mostly rewrite this using sqlite after phase 1
-        let thread_id = match ThreadId::from_string(&params.thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let Some(thread_id) = self
+            .parse_thread_id(request_id.clone(), &params.thread_id)
+            .await
+        else {
+            return;
         };
 
-        let archived_path = match find_archived_thread_path_by_id_str(
-            &self.config.codex_home,
-            &thread_id.to_string(),
-        )
-        .await
-        {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no archived rollout found for thread id {thread_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("failed to locate archived thread id {thread_id}: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let Some(archived_path) = self
+            .find_thread_rollout_path(request_id.clone(), &thread_id, true)
+            .await
+        else {
+            return;
         };
 
         let rollout_path_display = archived_path.display().to_string();
@@ -2378,6 +2329,63 @@ impl CodexMessageProcessor {
 
             self.send_internal_error(request, format!("failed to start rollback: {err}"))
                 .await;
+        }
+    }
+
+    async fn parse_thread_id(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+    ) -> Option<ThreadId> {
+        match ThreadId::from_string(thread_id) {
+            Ok(id) => Some(id),
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                None
+            }
+        }
+    }
+
+    async fn find_thread_rollout_path(
+        &self,
+        request_id: ConnectionRequestId,
+        thread_id: &ThreadId,
+        archived: bool,
+    ) -> Option<PathBuf> {
+        let result = if archived {
+            find_archived_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                .await
+        } else {
+            find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+        };
+
+        match result {
+            Ok(Some(path)) => Some(path),
+            Ok(None) => {
+                let kind = if archived { "archived " } else { "" };
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no {kind}rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                None
+            }
+            Err(err) => {
+                let kind = if archived { "archived " } else { "" };
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate {kind}thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                None
+            }
         }
     }
 
