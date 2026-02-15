@@ -90,6 +90,7 @@ mod notifications;
 pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+mod permissions;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
