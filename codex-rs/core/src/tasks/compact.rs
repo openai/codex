@@ -49,6 +49,7 @@ impl SessionTask for CompactTask {
             } else if has_user_turn_boundary {
                 // Manual `/compact` rewrites history to compacted transcript items and drops
                 // per-turn context entries. Force initial-context reseeding on the next user turn.
+                // TODO(ccunningham): Eliminate this when we have better TurnContextItem diffing (compaction aware)
                 session.mark_initial_context_unseeded_for_next_turn().await;
             }
         } else {
@@ -67,6 +68,7 @@ impl SessionTask for CompactTask {
             } else if has_user_turn_boundary {
                 // Manual `/compact` rewrites history to compacted transcript items and drops
                 // per-turn context entries. Force initial-context reseeding on the next user turn.
+                // TODO(ccunningham): Eliminate this when we have better TurnContextItem diffing (compaction aware)
                 session.mark_initial_context_unseeded_for_next_turn().await;
             }
         }
