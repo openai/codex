@@ -16,11 +16,11 @@ use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
+use crate::permissions::PermissionsPreset;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -171,8 +171,7 @@ pub(crate) enum AppEvent {
 
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
-        preset: ApprovalPreset,
-        return_to_permissions: bool,
+        preset: PermissionsPreset,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -181,7 +180,7 @@ pub(crate) enum AppEvent {
     /// policy change and only acknowledges/dismisses the warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
-        preset: Option<ApprovalPreset>,
+        preset: Option<PermissionsPreset>,
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
@@ -193,25 +192,25 @@ pub(crate) enum AppEvent {
     /// Prompt to enable the Windows sandbox feature before using Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
-        preset: ApprovalPreset,
+        preset: PermissionsPreset,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
-        preset: ApprovalPreset,
+        preset: PermissionsPreset,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
-        preset: ApprovalPreset,
+        preset: PermissionsPreset,
     },
 
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
-        preset: ApprovalPreset,
+        preset: PermissionsPreset,
     },
 
     /// Begin a non-elevated grant of read access for an additional directory.
@@ -230,7 +229,7 @@ pub(crate) enum AppEvent {
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     EnableWindowsSandboxForAgentMode {
-        preset: ApprovalPreset,
+        preset: PermissionsPreset,
         mode: WindowsSandboxEnableMode,
     },
 

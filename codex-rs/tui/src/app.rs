@@ -1747,12 +1747,8 @@ impl App {
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
             }
-            AppEvent::OpenFullAccessConfirmation {
-                preset,
-                return_to_permissions,
-            } => {
-                self.chat_widget
-                    .open_full_access_confirmation(preset, return_to_permissions);
+            AppEvent::OpenFullAccessConfirmation { preset } => {
+                self.chat_widget.open_full_access_confirmation(preset);
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,

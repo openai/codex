@@ -1,13 +1,12 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 3092
 expression: popup
 ---
   Update Model Permissions
 
 › 1. Default      Codex can read and edit files in the current workspace, and
                   run commands. Approval is required to access the internet or
-                  edit other files.
+                  edit other files. (Identical to Agent mode)
   2. Full Access  Codex can edit files outside this workspace and access the
                   internet without asking for approval. Exercise caution when
                   using.
