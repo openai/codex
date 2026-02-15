@@ -66,8 +66,6 @@ pub(crate) struct FooterProps {
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
     pub(crate) quit_shortcut_key: KeyBinding,
-    pub(crate) context_window_percent: Option<i64>,
-    pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
 }
@@ -1086,10 +1084,7 @@ mod tests {
                         compact
                     }
                 } else {
-                    Some(context_window_line(
-                        props.context_window_percent,
-                        props.context_window_used_tokens,
-                    ))
+                    Some(context_window_line(None, None))
                 };
                 let right_width = right_line
                     .as_ref()
@@ -1208,8 +1203,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1226,8 +1219,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1244,8 +1235,6 @@ mod tests {
                 collaboration_modes_enabled: true,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1262,8 +1251,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1280,8 +1267,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1298,8 +1283,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1316,8 +1299,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1334,8 +1315,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: Some(72),
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1352,8 +1331,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: Some(123_456),
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1370,8 +1347,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1388,8 +1363,6 @@ mod tests {
                 collaboration_modes_enabled: false,
                 is_wsl: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                context_window_percent: None,
-                context_window_used_tokens: None,
                 status_line_value: None,
                 status_line_enabled: false,
             },
@@ -1404,8 +1377,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: None,
-            context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1433,8 +1404,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: None,
-            context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1455,8 +1424,6 @@ mod tests {
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: None,
-            context_window_used_tokens: None,
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
         };
@@ -1472,8 +1439,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
         };
@@ -1494,8 +1459,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
@@ -1516,8 +1479,6 @@ mod tests {
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: true,
         };
@@ -1539,8 +1500,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that should truncate before the mode indicator".to_string(),
             )),
@@ -1566,8 +1525,6 @@ mod tests {
             collaboration_modes_enabled: true,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: Some(Line::from(
                 "Status line content that is definitely too long to fit alongside the mode label"
                     .to_string(),
@@ -1603,17 +1560,12 @@ mod tests {
             collaboration_modes_enabled: false,
             is_wsl: false,
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-            context_window_percent: Some(50),
-            context_window_used_tokens: None,
             status_line_value: None,
             status_line_enabled: false,
         };
 
         let screen = render_footer_with_mode_indicator(120, &props, None);
-        let expected_context = context_window_line(
-            props.context_window_percent,
-            props.context_window_used_tokens,
-        );
+        let expected_context = context_window_line(None, None);
         let expected_context_text = expected_context
             .spans
             .iter()

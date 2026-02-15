@@ -2915,8 +2915,6 @@ impl ChatComposer {
             steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            context_window_percent: self.context_window_percent,
-            context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
         }
