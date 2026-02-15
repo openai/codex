@@ -41,7 +41,6 @@ pub(crate) struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
-    pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -64,7 +63,6 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
-        let request_rule_enabled = features.enabled(Feature::RequestRule);
         let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -101,7 +99,6 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
-            request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -174,7 +171,7 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, JsonSchema> {
+fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
             "sandbox_permissions".to_string(),
@@ -200,23 +197,22 @@ fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, Jso
         ),
     ]);
 
-    if include_prefix_rule {
-        properties.insert(
-            "prefix_rule".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::String { description: None }),
-                description: Some(
-                    r#"Only specify when sandbox_permissions is `require_escalated`.
+    properties.insert(
+        "prefix_rule".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some(
+                r#"Only specify when sandbox_permissions is `require_escalated`.
                     Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
                     Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
-                ),
-            });
-    }
+            ),
+        },
+    );
 
     properties
 }
 
-fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
+fn create_exec_command_tool() -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -274,7 +270,7 @@ fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters(include_prefix_rule));
+    properties.extend(create_approval_parameters());
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -337,7 +333,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
+fn create_shell_tool() -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -359,7 +355,7 @@ fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters(include_prefix_rule));
+    properties.extend(create_approval_parameters());
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -390,7 +386,7 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
+fn create_shell_command_tool() -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -422,7 +418,7 @@ fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters(include_prefix_rule));
+    properties.extend(create_approval_parameters());
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -1442,19 +1438,13 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec_with_parallel_support(
-                create_shell_tool(config.request_rule_enabled),
-                true,
-            );
+            builder.push_spec_with_parallel_support(create_shell_tool(), true);
         }
         ConfigShellToolType::Local => {
             builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec_with_parallel_support(
-                create_exec_command_tool(config.request_rule_enabled),
-                true,
-            );
+            builder.push_spec_with_parallel_support(create_exec_command_tool(), true);
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1463,10 +1453,7 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec_with_parallel_support(
-                create_shell_command_tool(config.request_rule_enabled),
-                true,
-            );
+            builder.push_spec_with_parallel_support(create_shell_command_tool(), true);
         }
     }
 
@@ -1832,7 +1819,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(true),
+            create_exec_command_tool(),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
@@ -2815,7 +2802,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool(true);
+        let tool = super::create_shell_tool();
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -2845,7 +2832,7 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool(true);
+        let tool = super::create_shell_command_tool();
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

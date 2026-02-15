@@ -243,14 +243,6 @@ impl ShellHandler {
             freeform,
         } = args;
 
-        let features = session.features();
-        let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-        let prefix_rule = if request_rule_enabled {
-            prefix_rule
-        } else {
-            None
-        };
-
         let mut exec_params = exec_params;
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {

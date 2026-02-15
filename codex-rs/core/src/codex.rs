@@ -2004,7 +2004,6 @@ impl Session {
                 &next.sandbox_policy,
                 next.approval_policy,
                 self.services.exec_policy.current().as_ref(),
-                self.features.enabled(Feature::RequestRule),
                 &next.cwd,
             )
             .into(),
@@ -2624,7 +2623,6 @@ impl Session {
                 &turn_context.sandbox_policy,
                 turn_context.approval_policy,
                 self.services.exec_policy.current().as_ref(),
-                self.features.enabled(Feature::RequestRule),
                 &turn_context.cwd,
             )
             .into(),
