@@ -618,7 +618,7 @@ impl ChatComposer {
         if self.voice.is_some() {
             return None;
         }
-        let [_, textarea_rect, _] = self.layout_areas(area);
+        let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }

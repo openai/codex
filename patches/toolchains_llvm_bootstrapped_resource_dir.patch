@@ -71,15 +71,3 @@ index 6ffc9f7..e02089a 100644
          ],
      }),
  )
-diff --git a/toolchain/llvm/llvm.bzl b/toolchain/llvm/llvm.bzl
-index d068085..c152552 100644
---- a/toolchain/llvm/llvm.bzl
-+++ b/toolchain/llvm/llvm.bzl
-@@ -7,6 +7,7 @@ def declare_llvm_targets(*, suffix = ""):
-         name = "builtin_headers",
-         # Grab whichever version-specific dir is there.
-         path = native.glob(["lib/clang/*"], exclude_directories = 0)[0] + "/include",
-+        visibility = ["//visibility:public"],
-     )
- 
-     # Convenient exports

@@ -1,6 +1,5 @@
 load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
 load("@rules_cc//cc:defs.bzl", "cc_shared_library")
-load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 cc_shared_library(
     name = "clang",
