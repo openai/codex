@@ -547,13 +547,6 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
-    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
-        Ok(notice) => notice,
-        Err(err) => {
-            tracing::warn!(?err, "Failed to detect Ollama wire API");
-            None
-        }
-    };
     let fatal_exit = |tui: &mut Tui, message: String| {
         error!("{message}");
         restore();
