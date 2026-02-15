@@ -4908,6 +4908,12 @@ async fn built_tools(
             } else {
                 HashMap::new()
             };
+        selected_mcp_tools.extend(
+            mcp_tools
+                .iter()
+                .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+                .map(|(name, tool)| (name.clone(), tool.clone())),
+        );
 
         let apps_mcp_tools =
             filter_codex_apps_mcp_tools_only(&mcp_tools, explicitly_enabled.as_ref());
@@ -6039,6 +6045,54 @@ mod tests {
         let connectors = filter_connectors_for_input(
             &connectors,
             &[user_message("use $calendar and then echo the response")],
+            &explicitly_enabled_connectors,
+            &HashMap::new(),
+        );
+        let apps_mcp_tools = filter_codex_apps_mcp_tools_only(&mcp_tools, &connectors);
+        selected_mcp_tools.extend(apps_mcp_tools);
+
+        let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec![
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                "mcp__rmcp__echo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn search_tool_selection_always_keeps_non_codex_apps_tools() {
+        let selected_tool_names = vec!["mcp__codex_apps__calendar_create_event".to_string()];
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let mut selected_mcp_tools = filter_mcp_tools_by_name(&mcp_tools, &selected_tool_names);
+        selected_mcp_tools.extend(
+            mcp_tools
+                .iter()
+                .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+                .map(|(name, tool)| (name.clone(), tool.clone())),
+        );
+        let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+        let explicitly_enabled_connectors = HashSet::new();
+        let connectors = filter_connectors_for_input(
+            &connectors,
+            &[user_message("run calendar tool")],
             &explicitly_enabled_connectors,
             &HashMap::new(),
         );
