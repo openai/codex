@@ -253,9 +253,8 @@ fn parse_plain_command_from_node(
                 }
                 words.push(concatenated);
             }
-            kind
-                if allow_command_attachments
-                    && matches!(kind, "file_redirect" | "variable_assignment" | "comment") => {}
+            kind if allow_command_attachments
+                && matches!(kind, "file_redirect" | "variable_assignment" | "comment") => {}
             _ => return None,
         }
     }
