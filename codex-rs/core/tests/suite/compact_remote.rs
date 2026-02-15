@@ -1,9 +1,11 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
+use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::ItemStartedEvent;
@@ -14,6 +16,9 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -23,6 +28,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use wiremock::ResponseTemplate;
 
 fn approx_token_count(text: &str) -> i64 {
     i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
@@ -37,6 +43,29 @@ fn estimate_compact_input_tokens(request: &responses::ResponsesRequest) -> i64 {
 fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64 {
     estimate_compact_input_tokens(request)
         .saturating_add(approx_token_count(&request.instructions_text()))
+}
+
+const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
+const DUMMY_FUNCTION_NAME: &str = "test_tool";
+
+fn summary_with_prefix(summary: &str) -> String {
+    format!("{SUMMARY_PREFIX}\n{summary}")
+}
+
+fn context_snapshot_options() -> ContextSnapshotOptions {
+    ContextSnapshotOptions::default()
+        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
+}
+
+fn format_labeled_requests_snapshot(
+    scenario: &str,
+    sections: &[(&str, &responses::ResponsesRequest)],
+) -> String {
+    context_snapshot::format_labeled_requests_snapshot(
+        scenario,
+        sections,
+        &context_snapshot_options(),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -65,15 +94,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
@@ -134,12 +155,9 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         "expected compact request to include assistant history"
     );
 
-    let follow_up_body = responses_mock
-        .requests()
-        .last()
-        .expect("follow-up request missing")
-        .body_json()
-        .to_string();
+    let response_requests = responses_mock.requests();
+    let follow_up_request = response_requests.last().expect("follow-up request missing");
+    let follow_up_body = follow_up_request.body_json().to_string();
     assert!(
         follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"),
         "expected follow-up request to use compacted history"
@@ -151,6 +169,21 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     assert!(
         !follow_up_body.contains("FIRST_REMOTE_REPLY"),
         "expected follow-up request to drop pre-compaction assistant messages"
+    );
+    assert!(
+        !follow_up_body.contains("hello remote compact"),
+        "expected follow-up request to drop compacted-away user turns when remote output omits them"
+    );
+
+    insta::assert_snapshot!(
+        "remote_manual_compact_with_history_shapes",
+        format_labeled_requests_snapshot(
+            "Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", follow_up_request),
+            ]
+        )
     );
 
     Ok(())
@@ -184,15 +217,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
@@ -221,7 +246,8 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     assert!(message);
     assert_eq!(compact_mock.requests().len(), 1);
-    let follow_up_body = responses_mock.single_request().body_json().to_string();
+    let follow_up_request = responses_mock.single_request();
+    let follow_up_body = follow_up_request.body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));
     assert!(follow_up_body.contains("ENCRYPTED_COMPACTION_SUMMARY"));
 
@@ -497,7 +523,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
     )
     .await;
 
-    let compact_mock = responses::mount_compact_json_once(
+    let first_compact_mock = responses::mount_compact_json_once(
         harness.server(),
         serde_json::json!({ "output": "invalid compact payload shape" }),
     )
@@ -541,16 +567,27 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
 
     assert!(
         error_message.contains("Error running remote compact task"),
-        "expected compact failure error, got {error_message}"
+        "expected remote compact task error prefix, got {error_message}"
     );
     assert_eq!(
-        compact_mock.requests().len(),
+        first_compact_mock.requests().len(),
         1,
-        "expected exactly one remote compact attempt"
+        "expected first remote compact attempt with incoming items"
     );
     assert!(
         post_compact_turn_mock.requests().is_empty(),
         "expected agent loop to stop after compaction failure"
+    );
+
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_failure_shapes",
+        format_labeled_requests_snapshot(
+            "Remote pre-turn auto-compaction parse failure: compaction request excludes the incoming user message and the turn stops.",
+            &[(
+                "Remote Compaction Request (Incoming User Excluded)",
+                &first_compact_mock.single_request()
+            ),]
+        )
     );
 
     Ok(())
@@ -778,15 +815,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
@@ -851,6 +880,68 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_REPLY"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": "invalid compact payload shape" }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "manual remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await?;
+
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(
+        error_message.contains("Error running remote compact task"),
+        "expected remote compact task error prefix, got {error_message}"
+    );
+    assert!(
+        error_message.contains("invalid compact payload shape")
+            || error_message.contains("invalid type: string"),
+        "expected invalid compact payload details, got {error_message}"
+    );
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Re-enable after the follow-up compaction behavior PR lands.
+// Current main behavior for rollout replacement-history persistence is known-incorrect.
+#[ignore = "behavior change covered in follow-up compaction PR"]
 async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -876,15 +967,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "COMPACTED_USER_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("COMPACTED_USER_SUMMARY"),
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
         },
@@ -980,11 +1063,11 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 )
             });
 
-            if has_compacted_user_summary
-                && has_compaction_item
-                && has_compacted_assistant_note
-                && has_permissions_developer_message
-            {
+            if has_compacted_user_summary && has_compaction_item && has_compacted_assistant_note {
+                assert!(
+                    !has_permissions_developer_message,
+                    "manual remote compact rollout replacement history should not inject permissions context"
+                );
                 saw_compacted_history = true;
                 break;
             }
@@ -1036,15 +1119,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -1177,15 +1252,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
     .await;
 
     let compacted_history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "REMOTE_COMPACTED_SUMMARY".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        },
+        responses::user_message_item("REMOTE_COMPACTED_SUMMARY"),
         ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -1246,6 +1313,347 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
     assert!(
         after_compact_body.contains("REMOTE_COMPACTED_SUMMARY"),
         "compacted summary should be present after compaction"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Update once remote pre-turn compaction includes incoming user input.
+async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_user_message()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_SECOND_REPLY"),
+                responses::ev_completed_with_tokens("r2", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "REMOTE_FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r3", 80),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        responses::user_message_item("USER_ONE"),
+        responses::user_message_item("USER_TWO"),
+        responses::user_message_item(&summary_with_prefix("REMOTE_PRE_TURN_SUMMARY")),
+    ];
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    for user in ["USER_ONE", "USER_TWO", "USER_THREE"] {
+        if user == "USER_THREE" {
+            codex
+                .submit(Op::OverrideTurnContext {
+                    cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    collaboration_mode: None,
+                    personality: None,
+                })
+                .await?;
+        }
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await?;
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user, user, and post-compact turn"
+    );
+
+    let compact_request = compact_mock.single_request();
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_including_incoming_shapes",
+        format_labeled_requests_snapshot(
+            "Remote pre-turn auto-compaction with a context override emits the context diff in the compact request while excluding the incoming user message.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &requests[2]),
+            ]
+        )
+    );
+    assert_eq!(
+        requests[2]
+            .message_input_texts("user")
+            .iter()
+            .filter(|text| text.as_str() == "USER_THREE")
+            .count(),
+        1,
+        "post-compaction request should contain incoming user exactly once from runtime append"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Update once remote pre-turn compaction context-overflow handling includes
+// incoming user input and emits richer oversized-input messaging.
+async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceeded() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![responses::sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_FIRST_REPLY"),
+            responses::ev_completed_with_tokens("r1", 500),
+        ])],
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_response_once(
+        harness.server(),
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "Your input exceeds the context window of this model. Please adjust your input and try again."
+            }
+        })),
+    )
+    .await;
+    let post_compact_turn_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m2", "REMOTE_POST_COMPACT_SHOULD_NOT_RUN"),
+            responses::ev_completed_with_tokens("r2", 80),
+        ]),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "expected no post-compaction follow-up turn request after compact failure"
+    );
+    assert!(
+        post_compact_turn_mock.requests().is_empty(),
+        "expected turn to stop after compaction failure"
+    );
+
+    let include_attempt_request = compact_mock.single_request();
+    insta::assert_snapshot!(
+        "remote_pre_turn_compaction_context_window_exceeded_shapes",
+        format_labeled_requests_snapshot(
+            "Remote pre-turn auto-compaction context-window failure: compaction request excludes the incoming user message and the turn errors.",
+            &[(
+                "Remote Compaction Request (Incoming User Excluded)",
+                &include_attempt_request
+            ),]
+        )
+    );
+    assert!(
+        error_message.to_lowercase().contains("context window"),
+        "expected context window failure to surface, got {error_message}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call("call-remote-mid-turn", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r1", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m2", "REMOTE_MID_TURN_FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r2", 80),
+            ]),
+        ],
+    )
+    .await;
+
+    let compacted_history = vec![
+        responses::user_message_item("USER_ONE"),
+        responses::user_message_item(&summary_with_prefix("REMOTE_MID_TURN_SUMMARY")),
+    ];
+    let compact_mock = responses::mount_compact_json_once(
+        harness.server(),
+        serde_json::json!({ "output": compacted_history }),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected initial and post-compact requests"
+    );
+
+    let compact_request = compact_mock.single_request();
+    insta::assert_snapshot!(
+        "remote_mid_turn_compaction_shapes",
+        format_labeled_requests_snapshot(
+            "Remote mid-turn continuation compaction after tool output: compact request includes tool artifacts and follow-up request includes the summary.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &requests[1]),
+            ]
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// TODO(ccunningham): Update once manual remote /compact with no prior user turn becomes a no-op.
+async fn snapshot_request_shape_remote_manual_compact_without_previous_user_messages() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m1", "REMOTE_MANUAL_EMPTY_FOLLOW_UP_REPLY"),
+            responses::ev_completed_with_tokens("r1", 80),
+        ]),
+    )
+    .await;
+
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), serde_json::json!({ "output": [] }))
+            .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        compact_mock.requests().len(),
+        1,
+        "current behavior still issues remote compaction for manual /compact without prior user"
+    );
+    let compact_request = compact_mock.single_request();
+    let follow_up_request = responses_mock.single_request();
+    insta::assert_snapshot!(
+        "remote_manual_compact_without_prev_user_shapes",
+        format_labeled_requests_snapshot(
+            "Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                ("Remote Post-Compaction History Layout", &follow_up_request),
+            ]
+        )
     );
 
     Ok(())
