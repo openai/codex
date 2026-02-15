@@ -900,15 +900,8 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is already trusted. If not, we need to
-/// show the trust screen.
+/// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // Respect explicit approval/sandbox overrides made by the user.
-        return false;
-    }
-    // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
 }
 
@@ -961,7 +954,6 @@ mod tests {
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(false);
 
@@ -977,7 +969,6 @@ mod tests {
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(true);
 
@@ -1000,7 +991,6 @@ mod tests {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
         };
