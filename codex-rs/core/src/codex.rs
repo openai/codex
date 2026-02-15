@@ -4278,6 +4278,31 @@ pub(crate) async fn run_turn(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, event).await;
+
+    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
+    if let Err(err) = maybe_run_previous_model_inline_compact(
+        &sess,
+        &turn_context,
+        total_usage_tokens_before_compaction,
+    )
+    .await
+    {
+        if !pre_turn_context_items.is_empty() {
+            // Preserve model-visible settings updates even when pre-turn compaction fails
+            // before we can persist turn input.
+            sess.record_conversation_items(&turn_context, &pre_turn_context_items)
+                .await;
+        }
+        let compact_error_prefix = if should_use_remote_compact_task(&turn_context.provider) {
+            "Error running remote compact task"
+        } else {
+            "Error running local compact task"
+        };
+        let event = EventMsg::Error(err.to_error_event(Some(compact_error_prefix.to_string())));
+        sess.send_event(&turn_context, event).await;
+        return None;
+    }
+
     let pre_turn_compaction_outcome = match run_pre_turn_auto_compaction_if_needed(
         &sess,
         &turn_context,
@@ -4758,14 +4783,6 @@ async fn run_pre_turn_auto_compaction_if_needed(
     auto_compact_limit: i64,
     incoming_turn_items: &[ResponseItem],
 ) -> CodexResult<PreTurnCompactionOutcome> {
-    let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    maybe_run_previous_model_inline_compact(
-        sess,
-        turn_context,
-        total_usage_tokens_before_compaction,
-    )
-    .await?;
-
     let total_usage_tokens = sess.get_total_token_usage().await;
     let incoming_items_tokens_estimate = incoming_turn_items
         .iter()
