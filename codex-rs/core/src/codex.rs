@@ -4722,6 +4722,25 @@ fn filter_codex_apps_mcp_tools(
         .collect()
 }
 
+fn merge_apps_mode_mcp_tools(
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    mut selected_mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    apps_mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    preserve_non_codex_apps_tools: bool,
+) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
+    if preserve_non_codex_apps_tools {
+        // Keep non-codex_apps MCP tools available when there is no explicit MCP tool selection.
+        for (name, tool) in mcp_tools {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                selected_mcp_tools.insert(name.clone(), tool.clone());
+            }
+        }
+    }
+
+    selected_mcp_tools.extend(apps_mcp_tools);
+    selected_mcp_tools
+}
+
 fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Option<&str> {
     tool.connector_id.as_deref()
 }
@@ -4902,18 +4921,21 @@ async fn built_tools(
             &skill_name_counts_lower,
         );
 
-        let mut selected_mcp_tools =
-            if let Some(selected_tools) = sess.get_mcp_tool_selection().await {
-                filter_mcp_tools_by_name(&mcp_tools, &selected_tools)
-            } else {
-                HashMap::new()
-            };
+        let selected_tool_names = sess.get_mcp_tool_selection().await;
+        let selected_mcp_tools = if let Some(selected_tools) = selected_tool_names.as_ref() {
+            filter_mcp_tools_by_name(&mcp_tools, selected_tools)
+        } else {
+            HashMap::new()
+        };
 
         let apps_mcp_tools =
             filter_codex_apps_mcp_tools_only(&mcp_tools, explicitly_enabled.as_ref());
-        selected_mcp_tools.extend(apps_mcp_tools);
-
-        mcp_tools = selected_mcp_tools;
+        mcp_tools = merge_apps_mode_mcp_tools(
+            &mcp_tools,
+            selected_mcp_tools,
+            apps_mcp_tools,
+            selected_tool_names.is_none(),
+        );
     }
 
     let app_tools = connectors
@@ -6053,6 +6075,61 @@ mod tests {
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 "mcp__rmcp__echo".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn apps_mode_keeps_non_codex_apps_mcp_tools_without_selection() {
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+
+        let merged = merge_apps_mode_mcp_tools(&mcp_tools, HashMap::new(), HashMap::new(), true);
+        let mut tool_names: Vec<String> = merged.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(tool_names, vec!["mcp__rmcp__echo".to_string()]);
+    }
+
+    #[test]
+    fn apps_mode_respects_explicit_tool_selection() {
+        let mcp_tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                make_mcp_tool(
+                    CODEX_APPS_MCP_SERVER_NAME,
+                    "calendar_create_event",
+                    Some("calendar"),
+                    Some("Calendar"),
+                ),
+            ),
+            (
+                "mcp__rmcp__echo".to_string(),
+                make_mcp_tool("rmcp", "echo", None, None),
+            ),
+        ]);
+        let selected = HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            mcp_tools["mcp__codex_apps__calendar_create_event"].clone(),
+        )]);
+
+        let merged = merge_apps_mode_mcp_tools(&mcp_tools, selected, HashMap::new(), false);
+        let mut tool_names: Vec<String> = merged.into_keys().collect();
+        tool_names.sort();
+        assert_eq!(
+            tool_names,
+            vec!["mcp__codex_apps__calendar_create_event".to_string()]
         );
     }
 
