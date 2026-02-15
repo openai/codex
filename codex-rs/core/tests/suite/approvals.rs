@@ -1958,3 +1958,70 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
 
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn gh_run_view_prefix_rule_allows_redirected_command_without_prompt() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).expect("create rules dir");
+            fs::write(
+                rules_dir.join("default.rules"),
+                r#"prefix_rule(pattern=["gh", "run", "view"], decision="allow")"#,
+            )
+            .expect("write default rules");
+        })
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        });
+    let test = builder.build(&server).await?;
+
+    let call_id = "gh-run-view-prefix";
+    let command = "gh run view --help > /tmp/codex-gh-run-view-help.log && echo saved";
+    let (event, expected_command) = ActionKind::RunCommand { command }
+        .prepare(&test, &server, call_id, SandboxPermissions::UseDefault)
+        .await?;
+    assert_eq!(expected_command.as_deref(), Some(command));
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-gh-run-view-prefix-1"),
+            event,
+            ev_completed("resp-gh-run-view-prefix-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-gh-run-view-prefix-1", "done"),
+            ev_completed("resp-gh-run-view-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "gh run view prefix should skip approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    wait_for_completion_without_approval(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert!(
+        output.exit_code.is_some(),
+        "expected command to execute and return an exit code"
+    );
+
+    Ok(())
+}
