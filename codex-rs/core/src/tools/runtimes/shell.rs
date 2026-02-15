@@ -28,6 +28,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::AdditionalPermissions;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -41,6 +42,7 @@ pub struct ShellRequest {
     pub explicit_env_overrides: std::collections::HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<AdditionalPermissions>,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -53,6 +55,7 @@ pub(crate) struct ApprovalKey {
     command: Vec<String>,
     cwd: PathBuf,
     sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<AdditionalPermissions>,
 }
 
 impl ShellRuntime {
@@ -86,6 +89,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
         }]
     }
 
@@ -118,6 +122,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
+                        req.additional_permissions.clone(),
                     )
                     .await
             })
@@ -131,13 +136,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
         if req.sandbox_permissions.requires_escalated_permissions()
-            || matches!(
-                req.exec_approval_requirement,
-                ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    ..
-                }
-            )
+            || (!req.sandbox_permissions.uses_additional_permissions()
+                && matches!(
+                    req.exec_approval_requirement,
+                    ExecApprovalRequirement::Skip {
+                        bypass_sandbox: true,
+                        ..
+                    }
+                ))
         {
             SandboxOverride::BypassSandboxFirstAttempt
         } else {
@@ -217,6 +223,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.env,
             req.timeout_ms.into(),
             req.sandbox_permissions,
+            req.additional_permissions.clone(),
             req.justification.clone(),
         )?;
         let env = attempt
