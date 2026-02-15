@@ -25,7 +25,7 @@ use serde_json::Value;
 use serde_json::json;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
-    "apps tools (`mcp__codex_apps__...`) are hidden until you search for them.",
+    "MCP tools of the apps () are hidden until you search for them with this tool",
     "Matching tools are added to available `tools` and available for the remainder of the current session/thread.",
 ];
 const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";

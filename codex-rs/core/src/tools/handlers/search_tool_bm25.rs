@@ -43,7 +43,6 @@ struct ToolEntry {
     server_name: String,
     title: Option<String>,
     description: Option<String>,
-    connector_id: Option<String>,
     connector_name: Option<String>,
     input_keys: Vec<String>,
     search_text: String,
@@ -67,7 +66,6 @@ impl ToolEntry {
                 .tool
                 .description
                 .map(|description| description.to_string()),
-            connector_id: info.connector_id,
             connector_name: info.connector_name,
             input_keys,
             search_text,
@@ -173,7 +171,6 @@ impl ToolHandler for SearchToolBm25Handler {
                 "server": entry.server_name.clone(),
                 "title": entry.title.clone(),
                 "description": entry.description.clone(),
-                "connector_id": entry.connector_id.clone(),
                 "connector_name": entry.connector_name.clone(),
                 "input_keys": entry.input_keys.clone(),
                 "score": result.score,
@@ -242,12 +239,6 @@ fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> Stri
         && !connector_name.trim().is_empty()
     {
         parts.push(connector_name.to_string());
-    }
-
-    if let Some(connector_id) = info.connector_id.as_deref()
-        && !connector_id.trim().is_empty()
-    {
-        parts.push(connector_id.to_string());
     }
 
     if !input_keys.is_empty() {
