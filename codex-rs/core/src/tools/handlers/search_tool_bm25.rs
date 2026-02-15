@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::connectors;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
@@ -119,15 +118,12 @@ impl ToolHandler for SearchToolBm25Handler {
             .await
             .list_all_tools()
             .await;
-        let mcp_tools = if turn.config.features.enabled(Feature::Apps) {
-            let connectors = connectors::with_app_enabled_state(
-                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-                &turn.config,
-            );
-            filter_codex_apps_mcp_tools(mcp_tools, &connectors)
-        } else {
-            mcp_tools
-        };
+
+        let connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn.config,
+        );
+        let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
