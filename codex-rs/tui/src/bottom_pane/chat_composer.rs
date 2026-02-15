@@ -784,9 +784,13 @@ impl ChatComposer {
         enabled
     }
 
+    pub(crate) fn is_vim_insert(&self) -> bool {
+        self.textarea.is_vim_insert()
+    }
+
     fn vim_mode_indicator_span(&self) -> Option<Span<'static>> {
         self.textarea.vim_mode_label().map(|label| match label {
-            "Normal" => "Vim: Normal".yellow(),
+            "Normal" => "Vim: Normal".magenta(),
             "Insert" => "Vim: Insert".green(),
             _ => unreachable!(),
         })
