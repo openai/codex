@@ -148,6 +148,7 @@ use crate::mcp::effective_mcp_servers;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpConnectionManagerInitializeParams;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_codex_apps_mcp_tools_only;
 use crate::mcp_connection_manager::filter_mcp_tools_by_name;
@@ -1381,13 +1382,15 @@ impl Session {
             .await
             .initialize(
                 &mcp_servers,
-                config.mcp_oauth_credentials_store_mode,
-                auth_statuses.clone(),
-                tx_event.clone(),
-                cancel_token,
-                sandbox_state,
-                config.codex_home.clone(),
-                codex_apps_tools_cache_key(auth),
+                McpConnectionManagerInitializeParams {
+                    store_mode: config.mcp_oauth_credentials_store_mode,
+                    auth_entries: auth_statuses.clone(),
+                    tx_event: tx_event.clone(),
+                    cancel_token,
+                    initial_sandbox_state: sandbox_state,
+                    codex_home: config.codex_home.clone(),
+                    codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth),
+                },
             )
             .await;
         if !required_mcp_servers.is_empty() {
@@ -3001,13 +3004,15 @@ impl Session {
         refreshed_manager
             .initialize(
                 &mcp_servers,
-                store_mode,
-                auth_statuses,
-                self.get_tx_event(),
-                cancel_token,
-                sandbox_state,
-                config.codex_home.clone(),
-                codex_apps_tools_cache_key(auth.as_ref()),
+                McpConnectionManagerInitializeParams {
+                    store_mode,
+                    auth_entries: auth_statuses,
+                    tx_event: self.get_tx_event(),
+                    cancel_token,
+                    initial_sandbox_state: sandbox_state,
+                    codex_home: config.codex_home.clone(),
+                    codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+                },
             )
             .await;
 

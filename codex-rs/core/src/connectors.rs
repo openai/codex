@@ -23,6 +23,7 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpConnectionManagerInitializeParams;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::token_data::TokenData;
 
@@ -135,13 +136,15 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     mcp_connection_manager
         .initialize(
             &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_status_entries,
-            tx_event,
-            cancel_token.clone(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth.as_ref()),
+            McpConnectionManagerInitializeParams {
+                store_mode: config.mcp_oauth_credentials_store_mode,
+                auth_entries: auth_status_entries,
+                tx_event,
+                cancel_token: cancel_token.clone(),
+                initial_sandbox_state: sandbox_state,
+                codex_home: config.codex_home.clone(),
+                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+            },
         )
         .await;
 

@@ -24,6 +24,7 @@ use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::McpConnectionManagerInitializeParams;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 
@@ -208,13 +209,15 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     mcp_connection_manager
         .initialize(
             &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_status_entries.clone(),
-            tx_event,
-            cancel_token.clone(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth.as_ref()),
+            McpConnectionManagerInitializeParams {
+                store_mode: config.mcp_oauth_credentials_store_mode,
+                auth_entries: auth_status_entries.clone(),
+                tx_event,
+                cancel_token: cancel_token.clone(),
+                initial_sandbox_state: sandbox_state,
+                codex_home: config.codex_home.clone(),
+                codex_apps_tools_cache_key: codex_apps_tools_cache_key(auth.as_ref()),
+            },
         )
         .await;
 

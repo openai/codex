@@ -388,12 +388,16 @@ impl AsyncManagedClient {
                 match start_server_task(
                     server_name,
                     client,
-                    config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                    config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
-                    startup_tool_filter,
-                    tx_event,
-                    elicitation_requests,
-                    codex_apps_tools_cache_context,
+                    StartServerTaskParams {
+                        startup_timeout: config
+                            .startup_timeout_sec
+                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
+                        tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                        tool_filter: startup_tool_filter,
+                        tx_event,
+                        elicitation_requests,
+                        codex_apps_tools_cache_context,
+                    },
                 )
                 .or_cancel(&cancel_token)
                 .await
@@ -473,18 +477,31 @@ pub(crate) struct McpConnectionManager {
     elicitation_requests: ElicitationRequestManager,
 }
 
+pub(crate) struct McpConnectionManagerInitializeParams {
+    pub(crate) store_mode: OAuthCredentialsStoreMode,
+    pub(crate) auth_entries: HashMap<String, McpAuthStatusEntry>,
+    pub(crate) tx_event: Sender<Event>,
+    pub(crate) cancel_token: CancellationToken,
+    pub(crate) initial_sandbox_state: SandboxState,
+    pub(crate) codex_home: PathBuf,
+    pub(crate) codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+}
+
 impl McpConnectionManager {
     pub async fn initialize(
         &mut self,
         mcp_servers: &HashMap<String, McpServerConfig>,
-        store_mode: OAuthCredentialsStoreMode,
-        auth_entries: HashMap<String, McpAuthStatusEntry>,
-        tx_event: Sender<Event>,
-        cancel_token: CancellationToken,
-        initial_sandbox_state: SandboxState,
-        codex_home: PathBuf,
-        codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        params: McpConnectionManagerInitializeParams,
     ) {
+        let McpConnectionManagerInitializeParams {
+            store_mode,
+            auth_entries,
+            tx_event,
+            cancel_token,
+            initial_sandbox_state,
+            codex_home,
+            codex_apps_tools_cache_key,
+        } = params;
         if cancel_token.is_cancelled() {
             return;
         }
@@ -1125,13 +1142,16 @@ impl From<anyhow::Error> for StartupOutcomeError {
 async fn start_server_task(
     server_name: String,
     client: Arc<RmcpClient>,
-    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
-    tool_timeout: Duration,
-    tool_filter: ToolFilter,
-    tx_event: Sender<Event>,
-    elicitation_requests: ElicitationRequestManager,
-    codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    params: StartServerTaskParams,
 ) -> Result<ManagedClient, StartupOutcomeError> {
+    let StartServerTaskParams {
+        startup_timeout,
+        tool_timeout,
+        tool_filter,
+        tx_event,
+        elicitation_requests,
+        codex_apps_tools_cache_context,
+    } = params;
     let params = InitializeRequestParams {
         meta: None,
         capabilities: ClientCapabilities {
@@ -1208,6 +1228,15 @@ async fn start_server_task(
     };
 
     Ok(managed)
+}
+
+struct StartServerTaskParams {
+    startup_timeout: Option<Duration>, // TODO: cancel_token should handle this.
+    tool_timeout: Duration,
+    tool_filter: ToolFilter,
+    tx_event: Sender<Event>,
+    elicitation_requests: ElicitationRequestManager,
+    codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
 async fn make_rmcp_client(
