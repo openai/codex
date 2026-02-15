@@ -170,11 +170,15 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         !follow_up_body.contains("FIRST_REMOTE_REPLY"),
         "expected follow-up request to drop pre-compaction assistant messages"
     );
+    assert!(
+        !follow_up_body.contains("hello remote compact"),
+        "expected follow-up request to drop compacted-away user turns when remote output omits them"
+    );
 
     insta::assert_snapshot!(
         "remote_manual_compact_with_history_shapes",
         format_labeled_requests_snapshot(
-            "Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.",
+            "Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.",
             &[
                 ("Remote Compaction Request", &compact_request),
                 ("Remote Post-Compaction History Layout", follow_up_request),

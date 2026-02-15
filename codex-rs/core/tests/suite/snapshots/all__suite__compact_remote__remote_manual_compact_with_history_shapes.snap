@@ -1,8 +1,9 @@
 ---
 source: core/tests/suite/compact_remote.rs
-expression: "format_labeled_requests_snapshot(\"Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\",\nresponses_mock.requests().last().expect(\"follow-up request missing\")),])"
+assertion_line: 178
+expression: "format_labeled_requests_snapshot(\"Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", follow_up_request),])"
 ---
-Scenario: Remote manual /compact with prior user history compacts existing history and follow-up includes compact summary plus new user message.
+Scenario: Remote manual /compact where remote compact output is summary-only: follow-up layout uses returned summary plus new user message.
 
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
