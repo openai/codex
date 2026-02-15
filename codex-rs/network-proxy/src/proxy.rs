@@ -3,7 +3,7 @@ use crate::config;
 use crate::http_proxy;
 use crate::metadata::proxy_username_for_attempt_id;
 use crate::network_policy::NetworkPolicyDecider;
-use crate::runtime::BlockedRequest;
+use crate::runtime::BlockedRequestObserver;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -72,6 +72,7 @@ pub struct NetworkProxyBuilder {
     admin_addr: Option<SocketAddr>,
     managed_by_codex: bool,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
 }
 
 impl Default for NetworkProxyBuilder {
@@ -83,6 +84,7 @@ impl Default for NetworkProxyBuilder {
             admin_addr: None,
             managed_by_codex: true,
             policy_decider: None,
+            blocked_request_observer: None,
         }
     }
 }
@@ -126,12 +128,31 @@ impl NetworkProxyBuilder {
         self
     }
 
+    pub fn blocked_request_observer<O>(mut self, observer: O) -> Self
+    where
+        O: BlockedRequestObserver,
+    {
+        self.blocked_request_observer = Some(Arc::new(observer));
+        self
+    }
+
+    pub fn blocked_request_observer_arc(
+        mut self,
+        observer: Arc<dyn BlockedRequestObserver>,
+    ) -> Self {
+        self.blocked_request_observer = Some(observer);
+        self
+    }
+
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = self.state.ok_or_else(|| {
             anyhow::anyhow!(
                 "NetworkProxyBuilder requires a state; supply one via builder.state(...)"
             )
         })?;
+        state
+            .set_blocked_request_observer(self.blocked_request_observer.clone())
+            .await;
         let current_cfg = state.current_cfg().await?;
         let (requested_http_addr, requested_socks_addr, requested_admin_addr, reserved_listeners) =
             if self.managed_by_codex {
@@ -397,13 +418,6 @@ impl NetworkProxy {
 
     pub fn admin_addr(&self) -> SocketAddr {
         self.admin_addr
-    }
-
-    pub async fn latest_blocked_request_for_attempt(
-        &self,
-        attempt_id: &str,
-    ) -> Result<Option<BlockedRequest>> {
-        self.state.latest_blocked_for_attempt(attempt_id).await
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {

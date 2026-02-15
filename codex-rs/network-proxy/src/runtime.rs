@@ -20,6 +20,7 @@ use globset::GlobSet;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -162,9 +163,33 @@ pub trait ConfigReloader: Send + Sync {
     async fn reload_now(&self) -> Result<ConfigState>;
 }
 
+#[async_trait]
+pub trait BlockedRequestObserver: Send + Sync + 'static {
+    async fn on_blocked_request(&self, request: BlockedRequest);
+}
+
+#[async_trait]
+impl<O: BlockedRequestObserver + ?Sized> BlockedRequestObserver for Arc<O> {
+    async fn on_blocked_request(&self, request: BlockedRequest) {
+        (**self).on_blocked_request(request).await
+    }
+}
+
+#[async_trait]
+impl<F, Fut> BlockedRequestObserver for F
+where
+    F: Fn(BlockedRequest) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send,
+{
+    async fn on_blocked_request(&self, request: BlockedRequest) {
+        (self)(request).await
+    }
+}
+
 pub struct NetworkProxyState {
     state: Arc<RwLock<ConfigState>>,
     reloader: Arc<dyn ConfigReloader>,
+    blocked_request_observer: Arc<RwLock<Option<Arc<dyn BlockedRequestObserver>>>>,
 }
 
 impl std::fmt::Debug for NetworkProxyState {
@@ -180,16 +205,34 @@ impl Clone for NetworkProxyState {
         Self {
             state: self.state.clone(),
             reloader: self.reloader.clone(),
+            blocked_request_observer: self.blocked_request_observer.clone(),
         }
     }
 }
 
 impl NetworkProxyState {
     pub fn with_reloader(state: ConfigState, reloader: Arc<dyn ConfigReloader>) -> Self {
+        Self::with_reloader_and_blocked_observer(state, reloader, None)
+    }
+
+    pub fn with_reloader_and_blocked_observer(
+        state: ConfigState,
+        reloader: Arc<dyn ConfigReloader>,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) -> Self {
         Self {
             state: Arc::new(RwLock::new(state)),
             reloader,
+            blocked_request_observer: Arc::new(RwLock::new(blocked_request_observer)),
         }
+    }
+
+    pub async fn set_blocked_request_observer(
+        &self,
+        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
+    ) {
+        let mut observer = self.blocked_request_observer.write().await;
+        *observer = blocked_request_observer;
     }
 
     pub async fn current_cfg(&self) -> Result<NetworkProxyConfig> {
@@ -312,6 +355,8 @@ impl NetworkProxyState {
 
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
+        let blocked_for_observer = entry.clone();
+        let blocked_request_observer = self.blocked_request_observer.read().await.clone();
         let violation_line = blocked_request_violation_log_line(&entry);
         let mut guard = self.state.write().await;
         let host = entry.host.clone();
@@ -340,6 +385,11 @@ impl NetworkProxyState {
             guard.blocked.len()
         );
         debug!("{violation_line}");
+        drop(guard);
+
+        if let Some(observer) = blocked_request_observer {
+            observer.on_blocked_request(blocked_for_observer).await;
+        }
         Ok(())
     }
 
@@ -349,20 +399,6 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.blocked.iter().cloned().collect())
-    }
-
-    pub async fn latest_blocked_for_attempt(
-        &self,
-        attempt_id: &str,
-    ) -> Result<Option<BlockedRequest>> {
-        self.reload_if_needed().await?;
-        let guard = self.state.read().await;
-        Ok(guard
-            .blocked
-            .iter()
-            .rev()
-            .find(|entry| entry.attempt_id.as_deref() == Some(attempt_id))
-            .cloned())
     }
 
     /// Drain and return the buffered blocked-request entries in FIFO order.
@@ -690,64 +726,6 @@ mod tests {
         assert_eq!(drained[0].decision, snapshot[0].decision);
         assert_eq!(drained[0].source, snapshot[0].source);
         assert_eq!(drained[0].port, snapshot[0].port);
-    }
-
-    #[tokio::test]
-    async fn latest_blocked_for_attempt_returns_latest_matching_entry() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings::default());
-
-        state
-            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                host: "one.example.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                attempt_id: Some("attempt-1".to_string()),
-                decision: Some("ask".to_string()),
-                source: Some("decider".to_string()),
-                port: Some(80),
-            }))
-            .await
-            .expect("entry should be recorded");
-        state
-            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                host: "two.example.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                attempt_id: Some("attempt-2".to_string()),
-                decision: Some("ask".to_string()),
-                source: Some("decider".to_string()),
-                port: Some(80),
-            }))
-            .await
-            .expect("entry should be recorded");
-        state
-            .record_blocked(BlockedRequest::new(BlockedRequestArgs {
-                host: "three.example.com".to_string(),
-                reason: "not_allowed".to_string(),
-                client: None,
-                method: Some("GET".to_string()),
-                mode: None,
-                protocol: "http".to_string(),
-                attempt_id: Some("attempt-1".to_string()),
-                decision: Some("ask".to_string()),
-                source: Some("decider".to_string()),
-                port: Some(80),
-            }))
-            .await
-            .expect("entry should be recorded");
-
-        let latest = state
-            .latest_blocked_for_attempt("attempt-1")
-            .await
-            .expect("lookup should succeed")
-            .expect("attempt should have a blocked entry");
-        assert_eq!(latest.host, "three.example.com");
     }
 
     #[tokio::test]

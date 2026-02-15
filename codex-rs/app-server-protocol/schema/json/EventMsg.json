@@ -1438,6 +1438,17 @@
               "description": "The command's working directory.",
               "type": "string"
             },
+            "network_approval_context": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NetworkApprovalContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional network context for a blocked request that can be approved."
+            },
             "parsed_cmd": {
               "items": {
                 "$ref": "#/definitions/ParsedCommand"
@@ -3312,6 +3323,30 @@
       "enum": [
         "restricted",
         "enabled"
+      ],
+      "type": "string"
+    },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
       ],
       "type": "string"
     },
@@ -6307,6 +6342,17 @@
         "cwd": {
           "description": "The command's working directory.",
           "type": "string"
+        },
+        "network_approval_context": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional network context for a blocked request that can be approved."
         },
         "parsed_cmd": {
           "items": {

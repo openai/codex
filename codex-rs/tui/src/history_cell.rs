@@ -49,6 +49,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::local_image_label_text;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -168,6 +169,7 @@ pub(crate) struct UserHistoryCell {
     pub text_elements: Vec<TextElement>,
     #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
+    pub remote_image_urls: Vec<String>,
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -236,10 +238,22 @@ fn build_user_message_lines_with_elements(
     raw_lines
 }
 
+fn remote_image_display_line(style: Style, index: usize) -> Line<'static> {
+    Line::from(local_image_label_text(index)).style(style)
+}
+
+fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    while lines
+        .last()
+        .is_some_and(|line| line.spans.iter().all(|span| span.content.trim().is_empty()))
+    {
+        lines.pop();
+    }
+    lines
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-
         let wrap_width = width
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
@@ -249,13 +263,35 @@ impl HistoryCell for UserHistoryCell {
         let style = user_message_style();
         let element_style = style.fg(Color::Cyan);
 
-        let wrapped = if self.text_elements.is_empty() {
-            word_wrap_lines(
-                self.message.split('\n').map(|l| Line::from(l).style(style)),
+        let wrapped_remote_images = if self.remote_image_urls.is_empty() {
+            None
+        } else {
+            Some(word_wrap_lines(
+                self.remote_image_urls
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _url)| {
+                        remote_image_display_line(element_style, idx.saturating_add(1))
+                    }),
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            ))
+        };
+
+        let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
+            None
+        } else if self.text_elements.is_empty() {
+            let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
+            let wrapped = word_wrap_lines(
+                message_without_trailing_newlines
+                    .split('\n')
+                    .map(|line| Line::from(line).style(style)),
                 // Wrap algorithm matches textarea.rs.
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            )
+            );
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
         } else {
             let raw_lines = build_user_message_lines_with_elements(
                 &self.message,
@@ -263,17 +299,56 @@ impl HistoryCell for UserHistoryCell {
                 style,
                 element_style,
             );
-            word_wrap_lines(
+            let wrapped = word_wrap_lines(
                 raw_lines,
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            )
+            );
+            let wrapped = trim_trailing_blank_lines(wrapped);
+            (!wrapped.is_empty()).then_some(wrapped)
         };
 
-        lines.push(Line::from("").style(style));
-        lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
+        if wrapped_remote_images.is_none() && wrapped_message.is_none() {
+            return Vec::new();
+        }
+
+        let mut lines: Vec<Line<'static>> = vec![Line::from("").style(style)];
+
+        if let Some(wrapped_remote_images) = wrapped_remote_images {
+            lines.extend(prefix_lines(
+                wrapped_remote_images,
+                "  ".into(),
+                "  ".into(),
+            ));
+            if wrapped_message.is_some() {
+                lines.push(Line::from("").style(style));
+            }
+        }
+
+        if let Some(wrapped_message) = wrapped_message {
+            lines.extend(prefix_lines(
+                wrapped_message,
+                "› ".bold().dim(),
+                "  ".into(),
+            ));
+        }
+
         lines.push(Line::from("").style(style));
         lines
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+
+    fn desired_transcript_height(&self, width: u16) -> u16 {
+        self.display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
     }
 }
 
@@ -1018,11 +1093,13 @@ pub(crate) fn new_user_prompt(
     message: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
+    remote_image_urls: Vec<String>,
 ) -> UserHistoryCell {
     UserHistoryCell {
         message,
         text_elements,
         local_image_paths,
+        remote_image_urls,
     }
 }
 
@@ -3359,6 +3436,7 @@ mod tests {
             message: msg.to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
@@ -3367,6 +3445,120 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_renders_remote_image_urls() {
+        let cell = UserHistoryCell {
+            message: "describe these".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/example.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("describe these"));
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_summarizes_inline_data_urls() {
+        let cell = UserHistoryCell {
+            message: "describe inline image".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["data:image/png;base64,aGVsbG8=".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("describe inline image"));
+    }
+
+    #[test]
+    fn user_history_cell_numbers_multiple_remote_images() {
+        let cell = UserHistoryCell {
+            message: "describe both".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        assert!(rendered.contains("[Image #1]"));
+        assert!(rendered.contains("[Image #2]"));
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn user_history_cell_height_matches_rendered_lines_with_remote_images() {
+        let cell = UserHistoryCell {
+            message: "line one\nline two".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![
+                "https://example.com/one.png".to_string(),
+                "https://example.com/two.png".to_string(),
+            ],
+        };
+
+        let width = 80;
+        let rendered_len: u16 = cell
+            .display_lines(width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX);
+        assert_eq!(cell.desired_height(width), rendered_len);
+        assert_eq!(cell.desired_transcript_height(width), rendered_len);
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines() {
+        let cell = UserHistoryCell {
+            message: "line one\n\n   \n\t \n".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("line one")));
+    }
+
+    #[test]
+    fn user_history_cell_trims_trailing_blank_message_lines_with_text_elements() {
+        let message = "tokenized\n\n\n".to_string();
+        let cell = UserHistoryCell {
+            message,
+            text_elements: vec![TextElement::new(
+                (0..8).into(),
+                Some("tokenized".to_string()),
+            )],
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec!["https://example.com/one.png".to_string()],
+        };
+
+        let rendered = render_lines(&cell.display_lines(80));
+        let trailing_blank_count = rendered
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty())
+            .count();
+        assert_eq!(trailing_blank_count, 1);
+        assert!(rendered.iter().any(|line| line.contains("tokenized")));
     }
 
     #[test]

@@ -3451,6 +3451,17 @@
               "description": "The command's working directory.",
               "type": "string"
             },
+            "network_approval_context": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NetworkApprovalContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional network context for a blocked request that can be approved."
+            },
             "parsed_cmd": {
               "items": {
                 "$ref": "#/definitions/ParsedCommand"
@@ -5412,6 +5423,19 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchSessionCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionCompletedNotification",
+      "type": "object"
+    },
     "FuzzyFileSearchSessionUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -6247,6 +6271,30 @@
       "enum": [
         "restricted",
         "enabled"
+      ],
+      "type": "string"
+    },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
       ],
       "type": "string"
     },
@@ -8501,6 +8549,26 @@
             "params"
           ],
           "title": "FuzzyFileSearch/sessionUpdatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionCompleted"
+              ],
+              "title": "FuzzyFileSearch/sessionCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionCompletedNotification",
           "type": "object"
         },
         {
@@ -12578,6 +12646,9 @@
           "displayName": {
             "type": "string"
           },
+          "hidden": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -12618,6 +12689,7 @@
           "defaultReasoningEffort",
           "description",
           "displayName",
+          "hidden",
           "id",
           "isDefault",
           "model",
@@ -12632,6 +12704,13 @@
             "description": "Opaque pagination cursor returned by a previous call.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "includeHidden": {
+            "description": "When true, include models that are hidden from the default picker list.",
+            "type": [
+              "boolean",
               "null"
             ]
           },

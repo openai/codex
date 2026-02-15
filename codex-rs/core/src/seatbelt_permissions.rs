@@ -6,10 +6,12 @@ use std::path::PathBuf;
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum MacOsPreferencesPermission {
+    // IMPORTANT: ReadOnly needs to be the default because it's the security-sensitive default.
+    // it's important for allowing cf prefs to work.
     #[default]
-    None,
     ReadOnly,
     ReadWrite,
+    None,
 }
 
 #[allow(dead_code)]
@@ -164,7 +166,6 @@ mod tests {
     use super::MacOsPreferencesPermission;
     use super::MacOsSeatbeltProfileExtensions;
     use super::build_seatbelt_extensions;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn preferences_read_only_emits_read_clauses_only() {
@@ -239,8 +240,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_extensions_emit_empty_policy() {
+    fn default_extensions_emit_preferences_read_only_policy() {
         let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions::default());
-        assert_eq!(policy.policy, "");
+        assert!(policy.policy.contains("(allow user-preference-read)"));
+        assert!(!policy.policy.contains("(allow user-preference-write)"));
     }
 }
