@@ -123,7 +123,13 @@ impl GitInfoProvider for RealGitInfo {
     }
 
     async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_core::git_info::current_branch_name(path).await
+        if let Some(branch) = codex_core::git_info::current_branch_name(path).await {
+            Some(branch)
+        } else {
+            codex_core::git_info::collect_git_info(path)
+                .await
+                .and_then(|git_info| git_info.branch)
+        }
     }
 }
 
