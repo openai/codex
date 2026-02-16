@@ -249,3 +249,55 @@ def test_jsonrpc_error_mapping_and_retry_helper():
 
         with pytest.raises(ServerBusyError):
             client.request_with_retry_on_overload("test/always-overload", max_attempts=2)
+
+
+def test_thread_lifecycle_and_steer_typed_schema_helpers():
+    with make_client() as client:
+        client.initialize()
+        started = client.thread_start_typed(model="gpt-5")
+
+        forked = client.thread_fork_typed(started.thread.id)
+        assert forked.thread.id.startswith("thr_")
+
+        _ = client.thread_archive_typed(started.thread.id)
+        unarchived = client.thread_unarchive_schema(started.thread.id)
+        assert unarchived.thread.id == started.thread.id
+
+        _ = client.thread_set_name_typed(started.thread.id, "renamed")
+        while True:
+            evt = client.next_notification()
+            if evt.method == "thread/nameUpdated":
+                parsed = client.parse_notification_typed(evt)
+                assert parsed is not None
+                assert getattr(parsed, "thread_name", None) == "renamed"
+                break
+
+        turn = client.turn_text_typed(started.thread.id, "hello")
+        steered = client.turn_steer_typed(started.thread.id, turn.turn.id, "continue")
+        assert steered.turn_id == turn.turn.id
+
+
+def test_extended_notification_parsers_include_item_and_usage_events():
+    with make_client() as client:
+        client.initialize()
+        thread_id = client.thread_start()["thread"]["id"]
+        turn_id = client.turn_text(thread_id, "hello")["turn"]["id"]
+
+        saw_item_started = False
+        saw_item_completed = False
+        saw_usage = False
+        while True:
+            n = client.next_notification()
+            typed = client.parse_notification_typed(n)
+            schema = client.parse_notification_schema(n)
+            if n.method == "item/started":
+                saw_item_started = typed is not None and schema is not None
+            if n.method == "item/completed":
+                saw_item_completed = typed is not None and schema is not None
+            if n.method == "thread/tokenUsageUpdated":
+                saw_usage = typed is not None and schema is not None
+            if n.method == "turn/completed" and (n.params or {}).get("turn", {}).get("id") == turn_id:
+                # consume through usage event emitted after completion in fake server
+                continue
+            if saw_item_started and saw_item_completed and saw_usage:
+                break

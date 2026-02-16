@@ -39,6 +39,35 @@ for raw in sys.stdin:
         elif method == "thread/read":
             tid = params["threadId"]
             send({"id": req_id, "result": {"thread": {"id": tid, "turns": []}}})
+        elif method == "thread/fork":
+            thread_counter += 1
+            tid = f"thr_{thread_counter}"
+            send(
+                {
+                    "id": req_id,
+                    "result": {
+                        "approvalPolicy": "on-request",
+                        "cwd": "/tmp",
+                        "model": "gpt-5",
+                        "modelProvider": "openai",
+                        "sandbox": {"type": "workspace-write"},
+                        "thread": {"id": tid, "preview": "forked"},
+                    },
+                }
+            )
+        elif method == "thread/archive":
+            send({"id": req_id, "result": {}})
+        elif method == "thread/unarchive":
+            tid = params["threadId"]
+            send({"id": req_id, "result": {"thread": {"id": tid, "preview": ""}}})
+        elif method == "thread/setName":
+            send({"id": req_id, "result": {}})
+            send(
+                {
+                    "method": "thread/nameUpdated",
+                    "params": {"threadId": params.get("threadId", ""), "threadName": params.get("name")},
+                }
+            )
         elif method == "turn/start":
             turn_counter += 1
             turn_id = f"turn_{turn_counter}"
@@ -66,11 +95,41 @@ for raw in sys.stdin:
 
             send({"method": "item/agentMessage/delta", "params": {"itemId": "i1", "delta": "hello "}})
             send({"method": "item/agentMessage/delta", "params": {"itemId": "i1", "delta": "world"}})
+            send({"method": "item/started", "params": {"threadId": tid, "turnId": turn_id, "item": {"id": "i1", "type": "agentMessage"}}})
             send({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": turn_id, "status": "completed"}}})
+            send({"method": "item/completed", "params": {"threadId": tid, "turnId": turn_id, "item": {"id": "i1", "type": "agentMessage", "text": "hello world"}}})
+            send(
+                {
+                    "method": "thread/tokenUsageUpdated",
+                    "params": {
+                        "threadId": tid,
+                        "turnId": turn_id,
+                        "tokenUsage": {
+                            "last": {
+                                "cachedInputTokens": 1,
+                                "inputTokens": 2,
+                                "outputTokens": 3,
+                                "reasoningOutputTokens": 4,
+                                "totalTokens": 10,
+                            },
+                            "total": {
+                                "cachedInputTokens": 1,
+                                "inputTokens": 2,
+                                "outputTokens": 3,
+                                "reasoningOutputTokens": 4,
+                                "totalTokens": 10,
+                            },
+                            "modelContextWindow": 200000,
+                        },
+                    },
+                }
+            )
         elif method == "turn/interrupt":
             send({"id": req_id, "result": {}})
         elif method == "model/list":
             send({"id": req_id, "result": {"data": [{"id": "gpt-5"}]}})
+        elif method == "turn/steer":
+            send({"id": req_id, "result": {"turnId": params.get("expectedTurnId", "")}})
         elif method == "test/overload-once":
             if not state["overload_once_seen"]:
                 state["overload_once_seen"] = True
