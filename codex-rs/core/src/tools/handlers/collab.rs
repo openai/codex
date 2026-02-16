@@ -7,6 +7,7 @@ use crate::config::Constrained;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -141,8 +142,14 @@ mod spawn {
             turn.as_ref(),
             child_depth,
         )?;
+        // Offline refresh strategy is cache-only and does not hit the network.
+        let available_models = session
+            .services
+            .models_manager
+            .list_models(&config, RefreshStrategy::Offline)
+            .await;
         agent_role
-            .apply_to_config(&mut config)
+            .apply_to_config(&mut config, &available_models)
             .map_err(FunctionCallError::RespondToModel)?;
 
         let result = session
