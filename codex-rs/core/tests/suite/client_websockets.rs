@@ -94,6 +94,40 @@ async fn responses_websocket_streams_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_create_includes_client_metadata() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let turn_metadata_header = r#"{"turn_id":"sub_test","sandbox":"workspace-write"}"#;
+
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt,
+        Some(turn_metadata_header),
+    )
+    .await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let body = connection.first().expect("missing request").body_json();
+    assert_eq!(
+        body["client_metadata"],
+        json!({ "x-codex-turn-metadata": turn_metadata_header })
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_preconnect_reuses_connection() {
     skip_if_no_network!();
 
@@ -715,6 +749,58 @@ async fn responses_websocket_appends_on_prefix() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_append_includes_client_metadata() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "assistant output"),
+            ev_done(),
+        ],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![
+        message_item("hello"),
+        assistant_message_item("msg-1", "assistant output"),
+        message_item("second"),
+    ]);
+    let turn_metadata_header = r#"{"turn_id":"sub_test","sandbox":"workspace-write"}"#;
+
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt_one,
+        Some(turn_metadata_header),
+    )
+    .await;
+    stream_until_complete_with_turn_metadata(
+        &mut client_session,
+        &harness,
+        &prompt_two,
+        Some(turn_metadata_header),
+    )
+    .await;
+
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+    let second = connection.get(1).expect("missing request").body_json();
+    let expected_append = serde_json::json!({
+        "type": "response.append",
+        "input": serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items"),
+        "client_metadata": { "x-codex-turn-metadata": turn_metadata_header },
+    });
+    assert_eq!(second, expected_append);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_append() {
     skip_if_no_network!();
 
@@ -1174,6 +1260,15 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
+    stream_until_complete_with_turn_metadata(client_session, harness, prompt, None).await;
+}
+
+async fn stream_until_complete_with_turn_metadata(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    turn_metadata_header: Option<&str>,
+) {
     let mut stream = client_session
         .stream(
             prompt,
@@ -1181,7 +1276,7 @@ async fn stream_until_complete(
             &harness.otel_manager,
             harness.effort,
             harness.summary,
-            None,
+            turn_metadata_header,
         )
         .await
         .expect("websocket stream failed");
