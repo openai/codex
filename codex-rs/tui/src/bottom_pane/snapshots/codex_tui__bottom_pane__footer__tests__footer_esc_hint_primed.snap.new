@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/footer.rs
+assertion_line: 1179
+expression: terminal.backend()
+---
+"  esc again to edit previous message                         100% context left  "

@@ -569,11 +569,10 @@ impl TextArea {
     }
 
     fn handle_vim_normal(&mut self, event: KeyEvent) {
-        if let Some(op) = self.vim_operator.take() {
-            if self.handle_vim_operator(op, event) {
+        if let Some(op) = self.vim_operator.take()
+            && self.handle_vim_operator(op, event) {
                 return;
             }
-        }
 
         match event {
             KeyEvent {

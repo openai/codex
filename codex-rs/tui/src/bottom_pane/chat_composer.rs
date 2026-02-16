@@ -805,7 +805,7 @@ impl ChatComposer {
             collaboration_mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
         {
             if !spans.is_empty() {
-                spans.push(" | ".dim().into());
+                spans.push(" | ".dim());
             }
             spans.extend(collab.spans);
         }
@@ -820,7 +820,7 @@ impl ChatComposer {
         let mut line =
             context_window_line(self.context_window_percent, self.context_window_used_tokens);
         if let Some(vim_mode) = self.vim_mode_indicator_span() {
-            line.spans.push(" | ".dim().into());
+            line.spans.push(" | ".dim());
             line.spans.push(vim_mode);
         }
         line
@@ -4440,7 +4440,7 @@ mod tests {
         assert!(composer.textarea.is_vim_enabled());
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".yellow())
+            Some("Vim: Normal".magenta())
         );
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -4485,7 +4485,7 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(
             composer.vim_mode_indicator_span(),
-            Some("Vim: Normal".yellow())
+            Some("Vim: Normal".magenta())
         );
     }
 
