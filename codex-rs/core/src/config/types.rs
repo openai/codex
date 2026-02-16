@@ -696,6 +696,25 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+/// Configuration for shell execution behavior.
+///
+/// ```toml
+/// [shell]
+/// default_login = false
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ShellConfigToml {
+    /// When `true` (the default), shell tool commands are executed in a login
+    /// shell (`bash -lc`).  Set to `false` to use a plain shell (`bash -c`)
+    /// so that the inherited `PATH` and environment are preserved — useful in
+    /// curated environments where startup scripts would overwrite them.
+    ///
+    /// A per-invocation `login` parameter on the tool call always takes
+    /// precedence over this setting.
+    pub default_login: Option<bool>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {

@@ -997,6 +997,17 @@
       },
       "type": "object"
     },
+    "ShellConfigToml": {
+      "additionalProperties": false,
+      "description": "Configuration for shell execution behavior.\n\n```toml [shell] default_login = false ```",
+      "properties": {
+        "default_login": {
+          "description": "When `true` (the default), shell tool commands are executed in a login shell (`bash -lc`).  Set to `false` to use a plain shell (`bash -c`) so that the inherited `PATH` and environment are preserved — useful in curated environments where startup scripts would overwrite them.\n\nA per-invocation `login` parameter on the tool call always takes precedence over this setting.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -1684,6 +1695,17 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "shell": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ShellConfigToml"
+        }
+      ],
+      "default": {
+        "default_login": null
+      },
+      "description": "Shell execution settings (e.g. login-shell default)."
     },
     "shell_environment_policy": {
       "allOf": [

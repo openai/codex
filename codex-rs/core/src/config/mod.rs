@@ -16,6 +16,7 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::ShellConfigToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
@@ -405,6 +406,12 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    /// When `true` (the default), shell tool commands use a login shell
+    /// (`bash -lc`). Set to `false` to preserve inherited `PATH` in curated
+    /// environments. A per-invocation `login` parameter always takes
+    /// precedence.
+    pub default_login_shell: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -887,6 +894,10 @@ pub struct ConfigToml {
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
+
+    /// Shell execution settings (e.g. login-shell default).
+    #[serde(default)]
+    pub shell: ShellConfigToml,
 
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
@@ -1576,6 +1587,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let default_login_shell = cfg.shell.default_login.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1877,6 +1889,7 @@ impl Config {
                     metrics_exporter,
                 }
             },
+            default_login_shell,
         };
         Ok(config)
     }
@@ -4160,6 +4173,7 @@ model_verbosity = "high"
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
                 otel: OtelConfig::default(),
+                default_login_shell: true,
             },
             o3_profile_config
         );
@@ -4271,6 +4285,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            default_login_shell: true,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -4380,6 +4395,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            default_login_shell: true,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -4475,6 +4491,7 @@ model_verbosity = "high"
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             otel: OtelConfig::default(),
+            default_login_shell: true,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
