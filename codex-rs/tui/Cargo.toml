@@ -15,8 +15,6 @@ path = "src/lib.rs"
 [features]
 # Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
 vt100-tests = []
-# Gate verbose debug logging inside the TUI implementation.
-debug-logs = []
 
 [lints]
 workspace = true
