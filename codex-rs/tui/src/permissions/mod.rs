@@ -54,9 +54,11 @@ pub fn builtin_permissions_presets() -> Vec<PermissionsPreset> {
 }
 
 pub(crate) fn visible_permissions_options(config: &Config) -> Vec<SelectionItem> {
-    builtin_permissions_presets()
+    let mut presets = builtin_permissions_presets()
         .into_iter()
-        .filter(|preset| preset.is_visible(config))
+        .filter(|preset| preset.is_visible(config));
+
+    presets
         .map(|preset| preset.to_selection_item(config))
         .collect()
 }

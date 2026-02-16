@@ -1934,6 +1934,83 @@ impl Config {
         };
     }
 
+    pub fn configured_sandbox_policy_subject_to_requirements(
+        &self,
+    ) -> ConstraintResult<Option<SandboxPolicy>> {
+        let Some(user_layer) = self.config_layer_stack.get_user_layer() else {
+            return Ok(None);
+        };
+        let user_config: ConfigToml = match user_layer.config.clone().try_into() {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to parse user config layer while resolving configured sandbox policy: {err}"
+                );
+                return Ok(None);
+            }
+        };
+
+        let configured_sandbox_mode = self
+            .active_profile
+            .as_ref()
+            .and_then(|profile_name| user_config.profiles.get(profile_name))
+            .and_then(|profile| profile.sandbox_mode)
+            .or(user_config.sandbox_mode);
+
+        let Some(configured_sandbox_mode) = configured_sandbox_mode else {
+            return Ok(None);
+        };
+
+        let sandbox_policy = match configured_sandbox_mode {
+            SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+            SandboxMode::WorkspaceWrite => match user_config.sandbox_workspace_write.as_ref() {
+                Some(SandboxWorkspaceWrite {
+                    writable_roots,
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                }) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: writable_roots.clone(),
+                    read_only_access: ReadOnlyAccess::FullAccess,
+                    network_access: *network_access,
+                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                    exclude_slash_tmp: *exclude_slash_tmp,
+                },
+                None => SandboxPolicy::new_workspace_write_policy(),
+            },
+            SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        };
+
+        self.permissions.sandbox_policy.can_set(&sandbox_policy)?;
+        Ok(Some(sandbox_policy))
+    }
+
+    pub fn permissions_satisfy_requirements(
+        &self,
+        candidate: &Permissions,
+    ) -> ConstraintResult<()> {
+        let candidate_approval_policy = candidate.approval_policy.value();
+        self.permissions
+            .approval_policy
+            .can_set(&candidate_approval_policy)?;
+        self.permissions
+            .sandbox_policy
+            .can_set(candidate.sandbox_policy.get())?;
+
+        if let Some(network_requirement) = self.config_layer_stack.requirements().network.as_ref()
+            && candidate.network != self.permissions.network
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "experimental_network",
+                candidate: format!("{:?}", candidate.network),
+                allowed: format!("{:?}", self.permissions.network),
+                requirement_source: network_requirement.source.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
     pub fn managed_network_requirements_enabled(&self) -> bool {
         self.config_layer_stack
             .requirements_toml()
@@ -2044,6 +2121,20 @@ mod tests {
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
+        }
+    }
+
+    fn unconstrained_permissions_from(config: &Config) -> Permissions {
+        Permissions {
+            approval_policy: Constrained::allow_any(config.permissions.approval_policy.value()),
+            sandbox_policy: Constrained::allow_any(config.permissions.sandbox_policy.get().clone()),
+            network: config.permissions.network.clone(),
+            shell_environment_policy: config.permissions.shell_environment_policy.clone(),
+            windows_sandbox_mode: config.permissions.windows_sandbox_mode,
+            macos_seatbelt_profile_extensions: config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .clone(),
         }
     }
 
@@ -5038,6 +5129,321 @@ mcp_oauth_callback_port = 5678
             *config.permissions.sandbox_policy.get(),
             SandboxPolicy::new_read_only_policy()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_sandbox_policy_subject_to_requirements_returns_none_when_unset()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.configured_sandbox_policy_subject_to_requirements()?,
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_sandbox_policy_subject_to_requirements_uses_active_profile_first()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "work".to_string(),
+            ConfigProfile {
+                sandbox_mode: Some(SandboxMode::ReadOnly),
+                ..Default::default()
+            },
+        );
+        let config_toml = ConfigToml {
+            profile: Some("work".to_string()),
+            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            profiles,
+            ..Default::default()
+        };
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&config_toml).expect("serialize config"),
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+
+        assert_eq!(config.active_profile.as_deref(), Some("work"));
+        assert_eq!(
+            config.configured_sandbox_policy_subject_to_requirements()?,
+            Some(SandboxPolicy::new_read_only_policy())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_sandbox_policy_subject_to_requirements_falls_back_to_top_level()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let writable_root_path = codex_home.path().join("writable-root");
+        let writable_root = AbsolutePathBuf::try_from(writable_root_path.as_path())
+            .expect("writable root should be absolute");
+        let config_toml = ConfigToml {
+            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: vec![writable_root.clone()],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            }),
+            ..Default::default()
+        };
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&config_toml).expect("serialize config"),
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.configured_sandbox_policy_subject_to_requirements()?,
+            Some(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![writable_root],
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_sandbox_policy_subject_to_requirements_returns_err_when_disallowed()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"sandbox_mode = "danger-full-access"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_sandbox_modes: Some(vec![
+                        crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        let err = config
+            .configured_sandbox_policy_subject_to_requirements()
+            .expect_err("danger-full-access should be rejected");
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "sandbox_mode",
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_accepts_valid_candidate() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                    allowed_sandbox_modes: Some(vec![
+                        crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+        let candidate = unconstrained_permissions_from(&config);
+
+        config.permissions_satisfy_requirements(&candidate)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_rejects_disallowed_approval() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+        let mut candidate = unconstrained_permissions_from(&config);
+        candidate.approval_policy = Constrained::allow_any(AskForApproval::Never);
+
+        let err = config
+            .permissions_satisfy_requirements(&candidate)
+            .expect_err("Never should be rejected");
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "approval_policy",
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_rejects_disallowed_sandbox() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_sandbox_modes: Some(vec![
+                        crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+        let mut candidate = unconstrained_permissions_from(&config);
+        candidate.sandbox_policy = Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+
+        let err = config
+            .permissions_satisfy_requirements(&candidate)
+            .expect_err("danger-full-access should be rejected");
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "sandbox_mode",
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_enforces_network_exact_match_when_managed()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    network: Some(crate::config_loader::NetworkRequirementsToml {
+                        enabled: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+        assert!(config.permissions.network.is_some());
+        let mut candidate = unconstrained_permissions_from(&config);
+        candidate.network = None;
+
+        let err = config
+            .permissions_satisfy_requirements(&candidate)
+            .expect_err("network mismatch should be rejected when managed");
+        assert!(matches!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "experimental_network",
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_ignores_network_when_unmanaged() -> std::io::Result<()>
+    {
+        let codex_home_managed = TempDir::new()?;
+        let managed_config = ConfigBuilder::default()
+            .codex_home(codex_home_managed.path().to_path_buf())
+            .fallback_cwd(Some(codex_home_managed.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    network: Some(crate::config_loader::NetworkRequirementsToml {
+                        enabled: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+        assert!(managed_config.permissions.network.is_some());
+        let candidate = unconstrained_permissions_from(&managed_config);
+
+        let codex_home_unmanaged = TempDir::new()?;
+        let unmanaged_config = ConfigBuilder::default()
+            .codex_home(codex_home_unmanaged.path().to_path_buf())
+            .fallback_cwd(Some(codex_home_unmanaged.path().to_path_buf()))
+            .build()
+            .await?;
+        assert!(unmanaged_config.permissions.network.is_none());
+
+        unmanaged_config.permissions_satisfy_requirements(&candidate)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_satisfy_requirements_ignores_non_requirement_fields() -> std::io::Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Some(crate::config_loader::ConfigRequirementsToml {
+                    allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
+                    allowed_sandbox_modes: Some(vec![
+                        crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    ]),
+                    ..Default::default()
+                })
+            }))
+            .build()
+            .await?;
+
+        let mut candidate = unconstrained_permissions_from(&config);
+        candidate.shell_environment_policy = ShellEnvironmentPolicy {
+            use_profile: true,
+            ..ShellEnvironmentPolicy::default()
+        };
+        candidate.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+
+        config.permissions_satisfy_requirements(&candidate)?;
         Ok(())
     }
 
