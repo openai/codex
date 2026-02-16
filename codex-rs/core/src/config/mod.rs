@@ -1991,7 +1991,7 @@ impl Config {
             } else {
                 format!("{context} failed with status {status}: {stderr}")
             };
-            return Err(std::io::Error::new(ErrorKind::Other, message));
+            return Err(std::io::Error::other(message));
         }
 
         let stdout = String::from_utf8(output.stdout).map_err(|err| {
