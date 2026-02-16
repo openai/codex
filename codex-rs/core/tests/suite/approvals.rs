@@ -1897,7 +1897,7 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
 
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
-    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
@@ -1913,12 +1913,11 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
     )?;
 
     let call_id = "heredoc-with-chained-prefix";
-    let command = "cat <<'EOF' > /tmp/test.txt && touch allow-prefix.txt\nhello\nEOF";
+    let command = "cat <<'EOF' > /tmp/test.txt \nhello\nEOF";
     let (event, expected_command) = ActionKind::RunCommand { command }
         .prepare(&test, &server, call_id, SandboxPermissions::UseDefault)
         .await?;
-    let expected_command =
-        expected_command.expect("heredoc chained command scenario should produce a shell command");
+    let expected_command = expected_command.expect("heredoc should produce a shell command");
 
     let _ = mount_sse_once(
         &server,
@@ -1940,7 +1939,7 @@ async fn heredoc_with_chained_allowed_prefix_still_requires_approval() -> Result
 
     submit_turn(
         &test,
-        "heredoc chained prefix",
+        "cat heredoc",
         approval_policy,
         sandbox_policy.clone(),
     )

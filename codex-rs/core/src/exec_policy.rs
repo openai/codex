@@ -181,6 +181,7 @@ impl ExecPolicyManager {
                 sandbox_policy,
                 cmd,
                 sandbox_permissions,
+                used_heredoc_fallback,
             )
         };
         let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
@@ -406,8 +407,9 @@ pub fn render_decision_for_unmatched_command(
     sandbox_policy: &SandboxPolicy,
     command: &[String],
     sandbox_permissions: SandboxPermissions,
+    used_heredoc_fallback: bool,
 ) -> Decision {
-    if is_known_safe_command(command) {
+    if is_known_safe_command(command) && !used_heredoc_fallback {
         return Decision::Allow;
     }
 
