@@ -1344,13 +1344,6 @@ impl ConfigOverrides {
         Self {
             cwd: Some(config.cwd.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            model_provider: Some(config.model_provider_id.clone()),
-            js_repl_node_path: config.js_repl_node_path.clone(),
-            base_instructions: config.base_instructions.clone(),
-            developer_instructions: config.developer_instructions.clone(),
-            personality: config.personality,
-            compact_prompt: config.compact_prompt.clone(),
-            show_raw_agent_reasoning: Some(config.show_raw_agent_reasoning),
             ephemeral: Some(config.ephemeral),
             additional_writable_roots,
             ..Default::default()
@@ -1686,7 +1679,9 @@ impl Config {
             .or(cfg.model_instructions_file.as_ref());
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
-        let base_instructions = base_instructions.or(file_base_instructions);
+        let base_instructions = base_instructions
+            .or(file_base_instructions)
+            .or(cfg.instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let personality = personality
             .or(config_profile.personality)
@@ -3991,6 +3986,60 @@ model = "gpt-5.1-codex"
         assert_eq!(
             config.compact_prompt.as_deref(),
             Some("summarize differently")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn instructions_field_sets_base_instructions() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            instructions: Some("Use this base instruction".to_string()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.base_instructions,
+            Some("Use this base instruction".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn model_instructions_file_wins_over_instructions_field() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let workspace = codex_home.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+
+        let instructions_path = workspace.join("role_instructions.txt");
+        std::fs::write(&instructions_path, "From model instructions file")?;
+
+        let cfg = ConfigToml {
+            instructions: Some("From instructions field".to_string()),
+            model_instructions_file: Some(AbsolutePathBuf::from_absolute_path(instructions_path)?),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(workspace),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.base_instructions,
+            Some("From model instructions file".to_string())
         );
 
         Ok(())

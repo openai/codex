@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use crate::config::ConfigToml;
 use crate::config::deserialize_config_toml_with_base;
 use crate::config::find_codex_home;
 use crate::config_loader::ConfigLayerEntry;
@@ -7,6 +8,7 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -96,16 +98,38 @@ pub(crate) async fn apply_role_to_config(
     };
 
     let original = config.clone();
-    let role_overrides_sandbox_mode = agent_config
-        .as_table()
-        .and_then(|table| table.get("sandbox_mode"))
-        .is_some();
     let runtime_sandbox_mode = match original.permissions.sandbox_policy.get() {
         crate::protocol::SandboxPolicy::ReadOnly { .. } => Some(SandboxMode::ReadOnly),
         crate::protocol::SandboxPolicy::WorkspaceWrite { .. } => Some(SandboxMode::WorkspaceWrite),
         crate::protocol::SandboxPolicy::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
         crate::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
     };
+    let runtime_layer_config = toml::Value::try_from(ConfigToml {
+        model: original.model.clone(),
+        model_provider: Some(original.model_provider_id.clone()),
+        sandbox_mode: runtime_sandbox_mode,
+        instructions: original.base_instructions.clone(),
+        developer_instructions: original.developer_instructions.clone(),
+        js_repl_node_path: original
+            .js_repl_node_path
+            .clone()
+            .and_then(|path| AbsolutePathBuf::try_from(path).ok()),
+        compact_prompt: original.compact_prompt.clone(),
+        show_raw_agent_reasoning: Some(original.show_raw_agent_reasoning),
+        model_reasoning_effort: original.model_reasoning_effort,
+        model_reasoning_summary: Some(original.model_reasoning_summary),
+        model_verbosity: original.model_verbosity,
+        personality: original.personality,
+        ..ConfigToml::default()
+    })
+    .map_err(|err| {
+        tracing::warn!(
+            agent_type = role_name,
+            error = %err,
+            "failed to serialize runtime fallback layer for role"
+        );
+        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+    })?;
     let original_stack = &original.config_layer_stack;
     let mut layers = original
         .config_layer_stack
@@ -113,6 +137,13 @@ pub(crate) async fn apply_role_to_config(
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
+
+    let runtime_layer =
+        ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, runtime_layer_config);
+    let runtime_layer_precedence = runtime_layer.name.precedence();
+    let runtime_layer_index =
+        layers.partition_point(|layer| layer.name.precedence() <= runtime_layer_precedence);
+    layers.insert(runtime_layer_index, runtime_layer);
 
     let role_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, agent_config);
     let role_layer_precedence = role_layer.name.precedence();
@@ -143,13 +174,9 @@ pub(crate) async fn apply_role_to_config(
             AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
         })?;
 
-    let mut overrides = ConfigOverrides::for_role_reload(&original);
-    if !role_overrides_sandbox_mode {
-        overrides.sandbox_mode = runtime_sandbox_mode;
-    }
     *config = Config::load_config_with_layer_stack(
         layered_config,
-        overrides,
+        ConfigOverrides::for_role_reload(&original),
         original.codex_home.clone(),
         layered_stack,
     )
@@ -586,7 +613,8 @@ enabled_tools = ["search"]
     }
 
     /// Preserves runtime-only harness overrides (provider, ephemeral, writable roots)
-    /// when a role config layer forces a reload via `load_config_with_layer_stack`.
+    /// when a role config layer forces a reload via `load_config_with_layer_stack`,
+    /// as long as the role does not explicitly set the same fields.
     #[tokio::test]
     async fn apply_role_to_config_preserves_runtime_overrides() {
         let mut config = test_config();
@@ -627,6 +655,52 @@ enabled_tools = ["search"]
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_role_to_config_explicit_role_fields_beat_runtime_overrides() {
+        let dir = TempDir::new().expect("tempdir");
+        let planner_path = write_role_config_file(
+            &dir,
+            "agents/planner.toml",
+            r#"
+model_provider = "lmstudio"
+developer_instructions = "ROLE_DEVELOPER"
+compact_prompt = "ROLE_COMPACT"
+personality = "friendly"
+"#,
+        );
+        write_agents_config(
+            &dir,
+            &format!("[agents.planner]\nconfig_file = {planner_path:?}\n"),
+        );
+
+        let mut config = test_config();
+        config.codex_home = dir.path().to_path_buf();
+        config.model_provider_id = "openai".to_string();
+        config.model_provider = built_in_model_providers()["openai"].clone();
+        config.developer_instructions = Some("RUNTIME_DEVELOPER".to_string());
+        config.compact_prompt = Some("RUNTIME_COMPACT".to_string());
+        config.personality = Some(crate::config::types::Personality::Pragmatic);
+
+        apply_role_to_config(&mut config, Some("planner"))
+            .await
+            .expect("apply planner role");
+
+        assert_eq!(config.model_provider_id, "lmstudio".to_string());
+        assert_eq!(
+            config.model_provider,
+            built_in_model_providers()["lmstudio"].clone()
+        );
+        assert_eq!(
+            config.developer_instructions,
+            Some("ROLE_DEVELOPER".to_string())
+        );
+        assert_eq!(config.compact_prompt, Some("ROLE_COMPACT".to_string()));
+        assert_eq!(
+            config.personality,
+            Some(crate::config::types::Personality::Friendly)
         );
     }
 
