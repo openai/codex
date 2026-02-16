@@ -134,3 +134,54 @@ def test_typed_wrappers_and_ask_helper_and_approval_flow():
         thread_id, answer = client.ask("hello again", thread_id=started.thread.id)
         assert thread_id == started.thread.id
         assert answer == "hello world"
+
+
+def test_conversation_and_schema_wrappers():
+    with make_client() as client:
+        client.initialize()
+
+        conv = client.conversation_start(model="gpt-5")
+        assert conv.thread_id.startswith("thr_")
+
+        turn = conv.turn_text_schema("hello")
+        assert turn.turn.id.startswith("turn_")
+        client.wait_for_turn_completed(turn.turn.id)
+
+        answer = conv.ask("hello again")
+        assert answer == "hello world"
+
+        streamed = [evt.method for evt in conv.stream("stream me")]
+        assert "item/agentMessage/delta" in streamed
+        assert streamed[-1] == "turn/completed"
+
+        started = client.thread_start_schema(model="gpt-5")
+        assert started.thread.id.startswith("thr_")
+
+        listed = client.thread_list_schema(limit=1)
+        assert listed.data[0].id == "thr_1"
+
+
+def test_async_conversation_and_schema_wrappers():
+    async def _run():
+        cfg = AppServerConfig(launch_args_override=("python3", str(FAKE)))
+        async with AsyncAppServerClient(cfg) as client:
+            await client.initialize()
+
+            conv = await client.conversation_start(model="gpt-5")
+            assert conv.thread_id.startswith("thr_")
+
+            answer = await conv.ask("hello")
+            assert answer == "hello world"
+
+            streamed = []
+            async for evt in conv.stream("hello"):
+                streamed.append(evt.method)
+            assert streamed[-1] == "turn/completed"
+
+            turn = await client.turn_text_schema(conv.thread_id, "hello")
+            assert turn.turn.id.startswith("turn_")
+
+            started = await client.thread_start_schema(model="gpt-5")
+            assert started.thread.id.startswith("thr_")
+
+    asyncio.run(_run())

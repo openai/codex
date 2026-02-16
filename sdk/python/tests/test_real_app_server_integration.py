@@ -20,3 +20,15 @@ def test_real_initialize_and_model_list():
         assert isinstance(out, dict)
         models = client.model_list(include_hidden=True)
         assert "data" in models
+
+
+def test_real_thread_and_turn_start_smoke():
+    with AppServerClient() as client:
+        client.initialize()
+        started = client.thread_start()
+        thread_id = started["thread"]["id"]
+        assert isinstance(thread_id, str) and thread_id
+
+        turn = client.turn_text(thread_id, "hello")
+        turn_id = turn["turn"]["id"]
+        assert isinstance(turn_id, str) and turn_id

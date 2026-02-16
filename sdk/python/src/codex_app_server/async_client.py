@@ -4,7 +4,13 @@ import asyncio
 from typing import Any, Iterable
 
 from .client import AppServerClient, AppServerConfig
+from .conversation import AsyncConversation
 from .models import Notification
+from .schema_types import (
+    ThreadListResponse as SchemaThreadListResponse,
+    ThreadStartResponse as SchemaThreadStartResponse,
+    TurnStartResponse as SchemaTurnStartResponse,
+)
 
 
 class AsyncAppServerClient:
@@ -61,6 +67,33 @@ class AsyncAppServerClient:
 
     async def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
         return await asyncio.to_thread(self._sync.model_list, include_hidden)
+
+    def conversation(self, thread_id: str) -> AsyncConversation:
+        return AsyncConversation(client=self, thread_id=thread_id)
+
+    async def conversation_start(self, *, model: str | None = None, **params: Any) -> AsyncConversation:
+        payload = dict(params)
+        if model is not None:
+            payload["model"] = model
+        started = await self.thread_start(**payload)
+        return AsyncConversation(client=self, thread_id=started["thread"]["id"])
+
+    async def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
+        return await asyncio.to_thread(self._sync.thread_start_schema, **params)
+
+    async def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
+        return await asyncio.to_thread(self._sync.thread_list_schema, **params)
+
+    async def turn_start_schema(
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+        **params: Any,
+    ) -> SchemaTurnStartResponse:
+        return await asyncio.to_thread(self._sync.turn_start_schema, thread_id, input_items, **params)
+
+    async def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
+        return await asyncio.to_thread(self._sync.turn_text_schema, thread_id, text, **params)
 
     async def next_notification(self) -> Notification:
         return await asyncio.to_thread(self._sync.next_notification)

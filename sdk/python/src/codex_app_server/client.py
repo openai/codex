@@ -13,6 +13,12 @@ from typing import Any, Callable, Iterable
 from .errors import AppServerError, JsonRpcError, TransportClosedError
 from .models import Notification
 from .typed import ThreadStartResult, TurnStartResult
+from .conversation import Conversation
+from .schema_types import (
+    ThreadListResponse as SchemaThreadListResponse,
+    ThreadStartResponse as SchemaThreadStartResponse,
+    TurnStartResponse as SchemaTurnStartResponse,
+)
 from .protocol_types import (
     ThreadListResponse,
     ThreadReadResponse,
@@ -202,6 +208,16 @@ class AppServerClient:
     def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
         return self.request("model/list", {"includeHidden": include_hidden})
 
+    def conversation(self, thread_id: str) -> Conversation:
+        return Conversation(client=self, thread_id=thread_id)
+
+    def conversation_start(self, *, model: str | None = None, **params: Any) -> Conversation:
+        payload = dict(params)
+        if model is not None:
+            payload["model"] = model
+        started = self.thread_start(**payload)
+        return Conversation(client=self, thread_id=started["thread"]["id"])
+
     # ---------- Typed convenience wrappers ----------
 
     def thread_start_typed(self, **params: Any) -> ThreadStartResult:
@@ -214,6 +230,23 @@ class AppServerClient:
         **params: Any,
     ) -> TurnStartResult:
         return TurnStartResult.from_dict(self.turn_start(thread_id, input_items, **params))
+
+    def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
+        return SchemaThreadStartResponse.from_dict(self.thread_start(**params))
+
+    def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
+        return SchemaThreadListResponse.from_dict(self.thread_list(**params))
+
+    def turn_start_schema(
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+        **params: Any,
+    ) -> SchemaTurnStartResponse:
+        return SchemaTurnStartResponse.from_dict(self.turn_start(thread_id, input_items, **params))
+
+    def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
+        return self.turn_start_schema(thread_id, text, **params)
 
     # ---------- Helpers ----------
 

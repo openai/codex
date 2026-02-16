@@ -10,7 +10,9 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 - ✅ command/file approval request handling
 - ✅ integration-test harness with fake app-server
 - ✅ async client (`AsyncAppServerClient`)
+- ✅ fluent thread abstraction (`Conversation` / `AsyncConversation`)
 - ✅ typed convenience wrappers (`ThreadStartResult`, `TurnStartResult`)
+- ✅ schema-backed typed response helpers (`thread_start_schema`, `turn_start_schema`, ...)
 - ✅ protocol TypedDicts for v2 core responses (`ThreadStartResponse`, `TurnStartResponse`, etc.)
 - ✅ optional real app-server integration test (gated by env var)
 - 🔜 full generated models from app-server JSON schema
@@ -62,6 +64,51 @@ for e in events:
         print((e.params or {}).get("delta", ""), end="")
 ```
 
+## Cookbook
+
+### Fluent conversation API
+
+```python
+from codex_app_server import AppServerClient
+
+with AppServerClient() as client:
+    client.initialize()
+    conv = client.conversation_start(model="gpt-5")
+
+    # one-liner ask on the same thread
+    answer = conv.ask("Summarize the last release notes")
+    print(answer)
+
+    # explicit turn start helpers still available
+    turn = conv.turn_text("Give 3 follow-up tasks")
+    print(turn["turn"]["id"])
+```
+
+### Stream notifications for a single turn
+
+```python
+with AppServerClient() as client:
+    client.initialize()
+    conv = client.conversation_start(model="gpt-5")
+
+    for evt in conv.stream("Explain this stacktrace"):
+        if evt.method == "item/agentMessage/delta":
+            print((evt.params or {}).get("delta", ""), end="")
+```
+
+### Strongly typed schema responses (without changing dict API)
+
+```python
+with AppServerClient() as client:
+    client.initialize()
+
+    started = client.thread_start_schema(model="gpt-5")
+    print(started.thread.id)  # dataclass field
+
+    turn = client.turn_text_schema(started.thread.id, "hello")
+    print(turn.turn.status)
+```
+
 ## Async quickstart
 
 ```python
@@ -92,7 +139,9 @@ asyncio.run(main())
 - `next_notification()`
 - `wait_for_turn_completed(turn_id)`
 - `ask(text, model=None, thread_id=None)` notebook helper
+- conversation helpers: `conversation(thread_id)`, `conversation_start(model=..., **params)`
 - typed wrappers: `thread_start_typed()`, `turn_start_typed()`
+- schema-backed typed helpers: `thread_start_schema()`, `thread_list_schema()`, `turn_start_schema()`, `turn_text_schema()`
 
 ## Design goals
 

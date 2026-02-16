@@ -1,5 +1,6 @@
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
+from .conversation import Conversation, AsyncConversation
 from .errors import AppServerError, JsonRpcError, TransportClosedError
 from .models import Notification
 from .typed import ThreadRef, ThreadStartResult, TurnRef, TurnStartResult
@@ -26,6 +27,8 @@ __all__ = [
     "AppServerClient",
     "AsyncAppServerClient",
     "AppServerConfig",
+    "Conversation",
+    "AsyncConversation",
     "AppServerError",
     "JsonRpcError",
     "TransportClosedError",
