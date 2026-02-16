@@ -60,15 +60,11 @@ pub(crate) async fn apply_role_to_config(
             let content = tokio::fs::read_to_string(config_file)
                 .await
                 .map_err(|err| {
-                    tracing::warn!(
-                        "failed to read user-defined role config_file: {err:?}"
-                    );
+                    tracing::warn!("failed to read user-defined role config_file: {err:?}");
                     AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
                 })?;
             let parsed: TomlValue = toml::from_str(&content).map_err(|err| {
-                tracing::warn!(
-                    "failed to read user-defined role config_file: {err:?}"
-                );
+                tracing::warn!("failed to read user-defined role config_file: {err:?}");
                 AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
             })?;
             Some(parsed)
@@ -78,15 +74,11 @@ pub(crate) async fn apply_role_to_config(
     } else if let Some(role) = built_in_agents_config.agents.get(role_name) {
         if let Some(config_file) = &role.config_file {
             let content = built_in::config_file(config_file).ok_or_else(|| {
-                tracing::warn!(
-                    "failed to read user-defined role config_file."
-                );
+                tracing::warn!("failed to read user-defined role config_file.");
                 AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
             })?;
             let parsed: TomlValue = toml::from_str(content).map_err(|err| {
-                tracing::warn!(
-                    "failed to read user-defined role config_file: {err:?}"
-                );
+                tracing::warn!("failed to read user-defined role config_file: {err:?}");
                 AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
             })?;
             Some(parsed)
