@@ -552,7 +552,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::Collab,
-        key: "collab",
+        key: "multi_agent",
         stage: Stage::Experimental {
             name: "Sub-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
@@ -737,5 +737,11 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[test]
+    fn collab_is_legacy_alias_for_multi_agent() {
+        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
+        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
     }
 }
