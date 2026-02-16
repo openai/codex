@@ -1482,12 +1482,14 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    if mcp_tools.is_some() {
+        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
+        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
+        builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+        builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    }
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
@@ -1836,9 +1838,6 @@ mod tests {
         for spec in [
             create_exec_command_tool(true),
             create_write_stdin_tool(),
-            create_list_mcp_resources_tool(),
-            create_list_mcp_resource_templates_tool(),
-            create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
@@ -2043,7 +2042,7 @@ mod tests {
             features,
             web_search_mode,
         });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
     }
@@ -2111,6 +2110,53 @@ mod tests {
     }
 
     #[test]
+    fn mcp_resource_tools_are_hidden_without_mcp_servers() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        assert!(
+            !tools.iter().any(|tool| matches!(
+                tool.spec.name(),
+                "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource"
+            )),
+            "MCP resource tools should be omitted when no MCP servers are configured"
+        );
+    }
+
+    #[test]
+    fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
+
+        assert_contains_tool_names(
+            &tools,
+            &[
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+            ],
+        );
+    }
+
+    #[test]
     fn test_build_specs_gpt5_codex_default() {
         let mut features = Features::with_defaults();
         features.enable(Feature::CollaborationModes);
@@ -2120,9 +2166,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2142,9 +2185,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2166,9 +2206,6 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2190,9 +2227,6 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2212,9 +2246,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2234,9 +2265,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2256,9 +2284,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "web_search",
@@ -2277,9 +2302,6 @@ mod tests {
             Some(WebSearchMode::Cached),
             "shell_command",
             &[
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -2301,9 +2323,6 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",

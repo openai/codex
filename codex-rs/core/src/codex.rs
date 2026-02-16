@@ -4954,14 +4954,13 @@ async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
-    let mut mcp_tools = sess
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
+    let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+    let has_mcp_servers = mcp_connection_manager.has_servers();
+    let mut mcp_tools = mcp_connection_manager
         .list_all_tools()
         .or_cancel(cancellation_token)
         .await?;
+    drop(mcp_connection_manager);
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -5007,12 +5006,12 @@ async fn built_tools(
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(
+        has_mcp_servers.then(|| {
             mcp_tools
                 .into_iter()
                 .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
+                .collect()
+        }),
         app_tools,
         turn_context.dynamic_tools.as_slice(),
     )))
