@@ -1068,6 +1068,10 @@ impl App {
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let wait_for_initial_session_configured = matches!(
+            &session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        );
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1220,6 +1224,24 @@ impl App {
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+            }
+        }
+
+        if wait_for_initial_session_configured {
+            while app.primary_thread_id.is_none() {
+                let Some(event) = app_event_rx.recv().await else {
+                    break;
+                };
+                let control = app.handle_event(tui, event).await?;
+                if let AppRunControl::Exit(exit_reason) = control {
+                    return Ok(AppExitInfo {
+                        token_usage: app.token_usage(),
+                        thread_id: app.chat_widget.thread_id(),
+                        thread_name: app.chat_widget.thread_name(),
+                        update_action: app.pending_update_action,
+                        exit_reason,
+                    });
+                }
             }
         }
 
