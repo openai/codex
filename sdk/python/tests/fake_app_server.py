@@ -44,6 +44,25 @@ for raw in sys.stdin:
             tid = params["threadId"]
             send({"id": req_id, "result": {"turn": {"id": turn_id, "status": "inProgress"}}})
             send({"method": "turn/started", "params": {"turn": {"id": turn_id}}})
+
+            if params.get("requireApproval"):
+                send(
+                    {
+                        "id": "approval-1",
+                        "method": "item/commandExecution/requestApproval",
+                        "params": {
+                            "threadId": tid,
+                            "turnId": turn_id,
+                            "itemId": "cmd-1",
+                            "command": "echo hi",
+                        },
+                    }
+                )
+                # Wait for client response before proceeding.
+                raw_response = sys.stdin.readline()
+                if raw_response:
+                    _ = json.loads(raw_response)
+
             send({"method": "item/agentMessage/delta", "params": {"itemId": "i1", "delta": "hello "}})
             send({"method": "item/agentMessage/delta", "params": {"itemId": "i1", "delta": "world"}})
             send({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": turn_id, "status": "completed"}}})

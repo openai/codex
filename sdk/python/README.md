@@ -96,6 +96,8 @@ asyncio.run(main())
 - `model_list(include_hidden=False)`
 - `next_notification()`
 - `wait_for_turn_completed(turn_id)`
+- `ask(text, model=None, thread_id=None)` notebook helper
+- typed wrappers: `thread_start_typed()`, `turn_start_typed()`
 
 ## Design goals
 

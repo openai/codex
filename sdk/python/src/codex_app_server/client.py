@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import uuid
@@ -42,6 +43,8 @@ class AppServerClient:
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._pending_notifications: deque[Notification] = deque()
+        self._stderr_lines: deque[str] = deque(maxlen=400)
+        self._stderr_thread: threading.Thread | None = None
 
     def __enter__(self) -> "AppServerClient":
         self.start()
@@ -62,6 +65,10 @@ class AppServerClient:
                 args.extend(["--config", kv])
             args.extend(["app-server", "--listen", "stdio://"])
 
+        env = os.environ.copy()
+        if self.config.env:
+            env.update(self.config.env)
+
         self._proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -69,9 +76,11 @@ class AppServerClient:
             stderr=subprocess.PIPE,
             text=True,
             cwd=self.config.cwd,
-            env=self.config.env,
+            env=env,
             bufsize=1,
         )
+
+        self._start_stderr_drain_thread()
 
     def close(self) -> None:
         if self._proc is None:
@@ -86,6 +95,9 @@ class AppServerClient:
             proc.wait(timeout=2)
         except Exception:
             proc.kill()
+
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=0.5)
 
     # ---------- Core JSON-RPC ----------
 
@@ -218,6 +230,19 @@ class AppServerClient:
         assert completed is not None
         return "".join(chunks), completed
 
+    def ask(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> tuple[str, str]:
+        """High-level helper for notebooks.
+
+        Returns `(thread_id, assistant_text)`.
+        - If `thread_id` is omitted, starts a fresh thread.
+        - If provided, appends a turn to existing thread.
+        """
+        if thread_id is None:
+            started = self.thread_start(**({"model": model} if model else {}))
+            thread_id = started["thread"]["id"]
+        assistant_text, _ = self.run_text_turn(thread_id, text)
+        return thread_id, assistant_text
+
     # ---------- Internals ----------
 
     def _default_approval_handler(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -226,6 +251,23 @@ class AppServerClient:
         if method == "item/fileChange/requestApproval":
             return {"decision": "accept"}
         return {}
+
+    def _start_stderr_drain_thread(self) -> None:
+        if self._proc is None or self._proc.stderr is None:
+            return
+
+        def _drain() -> None:
+            stderr = self._proc.stderr
+            if stderr is None:
+                return
+            for line in stderr:
+                self._stderr_lines.append(line.rstrip("\n"))
+
+        self._stderr_thread = threading.Thread(target=_drain, daemon=True)
+        self._stderr_thread.start()
+
+    def _stderr_tail(self, limit: int = 40) -> str:
+        return "\n".join(list(self._stderr_lines)[-limit:])
 
     def _handle_server_request(self, msg: dict[str, Any]) -> dict[str, Any]:
         method = msg["method"]
@@ -245,13 +287,9 @@ class AppServerClient:
 
         line = self._proc.stdout.readline()
         if not line:
-            err = ""
-            if self._proc.stderr is not None:
-                try:
-                    err = self._proc.stderr.read()
-                except Exception:
-                    err = ""
-            raise TransportClosedError(f"app-server closed stdout. stderr={err[:1000]}")
+            raise TransportClosedError(
+                f"app-server closed stdout. stderr_tail={self._stderr_tail()[:2000]}"
+            )
 
         try:
             return json.loads(line)

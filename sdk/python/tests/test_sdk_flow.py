@@ -86,3 +86,24 @@ def test_async_client_wrapper():
             assert done.params["turn"]["status"] == "completed"
 
     asyncio.run(_run())
+
+
+def test_typed_wrappers_and_ask_helper_and_approval_flow():
+    with make_client() as client:
+        client.initialize()
+
+        started = client.thread_start_typed(model="gpt-5")
+        assert started.thread.id.startswith("thr_")
+
+        # Ensure default approval handler responds to server requests.
+        turn = client.turn_start(
+            started.thread.id,
+            input_items=[{"type": "text", "text": "hello"}],
+            requireApproval=True,
+        )
+        done = client.wait_for_turn_completed(turn["turn"]["id"])
+        assert done.params["turn"]["status"] == "completed"
+
+        thread_id, answer = client.ask("hello again", thread_id=started.thread.id)
+        assert thread_id == started.thread.id
+        assert answer == "hello world"
