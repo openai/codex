@@ -2,6 +2,49 @@
 
 All notable changes to `codex-app-server-sdk` are tracked here.
 
+## [0.2.0] - 2026-02-16
+
+Production-readiness and API ergonomics expansion release.
+
+### Added
+
+- Extended high-signal API coverage (sync + async + typed + schema wrappers):
+  - `thread/fork`
+  - `thread/archive`
+  - `thread/unarchive`
+  - `thread/setName`
+  - `turn/steer`
+- Expanded typed + schema notification parsing coverage for:
+  - `item/started`
+  - `item/completed`
+  - `thread/nameUpdated`
+  - `thread/tokenUsageUpdated`
+- New typed helper models for lifecycle, steering, and token usage:
+  - `ThreadForkResult`, `TurnSteerResult`, `ItemLifecycleEvent`
+  - `ThreadNameUpdatedEvent`, `TokenUsageBreakdown`, `ThreadTokenUsageUpdatedEvent`
+- Added runtime SDK `__version__` export.
+
+### Changed
+
+- API ergonomics pass:
+  - Added thread-scoped `Conversation.turn_text_typed(...)` and `Conversation.turn_steer_typed(...)`
+  - Maintained strict sync/async parity across newly added helpers.
+- Improved protocol typed dict generation to better model additional responses/notifications.
+
+### Quality
+
+- Extended fake transport server coverage for new methods and new notifications.
+- Added tests for:
+  - thread lifecycle + steer typed/schema paths
+  - extended typed/schema notification parser paths
+  - expanded generated schema-model assertions
+
+### Packaging / release readiness
+
+- `pyproject.toml` metadata tightened:
+  - version bumped to `0.2.0`
+  - classifiers/keywords/project URLs added
+
 ## [0.1.0] - 2026-02-16
 
 Initial SDK milestone release for Codex app-server v2.

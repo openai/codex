@@ -58,6 +58,10 @@ RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 
 ## Release checklist
 
+Use `RELEASE_CHECKLIST.md` as the canonical release gate list.
+
+Minimum checks:
+
 - [ ] All tests pass (`pytest`)
 - [ ] Real integration smoke tests pass when env allows
 - [ ] Typing/doc parity verified for changed API surface

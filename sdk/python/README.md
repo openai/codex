@@ -6,6 +6,7 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 
 - ✅ initialize + initialized handshake
 - ✅ core thread/turn methods (`thread/*`, `turn/*`, `model/list`)
+- ✅ extended thread lifecycle + control methods (`thread/fork`, `thread/archive`, `thread/unarchive`, `thread/setName`, `turn/steer`)
 - ✅ streaming notification consumption
 - ✅ command/file approval request handling
 - ✅ async client (`AsyncAppServerClient`)
@@ -57,9 +58,14 @@ with AppServerClient() as client:
 
     started = client.thread_start_typed(model="gpt-5")
     resumed = client.thread_resume_typed(started.thread.id)
+    forked = client.thread_fork_typed(started.thread.id)
+    _ = client.thread_archive_typed(started.thread.id)
+    _ = client.thread_unarchive_typed(started.thread.id)
+    _ = client.thread_set_name_typed(started.thread.id, "My Thread")
     listed = client.thread_list_typed(limit=10)
     models = client.model_list_typed()
     turn = client.turn_text_typed(started.thread.id, "hello")
+    steered = client.turn_steer_typed(started.thread.id, turn.turn.id, "continue")
 ```
 
 Schema wrappers (generated from protocol schemas):
@@ -100,8 +106,12 @@ schema = client.parse_notification_schema(evt)
 Covers common notifications such as:
 
 - `thread/started`
+- `thread/nameUpdated`
+- `thread/tokenUsageUpdated`
 - `turn/started`
 - `turn/completed`
+- `item/started`
+- `item/completed`
 - `item/agentMessage/delta`
 - `error`
 
@@ -137,6 +147,7 @@ RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 ## Related docs
 
 - `CHANGELOG.md` — milestone history for this SDK
-- `CONTRIBUTING.md` — development workflow, quality gates, and release checklist
+- `CONTRIBUTING.md` — development workflow and quality gates
+- `RELEASE_CHECKLIST.md` — release gate checklist
 - `learning.md` — SDK patterns extracted from top Python SDKs
 - `APP_SERVER_V2_NOTES.md` — architecture + method map for Codex app-server v2
