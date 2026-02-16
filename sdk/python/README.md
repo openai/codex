@@ -11,7 +11,7 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 - ✅ async client (`AsyncAppServerClient`)
 - ✅ fluent thread abstraction (`Conversation` / `AsyncConversation`)
 - ✅ schema-backed typed response helpers (`*_schema`)
-- ✅ lightweight typed wrappers (`*_typed`) for core responses + common notifications
+- ✅ lightweight typed wrappers (`*_typed`) for core responses + common notifications (sync + async parity)
 - ✅ robust JSON-RPC error mapping (standard and server-error codes)
 - ✅ overload retry helper (`request_with_retry_on_overload`, `retry_on_overload`)
 - ✅ fake + optional real integration tests (env-gated)
@@ -59,6 +59,7 @@ with AppServerClient() as client:
     resumed = client.thread_resume_typed(started.thread.id)
     listed = client.thread_list_typed(limit=10)
     models = client.model_list_typed()
+    turn = client.turn_text_typed(started.thread.id, "hello")
 ```
 
 Schema wrappers (generated from protocol schemas):
@@ -135,5 +136,7 @@ RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 
 ## Related docs
 
+- `CHANGELOG.md` — milestone history for this SDK
+- `CONTRIBUTING.md` — development workflow, quality gates, and release checklist
 - `learning.md` — SDK patterns extracted from top Python SDKs
 - `APP_SERVER_V2_NOTES.md` — architecture + method map for Codex app-server v2
