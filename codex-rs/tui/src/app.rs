@@ -1311,9 +1311,13 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        let mut resized = false;
+        let mut resized_width = 0;
         if matches!(event, TuiEvent::Draw) {
             let size = tui.terminal.size()?;
             if size != tui.terminal.last_known_screen_size {
+                resized = true;
+                resized_width = size.width;
                 self.refresh_status_line();
             }
         }
@@ -1334,6 +1338,31 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if resized {
+                        // Rebuild inline scrollback at the new width so transcript/history content
+                        // stays visually consistent after terminal reflow.
+                        tui.terminal.clear_scrollback()?;
+                        tui.terminal.clear()?;
+
+                        self.has_emitted_history_lines = false;
+                        for cell in &self.transcript_cells {
+                            let mut display = cell.display_lines(resized_width);
+                            if display.is_empty() {
+                                continue;
+                            }
+
+                            // Keep the same per-cell spacing policy used for live history inserts.
+                            if !cell.is_stream_continuation() {
+                                if self.has_emitted_history_lines {
+                                    display.insert(0, Line::from(""));
+                                } else {
+                                    self.has_emitted_history_lines = true;
+                                }
+                            }
+
+                            tui.insert_history_lines(display);
+                        }
+                    }
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
