@@ -59,12 +59,15 @@
           "$ref": "#/definitions/ThreadId"
         },
         "rolloutPath": {
-          "type": "string"
+          "description": "Optional legacy parameter: newer clients may omit or send null and rely on the server to resolve the rollout path from the conversation id.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "conversationId",
-        "rolloutPath"
+        "conversationId"
       ],
       "type": "object"
     },

@@ -98,7 +98,110 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
     let archive_request_id = mcp
         .send_archive_conversation_request(ArchiveConversationParams {
             conversation_id,
-            rollout_path: rollout_path.clone(),
+            rollout_path: Some(rollout_path.clone()),
+        })
+        .await?;
+    let archive_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_request_id)),
+    )
+    .await??;
+
+    let _: ArchiveConversationResponse =
+        to_response::<ArchiveConversationResponse>(archive_response)?;
+
+    let archived_directory = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    let archived_rollout_path =
+        archived_directory.join(rollout_path.file_name().unwrap_or_else(|| {
+            panic!("rollout path {} missing file name", rollout_path.display())
+        }));
+
+    assert!(
+        !rollout_path.exists(),
+        "expected rollout path {} to be moved",
+        rollout_path.display()
+    );
+    assert!(
+        archived_rollout_path.exists(),
+        "expected archived rollout path {} to exist",
+        archived_rollout_path.display()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn archive_conversation_without_rollout_path_resolves_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let new_request_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let new_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_request_id)),
+    )
+    .await??;
+
+    let NewConversationResponse {
+        conversation_id,
+        rollout_path,
+        ..
+    } = to_response::<NewConversationResponse>(new_response)?;
+
+    let add_listener_request_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams {
+            conversation_id,
+            experimental_raw_events: false,
+        })
+        .await?;
+    let add_listener_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_request_id)),
+    )
+    .await??;
+    let AddConversationSubscriptionResponse { subscription_id: _ } =
+        to_response::<AddConversationSubscriptionResponse>(add_listener_response)?;
+
+    let send_request_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: "materialize".to_string(),
+                text_elements: Vec::new(),
+            }],
+        })
+        .await?;
+    let send_response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(send_request_id)),
+    )
+    .await??;
+    let _: SendUserMessageResponse = to_response::<SendUserMessageResponse>(send_response)?;
+    let _: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await??;
+
+    assert!(
+        rollout_path.exists(),
+        "expected rollout path {} to exist after first user message",
+        rollout_path.display()
+    );
+
+    let archive_request_id = mcp
+        .send_archive_conversation_request(ArchiveConversationParams {
+            conversation_id,
+            rollout_path: None,
         })
         .await?;
     let archive_response: JSONRPCResponse = timeout(

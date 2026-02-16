@@ -4505,9 +4505,53 @@ impl CodexMessageProcessor {
             rollout_path,
         } = params;
 
-        match self.archive_thread_common(thread_id, &rollout_path).await {
+        // Legacy clients may not have a rollout path (e.g. when thread creation fails partway
+        // through); fall back to resolving it from the thread id.
+        let mut primary_error: Option<JSONRPCErrorError> = None;
+        if let Some(rollout_path) = rollout_path {
+            match self.archive_thread_common(thread_id, &rollout_path).await {
+                Ok(()) => {
+                    tracing::info!("thread/archive succeeded for {thread_id}");
+                    let response = ArchiveConversationResponse {};
+                    self.outgoing.send_response(request_id, response).await;
+                    return;
+                }
+                Err(err) => {
+                    primary_error = Some(err);
+                }
+            }
+        }
+
+        // Resolve rollout path from disk by thread id.
+        let resolved_path =
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    let error = primary_error.unwrap_or(JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("no rollout found for conversation id {thread_id}"),
+                        data: None,
+                    });
+                    tracing::warn!("thread/archive failed for {thread_id}: {}", error.message);
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+                Err(err) => {
+                    let error = primary_error.unwrap_or(JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("failed to locate conversation id {thread_id}: {err}"),
+                        data: None,
+                    });
+                    tracing::warn!("thread/archive failed for {thread_id}: {}", error.message);
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        match self.archive_thread_common(thread_id, &resolved_path).await {
             Ok(()) => {
-                tracing::info!("thread/archive succeeded for {thread_id}");
+                tracing::info!("thread/archive succeeded for {thread_id} (resolved rollout path)");
                 let response = ArchiveConversationResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }

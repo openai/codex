@@ -194,7 +194,9 @@ pub struct AddConversationSubscriptionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveConversationParams {
     pub conversation_id: ThreadId,
-    pub rollout_path: PathBuf,
+    /// Optional legacy parameter: newer clients may omit or send null and rely
+    /// on the server to resolve the rollout path from the conversation id.
+    pub rollout_path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
