@@ -2387,6 +2387,10 @@ impl Session {
                     if let Some(replacement) = &compacted.replacement_history {
                         history.replace(replacement.clone());
                     } else {
+                        // TODO(ccunningham): When we have TurnContextItem-based legacy reconstruction,
+                        // build historical turn context from those items and inject it at the correct
+                        // point in compacted history instead of prepending the current initial context.
+                        // This matters for legacy rollouts with replacement_history=None.
                         let user_messages = collect_user_messages(history.raw_items());
                         let mut rebuilt = self.build_initial_context(turn_context).await;
                         rebuilt.extend(compact::build_compacted_history(
