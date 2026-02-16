@@ -1,11 +1,30 @@
+//! Newline-gated streaming accumulator for markdown source.
+//!
+//! `MarkdownStreamCollector` buffers incoming token deltas and exposes a commit boundary at each
+//! newline.  The stream controllers (`streaming/controller.rs`) call `commit_complete_source()`
+//! after each newline-bearing delta to obtain the completed prefix for re-rendering, leaving the
+//! trailing incomplete line in the buffer for the next delta.
+//!
+//! On finalization, `finalize_and_drain_source()` flushes whatever remains (the last line, which
+//! may lack a trailing newline).
+
+#[cfg(test)]
 use ratatui::text::Line;
 
+#[cfg(test)]
 use crate::markdown;
 
-/// Newline-gated accumulator that renders markdown and commits only fully
-/// completed logical lines.
+/// Newline-gated accumulator that buffers raw markdown source and commits only completed lines
+/// (terminated by `\n`).
+///
+/// The buffer tracks how many source bytes have already been committed via
+/// `committed_source_len`, so each `commit_complete_source()` call returns only the newly
+/// completed portion.  This design lets the stream controller re-render the entire accumulated
+/// source while only appending new content.
 pub(crate) struct MarkdownStreamCollector {
     buffer: String,
+    committed_source_len: usize,
+    #[cfg(test)]
     committed_line_count: usize,
     width: Option<usize>,
 }
@@ -14,14 +33,24 @@ impl MarkdownStreamCollector {
     pub fn new(width: Option<usize>) -> Self {
         Self {
             buffer: String::new(),
+            committed_source_len: 0,
+            #[cfg(test)]
             committed_line_count: 0,
             width,
         }
     }
 
+    pub fn set_width(&mut self, width: Option<usize>) {
+        self.width = width;
+    }
+
     pub fn clear(&mut self) {
         self.buffer.clear();
-        self.committed_line_count = 0;
+        self.committed_source_len = 0;
+        #[cfg(test)]
+        {
+            self.committed_line_count = 0;
+        }
     }
 
     pub fn push_delta(&mut self, delta: &str) {
@@ -29,17 +58,48 @@ impl MarkdownStreamCollector {
         self.buffer.push_str(delta);
     }
 
+    /// Commit newly completed raw markdown source up to the last newline.
+    pub fn commit_complete_source(&mut self) -> Option<String> {
+        let commit_end = self.buffer.rfind('\n').map(|idx| idx + 1)?;
+        if commit_end <= self.committed_source_len {
+            return None;
+        }
+
+        let out = self.buffer[self.committed_source_len..commit_end].to_string();
+        self.committed_source_len = commit_end;
+        Some(out)
+    }
+
+    /// Finalize the stream and return any remaining raw source.
+    ///
+    /// Ensures the returned source chunk is newline-terminated when non-empty so callers can
+    /// safely run markdown block parsing on the final chunk.
+    pub fn finalize_and_drain_source(&mut self) -> String {
+        if self.committed_source_len >= self.buffer.len() {
+            self.clear();
+            return String::new();
+        }
+
+        let mut out = self.buffer[self.committed_source_len..].to_string();
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        self.clear();
+        out
+    }
+
     /// Render the full buffer and return only the newly completed logical lines
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
+    #[cfg(test)]
     pub fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
-        let source = self.buffer.clone();
-        let last_newline_idx = source.rfind('\n');
-        let source = if let Some(last_newline_idx) = last_newline_idx {
-            source[..=last_newline_idx].to_string()
-        } else {
+        let Some(commit_end) = self.buffer.rfind('\n').map(|idx| idx + 1) else {
             return Vec::new();
         };
+        if commit_end <= self.committed_source_len {
+            return Vec::new();
+        }
+        let source = self.buffer[..commit_end].to_string();
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
@@ -58,6 +118,7 @@ impl MarkdownStreamCollector {
         let out_slice = &rendered[self.committed_line_count..complete_line_count];
 
         let out = out_slice.to_vec();
+        self.committed_source_len = commit_end;
         self.committed_line_count = complete_line_count;
         out
     }
@@ -66,17 +127,21 @@ impl MarkdownStreamCollector {
     /// If the buffer does not end with a newline, a temporary one is appended
     /// for rendering. Optionally unwraps ```markdown language fences in
     /// non-test builds.
+    #[cfg(test)]
     pub fn finalize_and_drain(&mut self) -> Vec<Line<'static>> {
-        let raw_buffer = self.buffer.clone();
-        let mut source: String = raw_buffer.clone();
+        let mut source = self.buffer.clone();
+        if source.is_empty() {
+            self.clear();
+            return Vec::new();
+        }
         if !source.ends_with('\n') {
             source.push('\n');
-        }
+        };
         tracing::debug!(
-            raw_len = raw_buffer.len(),
+            raw_len = self.buffer.len(),
             source_len = source.len(),
             "markdown finalize (raw length: {}, rendered length: {})",
-            raw_buffer.len(),
+            self.buffer.len(),
             source.len()
         );
         tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
@@ -386,6 +451,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn table_header_commits_without_holdback() {
+        let mut c = super::MarkdownStreamCollector::new(None);
+        c.push_delta("| A | B |\n");
+        let out1 = c.commit_complete_lines();
+        let out1_str = lines_to_plain_strings(&out1);
+        assert_eq!(out1_str, vec!["| A | B |".to_string()]);
+
+        c.push_delta("| --- | --- |\n");
+        let out = c.commit_complete_lines();
+        let out_str = lines_to_plain_strings(&out);
+        assert!(
+            !out_str.is_empty(),
+            "expected output to continue committing after delimiter: {out_str:?}"
+        );
+
+        c.push_delta("| 1 | 2 |\n");
+        let out2 = c.commit_complete_lines();
+        assert!(
+            !out2.is_empty(),
+            "expected output to continue committing after body row"
+        );
+
+        c.push_delta("\n");
+        let _ = c.commit_complete_lines();
+    }
+
+    #[tokio::test]
+    async fn pipe_text_without_table_prefix_is_not_delayed() {
+        let mut c = super::MarkdownStreamCollector::new(None);
+        c.push_delta("Escaped pipe in text: a | b | c\n");
+        let out = c.commit_complete_lines();
+        let out_str = lines_to_plain_strings(&out);
+        assert_eq!(out_str, vec!["Escaped pipe in text: a | b | c".to_string()]);
+    }
+
+    #[tokio::test]
     async fn lists_and_fences_commit_without_duplication() {
         // List case
         assert_streamed_equals_full(&["- a\n- ", "b\n- c\n"]).await;
@@ -666,5 +767,10 @@ mod tests {
             "more stuff\n",
         ])
         .await;
+    }
+
+    #[tokio::test]
+    async fn table_like_lines_inside_fenced_code_are_not_held() {
+        assert_streamed_equals_full(&["```\n", "| a | b |\n", "```\n"]).await;
     }
 }
