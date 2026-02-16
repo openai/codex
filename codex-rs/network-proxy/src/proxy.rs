@@ -1,7 +1,9 @@
 use crate::admin;
 use crate::config;
 use crate::http_proxy;
+use crate::metadata::proxy_username_for_attempt_id;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::runtime::BlockedRequestObserver;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -70,6 +72,7 @@ pub struct NetworkProxyBuilder {
     admin_addr: Option<SocketAddr>,
     managed_by_codex: bool,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
 }
 
 impl Default for NetworkProxyBuilder {
@@ -81,6 +84,7 @@ impl Default for NetworkProxyBuilder {
             admin_addr: None,
             managed_by_codex: true,
             policy_decider: None,
+            blocked_request_observer: None,
         }
     }
 }
@@ -124,12 +128,31 @@ impl NetworkProxyBuilder {
         self
     }
 
+    pub fn blocked_request_observer<O>(mut self, observer: O) -> Self
+    where
+        O: BlockedRequestObserver,
+    {
+        self.blocked_request_observer = Some(Arc::new(observer));
+        self
+    }
+
+    pub fn blocked_request_observer_arc(
+        mut self,
+        observer: Arc<dyn BlockedRequestObserver>,
+    ) -> Self {
+        self.blocked_request_observer = Some(observer);
+        self
+    }
+
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = self.state.ok_or_else(|| {
             anyhow::anyhow!(
                 "NetworkProxyBuilder requires a state; supply one via builder.state(...)"
             )
         })?;
+        state
+            .set_blocked_request_observer(self.blocked_request_observer.clone())
+            .await;
         let current_cfg = state.current_cfg().await?;
         let (requested_http_addr, requested_socks_addr, requested_admin_addr, reserved_listeners) =
             if self.managed_by_codex {
@@ -312,8 +335,12 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    network_attempt_id: Option<&str>,
 ) {
-    let http_proxy_url = format!("http://{http_addr}");
+    let http_proxy_url = network_attempt_id
+        .map(proxy_username_for_attempt_id)
+        .map(|username| format!("http://{username}@{http_addr}"))
+        .unwrap_or_else(|| format!("http://{http_addr}"));
     let socks_proxy_url = format!("socks5h://{socks_addr}");
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
@@ -354,18 +381,25 @@ fn apply_proxy_env_overrides(
 
     env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
 
-    if socks_enabled {
+    // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
+    // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
+    //
+    // For attempt-scoped runs, point ALL_PROXY at the HTTP proxy URL so the
+    // attempt metadata survives in proxy credentials for correlation.
+    if socks_enabled && network_attempt_id.is_none() {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &socks_proxy_url);
         set_env_keys(env, FTP_PROXY_ENV_KEYS, &socks_proxy_url);
-        #[cfg(target_os = "macos")]
-        {
-            // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
-            // and only provide a SOCKS ProxyCommand fallback when one is not present.
-            env.entry("GIT_SSH_COMMAND".to_string())
-                .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
-        }
     } else {
         set_env_keys(env, ALL_PROXY_ENV_KEYS, &http_proxy_url);
+        set_env_keys(env, FTP_PROXY_ENV_KEYS, &http_proxy_url);
+    }
+
+    #[cfg(target_os = "macos")]
+    if socks_enabled {
+        // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
+        // and only provide a SOCKS ProxyCommand fallback when one is not present.
+        env.entry("GIT_SSH_COMMAND".to_string())
+            .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
     }
 }
 
@@ -387,6 +421,14 @@ impl NetworkProxy {
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        self.apply_to_env_for_attempt(env, None);
+    }
+
+    pub fn apply_to_env_for_attempt(
+        &self,
+        env: &mut HashMap<String, String>,
+        network_attempt_id: Option<&str>,
+    ) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -395,6 +437,7 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
+            network_attempt_id,
         );
     }
 
@@ -694,6 +737,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            None,
         );
 
         assert_eq!(
@@ -736,6 +780,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
+            None,
         );
 
         assert_eq!(
@@ -743,6 +788,39 @@ mod tests {
             Some(&"http://127.0.0.1:3128".to_string())
         );
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_embeds_attempt_id_in_http_proxy_url() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+            Some("attempt-123"),
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("HTTPS_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"http://codex-net-attempt-attempt-123@127.0.0.1:3128".to_string())
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            env.get("GIT_SSH_COMMAND"),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
     }
 
     #[cfg(target_os = "macos")]
@@ -759,6 +837,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            None,
         );
 
         assert_eq!(

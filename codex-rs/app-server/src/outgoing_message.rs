@@ -20,6 +20,8 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 #[cfg(test)]
 use codex_protocol::account::PlanType;
 
+pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
+
 /// Stable identifier for a transport connection.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ConnectionId(pub(crate) u64);
@@ -46,7 +48,7 @@ pub(crate) enum OutgoingEnvelope {
 pub(crate) struct OutgoingMessageSender {
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
-    request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
+    request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<ClientRequestResult>>>,
 }
 
 #[derive(Clone)]
@@ -69,7 +71,7 @@ impl ThreadScopedOutgoingMessageSender {
     pub(crate) async fn send_request(
         &self,
         payload: ServerRequestPayload,
-    ) -> oneshot::Receiver<Result> {
+    ) -> oneshot::Receiver<ClientRequestResult> {
         if self.connection_ids.is_empty() {
             let (_tx, rx) = oneshot::channel();
             return rx;
@@ -118,7 +120,7 @@ impl OutgoingMessageSender {
         &self,
         connection_ids: &[ConnectionId],
         request: ServerRequestPayload,
-    ) -> oneshot::Receiver<Result> {
+    ) -> oneshot::Receiver<ClientRequestResult> {
         let (_id, rx) = self
             .send_request_with_id_to_connections(connection_ids, request)
             .await;
@@ -128,7 +130,7 @@ impl OutgoingMessageSender {
     pub(crate) async fn send_request_with_id(
         &self,
         request: ServerRequestPayload,
-    ) -> (RequestId, oneshot::Receiver<Result>) {
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         self.send_request_with_id_to_connections(&[], request).await
     }
 
@@ -136,7 +138,7 @@ impl OutgoingMessageSender {
         &self,
         connection_ids: &[ConnectionId],
         request: ServerRequestPayload,
-    ) -> (RequestId, oneshot::Receiver<Result>) {
+    ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
         let id = RequestId::Integer(self.next_server_request_id.fetch_add(1, Ordering::Relaxed));
         let outgoing_message_id = id.clone();
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -190,7 +192,7 @@ impl OutgoingMessageSender {
 
         match entry {
             Some((id, sender)) => {
-                if let Err(err) = sender.send(result) {
+                if let Err(err) = sender.send(Ok(result)) {
                     warn!("could not notify callback for {id:?} due to: {err:?}");
                 }
             }
@@ -207,8 +209,11 @@ impl OutgoingMessageSender {
         };
 
         match entry {
-            Some((id, _sender)) => {
+            Some((id, sender)) => {
                 warn!("client responded with error for {id:?}: {error:?}");
+                if let Err(err) = sender.send(Err(error)) {
+                    warn!("could not notify callback for {id:?} due to: {err:?}");
+                }
             }
             None => {
                 warn!("could not find callback for {id:?}");
@@ -390,11 +395,13 @@ mod tests {
     use codex_app_server_protocol::AccountLoginCompletedNotification;
     use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
+    use codex_app_server_protocol::ApplyPatchApprovalParams;
     use codex_app_server_protocol::AuthMode;
     use codex_app_server_protocol::ConfigWarningNotification;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
+    use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::time::timeout;
@@ -608,5 +615,39 @@ mod tests {
             }
             other => panic!("expected targeted error envelope, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn notify_client_error_forwards_error_to_waiter() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = OutgoingMessageSender::new(tx);
+
+        let (request_id, wait_for_result) = outgoing
+            .send_request_with_id(ServerRequestPayload::ApplyPatchApproval(
+                ApplyPatchApprovalParams {
+                    conversation_id: ThreadId::new(),
+                    call_id: "call-id".to_string(),
+                    file_changes: HashMap::new(),
+                    reason: None,
+                    grant_root: None,
+                },
+            ))
+            .await;
+
+        let error = JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: "refresh failed".to_string(),
+            data: None,
+        };
+
+        outgoing
+            .notify_client_error(request_id, error.clone())
+            .await;
+
+        let result = timeout(Duration::from_secs(1), wait_for_result)
+            .await
+            .expect("wait should not time out")
+            .expect("waiter should receive a callback");
+        assert_eq!(result, Err(error));
     }
 }

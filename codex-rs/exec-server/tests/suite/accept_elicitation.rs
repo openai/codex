@@ -10,6 +10,7 @@ use anyhow::ensure;
 use codex_exec_server::ExecResult;
 use exec_server_test_support::InteractiveClient;
 use exec_server_test_support::create_transport;
+use exec_server_test_support::create_transport_with_shell_path;
 use exec_server_test_support::notify_readable_sandbox;
 use exec_server_test_support::write_default_execpolicy;
 use maplit::hashset;
@@ -54,7 +55,46 @@ prefix_rule(
     let dotslash_cache_temp_dir = TempDir::new()?;
     let dotslash_cache = dotslash_cache_temp_dir.path();
     let transport = create_transport(codex_home.as_ref(), dotslash_cache).await?;
+    run_accept_elicitation_for_prompt_rule_with_transport(transport).await
+}
 
+/// Verify the same prompt/escalation flow works when the server is launched
+/// with a patched zsh binary.
+///
+/// Set CODEX_TEST_ZSH_PATH to enable this test locally or in CI.
+#[tokio::test(flavor = "current_thread")]
+async fn accept_elicitation_for_prompt_rule_with_zsh() -> Result<()> {
+    let Some(zsh_path) = std::env::var_os("CODEX_TEST_ZSH_PATH") else {
+        eprintln!("skipping zsh test: CODEX_TEST_ZSH_PATH is not set");
+        return Ok(());
+    };
+    let zsh_path = PathBuf::from(zsh_path);
+
+    let codex_home = TempDir::new()?;
+    write_default_execpolicy(
+        r#"
+# Create a rule with `decision = "prompt"` to exercise the elicitation flow.
+prefix_rule(
+  pattern = ["git", "init"],
+  decision = "prompt",
+  match = [
+    "git init ."
+  ],
+)
+"#,
+        codex_home.as_ref(),
+    )
+    .await?;
+    let dotslash_cache_temp_dir = TempDir::new()?;
+    let dotslash_cache = dotslash_cache_temp_dir.path();
+    let transport =
+        create_transport_with_shell_path(codex_home.as_ref(), dotslash_cache, &zsh_path).await?;
+    run_accept_elicitation_for_prompt_rule_with_transport(transport).await
+}
+
+async fn run_accept_elicitation_for_prompt_rule_with_transport(
+    transport: rmcp::transport::TokioChildProcess,
+) -> Result<()> {
     // Create an MCP client that approves expected elicitation messages.
     let project_root = TempDir::new()?;
     let project_root_path = project_root.path().canonicalize().unwrap();

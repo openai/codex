@@ -316,6 +316,7 @@ async fn handle_exec_approval(
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
         ..
     } = event;
@@ -327,6 +328,7 @@ async fn handle_exec_approval(
         command,
         cwd,
         reason,
+        network_approval_context,
         proposed_execpolicy_amendment,
     );
     let decision =

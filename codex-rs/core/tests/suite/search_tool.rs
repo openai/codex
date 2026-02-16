@@ -25,8 +25,8 @@ use serde_json::Value;
 use serde_json::json;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 3] = [
-    "MCP tools (`mcp__...`) are hidden until you search for them.",
-    "Matching tools are added to `active_selected_tools`.",
+    "apps tools (`mcp__codex_apps__...`) are hidden until you search for them.",
+    "Matching tools are added to available `tools` and available for the remainder of the current turn.",
     "do not run that name as a shell command",
 ];
 
@@ -47,30 +47,20 @@ fn tool_names(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn developer_messages(body: &Value) -> Vec<String> {
-    body.get("input")
+fn search_tool_description(body: &Value) -> Option<String> {
+    body.get("tools")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    if item.get("role").and_then(Value::as_str) != Some("developer") {
-                        return None;
-                    }
-                    let content = item.get("content").and_then(Value::as_array)?;
-                    let texts: Vec<&str> = content
-                        .iter()
-                        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
-                        .collect();
-                    if texts.is_empty() {
-                        None
-                    } else {
-                        Some(texts.join("\n"))
-                    }
-                })
-                .collect()
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(Value::as_str) == Some("search_tool_bm25") {
+                    tool.get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
         })
-        .unwrap_or_default()
 }
 
 fn search_tool_output_payload(request: &ResponsesRequest, call_id: &str) -> Value {
@@ -103,6 +93,16 @@ fn active_selected_tools(payload: &Value) -> Vec<String> {
                 .expect("active_selected_tools entries should be strings")
                 .to_string()
         })
+        .collect()
+}
+
+fn search_result_tools(payload: &Value) -> Vec<&Value> {
+    payload
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
         .collect()
 }
 
@@ -144,7 +144,7 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_tool_adds_developer_instructions() -> Result<()> {
+async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -171,14 +171,13 @@ async fn search_tool_adds_developer_instructions() -> Result<()> {
     .await?;
 
     let body = mock.single_request().body_json();
-    let developer_texts = developer_messages(&body);
+    let search_tool_description =
+        search_tool_description(&body).expect("search tool description should be present");
     assert!(
-        developer_texts.iter().any(|text| {
-            SEARCH_TOOL_INSTRUCTION_SNIPPETS
-                .iter()
-                .all(|snippet| text.contains(snippet))
-        }),
-        "developer instructions should include search tool workflow: {developer_texts:?}"
+        SEARCH_TOOL_INSTRUCTION_SNIPPETS
+            .iter()
+            .all(|snippet| search_tool_description.contains(snippet)),
+        "search tool description should include search tool workflow: {search_tool_description:?}"
     );
 
     Ok(())
@@ -342,12 +341,12 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
-        second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should include selected MCP tool: {second_tools:?}"
+        !second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "second request should not include rmcp MCP tools after search: {second_tools:?}"
     );
     assert!(
         !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should only include selected MCP tool: {second_tools:?}"
+        "second request should not include rmcp MCP tools after search: {second_tools:?}"
     );
 
     let search_output_payload = search_tool_output_payload(&requests[1], call_id);
@@ -355,9 +354,18 @@ async fn search_tool_selection_persists_within_turn_and_resets_next_turn() -> Re
         search_output_payload.get("selected_tools").is_none(),
         "selected_tools should not be returned: {search_output_payload:?}"
     );
-    assert_eq!(
-        active_selected_tools(&search_output_payload),
-        vec!["mcp__rmcp__echo".to_string()],
+    for tool in search_result_tools(&search_output_payload) {
+        assert_eq!(
+            tool.get("server").and_then(Value::as_str),
+            Some("codex_apps"),
+            "search results should only include codex_apps tools: {search_output_payload:?}"
+        );
+    }
+    assert!(
+        !active_selected_tools(&search_output_payload)
+            .iter()
+            .any(|tool_name| tool_name.starts_with("mcp__rmcp__")),
+        "search should not add rmcp tools to active selection: {search_output_payload:?}"
     );
 
     let third_tools = tool_names(&requests[2].body_json());
@@ -464,22 +472,22 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
 
     let second_tools = tool_names(&requests[1].body_json());
     assert!(
-        second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "second request should include echo after first search: {second_tools:?}"
+        !second_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "second request should not include rmcp tools after first search: {second_tools:?}"
     );
     assert!(
         !second_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "second request should not include image before second search runs: {second_tools:?}"
+        "second request should not include rmcp tools after first search: {second_tools:?}"
     );
 
     let third_tools = tool_names(&requests[2].body_json());
     assert!(
-        third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
-        "third request should still include echo: {third_tools:?}"
+        !third_tools.iter().any(|name| name == "mcp__rmcp__echo"),
+        "third request should not include rmcp tools: {third_tools:?}"
     );
     assert!(
-        third_tools.iter().any(|name| name == "mcp__rmcp__image"),
-        "third request should include image after second search: {third_tools:?}"
+        !third_tools.iter().any(|name| name == "mcp__rmcp__image"),
+        "third request should not include rmcp tools: {third_tools:?}"
     );
 
     let second_search_payload = search_tool_output_payload(&requests[2], second_call_id);
@@ -487,12 +495,18 @@ async fn search_tool_selection_unions_results_within_turn() -> Result<()> {
         second_search_payload.get("selected_tools").is_none(),
         "selected_tools should not be returned: {second_search_payload:?}"
     );
-    assert_eq!(
-        active_selected_tools(&second_search_payload),
-        vec![
-            "mcp__rmcp__echo".to_string(),
-            "mcp__rmcp__image".to_string(),
-        ],
+    for tool in search_result_tools(&second_search_payload) {
+        assert_eq!(
+            tool.get("server").and_then(Value::as_str),
+            Some("codex_apps"),
+            "search results should only include codex_apps tools: {second_search_payload:?}"
+        );
+    }
+    assert!(
+        !active_selected_tools(&second_search_payload)
+            .iter()
+            .any(|tool_name| tool_name.starts_with("mcp__rmcp__")),
+        "search should not add rmcp tools to active selection: {second_search_payload:?}"
     );
 
     Ok(())

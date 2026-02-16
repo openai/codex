@@ -5,6 +5,7 @@
   rustPlatform,
   pkg-config,
   lib,
+  version ? "0.0.0",
   ...
 }:
 rustPlatform.buildRustPackage (_: {
@@ -12,10 +13,18 @@ rustPlatform.buildRustPackage (_: {
     PKG_CONFIG_PATH = "${openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
   pname = "codex-rs";
-  version = "0.1.0";
+  inherit version;
   cargoLock.lockFile = ./Cargo.lock;
   doCheck = false;
   src = ./.;
+
+  # Patch the workspace Cargo.toml so that cargo embeds the correct version in
+  # CARGO_PKG_VERSION (which the binary reads via env!("CARGO_PKG_VERSION")).
+  # On release commits the Cargo.toml already contains the real version and
+  # this sed is a no-op.
+  postPatch = ''
+    sed -i 's/^version = "0\.0\.0"$/version = "${version}"/' Cargo.toml
+  '';
   nativeBuildInputs = [
     cmake
     llvmPackages.clang

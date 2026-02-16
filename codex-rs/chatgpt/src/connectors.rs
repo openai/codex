@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
@@ -19,7 +20,9 @@ pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_options;
+pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 use codex_core::connectors::merge_connectors;
+pub use codex_core::connectors::with_app_enabled_state;
 
 #[derive(Debug, Deserialize)]
 struct DirectoryListResponse {
@@ -72,11 +75,30 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     );
     let connectors = connectors_result?;
     let accessible = accessible_result?;
-    Ok(merge_connectors_with_accessible(connectors, accessible))
+    Ok(with_app_enabled_state(
+        merge_connectors_with_accessible(connectors, accessible, true),
+        config,
+    ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     list_all_connectors_with_options(config, false).await
+}
+
+pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Some(Vec::new());
+    }
+
+    if init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
+        .await
+        .is_err()
+    {
+        return None;
+    }
+    let token_data = get_chatgpt_token_data()?;
+    let cache_key = all_connectors_cache_key(config, &token_data);
+    read_cached_all_connectors(&cache_key)
 }
 
 pub async fn list_all_connectors_with_options(
@@ -164,7 +186,20 @@ fn write_cached_all_connectors(cache_key: AllConnectorsCacheKey, connectors: &[A
 pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
+    all_connectors_loaded: bool,
 ) -> Vec<AppInfo> {
+    let accessible_connectors = if all_connectors_loaded {
+        let connector_ids: HashSet<&str> = connectors
+            .iter()
+            .map(|connector| connector.id.as_str())
+            .collect();
+        accessible_connectors
+            .into_iter()
+            .filter(|connector| connector_ids.contains(connector.id.as_str()))
+            .collect()
+    } else {
+        accessible_connectors
+    };
     let merged = merge_connectors(connectors, accessible_connectors);
     filter_disallowed_connectors(merged)
 }
@@ -283,6 +318,7 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         distribution_channel: app.distribution_channel,
         install_url: None,
         is_accessible: false,
+        is_enabled: true,
     }
 }
 
@@ -341,6 +377,7 @@ mod tests {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         }
     }
 
@@ -382,5 +419,42 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some(connector_install_url(id, id)),
+            is_accessible,
+            is_enabled: true,
+        }
+    }
+
+    #[test]
+    fn excludes_accessible_connectors_not_in_all_when_all_loaded() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            true,
+        );
+        assert_eq!(merged, vec![merged_app("alpha", true)]);
+    }
+
+    #[test]
+    fn keeps_accessible_connectors_not_in_all_while_all_loading() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            false,
+        );
+        assert_eq!(
+            merged,
+            vec![merged_app("alpha", true), merged_app("beta", true)]
+        );
     }
 }

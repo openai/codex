@@ -1128,6 +1128,13 @@
             "null"
           ]
         },
+        "includeHidden": {
+          "description": "When true, include models that are hidden from the default picker list.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",
@@ -2560,6 +2567,13 @@
         },
         "cursor": {
           "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
           "type": [
             "string",
             "null"
