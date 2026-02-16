@@ -1991,8 +1991,8 @@ impl Session {
         // state or explicit non-state replay events.
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        crate::context_updates::build_settings_update_items(
-            crate::context_updates::BuildSettingsUpdateItemsParams {
+        crate::context_manager::updates::build_settings_update_items(
+            crate::context_manager::updates::BuildSettingsUpdateItemsParams {
                 previous: previous_context.map(Arc::as_ref),
                 resumed_model,
                 next: current_context,
@@ -2532,7 +2532,10 @@ impl Session {
                 && base_instructions == model_info.get_model_instructions(Some(personality));
             if !has_baked_personality
                 && let Some(personality_message) =
-                    crate::context_updates::personality_message_for(&model_info, personality)
+                    crate::context_manager::updates::personality_message_for(
+                        &model_info,
+                        personality,
+                    )
             {
                 items.push(
                     DeveloperInstructions::personality_spec_message(personality_message).into(),
