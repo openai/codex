@@ -327,9 +327,7 @@ impl JsReplManager {
         exec_id: &str,
     ) -> Option<CancellationToken> {
         let mut calls = exec_tool_calls.lock().await;
-        let Some(state) = calls.get_mut(exec_id) else {
-            return None;
-        };
+        let state = calls.get_mut(exec_id)?;
         state.in_flight += 1;
         Some(state.cancel.clone())
     }
