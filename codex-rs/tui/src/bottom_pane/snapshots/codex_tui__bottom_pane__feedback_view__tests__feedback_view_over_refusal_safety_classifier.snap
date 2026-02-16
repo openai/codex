@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+expression: rendered
+---
+▌ Tell us more (over-refusal / safety check)
+▌
+▌ (optional) Share what was refused and why it should have been allowed
+
+Press enter to confirm or esc to go back

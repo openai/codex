@@ -279,7 +279,7 @@ impl CodexLogSnapshot {
         }
 
         let level = match classification {
-            "bug" | "bad_result" => Level::Error,
+            "bug" | "bad_result" | "over_refusal_safety_classifier" => Level::Error,
             _ => Level::Info,
         };
 
@@ -342,6 +342,7 @@ fn display_classification(classification: &str) -> String {
         "bug" => "Bug".to_string(),
         "bad_result" => "Bad result".to_string(),
         "good_result" => "Good result".to_string(),
+        "over_refusal_safety_classifier" => "Over-refusal / safety check".to_string(),
         _ => "Other".to_string(),
     }
 }
