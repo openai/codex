@@ -1660,6 +1660,22 @@ keep me updated
             },
         ];
         assert_eq!(refreshed, expected);
+
+        let refreshed_value =
+            serde_json::to_value(&refreshed).expect("serialize refreshed history");
+        let Value::Array(refreshed_items) = refreshed_value else {
+            panic!("expected refreshed history to serialize as array");
+        };
+
+        assert_snapshot!(
+            "process_compacted_history_reinject_above_last_summary_shapes",
+            context_snapshot::format_labeled_items_snapshot(
+                "When compaction output has multiple summary-only user messages and no real user message, canonical context is reinserted above the last summary.",
+                &[("Refreshed History Layout", refreshed_items.as_slice())],
+                &ContextSnapshotOptions::default()
+                    .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+            )
+        );
     }
 
     #[test]
