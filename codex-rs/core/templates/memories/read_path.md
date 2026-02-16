@@ -14,8 +14,7 @@ Especially if the user asks about a specific repo/module/code path that seems
 relevant, skim/search the relevant memory files first before diving into the repo.
 
 Memory layout (general -> specific):
-- {{ base_path }}/memory_summary.md (already provided below; do NOT open
-again)
+- {{ base_path }}/memory_summary.md (already provided below; do NOT open it again for routine reads)
 - {{ base_path }}/MEMORY.md (searchable registry; primary file to query)
 - {{ base_path }}/skills/<skill-name>/ (skill folder)
   - SKILL.md (entrypoint instructions)
@@ -36,14 +35,24 @@ under {{ base_path }}/rollout_summaries/ and {{ base_path }}/skills/.
 During execution: if you hit repeated errors, confusing behavior, or you suspect
 there is relevant prior context, it is worth redoing the quick memory pass.
 
-When to update memory:
+When to update memory (automatic, same turn):
 - Treat memory as guidance, not truth: if memory conflicts with the current
-repo state, tool outputs, or environment, the user feedback, the current state
-wins. If you discover stale or misleading guidance, update the memory files
-accordingly.
-- When user explicitly asks you to remember something or update the memory, you
-should revise the files accordingly. Usually you should directly update
-memory_summary.md (such as general tips and user profile section) and MEMORY.md.
+repo state, tool outputs, or environment, the user feedback, the current state wins. 
+- Memory is writable. You are authorized to edit {{ base_path }}/MEMORY.md,
+{{ base_path }}/memory_summary.md when stale guidance is detected.
+- If any memory fact conflicts with current evidence (repo state, tool output, or user correction),
+you MUST update memory in the same turn. Do not wait for a separate user prompt.
+- Required behavior after detecting stale memory:
+  1) Verify the correct replacement using local evidence.
+  2) Continue the task using current evidence (do not rely on stale memory).
+  3) Edit memory files later in the same turn, before your final response:
+     - Always update {{ base_path }}/MEMORY.md.
+     - Update {{ base_path }}/memory_summary.md only if the correction affects
+       reusable guidance AND you have complete local file context for a
+       targeted edit.
+  4) Finalize the task after the memory updates are written.
+- Only ask a clarifying question instead of editing when the replacement is ambiguous (multiple plausible targets with low confidence).
+- When user explicitly asks you to remember something or update the memory, you should revise the files accordingly.
 
 Memory citation requirements:
 - If ANY relevant memory files were used: you must output exactly one final
