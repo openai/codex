@@ -286,7 +286,7 @@ async fn run_compact_task_inner(
     let incoming_user_items = match incoming_items.as_ref() {
         Some(items) => items
             .iter()
-            .filter(|item| real_user_message_text(item).is_some())
+            .filter(|item| is_non_summary_user_message(item))
             .cloned()
             .collect(),
         None => Vec::new(),
@@ -391,7 +391,7 @@ pub(crate) fn process_compacted_history(
             // user input rather than an earlier turn.
             if let Some(insertion_index) = compacted_history
                 .iter()
-                .rposition(|item| real_user_message_text(item).is_some())
+                .rposition(is_non_summary_user_message)
             {
                 compacted_history
                     .splice(insertion_index..insertion_index, initial_context.to_vec());
@@ -403,13 +403,13 @@ pub(crate) fn process_compacted_history(
     compacted_history
 }
 
-fn real_user_message_text(item: &ResponseItem) -> Option<String> {
+fn is_non_summary_user_message(item: &ResponseItem) -> bool {
     match crate::event_mapping::parse_turn_item(item) {
         Some(TurnItem::UserMessage(user_message)) => {
             let message = user_message.message();
-            (!is_summary_message(&message)).then_some(message)
+            !is_summary_message(&message)
         }
-        _ => None,
+        _ => false,
     }
 }
 
@@ -872,6 +872,21 @@ do things
         ];
 
         assert_eq!(history, expected);
+    }
+
+    #[test]
+    fn non_summary_user_message_includes_image_only_user_messages() {
+        let image_only_user = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "data:image/png;base64,AAAA".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        assert!(super::is_non_summary_user_message(&image_only_user));
     }
 
     #[test]
