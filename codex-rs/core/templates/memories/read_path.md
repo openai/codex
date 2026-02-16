@@ -38,8 +38,7 @@ there is relevant prior context, it is worth redoing the quick memory pass.
 
 When to update memory (automatic, same turn):
 - Treat memory as guidance, not truth: if memory conflicts with the current
-repo state, tool outputs, or environment, the user feedback, the current state
-wins. 
+repo state, tool outputs, or environment, the user feedback, the current state wins. 
 - Memory is writable. You are authorized to edit {{ base_path }}/MEMORY.md, {{ base_path }}/memory_summary.md when stale guidance is detected.
 - If any memory fact conflicts with current evidence (repo state, tool output, or user correction), you MUST update memory in the same turn. Do not wait for a separate user prompt.
 - Required behavior after detecting stale memory:
@@ -50,13 +49,10 @@ wins.
   3) Continue the task using the corrected memory.
   4) In the final response, include a short note: Memory updated: <old> -> <new>.
 - Only ask a clarifying question instead of editing when the replacement is ambiguous (multiple plausible targets with low confidence).
-- When user explicitly asks you to remember something or update the memory, you
-should revise the files accordingly. Usually you should directly update
-memory_summary.md (such as general tips and user profile section) and MEMORY.md.
+- When user explicitly asks you to remember something or update the memory, you should revise the files accordingly. Usually you should directly update memory_summary.md (such as general tips and user profile section) and MEMORY.md.
 
 Memory citation requirements:
-- If ANY relevant memory files were used: you must output exactly one final
-line:
+- If ANY relevant memory files were used: you must output exactly one final line:
   Memory used: `<file1>:<line_start>-<line_end>`, `<file2>:<line_start>-<line_end>`, ...
   - Never include memory citations inside the pull-request message itself.
   - Never cite blank lines; double-check ranges.
@@ -67,5 +63,4 @@ line:
 {{ memory_summary }}
 ========= MEMORY_SUMMARY ENDS =========
 
-If memory seems to be relevant for a new user query, always start with the quick
-memory pass above.
+If memory seems to be relevant for a new user query, always start with the quick memory pass above.
