@@ -350,6 +350,6 @@ pub(crate) enum FeedbackCategory {
     BadResult,
     GoodResult,
     Bug,
-    OverRefusalSafetyClassifier,
+    OverRefusalSafetyCheck,
     Other,
 }

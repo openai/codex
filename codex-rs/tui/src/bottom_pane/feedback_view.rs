@@ -353,7 +353,7 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
             "Tell us more (bug)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
         ),
-        FeedbackCategory::OverRefusalSafetyClassifier => (
+        FeedbackCategory::OverRefusalSafetyCheck => (
             "Tell us more (over-refusal / safety check)".to_string(),
             "(optional) Share what was refused and why it should have been allowed".to_string(),
         ),
@@ -369,7 +369,7 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
         FeedbackCategory::BadResult => "bad_result",
         FeedbackCategory::GoodResult => "good_result",
         FeedbackCategory::Bug => "bug",
-        FeedbackCategory::OverRefusalSafetyClassifier => "over_refusal_safety_classifier",
+        FeedbackCategory::OverRefusalSafetyCheck => "over_refusal_safety_check",
         FeedbackCategory::Other => "other",
     }
 }
@@ -385,7 +385,7 @@ fn issue_url_for_category(
     match category {
         FeedbackCategory::Bug
         | FeedbackCategory::BadResult
-        | FeedbackCategory::OverRefusalSafetyClassifier
+        | FeedbackCategory::OverRefusalSafetyCheck
         | FeedbackCategory::Other => Some(match feedback_audience {
             FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
             FeedbackAudience::External => {
@@ -439,7 +439,7 @@ pub(crate) fn feedback_selection_params(
                 app_event_tx,
                 "over-refusal / safety check",
                 "Benign usage blocked due to safety checks or refusals.",
-                FeedbackCategory::OverRefusalSafetyClassifier,
+                FeedbackCategory::OverRefusalSafetyCheck,
             ),
         ],
         ..Default::default()
@@ -628,10 +628,10 @@ mod tests {
     }
 
     #[test]
-    fn feedback_view_over_refusal_safety_classifier() {
-        let view = make_view(FeedbackCategory::OverRefusalSafetyClassifier);
+    fn feedback_view_over_refusal_safety_check() {
+        let view = make_view(FeedbackCategory::OverRefusalSafetyCheck);
         let rendered = render(&view, 60);
-        insta::assert_snapshot!("feedback_view_over_refusal_safety_classifier", rendered);
+        insta::assert_snapshot!("feedback_view_over_refusal_safety_check", rendered);
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
         assert!(other_url.is_some());
 
         let over_refusal_url = issue_url_for_category(
-            FeedbackCategory::OverRefusalSafetyClassifier,
+            FeedbackCategory::OverRefusalSafetyCheck,
             "thread-4",
             FeedbackAudience::OpenAiEmployee,
         );
