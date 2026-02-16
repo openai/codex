@@ -96,6 +96,24 @@ def test_stream_until_methods_accepts_single_method_string():
         assert events[-1].method == "turn/completed"
 
 
+
+
+def test_ask_result_and_stream_text_helpers():
+    with make_client() as client:
+        client.initialize()
+
+        started = client.thread_start()
+        thread_id = started["thread"]["id"]
+
+        result = client.ask_result("hello", thread_id=thread_id)
+        assert result.thread_id == thread_id
+        assert result.text == "hello world"
+        assert result.completed.method == "turn/completed"
+
+        chunks = list(client.stream_text(thread_id, "hello"))
+        assert chunks == ["hello ", "world"]
+
+
 def test_async_client_wrapper():
     async def _run():
         cfg = AppServerConfig(launch_args_override=("python3", str(FAKE)))
@@ -183,10 +201,17 @@ def test_async_conversation_and_schema_wrappers():
             answer = await conv.ask("hello")
             assert answer == "hello world"
 
+            ask_result = await conv.ask_result("hello")
+            assert ask_result.text == "hello world"
+            assert ask_result.thread_id == conv.thread_id
+
             streamed = []
             async for evt in conv.stream("hello"):
                 streamed.append(evt.method)
             assert streamed[-1] == "turn/completed"
+
+            text_chunks = [chunk async for chunk in conv.stream_text("hello")]
+            assert text_chunks == ["hello ", "world"]
 
             turn = await client.turn_text_schema(conv.thread_id, "hello")
             assert turn.turn.id.startswith("turn_")

@@ -11,6 +11,7 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 - ✅ command/file approval request handling
 - ✅ async client (`AsyncAppServerClient`)
 - ✅ fluent thread abstraction (`Conversation` / `AsyncConversation`)
+- ✅ notebook ergonomics helpers (`ask_result`, `stream_text`)
 - ✅ schema-backed typed response helpers (`*_schema`)
 - ✅ lightweight typed wrappers (`*_typed`) for core responses + common notifications (sync + async parity)
 - ✅ robust JSON-RPC error mapping (standard and server-error codes)
@@ -46,6 +47,20 @@ with AppServerClient() as client:
 
     final = client.wait_for_turn_completed(turn_id)
     print(final.method, final.params["turn"]["status"])
+```
+
+Notebook-oriented helpers:
+
+```python
+with AppServerClient() as client:
+    client.initialize()
+    conv = client.conversation_start(model="gpt-5")
+
+    result = conv.ask_result("Give me one sentence about gravity")
+    print(result.thread_id, result.text)
+
+    for chunk in conv.stream_text("Now stream 3 short words"):
+        print(chunk, end="", flush=True)
 ```
 
 ## Typed wrappers
@@ -151,3 +166,4 @@ RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 - `RELEASE_CHECKLIST.md` — release gate checklist
 - `learning.md` — SDK patterns extracted from top Python SDKs
 - `APP_SERVER_V2_NOTES.md` — architecture + method map for Codex app-server v2
+- `examples/notebook_workflow.py` — ipynb-style walkthrough using fake server

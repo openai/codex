@@ -14,7 +14,7 @@ from .errors import (
     ServerBusyError,
     TransportClosedError,
 )
-from .models import Notification
+from .models import AskResult, Notification
 from .retry import retry_on_overload
 from .typed import (
     AgentMessageDeltaEvent,
@@ -96,6 +96,7 @@ __all__ = [
     "RetryLimitExceededError",
     "TransportClosedError",
     "Notification",
+    "AskResult",
     "retry_on_overload",
     "ThreadRef",
     "TurnRef",

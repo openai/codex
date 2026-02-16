@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 from .client import AppServerClient, AppServerConfig
 from .conversation import AsyncConversation
-from .models import Notification
+from .models import AskResult, Notification
 from .protocol_types import (
     ThreadListResponse,
     ThreadReadResponse,
@@ -297,5 +297,14 @@ class AsyncAppServerClient:
     async def run_text_turn(self, thread_id: str, text: str, **params: Any) -> tuple[str, Notification]:
         return await self._call_sync(self._sync.run_text_turn, thread_id, text, **params)
 
+    async def ask_result(
+        self, text: str, *, model: str | None = None, thread_id: str | None = None
+    ) -> AskResult:
+        return await self._call_sync(self._sync.ask_result, text, model=model, thread_id=thread_id)
+
     async def ask(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> tuple[str, str]:
         return await self._call_sync(self._sync.ask, text, model=model, thread_id=thread_id)
+
+    async def stream_text(self, thread_id: str, text: str, **params: Any) -> list[str]:
+        """Collect assistant delta chunks for a text turn."""
+        return await self._call_sync(lambda: list(self._sync.stream_text(thread_id, text, **params)))

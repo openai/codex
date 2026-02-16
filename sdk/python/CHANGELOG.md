@@ -23,6 +23,10 @@ Production-readiness and API ergonomics expansion release.
   - `ThreadForkResult`, `TurnSteerResult`, `ItemLifecycleEvent`
   - `ThreadNameUpdatedEvent`, `TokenUsageBreakdown`, `ThreadTokenUsageUpdatedEvent`
 - Added runtime SDK `__version__` export.
+- Added notebook-first helper APIs:
+  - `ask_result(...)` returning `AskResult(thread_id, text, completed)`
+  - `stream_text(...)` on client + conversation helpers for chunk-only streaming
+- Added `examples/notebook_workflow.py` (ipynb-style walkthrough covering sync, async, typed, schema, ask, stream).
 
 ### Changed
 

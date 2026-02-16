@@ -8,10 +8,10 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from .errors import AppServerError, JsonRpcError, TransportClosedError, map_jsonrpc_error
-from .models import Notification
+from .models import AskResult, Notification
 from .typed import (
     AgentMessageDeltaEvent,
     EmptyResult,
@@ -485,6 +485,14 @@ class AppServerClient:
         assert completed is not None
         return "".join(chunks), completed
 
+    def ask_result(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> AskResult:
+        """High-level notebook helper returning thread id, text, and completion event."""
+        if thread_id is None:
+            started = self.thread_start(**({"model": model} if model else {}))
+            thread_id = started["thread"]["id"]
+        assistant_text, completed = self.run_text_turn(thread_id, text)
+        return AskResult(thread_id=thread_id, text=assistant_text, completed=completed)
+
     def ask(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> tuple[str, str]:
         """High-level helper for notebooks.
 
@@ -492,11 +500,19 @@ class AppServerClient:
         - If `thread_id` is omitted, starts a fresh thread.
         - If provided, appends a turn to existing thread.
         """
-        if thread_id is None:
-            started = self.thread_start(**({"model": model} if model else {}))
-            thread_id = started["thread"]["id"]
-        assistant_text, _ = self.run_text_turn(thread_id, text)
-        return thread_id, assistant_text
+        result = self.ask_result(text, model=model, thread_id=thread_id)
+        return result.thread_id, result.text
+
+    def stream_text(self, thread_id: str, text: str, **params: Any) -> Iterator[str]:
+        """Yield only assistant delta chunks for a text turn (not raw notifications)."""
+        turn = self.turn_text(thread_id, text, **params)
+        turn_id = turn["turn"]["id"]
+        while True:
+            event = self.next_notification()
+            if event.method == "item/agentMessage/delta":
+                yield (event.params or {}).get("delta", "")
+            if event.method == "turn/completed" and (event.params or {}).get("turn", {}).get("id") == turn_id:
+                break
 
     # ---------- Internals ----------
 
