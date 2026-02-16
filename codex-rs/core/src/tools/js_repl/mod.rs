@@ -320,22 +320,6 @@ impl JsReplManager {
         }
     }
 
-    async fn wait_for_all_exec_tool_calls(&self) {
-        loop {
-            let notified = {
-                let calls = self.exec_tool_calls.lock().await;
-                calls
-                    .values()
-                    .find(|state| state.in_flight > 0)
-                    .map(|state| Arc::clone(&state.notify).notified_owned())
-            };
-            match notified {
-                Some(notified) => notified.await,
-                None => return,
-            }
-        }
-    }
-
     async fn begin_exec_tool_call(
         exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
         exec_id: &str,
@@ -400,10 +384,24 @@ impl JsReplManager {
         }
     }
 
+    async fn clear_all_exec_tool_calls_map(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+    ) {
+        let notifiers = {
+            let mut calls = exec_tool_calls.lock().await;
+            calls
+                .drain()
+                .map(|(_, state)| state.notify)
+                .collect::<Vec<_>>()
+        };
+        for notify in notifiers {
+            notify.notify_waiters();
+        }
+    }
+
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
         self.reset_kernel().await;
-        self.wait_for_all_exec_tool_calls().await;
-        self.exec_tool_calls.lock().await.clear();
+        Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
         Ok(())
     }
 
@@ -1441,6 +1439,36 @@ mod tests {
             JsReplManager::clear_exec_tool_calls_map(&exec_tool_calls, &exec_id).await;
         }
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
+        let manager = JsReplManager::new(None, std::env::temp_dir())
+            .await
+            .expect("manager should initialize");
+        let exec_id = Uuid::new_v4().to_string();
+        manager.register_exec_tool_calls(&exec_id).await;
+        assert!(JsReplManager::begin_exec_tool_call(&manager.exec_tool_calls, &exec_id).await);
+
+        let wait_manager = Arc::clone(&manager);
+        let wait_exec_id = exec_id.clone();
+        let waiter = tokio::spawn(async move {
+            wait_manager.wait_for_exec_tool_calls(&wait_exec_id).await;
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::timeout(Duration::from_secs(1), manager.reset())
+            .await
+            .expect("reset should not hang")
+            .expect("reset should succeed");
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter should be released")
+            .expect("wait task should not panic");
+
+        assert!(manager.exec_tool_calls.lock().await.is_empty());
+    }
+
     async fn can_run_js_repl_runtime_tests() -> bool {
         if std::env::var_os("CODEX_SANDBOX").is_some() {
             return false;
