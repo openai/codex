@@ -9,7 +9,10 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 - ✅ streaming notification consumption
 - ✅ command/file approval request handling
 - ✅ integration-test harness with fake app-server
-- 🔜 async client + generated typed models from app-server schema
+- ✅ async client (`AsyncAppServerClient`)
+- ✅ typed convenience wrappers (`ThreadStartResult`, `TurnStartResult`)
+- ✅ optional real app-server integration test (gated by env var)
+- 🔜 full generated models from app-server JSON schema
 
 ## Install (editable)
 
@@ -62,6 +65,25 @@ for e in events:
         print((e.params or {}).get("delta", ""), end="")
 ```
 
+## Async quickstart
+
+```python
+import asyncio
+from codex_app_server import AsyncAppServerClient
+
+async def main():
+    async with AsyncAppServerClient() as client:
+        await client.initialize()
+        thread = await client.thread_start(model="gpt-5")
+        turn = await client.turn_start(
+            thread["thread"]["id"],
+            [{"type": "text", "text": "hello from async"}],
+        )
+        await client.wait_for_turn_completed(turn["turn"]["id"])
+
+asyncio.run(main())
+```
+
 ## API surface (v0.1)
 
 - `initialize()`
@@ -87,6 +109,12 @@ for e in events:
 ```bash
 cd sdk/python
 pytest
+```
+
+Run optional real integration tests (requires `codex` binary in PATH and auth/config set):
+
+```bash
+RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 ```
 
 ## Related docs

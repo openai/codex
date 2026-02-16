@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .errors import AppServerError, JsonRpcError, TransportClosedError
 from .models import Notification
+from .typed import ThreadStartResult, TurnStartResult
 
 ApprovalHandler = Callable[[str, dict[str, Any] | None], dict[str, Any]]
 
@@ -173,6 +174,16 @@ class AppServerClient:
     def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
         return self.request("model/list", {"includeHidden": include_hidden})
 
+    # ---------- Typed convenience wrappers ----------
+
+    def thread_start_typed(self, **params: Any) -> ThreadStartResult:
+        return ThreadStartResult.from_dict(self.thread_start(**params))
+
+    def turn_start_typed(
+        self, thread_id: str, input_items: list[dict[str, Any]], **params: Any
+    ) -> TurnStartResult:
+        return TurnStartResult.from_dict(self.turn_start(thread_id, input_items, **params))
+
     # ---------- Helpers ----------
 
     def wait_for_turn_completed(self, turn_id: str) -> Notification:
@@ -188,6 +199,24 @@ class AppServerClient:
             out.append(n)
             if n.method in methods:
                 return out
+
+    def run_text_turn(self, thread_id: str, text: str, **params: Any) -> tuple[str, Notification]:
+        """Notebook-friendly helper: start a text turn and return (final_text, turn_completed_notification)."""
+        turn = self.turn_start(thread_id, input_items=[{"type": "text", "text": text}], **params)
+        turn_id = turn["turn"]["id"]
+
+        chunks: list[str] = []
+        completed: Notification | None = None
+        while True:
+            n = self.next_notification()
+            if n.method == "item/agentMessage/delta":
+                chunks.append((n.params or {}).get("delta", ""))
+            if n.method == "turn/completed" and (n.params or {}).get("turn", {}).get("id") == turn_id:
+                completed = n
+                break
+
+        assert completed is not None
+        return "".join(chunks), completed
 
     # ---------- Internals ----------
 

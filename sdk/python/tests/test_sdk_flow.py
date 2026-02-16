@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_app_server import AppServerClient, AppServerConfig
+import asyncio
+
+from codex_app_server import AppServerClient, AppServerConfig, AsyncAppServerClient
 
 
 HERE = Path(__file__).parent
@@ -59,3 +61,28 @@ def test_model_list_and_interrupt():
         assert models["data"][0]["id"] == "gpt-5"
 
         assert client.turn_interrupt(thread_id, turn_id) == {}
+
+
+def test_notebook_helper_run_text_turn():
+    with make_client() as client:
+        client.initialize()
+        thread_id = client.thread_start()["thread"]["id"]
+        text, completed = client.run_text_turn(thread_id, "hello")
+        assert text == "hello world"
+        assert completed.params["turn"]["status"] == "completed"
+
+
+def test_async_client_wrapper():
+    async def _run():
+        cfg = AppServerConfig(launch_args_override=("python3", str(FAKE)))
+        async with AsyncAppServerClient(cfg) as client:
+            await client.initialize()
+            thread = await client.thread_start(model="gpt-5")
+            turn = await client.turn_start(
+                thread["thread"]["id"],
+                [{"type": "text", "text": "hello"}],
+            )
+            done = await client.wait_for_turn_completed(turn["turn"]["id"])
+            assert done.params["turn"]["status"] == "completed"
+
+    asyncio.run(_run())
