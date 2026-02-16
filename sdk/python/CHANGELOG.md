@@ -2,6 +2,26 @@
 
 All notable changes to `codex-app-server-sdk` are tracked here.
 
+## [Unreleased]
+
+### Added
+
+- TestPyPI rehearsal script: `scripts/release_rehearsal.sh`
+  - Builds package
+  - Runs `twine check`
+  - Optionally uploads to TestPyPI when `TWINE_*` credentials are set
+  - Performs clean-venv install smoke from TestPyPI
+- Notebook cookbook assets:
+  - `notebooks/01_quickstart.ipynb`
+  - `notebooks/02_streaming.ipynb`
+  - `notebooks/03_typed_schema.ipynb`
+- Contract guard tests to ensure generated schema/type files remain in sync.
+
+### Changed
+
+- Release checklist now includes the rehearsal script gate.
+- README expanded with notebook cookbook and TestPyPI rehearsal guidance.
+
 ## [0.2.0] - 2026-02-16
 
 Production-readiness and API ergonomics expansion release.

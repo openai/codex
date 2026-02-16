@@ -17,6 +17,7 @@
 
 - [ ] `python -m build`
 - [ ] `python -m twine check dist/*`
+- [ ] `scripts/release_rehearsal.sh` (with TestPyPI upload if credentials available)
 
 ## API sanity pass
 

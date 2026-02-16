@@ -159,6 +159,28 @@ Optional real integration tests:
 RUN_REAL_CODEX_TESTS=1 pytest tests/test_real_app_server_integration.py
 ```
 
+## Notebook cookbook
+
+- `notebooks/01_quickstart.ipynb`
+- `notebooks/02_streaming.ipynb`
+- `notebooks/03_typed_schema.ipynb`
+
+## Release rehearsal (TestPyPI)
+
+Run local build + metadata checks, and optionally upload to TestPyPI when credentials are set:
+
+```bash
+scripts/release_rehearsal.sh
+```
+
+Enable upload phase:
+
+```bash
+export TWINE_USERNAME=__token__
+export TWINE_PASSWORD=pypi-***
+scripts/release_rehearsal.sh
+```
+
 ## Related docs
 
 - `CHANGELOG.md` — milestone history for this SDK

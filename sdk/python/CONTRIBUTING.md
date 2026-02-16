@@ -67,3 +67,8 @@ Minimum checks:
 - [ ] Typing/doc parity verified for changed API surface
 - [ ] `CHANGELOG.md` updated
 - [ ] `README.md` updated when behavior or recommended usage changes
+- [ ] Run `scripts/release_rehearsal.sh` (and TestPyPI upload when credentials are available)
+
+## Notebook docs
+
+If you change ergonomic APIs, update notebook examples in `notebooks/*.ipynb` and ensure `tests/test_notebooks.py` still passes.
