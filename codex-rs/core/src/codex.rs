@@ -1985,6 +1985,10 @@ impl Session {
         resumed_model: Option<&str>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
+        // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
+        // context (shell, exec policy, feature gates, resumed model bridge) should be persisted
+        // state or explicit non-state replay events.
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_updates::build_settings_update_items(
