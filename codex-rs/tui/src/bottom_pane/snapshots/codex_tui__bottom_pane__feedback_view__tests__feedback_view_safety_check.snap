@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-▌ Tell us more (over-refusal / safety check)
+▌ Tell us more (safety check)
 ▌
 ▌ (optional) Share what was refused and why it should have b
 

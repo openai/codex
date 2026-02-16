@@ -353,8 +353,8 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
             "Tell us more (bug)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
         ),
-        FeedbackCategory::OverRefusalSafetyCheck => (
-            "Tell us more (over-refusal / safety check)".to_string(),
+        FeedbackCategory::SafetyCheck => (
+            "Tell us more (safety check)".to_string(),
             "(optional) Share what was refused and why it should have been allowed".to_string(),
         ),
         FeedbackCategory::Other => (
@@ -369,7 +369,7 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
         FeedbackCategory::BadResult => "bad_result",
         FeedbackCategory::GoodResult => "good_result",
         FeedbackCategory::Bug => "bug",
-        FeedbackCategory::OverRefusalSafetyCheck => "over_refusal_safety_check",
+        FeedbackCategory::SafetyCheck => "safety_check",
         FeedbackCategory::Other => "other",
     }
 }
@@ -385,7 +385,7 @@ fn issue_url_for_category(
     match category {
         FeedbackCategory::Bug
         | FeedbackCategory::BadResult
-        | FeedbackCategory::OverRefusalSafetyCheck
+        | FeedbackCategory::SafetyCheck
         | FeedbackCategory::Other => Some(match feedback_audience {
             FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
             FeedbackAudience::External => {
@@ -431,15 +431,15 @@ pub(crate) fn feedback_selection_params(
             ),
             make_feedback_item(
                 app_event_tx.clone(),
-                "other",
-                "Slowness, feature suggestion, UX feedback, or anything else.",
-                FeedbackCategory::Other,
+                "safety check",
+                "Benign usage blocked due to safety checks or refusals.",
+                FeedbackCategory::SafetyCheck,
             ),
             make_feedback_item(
                 app_event_tx,
-                "over-refusal / safety check",
-                "Benign usage blocked due to safety checks or refusals.",
-                FeedbackCategory::OverRefusalSafetyCheck,
+                "other",
+                "Slowness, feature suggestion, UX feedback, or anything else.",
+                FeedbackCategory::Other,
             ),
         ],
         ..Default::default()
@@ -628,14 +628,14 @@ mod tests {
     }
 
     #[test]
-    fn feedback_view_over_refusal_safety_check() {
-        let view = make_view(FeedbackCategory::OverRefusalSafetyCheck);
+    fn feedback_view_safety_check() {
+        let view = make_view(FeedbackCategory::SafetyCheck);
         let rendered = render(&view, 60);
-        insta::assert_snapshot!("feedback_view_over_refusal_safety_check", rendered);
+        insta::assert_snapshot!("feedback_view_safety_check", rendered);
     }
 
     #[test]
-    fn issue_url_available_for_bug_bad_result_over_refusal_and_other() {
+    fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
         let bug_url = issue_url_for_category(
             FeedbackCategory::Bug,
             "thread-1",
@@ -658,12 +658,12 @@ mod tests {
         );
         assert!(other_url.is_some());
 
-        let over_refusal_url = issue_url_for_category(
-            FeedbackCategory::OverRefusalSafetyCheck,
+        let safety_check_url = issue_url_for_category(
+            FeedbackCategory::SafetyCheck,
             "thread-4",
             FeedbackAudience::OpenAiEmployee,
         );
-        assert!(over_refusal_url.is_some());
+        assert!(safety_check_url.is_some());
 
         assert!(
             issue_url_for_category(
