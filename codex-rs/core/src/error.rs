@@ -117,8 +117,7 @@ pub enum CodexErr {
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
-    #[error("Codex is currently experiencing high load. Please try again later.")]
-    ServerOverloaded,
+    #[error("Codex is currently experiencing high load. Please try again later.")] ServerOverloaded,
 
     #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
