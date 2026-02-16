@@ -318,6 +318,7 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
         ..
     } = event;
     let approval_id = call_id.clone();
@@ -330,6 +331,7 @@ async fn handle_exec_approval(
         reason,
         network_approval_context,
         proposed_execpolicy_amendment,
+        additional_permissions,
     );
     let decision =
         await_approval_with_cancel(approval_fut, parent_session, &approval_id, cancel_token).await;

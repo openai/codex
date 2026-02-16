@@ -29,6 +29,7 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::AdditionalPermissions;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -88,6 +89,7 @@ pub(crate) struct ExecCommandRequest {
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<AdditionalPermissions>,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
 }
@@ -215,6 +217,7 @@ mod tests {
                     network: None,
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
+                    additional_permissions: None,
                     justification: None,
                     prefix_rule: None,
                 },

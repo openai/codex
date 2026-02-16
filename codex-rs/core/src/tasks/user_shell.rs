@@ -142,6 +142,7 @@ pub(crate) async fn execute_user_shell_command(
         )
         .await;
 
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
@@ -157,6 +158,7 @@ pub(crate) async fn execute_user_shell_command(
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
         sandbox_permissions: SandboxPermissions::UseDefault,
+        sandbox_policy: sandbox_policy.clone(),
         justification: None,
         arg0: None,
     };
@@ -167,7 +169,6 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
         .or_cancel(&cancellation_token)
         .await;

@@ -1,8 +1,10 @@
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::normalize_additional_permissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
@@ -18,6 +20,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
+use codex_protocol::models::AdditionalPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -42,6 +45,8 @@ struct ExecCommandArgs {
     max_output_tokens: Option<usize>,
     #[serde(default)]
     sandbox_permissions: SandboxPermissions,
+    #[serde(default)]
+    additional_permissions: Option<AdditionalPermissions>,
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
@@ -137,18 +142,24 @@ impl ToolHandler for UnifiedExecHandler {
                     yield_time_ms,
                     max_output_tokens,
                     sandbox_permissions,
+                    additional_permissions,
                     justification,
                     prefix_rule,
                     ..
                 } = args;
 
-                let features = session.features();
-                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-                let prefix_rule = if request_rule_enabled {
-                    prefix_rule
-                } else {
-                    None
-                };
+                let request_permission_enabled =
+                    session.features().enabled(Feature::RequestPermission);
+                if !request_permission_enabled
+                    && (sandbox_permissions.uses_additional_permissions()
+                        || additional_permissions.is_some())
+                {
+                    manager.release_process_id(&process_id).await;
+                    return Err(FunctionCallError::RespondToModel(
+                        "additional permissions are disabled; enable `features.request_permission` before using `with_additional_permissions`"
+                            .to_string(),
+                    ));
+                }
 
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
@@ -167,6 +178,45 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let normalized_additional_permissions = if sandbox_permissions
+                    .uses_additional_permissions()
+                {
+                    if !matches!(
+                        context.turn.approval_policy,
+                        codex_protocol::protocol::AskForApproval::OnRequest
+                    ) {
+                        let approval_policy = context.turn.approval_policy;
+                        manager.release_process_id(&process_id).await;
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
+                        )));
+                    }
+                    let Some(additional_permissions) = additional_permissions else {
+                        manager.release_process_id(&process_id).await;
+                        return Err(FunctionCallError::RespondToModel(
+                            "missing `additional_permissions`; provide `fs_read` and/or `fs_write` when using `with_additional_permissions`"
+                                .to_string(),
+                        ));
+                    };
+                    let normalized = normalize_additional_permissions(additional_permissions, &cwd)
+                        .map_err(FunctionCallError::RespondToModel)?;
+                    if normalized.is_empty() {
+                        manager.release_process_id(&process_id).await;
+                        return Err(FunctionCallError::RespondToModel(
+                            "`additional_permissions` must include at least one path in `fs_read` or `fs_write`"
+                                .to_string(),
+                        ));
+                    }
+                    Some(normalized)
+                } else if additional_permissions.is_some() {
+                    manager.release_process_id(&process_id).await;
+                    return Err(FunctionCallError::RespondToModel(
+                        "`additional_permissions` requires `sandbox_permissions` set to `with_additional_permissions`"
+                            .to_string(),
+                    ));
+                } else {
+                    None
+                };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -195,6 +245,7 @@ impl ToolHandler for UnifiedExecHandler {
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions,
+                            additional_permissions: normalized_additional_permissions,
                             justification,
                             prefix_rule,
                         },

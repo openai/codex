@@ -477,8 +477,8 @@ fn assert_permissions_message(item: &ResponseItem) {
                 &SandboxPolicy::DangerFullAccess,
                 AskForApproval::Never,
                 &Policy::empty(),
-                false,
                 &PathBuf::from("/tmp"),
+                false,
             )
             .into_text();
             assert_eq!(

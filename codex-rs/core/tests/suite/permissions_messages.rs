@@ -488,8 +488,8 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         &sandbox_policy,
         AskForApproval::OnRequest,
         &Policy::empty(),
-        true,
         test.config.cwd.as_path(),
+        false,
     )
     .into_text();
     // Normalize line endings to handle Windows vs Unix differences

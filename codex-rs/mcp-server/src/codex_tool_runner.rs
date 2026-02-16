@@ -222,6 +222,7 @@ async fn run_codex_tool_session_inner(
                         proposed_execpolicy_amendment: _,
                         parsed_cmd,
                         network_approval_context: _,
+                        additional_permissions: _,
                     }) => {
                         handle_exec_approval_request(
                             command,

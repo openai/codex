@@ -63,6 +63,7 @@ impl ApplyPatchRuntime {
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
             justification: None,
         })
     }

@@ -581,6 +581,7 @@ impl JsReplManager {
             env,
             expiration: ExecExpiration::DefaultTimeout,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
             justification: None,
         };
 
