@@ -3319,7 +3319,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Approvals => {
-                self.open_permissions_popup();
+                self.open_approvals_popup();
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
@@ -5325,14 +5325,18 @@ impl ChatWidget {
         );
     }
 
-    /// Open the permissions popup (alias for /permissions).
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
-        self.open_permissions_popup();
+        self.open_approval_mode_popup(true);
     }
 
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let include_read_only = cfg!(target_os = "windows");
+        self.open_approval_mode_popup(include_read_only);
+    }
+
+    fn open_approval_mode_popup(&mut self, include_read_only: bool) {
         let current_approval = self.config.permissions.approval_policy.value();
         let current_sandbox = self.config.permissions.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
