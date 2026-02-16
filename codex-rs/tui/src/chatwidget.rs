@@ -3580,6 +3580,7 @@ impl ChatWidget {
                             instructions: prepared_args,
                         },
                         user_facing_hint: None,
+                        additional_instructions: None,
                     },
                 });
                 self.bottom_pane.drain_pending_submission_state();
@@ -3616,6 +3617,7 @@ impl ChatWidget {
             title.to_string(),
             "Type a name and press Enter".to_string(),
             None,
+            false,
             Box::new(move |name: String| {
                 let Some(name) = codex_core::util::normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -6910,14 +6912,11 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::UncommittedChanges,
-                        user_facing_hint: None,
-                    },
-                }));
+                tx.send(AppEvent::OpenReviewOptionalComments {
+                    target: ReviewTarget::UncommittedChanges,
+                });
             })],
-            dismiss_on_select: true,
+            dismiss_on_select: false,
             ..Default::default()
         });
 
@@ -6963,16 +6962,13 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            target: ReviewTarget::BaseBranch {
-                                branch: branch.clone(),
-                            },
-                            user_facing_hint: None,
+                    tx3.send(AppEvent::OpenReviewOptionalComments {
+                        target: ReviewTarget::BaseBranch {
+                            branch: branch.clone(),
                         },
-                    }));
+                    });
                 })],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 search_value: Some(option),
                 ..Default::default()
             });
@@ -7000,17 +6996,14 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
-                            target: ReviewTarget::Commit {
-                                sha: sha.clone(),
-                                title: Some(subject.clone()),
-                            },
-                            user_facing_hint: None,
+                    tx3.send(AppEvent::OpenReviewOptionalComments {
+                        target: ReviewTarget::Commit {
+                            sha: sha.clone(),
+                            title: Some(subject.clone()),
                         },
-                    }));
+                    });
                 })],
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 search_value: Some(search_val),
                 ..Default::default()
             });
@@ -7032,6 +7025,7 @@ impl ChatWidget {
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
             None,
+            false,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {
@@ -7043,6 +7037,32 @@ impl ChatWidget {
                             instructions: trimmed,
                         },
                         user_facing_hint: None,
+                        additional_instructions: None,
+                    },
+                }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn show_review_optional_comments(&mut self, target: ReviewTarget) {
+        let context_label = format!(
+            "Target: {}",
+            codex_core::review_prompts::user_facing_hint(&target)
+        );
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Additional review comments (optional)".to_string(),
+            "Press Enter to continue, or type comments and press Enter".to_string(),
+            Some(context_label),
+            true,
+            Box::new(move |prompt: String| {
+                let additional_instructions = (!prompt.is_empty()).then_some(prompt);
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        target: target.clone(),
+                        user_facing_hint: None,
+                        additional_instructions,
                     },
                 }));
             }),
@@ -7300,17 +7320,14 @@ pub(crate) fn show_review_commit_picker_with_entries(
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                tx3.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::Commit {
-                            sha: sha.clone(),
-                            title: Some(subject.clone()),
-                        },
-                        user_facing_hint: None,
+                tx3.send(AppEvent::OpenReviewOptionalComments {
+                    target: ReviewTarget::Commit {
+                        sha: sha.clone(),
+                        title: Some(subject.clone()),
                     },
-                }));
+                });
             })],
-            dismiss_on_select: true,
+            dismiss_on_select: false,
             search_value: Some(search_val),
             ..Default::default()
         });

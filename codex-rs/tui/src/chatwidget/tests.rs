@@ -1350,6 +1350,7 @@ async fn entered_review_mode_uses_request_hint() {
                 branch: "feature".to_string(),
             },
             user_facing_hint: Some("feature branch".to_string()),
+            additional_instructions: None,
         }),
     });
 
@@ -1369,6 +1370,7 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            additional_instructions: None,
         }),
     });
 
@@ -1403,6 +1405,7 @@ async fn review_restores_context_window_indicator() {
                 branch: "feature".to_string(),
             },
             user_facing_hint: Some("feature branch".to_string()),
+            additional_instructions: None,
         }),
     });
 
@@ -4158,8 +4161,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     );
 }
 
-/// Submitting the custom prompt view sends Op::Review with the typed prompt
-/// and uses the same text for the user-facing hint.
+/// Submitting the custom prompt view sends Op::Review with the typed prompt.
 #[tokio::test]
 async fn custom_prompt_submit_sends_review_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4180,6 +4182,7 @@ async fn custom_prompt_submit_sends_review_op() {
                         instructions: "please audit dependencies".to_string(),
                     },
                     user_facing_hint: None,
+                    additional_instructions: None,
                 }
             );
         }
@@ -4198,6 +4201,70 @@ async fn custom_prompt_enter_empty_does_not_send() {
 
     // No AppEvent::CodexOp should be sent
     assert!(rx.try_recv().is_err(), "no app event should be sent");
+}
+
+#[tokio::test]
+async fn review_popup_uncommitted_opens_optional_comments_view() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_review_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::OpenReviewOptionalComments { target } => {
+            assert_eq!(target, ReviewTarget::UncommittedChanges);
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_optional_comments_empty_submit_sends_review_without_extra_instructions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_review_optional_comments(ReviewTarget::UncommittedChanges);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert_eq!(
+                review_request,
+                ReviewRequest {
+                    target: ReviewTarget::UncommittedChanges,
+                    user_facing_hint: None,
+                    additional_instructions: None,
+                }
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn review_optional_comments_submit_sends_review_with_extra_instructions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_review_optional_comments(ReviewTarget::UncommittedChanges);
+    chat.handle_paste("  prioritize API compatibility  ".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert_eq!(
+                review_request,
+                ReviewRequest {
+                    target: ReviewTarget::UncommittedChanges,
+                    user_facing_hint: None,
+                    additional_instructions: Some("prioritize API compatibility".to_string()),
+                }
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -4347,6 +4414,35 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
     );
 
     // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+/// Opening optional review comments from the review popup, pressing Esc returns
+/// to the parent popup, pressing Esc again dismisses all panels.
+#[tokio::test]
+async fn review_optional_comments_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_review_popup();
+    chat.show_review_optional_comments(ReviewTarget::UncommittedChanges);
+
+    let header = render_bottom_first_row(&chat, 70);
+    assert!(
+        header.contains("Additional review comments"),
+        "expected optional comments view header: {header:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 70);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(
         chat.is_normal_backtrack_mode(),
@@ -7320,6 +7416,7 @@ async fn review_queues_user_messages_snapshot() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: Some("current changes".to_string()),
+            additional_instructions: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);

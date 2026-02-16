@@ -24,6 +24,7 @@ use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -313,6 +314,11 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Open optional extra comments for a review target.
+    OpenReviewOptionalComments {
+        target: ReviewTarget,
+    },
 
     /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {
