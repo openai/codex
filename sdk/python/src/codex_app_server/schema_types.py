@@ -108,18 +108,51 @@ class ThreadStartResponse:
         )
 
 
-class TurnStartResponseDict(TypedDict, total=False):
-    turn: Turn
+class ThreadResumeResponseDict(TypedDict, total=False):
+    approvalPolicy: str
+    cwd: str
+    model: str
+    modelProvider: str
+    reasoningEffort: str | None
+    sandbox: Any
+    thread: Thread
 
 @dataclass(slots=True, kw_only=True)
-class TurnStartResponse:
-    turn: Turn
+class ThreadResumeResponse:
+    approvalPolicy: str
+    cwd: str
+    model: str
+    modelProvider: str
+    reasoningEffort: str | None = None
+    sandbox: Any
+    thread: Thread
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TurnStartResponse":
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadResumeResponse":
         payload = payload or {}
         return cls(
-            turn=Turn.from_dict(payload.get("turn") or {}),
+            approvalPolicy=str(payload.get("approvalPolicy", None) or ""),
+            cwd=str(payload.get("cwd", None) or ""),
+            model=str(payload.get("model", None) or ""),
+            modelProvider=str(payload.get("modelProvider", None) or ""),
+            reasoningEffort=None if payload.get("reasoningEffort") is None else str(payload.get("reasoningEffort")),
+            sandbox=payload.get("sandbox", None),
+            thread=Thread.from_dict(payload.get("thread") or {}),
+        )
+
+
+class ThreadReadResponseDict(TypedDict, total=False):
+    thread: Thread
+
+@dataclass(slots=True, kw_only=True)
+class ThreadReadResponse:
+    thread: Thread
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadReadResponse":
+        payload = payload or {}
+        return cls(
+            thread=Thread.from_dict(payload.get("thread") or {}),
         )
 
 
@@ -141,6 +174,72 @@ class ThreadListResponse:
         )
 
 
+class TurnStartResponseDict(TypedDict, total=False):
+    turn: Turn
+
+@dataclass(slots=True, kw_only=True)
+class TurnStartResponse:
+    turn: Turn
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TurnStartResponse":
+        payload = payload or {}
+        return cls(
+            turn=Turn.from_dict(payload.get("turn") or {}),
+        )
+
+
+class ModelListResponseDict(TypedDict, total=False):
+    data: list[Any]
+    nextCursor: str | None
+
+@dataclass(slots=True, kw_only=True)
+class ModelListResponse:
+    data: list[Any] = None
+    nextCursor: str | None = None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ModelListResponse":
+        payload = payload or {}
+        return cls(
+            data=list(payload.get("data", []) or []),
+            nextCursor=None if payload.get("nextCursor") is None else str(payload.get("nextCursor")),
+        )
+
+
+class ThreadStartedNotificationPayloadDict(TypedDict, total=False):
+    thread: Thread
+
+@dataclass(slots=True, kw_only=True)
+class ThreadStartedNotificationPayload:
+    thread: Thread
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadStartedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            thread=Thread.from_dict(payload.get("thread") or {}),
+        )
+
+
+class TurnStartedNotificationPayloadDict(TypedDict, total=False):
+    threadId: str
+    turn: Turn
+
+@dataclass(slots=True, kw_only=True)
+class TurnStartedNotificationPayload:
+    threadId: str
+    turn: Turn
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TurnStartedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            threadId=str(payload.get("threadId", None) or ""),
+            turn=Turn.from_dict(payload.get("turn") or {}),
+        )
+
+
 class TurnCompletedNotificationPayloadDict(TypedDict, total=False):
     threadId: str
     turn: Turn
@@ -159,17 +258,79 @@ class TurnCompletedNotificationPayload:
         )
 
 
+class AgentMessageDeltaNotificationPayloadDict(TypedDict, total=False):
+    delta: str
+    itemId: str
+    threadId: str
+    turnId: str
+
+@dataclass(slots=True, kw_only=True)
+class AgentMessageDeltaNotificationPayload:
+    delta: str
+    itemId: str
+    threadId: str
+    turnId: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AgentMessageDeltaNotificationPayload":
+        payload = payload or {}
+        return cls(
+            delta=str(payload.get("delta", None) or ""),
+            itemId=str(payload.get("itemId", None) or ""),
+            threadId=str(payload.get("threadId", None) or ""),
+            turnId=str(payload.get("turnId", None) or ""),
+        )
+
+
+class ErrorNotificationPayloadDict(TypedDict, total=False):
+    error: Any
+    threadId: str
+    turnId: str
+    willRetry: bool
+
+@dataclass(slots=True, kw_only=True)
+class ErrorNotificationPayload:
+    error: Any
+    threadId: str
+    turnId: str
+    willRetry: bool
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ErrorNotificationPayload":
+        payload = payload or {}
+        return cls(
+            error=payload.get("error", None),
+            threadId=str(payload.get("threadId", None) or ""),
+            turnId=str(payload.get("turnId", None) or ""),
+            willRetry=bool(payload.get("willRetry", None)),
+        )
+
+
 __all__ = [
     "Thread",
     "Turn",
     "ThreadStartResponse",
-    "TurnStartResponse",
+    "ThreadResumeResponse",
+    "ThreadReadResponse",
     "ThreadListResponse",
+    "TurnStartResponse",
+    "ModelListResponse",
+    "ThreadStartedNotificationPayload",
+    "TurnStartedNotificationPayload",
     "TurnCompletedNotificationPayload",
+    "AgentMessageDeltaNotificationPayload",
+    "ErrorNotificationPayload",
     "ThreadDict",
     "TurnDict",
     "ThreadStartResponseDict",
-    "TurnStartResponseDict",
+    "ThreadResumeResponseDict",
+    "ThreadReadResponseDict",
     "ThreadListResponseDict",
+    "TurnStartResponseDict",
+    "ModelListResponseDict",
+    "ThreadStartedNotificationPayloadDict",
+    "TurnStartedNotificationPayloadDict",
     "TurnCompletedNotificationPayloadDict",
+    "AgentMessageDeltaNotificationPayloadDict",
+    "ErrorNotificationPayloadDict",
 ]

@@ -10,14 +10,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .errors import AppServerError, JsonRpcError, TransportClosedError
+from .errors import AppServerError, JsonRpcError, TransportClosedError, map_jsonrpc_error
 from .models import Notification
-from .typed import ThreadStartResult, TurnStartResult
+from .typed import (
+    AgentMessageDeltaEvent,
+    ErrorEvent,
+    ModelListResult,
+    ThreadListResult,
+    ThreadReadResult,
+    ThreadResumeResult,
+    ThreadStartResult,
+    ThreadStartedEvent,
+    TurnCompletedEvent,
+    TurnStartResult,
+    TurnStartedEvent,
+)
+from .retry import retry_on_overload
 from .conversation import Conversation
 from .schema_types import (
+    AgentMessageDeltaNotificationPayload as SchemaAgentMessageDeltaNotificationPayload,
+    ErrorNotificationPayload as SchemaErrorNotificationPayload,
+    ModelListResponse as SchemaModelListResponse,
     ThreadListResponse as SchemaThreadListResponse,
+    ThreadReadResponse as SchemaThreadReadResponse,
+    ThreadResumeResponse as SchemaThreadResumeResponse,
     ThreadStartResponse as SchemaThreadStartResponse,
+    ThreadStartedNotificationPayload as SchemaThreadStartedNotificationPayload,
+    TurnCompletedNotificationPayload as SchemaTurnCompletedNotificationPayload,
     TurnStartResponse as SchemaTurnStartResponse,
+    TurnStartedNotificationPayload as SchemaTurnStartedNotificationPayload,
 )
 from .protocol_types import (
     ThreadListResponse,
@@ -154,7 +175,11 @@ class AppServerClient:
 
             if "error" in msg:
                 err = msg["error"]
-                raise JsonRpcError(err.get("code", -32000), err.get("message", "unknown"), err.get("data"))
+                raise map_jsonrpc_error(
+                    int(err.get("code", -32000)),
+                    str(err.get("message", "unknown")),
+                    err.get("data"),
+                )
 
             return msg.get("result")
 
@@ -223,6 +248,18 @@ class AppServerClient:
     def thread_start_typed(self, **params: Any) -> ThreadStartResult:
         return ThreadStartResult.from_dict(self.thread_start(**params))
 
+    def thread_resume_typed(self, thread_id: str, **params: Any) -> ThreadResumeResult:
+        return ThreadResumeResult.from_dict(self.thread_resume(thread_id, **params))
+
+    def thread_read_typed(self, thread_id: str, include_turns: bool = False) -> ThreadReadResult:
+        return ThreadReadResult.from_dict(self.thread_read(thread_id, include_turns=include_turns))
+
+    def thread_list_typed(self, **params: Any) -> ThreadListResult:
+        return ThreadListResult.from_dict(self.thread_list(**params))
+
+    def model_list_typed(self, include_hidden: bool = False) -> ModelListResult:
+        return ModelListResult.from_dict(self.model_list(include_hidden=include_hidden))
+
     def turn_start_typed(
         self,
         thread_id: str,
@@ -234,8 +271,17 @@ class AppServerClient:
     def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
         return SchemaThreadStartResponse.from_dict(self.thread_start(**params))
 
+    def thread_resume_schema(self, thread_id: str, **params: Any) -> SchemaThreadResumeResponse:
+        return SchemaThreadResumeResponse.from_dict(self.thread_resume(thread_id, **params))
+
+    def thread_read_schema(self, thread_id: str, include_turns: bool = False) -> SchemaThreadReadResponse:
+        return SchemaThreadReadResponse.from_dict(self.thread_read(thread_id, include_turns=include_turns))
+
     def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
         return SchemaThreadListResponse.from_dict(self.thread_list(**params))
+
+    def model_list_schema(self, include_hidden: bool = False) -> SchemaModelListResponse:
+        return SchemaModelListResponse.from_dict(self.model_list(include_hidden=include_hidden))
 
     def turn_start_schema(
         self,
@@ -247,6 +293,68 @@ class AppServerClient:
 
     def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
         return self.turn_start_schema(thread_id, text, **params)
+
+    def parse_notification_typed(
+        self, notification: Notification
+    ) -> (
+        TurnCompletedEvent
+        | TurnStartedEvent
+        | ThreadStartedEvent
+        | AgentMessageDeltaEvent
+        | ErrorEvent
+        | None
+    ):
+        params = notification.params or {}
+        if notification.method == "turn/completed":
+            return TurnCompletedEvent.from_dict(params)
+        if notification.method == "turn/started":
+            return TurnStartedEvent.from_dict(params)
+        if notification.method == "thread/started":
+            return ThreadStartedEvent.from_dict(params)
+        if notification.method == "item/agentMessage/delta":
+            return AgentMessageDeltaEvent.from_dict(params)
+        if notification.method == "error":
+            return ErrorEvent.from_dict(params)
+        return None
+
+    def parse_notification_schema(
+        self, notification: Notification
+    ) -> (
+        SchemaTurnCompletedNotificationPayload
+        | SchemaTurnStartedNotificationPayload
+        | SchemaThreadStartedNotificationPayload
+        | SchemaAgentMessageDeltaNotificationPayload
+        | SchemaErrorNotificationPayload
+        | None
+    ):
+        params = notification.params or {}
+        if notification.method == "turn/completed":
+            return SchemaTurnCompletedNotificationPayload.from_dict(params)
+        if notification.method == "turn/started":
+            return SchemaTurnStartedNotificationPayload.from_dict(params)
+        if notification.method == "thread/started":
+            return SchemaThreadStartedNotificationPayload.from_dict(params)
+        if notification.method == "item/agentMessage/delta":
+            return SchemaAgentMessageDeltaNotificationPayload.from_dict(params)
+        if notification.method == "error":
+            return SchemaErrorNotificationPayload.from_dict(params)
+        return None
+
+    def request_with_retry_on_overload(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        max_attempts: int = 3,
+        initial_delay_s: float = 0.25,
+        max_delay_s: float = 2.0,
+    ) -> Any:
+        return retry_on_overload(
+            lambda: self.request(method, params),
+            max_attempts=max_attempts,
+            initial_delay_s=initial_delay_s,
+            max_delay_s=max_delay_s,
+        )
 
     # ---------- Helpers ----------
 

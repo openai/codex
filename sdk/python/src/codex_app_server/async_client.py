@@ -7,9 +7,17 @@ from .client import AppServerClient, AppServerConfig
 from .conversation import AsyncConversation
 from .models import Notification
 from .schema_types import (
+    AgentMessageDeltaNotificationPayload as SchemaAgentMessageDeltaNotificationPayload,
+    ErrorNotificationPayload as SchemaErrorNotificationPayload,
+    ModelListResponse as SchemaModelListResponse,
     ThreadListResponse as SchemaThreadListResponse,
+    ThreadReadResponse as SchemaThreadReadResponse,
+    ThreadResumeResponse as SchemaThreadResumeResponse,
     ThreadStartResponse as SchemaThreadStartResponse,
+    ThreadStartedNotificationPayload as SchemaThreadStartedNotificationPayload,
+    TurnCompletedNotificationPayload as SchemaTurnCompletedNotificationPayload,
     TurnStartResponse as SchemaTurnStartResponse,
+    TurnStartedNotificationPayload as SchemaTurnStartedNotificationPayload,
 )
 
 
@@ -81,8 +89,17 @@ class AsyncAppServerClient:
     async def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
         return await asyncio.to_thread(self._sync.thread_start_schema, **params)
 
+    async def thread_resume_schema(self, thread_id: str, **params: Any) -> SchemaThreadResumeResponse:
+        return await asyncio.to_thread(self._sync.thread_resume_schema, thread_id, **params)
+
+    async def thread_read_schema(self, thread_id: str, include_turns: bool = False) -> SchemaThreadReadResponse:
+        return await asyncio.to_thread(self._sync.thread_read_schema, thread_id, include_turns)
+
     async def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
         return await asyncio.to_thread(self._sync.thread_list_schema, **params)
+
+    async def model_list_schema(self, include_hidden: bool = False) -> SchemaModelListResponse:
+        return await asyncio.to_thread(self._sync.model_list_schema, include_hidden)
 
     async def turn_start_schema(
         self,
@@ -94,6 +111,36 @@ class AsyncAppServerClient:
 
     async def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
         return await asyncio.to_thread(self._sync.turn_text_schema, thread_id, text, **params)
+
+    async def parse_notification_schema(
+        self, notification: Notification
+    ) -> (
+        SchemaTurnCompletedNotificationPayload
+        | SchemaTurnStartedNotificationPayload
+        | SchemaThreadStartedNotificationPayload
+        | SchemaAgentMessageDeltaNotificationPayload
+        | SchemaErrorNotificationPayload
+        | None
+    ):
+        return await asyncio.to_thread(self._sync.parse_notification_schema, notification)
+
+    async def request_with_retry_on_overload(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        max_attempts: int = 3,
+        initial_delay_s: float = 0.25,
+        max_delay_s: float = 2.0,
+    ) -> Any:
+        return await asyncio.to_thread(
+            self._sync.request_with_retry_on_overload,
+            method,
+            params,
+            max_attempts=max_attempts,
+            initial_delay_s=initial_delay_s,
+            max_delay_s=max_delay_s,
+        )
 
     async def next_notification(self) -> Notification:
         return await asyncio.to_thread(self._sync.next_notification)

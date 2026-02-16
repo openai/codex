@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Generate lightweight typed models from app-server v2 JSON schemas.
 
-The generator intentionally focuses on a high-value subset used by the Python SDK:
-- ThreadStartResponse
-- TurnStartResponse
-- ThreadListResponse
-- TurnCompletedNotification
+The generator intentionally focuses on a high-value subset used by the Python SDK,
+including core thread/turn responses and common server notifications.
 
 It emits dataclasses and TypedDict stubs into `src/codex_app_server/schema_types.py`.
 """
@@ -19,9 +16,16 @@ from typing import Any
 
 TARGET_SCHEMAS = {
     "ThreadStartResponse": "ThreadStartResponse.json",
-    "TurnStartResponse": "TurnStartResponse.json",
+    "ThreadResumeResponse": "ThreadResumeResponse.json",
+    "ThreadReadResponse": "ThreadReadResponse.json",
     "ThreadListResponse": "ThreadListResponse.json",
+    "TurnStartResponse": "TurnStartResponse.json",
+    "ModelListResponse": "ModelListResponse.json",
+    "ThreadStartedNotificationPayload": "ThreadStartedNotification.json",
+    "TurnStartedNotificationPayload": "TurnStartedNotification.json",
     "TurnCompletedNotificationPayload": "TurnCompletedNotification.json",
+    "AgentMessageDeltaNotificationPayload": "AgentMessageDeltaNotification.json",
+    "ErrorNotificationPayload": "ErrorNotification.json",
 }
 
 
