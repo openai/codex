@@ -4268,6 +4268,17 @@ async fn review_optional_comments_submit_sends_review_with_extra_instructions() 
 }
 
 #[tokio::test]
+async fn review_optional_comments_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_review_popup();
+    chat.show_review_optional_comments(ReviewTarget::UncommittedChanges);
+
+    let popup = render_bottom_popup(&chat, 72);
+    assert_snapshot!("review_optional_comments_popup", popup);
+}
+
+#[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let image_path = chat.config.cwd.join("example.png");
