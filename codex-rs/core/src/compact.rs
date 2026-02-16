@@ -390,22 +390,22 @@ pub(crate) fn process_compacted_history(
     match turn_context_reinjection {
         TurnContextReinjection::ReinjectAboveLastRealUser => {
             // Prefer inserting immediately above the last real user message so turn context
-            // applies to that user input rather than an earlier turn. If compaction output is
-            // summary-only, insert before the first summary user message to keep canonical context
-            // present for the next sampling request.
+            // applies to that user input rather than an earlier turn. If compaction output has no
+            // real user messages, insert before the last summary user message to keep canonical
+            // context present for the next sampling request.
             let insertion_index = if let Some(last_real_user_index) = compacted_history
                 .iter()
                 .rposition(is_non_summary_user_message)
             {
                 last_real_user_index
-            } else if let Some(first_summary_index) = compacted_history.iter().position(|item| {
+            } else if let Some(last_summary_index) = compacted_history.iter().rposition(|item| {
                 matches!(
                     crate::event_mapping::parse_turn_item(item),
                     Some(TurnItem::UserMessage(user_message))
                         if is_summary_message(&user_message.message())
                 )
             }) {
-                first_summary_index
+                last_summary_index
             } else {
                 compacted_history.len()
             };
@@ -1591,6 +1591,75 @@ keep me updated
                     .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
             )
         );
+    }
+
+    #[test]
+    fn process_compacted_history_reinjects_context_above_last_summary_when_no_real_user() {
+        let compacted_history = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        let initial_context = vec![ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "fresh permissions".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+
+        let refreshed = process_compacted_history(
+            compacted_history,
+            &initial_context,
+            TurnContextReinjection::ReinjectAboveLastRealUser,
+        );
+        let expected = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "fresh permissions".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+        assert_eq!(refreshed, expected);
     }
 
     #[test]
