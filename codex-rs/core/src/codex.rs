@@ -4755,10 +4755,12 @@ async fn persist_pre_turn_items_for_compaction_outcome(
             sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
                 .await;
         }
+        // TODO(ccunningham): Followup PR will use compacting excluding incoming items as a fallback
+        // (even though it is out of distribution for current models).
+        // Also future models may prefer compacting pre-turn history without incoming turn items.
         #[cfg(test)]
         PreTurnCompactionOutcome::CompactedWithoutIncomingItems => {
-            // Reserved path for future models that compact pre-turn history without incoming turn
-            // items; reseed canonical initial context above the incoming user message.
+            // Reseed canonical initial context above the incoming user message.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
             if !initial_context.is_empty() {
                 sess.record_conversation_items(turn_context, &initial_context)
