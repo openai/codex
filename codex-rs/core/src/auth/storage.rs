@@ -26,30 +26,18 @@ use codex_keyring_store::KeyringStore;
 use once_cell::sync::Lazy;
 
 /// Determine where Codex should store CLI auth credentials.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
     /// Persist credentials in CODEX_HOME/auth.json.
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
+    #[default]
     Keyring,
     /// Use keyring when available; otherwise, fall back to a file in CODEX_HOME.
     Auto,
     /// Store credentials in memory only for the current process.
     Ephemeral,
-}
-
-impl Default for AuthCredentialsStoreMode {
-    fn default() -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            Self::Keyring
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Self::File
-        }
-    }
 }
 
 /// Expected structure for $CODEX_HOME/auth.json.
