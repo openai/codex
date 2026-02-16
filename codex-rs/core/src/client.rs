@@ -624,7 +624,7 @@ impl ModelClientSession {
             if !responses_websockets_v2_enabled {
                 return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
                     input: append_items,
-                    client_metadata: payload.client_metadata.clone(),
+                    client_metadata: payload.client_metadata,
                 });
             }
         }
