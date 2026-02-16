@@ -46,14 +46,15 @@ pub(crate) async fn apply_role_to_config(
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     let built_in_agents_config = built_in::configs();
-    let user_agents_config = user_defined::config(config.codex_home.as_path()).map_err(|err| {
-        tracing::warn!(
-            agent_type = role_name,
-            error = %err,
-            "failed to load user-defined agents config"
-        );
-        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
-    })?;
+    let user_agents_config =
+        user_defined::config(config.codex_home.as_path()).unwrap_or_else(|err| {
+            tracing::warn!(
+                agent_type = role_name,
+                error = %err,
+                "failed to load user-defined agents config; falling back to built-in roles"
+            );
+            AgentsConfigToml::default()
+        });
 
     let agent_config = if let Some(role) = user_agents_config.agents.get(role_name) {
         if let Some(config_file) = &role.config_file {
@@ -348,6 +349,28 @@ mod tests {
     #[tokio::test]
     async fn apply_role_to_config_uses_builtin_explorer_config_layer() {
         let mut config = test_config();
+
+        apply_role_to_config(&mut config, Some("explorer"))
+            .await
+            .expect("apply explorer role");
+
+        assert_eq!(config.model, Some("gpt-5.1-codex-mini".to_string()));
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    #[tokio::test]
+    async fn apply_role_to_config_falls_back_to_builtins_when_user_config_is_invalid() {
+        let dir = TempDir::new().expect("tempdir");
+        write_agents_config(
+            &dir,
+            r#"
+[agents.explorer
+description = "broken"
+"#,
+        );
+
+        let mut config = test_config();
+        config.codex_home = dir.path().to_path_buf();
 
         apply_role_to_config(&mut config, Some("explorer"))
             .await
