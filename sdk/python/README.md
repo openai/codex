@@ -33,10 +33,8 @@ with AppServerClient() as client:
     thread = client.thread_start(model="gpt-5")
     thread_id = thread["thread"]["id"]
 
-    turn = client.turn_start(
-        thread_id,
-        input_items=[{"type": "text", "text": "Explain Newton's method in 3 bullets"}],
-    )
+    # ergonomic text-only turn (equivalent to input=[{"type": "text", ...}])
+    turn = client.turn_text(thread_id, "Explain Newton's method in 3 bullets")
     turn_id = turn["turn"]["id"]
 
     # stream until this turn finishes
@@ -55,12 +53,10 @@ client.initialize()
 
 thread_id = client.thread_start(model="gpt-5")["thread"]["id"]
 
-turn = client.turn_start(
-    thread_id,
-    input_items=[{"type": "text", "text": "summarize this repo architecture"}],
-)
+# turn_start also accepts raw text directly
+turn = client.turn_start(thread_id, "summarize this repo architecture")
 
-events = client.stream_until_methods({"turn/completed"})
+events = client.stream_until_methods("turn/completed")
 for e in events:
     if e.method == "item/agentMessage/delta":
         print((e.params or {}).get("delta", ""), end="")
@@ -76,10 +72,7 @@ async def main():
     async with AsyncAppServerClient() as client:
         await client.initialize()
         thread = await client.thread_start(model="gpt-5")
-        turn = await client.turn_start(
-            thread["thread"]["id"],
-            [{"type": "text", "text": "hello from async"}],
-        )
+        turn = await client.turn_text(thread["thread"]["id"], "hello from async")
         await client.wait_for_turn_completed(turn["turn"]["id"])
 
 asyncio.run(main())
@@ -92,7 +85,8 @@ asyncio.run(main())
 - `thread_resume(thread_id, **params)`
 - `thread_list(**params)`
 - `thread_read(thread_id, include_turns=False)`
-- `turn_start(thread_id, input_items, **params)`
+- `turn_start(thread_id, input_items, **params)` (`input_items` can be list/dict/str)
+- `turn_text(thread_id, text, **params)`
 - `turn_interrupt(thread_id, turn_id)`
 - `model_list(include_hidden=False)`
 - `next_notification()`

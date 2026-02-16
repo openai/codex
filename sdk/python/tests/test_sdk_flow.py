@@ -28,10 +28,7 @@ def test_initialize_thread_turn_flow():
         thread_id = thread["thread"]["id"]
         assert thread_id.startswith("thr_")
 
-        turn = client.turn_start(
-            thread_id,
-            input_items=[{"type": "text", "text": "hello"}],
-        )
+        turn = client.turn_start(thread_id, "hello")
         turn_id = turn["turn"]["id"]
         done = client.wait_for_turn_completed(turn_id)
         assert done.params["turn"]["status"] == "completed"
@@ -72,18 +69,48 @@ def test_notebook_helper_run_text_turn():
         assert completed.params["turn"]["status"] == "completed"
 
 
+def test_turn_start_accepts_single_item_dict_and_turn_text_alias():
+    with make_client() as client:
+        client.initialize()
+        thread_id = client.thread_start()["thread"]["id"]
+
+        turn = client.turn_start(thread_id, {"type": "text", "text": "hello"})
+        done = client.wait_for_turn_completed(turn["turn"]["id"])
+        assert done.params["turn"]["status"] == "completed"
+
+        turn2 = client.turn_text(thread_id, "hello")
+        done2 = client.wait_for_turn_completed(turn2["turn"]["id"])
+        assert done2.params["turn"]["status"] == "completed"
+
+
+def test_stream_until_methods_accepts_single_method_string():
+    with make_client() as client:
+        client.initialize()
+        thread_id = client.thread_start()["thread"]["id"]
+        client.turn_text(thread_id, "hello")
+
+        events = client.stream_until_methods("turn/completed")
+        assert events[-1].method == "turn/completed"
+
+
 def test_async_client_wrapper():
     async def _run():
         cfg = AppServerConfig(launch_args_override=("python3", str(FAKE)))
         async with AsyncAppServerClient(cfg) as client:
             await client.initialize()
             thread = await client.thread_start(model="gpt-5")
-            turn = await client.turn_start(
-                thread["thread"]["id"],
-                [{"type": "text", "text": "hello"}],
-            )
+            thread_id = thread["thread"]["id"]
+
+            listed = await client.thread_list(limit=5)
+            assert listed["data"][0]["id"] == "thr_1"
+
+            turn = await client.turn_text(thread_id, "hello")
             done = await client.wait_for_turn_completed(turn["turn"]["id"])
             assert done.params["turn"]["status"] == "completed"
+
+            _thread_id, answer = await client.ask("hello", thread_id=thread_id)
+            assert _thread_id == thread_id
+            assert answer == "hello world"
 
     asyncio.run(_run())
 

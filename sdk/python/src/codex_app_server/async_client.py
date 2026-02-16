@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Iterable
 
 from .client import AppServerClient, AppServerConfig
 from .models import Notification
@@ -39,11 +39,40 @@ class AsyncAppServerClient:
     async def thread_resume(self, thread_id: str, **params: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._sync.thread_resume, thread_id, **params)
 
-    async def turn_start(self, thread_id: str, input_items: list[dict[str, Any]], **params: Any) -> dict[str, Any]:
+    async def thread_list(self, **params: Any) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.thread_list, **params)
+
+    async def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.thread_read, thread_id, include_turns)
+
+    async def turn_start(
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+        **params: Any,
+    ) -> dict[str, Any]:
         return await asyncio.to_thread(self._sync.turn_start, thread_id, input_items, **params)
+
+    async def turn_text(self, thread_id: str, text: str, **params: Any) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.turn_text, thread_id, text, **params)
+
+    async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.turn_interrupt, thread_id, turn_id)
+
+    async def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
+        return await asyncio.to_thread(self._sync.model_list, include_hidden)
+
+    async def next_notification(self) -> Notification:
+        return await asyncio.to_thread(self._sync.next_notification)
 
     async def wait_for_turn_completed(self, turn_id: str) -> Notification:
         return await asyncio.to_thread(self._sync.wait_for_turn_completed, turn_id)
 
-    async def stream_until_methods(self, methods: set[str]) -> list[Notification]:
+    async def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
         return await asyncio.to_thread(self._sync.stream_until_methods, methods)
+
+    async def run_text_turn(self, thread_id: str, text: str, **params: Any) -> tuple[str, Notification]:
+        return await asyncio.to_thread(self._sync.run_text_turn, thread_id, text, **params)
+
+    async def ask(self, text: str, *, model: str | None = None, thread_id: str | None = None) -> tuple[str, str]:
+        return await asyncio.to_thread(self._sync.ask, text, model=model, thread_id=thread_id)

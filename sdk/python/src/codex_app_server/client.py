@@ -8,7 +8,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .errors import AppServerError, JsonRpcError, TransportClosedError
 from .models import Notification
@@ -183,9 +183,18 @@ class AppServerClient:
     def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         return self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
 
-    def turn_start(self, thread_id: str, input_items: list[dict[str, Any]], **params: Any) -> TurnStartResponse:
-        payload = {"threadId": thread_id, "input": input_items, **params}
+    def turn_start(
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+        **params: Any,
+    ) -> TurnStartResponse:
+        payload = {"threadId": thread_id, "input": self._normalize_input_items(input_items), **params}
         return self.request("turn/start", payload)
+
+    def turn_text(self, thread_id: str, text: str, **params: Any) -> TurnStartResponse:
+        """Convenience helper for the common text-only turn case."""
+        return self.turn_start(thread_id, text, **params)
 
     def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         return self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
@@ -199,7 +208,10 @@ class AppServerClient:
         return ThreadStartResult.from_dict(self.thread_start(**params))
 
     def turn_start_typed(
-        self, thread_id: str, input_items: list[dict[str, Any]], **params: Any
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+        **params: Any,
     ) -> TurnStartResult:
         return TurnStartResult.from_dict(self.turn_start(thread_id, input_items, **params))
 
@@ -211,17 +223,18 @@ class AppServerClient:
             if n.method == "turn/completed" and (n.params or {}).get("turn", {}).get("id") == turn_id:
                 return n
 
-    def stream_until_methods(self, methods: set[str]) -> list[Notification]:
+    def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
+        target_methods = {methods} if isinstance(methods, str) else set(methods)
         out: list[Notification] = []
         while True:
             n = self.next_notification()
             out.append(n)
-            if n.method in methods:
+            if n.method in target_methods:
                 return out
 
     def run_text_turn(self, thread_id: str, text: str, **params: Any) -> tuple[str, Notification]:
         """Notebook-friendly helper: start a text turn and return (final_text, turn_completed_notification)."""
-        turn = self.turn_start(thread_id, input_items=[{"type": "text", "text": text}], **params)
+        turn = self.turn_text(thread_id, text, **params)
         turn_id = turn["turn"]["id"]
 
         chunks: list[str] = []
@@ -251,6 +264,15 @@ class AppServerClient:
         return thread_id, assistant_text
 
     # ---------- Internals ----------
+
+    def _normalize_input_items(
+        self, input_items: list[dict[str, Any]] | dict[str, Any] | str
+    ) -> list[dict[str, Any]]:
+        if isinstance(input_items, str):
+            return [{"type": "text", "text": input_items}]
+        if isinstance(input_items, dict):
+            return [input_items]
+        return input_items
 
     def _default_approval_handler(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
         if method == "item/commandExecution/requestApproval":
