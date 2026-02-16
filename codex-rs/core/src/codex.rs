@@ -1780,11 +1780,13 @@ impl Session {
             }
         }
 
-        let resolved_model_slug = session_configuration.collaboration_mode.model().to_string();
         let model_info = self
             .services
             .models_manager
-            .get_model_info(resolved_model_slug.as_str(), &per_turn_config)
+            .get_model_info(
+                session_configuration.collaboration_mode.model(),
+                &per_turn_config,
+            )
             .await;
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -1805,19 +1807,23 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        if model_info.used_fallback_model_metadata {
+        turn_context.turn_metadata_state.spawn_git_enrichment_task();
+        turn_context
+    }
+
+    pub(crate) async fn maybe_emit_unknown_model_warning_for_turn(&self, tc: &TurnContext) {
+        if tc.model_info.used_fallback_model_metadata {
             self.send_event(
-                turn_context.as_ref(),
+                tc,
                 EventMsg::Warning(WarningEvent {
                     message: format!(
-                        "Model metadata for `{resolved_model_slug}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+                        "Model metadata for `{}` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+                        tc.model_info.slug
                     ),
                 }),
             )
             .await;
         }
-        turn_context.turn_metadata_state.spawn_git_enrichment_task();
-        turn_context
     }
 
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
@@ -3388,6 +3394,8 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
+        sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
+            .await;
         current_context.otel_manager.user_prompt(&items);
 
         // Attempt to inject input into current task.
@@ -3992,6 +4000,8 @@ mod handlers {
         review_request: ReviewRequest,
     ) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
         sess.refresh_mcp_servers_if_requested(&turn_context).await;
         match resolve_review_request(review_request, turn_context.cwd.as_path()) {
             Ok(resolved) => {
