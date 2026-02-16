@@ -126,6 +126,13 @@
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
+          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
           "description": "Persist credentials in CODEX_HOME/auth.json.",
           "enum": [
             "file"
@@ -136,13 +143,6 @@
           "description": "Persist credentials in the keyring. Fail if unavailable.",
           "enum": [
             "keyring"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME.",
-          "enum": [
-            "auto"
           ],
           "type": "string"
         },
@@ -1286,7 +1286,7 @@
         }
       ],
       "default": null,
-      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+      "description": "Preferred backend for storing CLI auth credentials. auto (default): Use the keyring if available, otherwise use a file. file: Use a file in the Codex home directory. keyring: Use an OS-specific keyring service."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",

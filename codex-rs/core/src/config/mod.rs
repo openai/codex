@@ -261,9 +261,9 @@ pub struct Config {
     pub cwd: PathBuf,
 
     /// Preferred store for CLI auth credentials.
-    /// file (default): Use a file in the Codex home directory.
+    /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
+    /// file: Use a file in the Codex home directory.
     /// keyring: Use an OS-specific keyring service.
-    /// auto: Use the OS-specific keyring service if available, otherwise use a file.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
@@ -923,9 +923,9 @@ pub struct ConfigToml {
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
-    /// file (default): Use a file in the Codex home directory.
+    /// auto (default): Use the keyring if available, otherwise use a file.
+    /// file: Use a file in the Codex home directory.
     /// keyring: Use an OS-specific keyring service.
-    /// auto: Use the keyring if available, otherwise use a file.
     #[serde(default)]
     pub cli_auth_credentials_store: Option<AuthCredentialsStoreMode>,
 
@@ -2465,7 +2465,7 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
+    fn config_defaults_to_auto_cli_auth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml::default();
 
@@ -2477,7 +2477,7 @@ trust_level = "trusted"
 
         assert_eq!(
             config.cli_auth_credentials_store_mode,
-            AuthCredentialsStoreMode::File,
+            AuthCredentialsStoreMode::Auto,
         );
 
         Ok(())

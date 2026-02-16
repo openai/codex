@@ -339,6 +339,7 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
+    "askama",
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
