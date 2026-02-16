@@ -88,7 +88,7 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
     Some(model_switch_item)
 }
 
-fn extract_latest_model_switch_update_from_items(
+pub(crate) fn extract_latest_model_switch_update_from_items(
     items: &mut Vec<ResponseItem>,
 ) -> Option<ResponseItem> {
     let model_switch_index = items
