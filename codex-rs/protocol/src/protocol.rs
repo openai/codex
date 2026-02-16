@@ -54,6 +54,8 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::approvals::NetworkApprovalContext;
+pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -259,6 +261,12 @@ pub enum Op {
 
     /// Request MCP servers to reinitialize and refresh cached tool lists.
     RefreshMcpServers { config: McpServerRefreshConfig },
+
+    /// Reload user config layer overrides for the active session.
+    ///
+    /// This updates runtime config-derived behavior (for example app
+    /// enable/disable state) without restarting the thread.
+    ReloadUserConfig,
 
     /// Request the list of available custom prompts.
     ListCustomPrompts,
@@ -1819,6 +1827,7 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
     },
+    MemoryConsolidation,
     Other(String),
 }
 
@@ -1840,6 +1849,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
@@ -1932,6 +1942,12 @@ impl From<CompactedItem> for ResponseItem {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnContextNetworkItem {
+    pub allowed_domains: Vec<String>,
+    pub denied_domains: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1939,6 +1955,8 @@ pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<TurnContextNetworkItem>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -2972,6 +2990,53 @@ mod tests {
             _ => panic!("expected turn_aborted event"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_deserializes_without_network() -> Result<()> {
+        let item: TurnContextItem = serde_json::from_value(json!({
+            "cwd": "/tmp",
+            "approval_policy": "never",
+            "sandbox_policy": { "type": "danger-full-access" },
+            "model": "gpt-5",
+            "summary": "auto",
+        }))?;
+
+        assert_eq!(item.network, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_serializes_network_when_present() -> Result<()> {
+        let item = TurnContextItem {
+            turn_id: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: Some(TurnContextNetworkItem {
+                allowed_domains: vec!["api.example.com".to_string()],
+                denied_domains: vec!["blocked.example.com".to_string()],
+            }),
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+
+        let value = serde_json::to_value(item)?;
+        assert_eq!(
+            value["network"],
+            json!({
+                "allowed_domains": ["api.example.com"],
+                "denied_domains": ["blocked.example.com"],
+            })
+        );
         Ok(())
     }
 

@@ -360,7 +360,7 @@ FROM threads
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, module_path, file, line) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line) ",
         );
         builder.push_values(entries, |mut row, entry| {
             row.push_bind(entry.ts)
@@ -369,6 +369,7 @@ FROM threads
                 .push_bind(&entry.target)
                 .push_bind(&entry.message)
                 .push_bind(&entry.thread_id)
+                .push_bind(&entry.process_uuid)
                 .push_bind(&entry.module_path)
                 .push_bind(&entry.file)
                 .push_bind(entry.line);
@@ -388,7 +389,7 @@ FROM threads
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -1143,7 +1144,14 @@ WHERE id = 1
 
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_id, ownership_token.as_str(), 100, "raw", "sum")
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded"),
             "stage1 success should finalize for current token"
@@ -1492,6 +1500,7 @@ WHERE id = 1
                     up_to_date.updated_at.timestamp(),
                     "raw",
                     "summary",
+                    None,
                 )
                 .await
                 .expect("mark up-to-date thread succeeded"),
@@ -1715,6 +1724,7 @@ WHERE kind = 'memory_stage1'
                         claim.thread.updated_at.timestamp(),
                         "raw",
                         "summary",
+                        None,
                     )
                     .await
                     .expect("mark first-batch stage1 success"),
@@ -1766,7 +1776,14 @@ WHERE kind = 'memory_stage1'
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_id, ownership_token.as_str(), 100, "raw", "sum")
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw",
+                    "sum",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded"),
             "mark stage1 succeeded should write stage1_outputs"
@@ -2058,6 +2075,7 @@ WHERE kind = 'memory_stage1'
                     100,
                     "raw memory a",
                     "summary a",
+                    None,
                 )
                 .await
                 .expect("mark stage1 succeeded a"),
@@ -2080,6 +2098,7 @@ WHERE kind = 'memory_stage1'
                     101,
                     "raw memory b",
                     "summary b",
+                    Some("rollout-b"),
                 )
                 .await
                 .expect("mark stage1 succeeded b"),
@@ -2093,9 +2112,11 @@ WHERE kind = 'memory_stage1'
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].thread_id, thread_id_b);
         assert_eq!(outputs[0].rollout_summary, "summary b");
+        assert_eq!(outputs[0].rollout_slug.as_deref(), Some("rollout-b"));
         assert_eq!(outputs[0].cwd, codex_home.join("workspace-b"));
         assert_eq!(outputs[1].thread_id, thread_id_a);
         assert_eq!(outputs[1].rollout_summary, "summary a");
+        assert_eq!(outputs[1].rollout_slug, None);
         assert_eq!(outputs[1].cwd, codex_home.join("workspace-a"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2208,7 +2229,14 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_a, token_a.as_str(), 100, "raw-a", "summary-a")
+                .mark_stage1_job_succeeded(
+                    thread_a,
+                    token_a.as_str(),
+                    100,
+                    "raw-a",
+                    "summary-a",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded a"),
             "stage1 success should persist output for thread a"
@@ -2224,7 +2252,14 @@ VALUES (?, ?, ?, ?, ?)
         };
         assert!(
             runtime
-                .mark_stage1_job_succeeded(thread_b, token_b.as_str(), 101, "raw-b", "summary-b")
+                .mark_stage1_job_succeeded(
+                    thread_b,
+                    token_b.as_str(),
+                    101,
+                    "raw-b",
+                    "summary-b",
+                    None,
+                )
                 .await
                 .expect("mark stage1 succeeded b"),
             "stage1 success should persist output for thread b"

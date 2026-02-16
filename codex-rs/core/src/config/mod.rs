@@ -7,6 +7,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::MemoriesConfig;
+use crate::config::types::MemoriesToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -47,6 +49,8 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
@@ -76,6 +80,8 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(test)]
 use tempfile::tempdir;
+#[cfg(not(target_os = "macos"))]
+type MacOsSeatbeltProfileExtensions = ();
 
 use crate::config::profile::ConfigProfile;
 use toml::Value as TomlValue;
@@ -131,6 +137,9 @@ pub struct Permissions {
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
     /// legacy feature keys.
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Optional macOS seatbelt extension profile used to extend default
+    /// seatbelt permissions when running under seatbelt.
+    pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -288,6 +297,9 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+
+    /// Memories subsystem settings.
+    pub memories: MemoriesConfig,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -1005,6 +1017,9 @@ pub struct ConfigToml {
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
+
+    /// Memories subsystem settings.
+    pub memories: Option<MemoriesToml>,
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
@@ -1737,6 +1752,7 @@ impl Config {
                 network,
                 shell_environment_policy,
                 windows_sandbox_mode,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
             did_user_set_custom_approval_policy_or_sandbox_mode,
@@ -1771,6 +1787,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
             log_dir,
             config_layer_stack,
@@ -1933,6 +1950,13 @@ impl Config {
             self.permissions.windows_sandbox_mode
         };
     }
+
+    pub fn managed_network_requirements_enabled(&self) -> bool {
+        self.config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some()
+    }
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
@@ -1985,6 +2009,8 @@ mod tests {
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
+    use crate::config::types::MemoriesConfig;
+    use crate::config::types::MemoriesToml;
     use crate::config::types::NotificationMethod;
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
@@ -2067,6 +2093,47 @@ persistence = "none"
                 max_bytes: None,
             }),
             history_no_persistence_cfg.history
+        );
+
+        let memories = r#"
+[memories]
+max_raw_memories_for_global = 512
+max_rollout_age_days = 42
+max_rollouts_per_startup = 9
+min_rollout_idle_hours = 24
+phase_1_model = "gpt-5-mini"
+phase_2_model = "gpt-5"
+"#;
+        let memories_cfg =
+            toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(MemoriesToml {
+                max_raw_memories_for_global: Some(512),
+                max_rollout_age_days: Some(42),
+                max_rollouts_per_startup: Some(9),
+                min_rollout_idle_hours: Some(24),
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }),
+            memories_cfg.memories
+        );
+
+        let config = Config::load_from_base_config_with_overrides(
+            memories_cfg,
+            ConfigOverrides::default(),
+            tempdir().expect("tempdir").path().to_path_buf(),
+        )
+        .expect("load config from memories settings");
+        assert_eq!(
+            config.memories,
+            MemoriesConfig {
+                max_raw_memories_for_global: 512,
+                max_rollout_age_days: 42,
+                max_rollouts_per_startup: 9,
+                min_rollout_idle_hours: 24,
+                phase_1_model: Some("gpt-5-mini".to_string()),
+                phase_2_model: Some("gpt-5".to_string()),
+            }
         );
     }
 
@@ -4032,6 +4099,7 @@ model_verbosity = "high"
                     network: None,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
+                    macos_seatbelt_profile_extensions: None,
                 },
                 enforce_residency: Constrained::allow_any(None),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4047,6 +4115,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
@@ -4141,6 +4210,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4156,6 +4226,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4248,6 +4319,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4263,6 +4335,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
@@ -4341,6 +4414,7 @@ model_verbosity = "high"
                 network: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
@@ -4356,6 +4430,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),

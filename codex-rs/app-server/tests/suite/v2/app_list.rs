@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -86,6 +87,7 @@ async fn list_apps_uses_thread_feature_flag_when_thread_id_is_provided() -> Resu
         distribution_channel: None,
         install_url: None,
         is_accessible: false,
+        is_enabled: true,
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -174,6 +176,78 @@ connectors = false
 }
 
 #[tokio::test]
+async fn list_apps_reports_is_enabled_from_config() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle) =
+        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{server_url}"
+
+[features]
+connectors = true
+
+[apps.beta]
+enabled = false
+"#
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: response_data,
+        next_cursor,
+    } = to_response(response)?;
+    assert!(next_cursor.is_none());
+    assert_eq!(response_data.len(), 1);
+    assert_eq!(response_data[0].id, "beta");
+    assert!(!response_data[0].is_enabled);
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<()> {
     let connectors = vec![
         AppInfo {
@@ -185,6 +259,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
         AppInfo {
             id: "beta".to_string(),
@@ -195,6 +270,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
     ];
 
@@ -239,6 +315,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         distribution_channel: None,
         install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
         is_accessible: true,
+        is_enabled: true,
     }];
 
     let first_update = read_app_list_updated_notification(&mut mcp).await?;
@@ -254,6 +331,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
             is_accessible: true,
+            is_enabled: true,
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -264,6 +342,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
             is_accessible: false,
+            is_enabled: true,
         },
     ];
 
@@ -300,6 +379,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
         AppInfo {
             id: "beta".to_string(),
@@ -310,6 +390,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
     ];
 
@@ -358,6 +439,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
                 distribution_channel: None,
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
                 is_accessible: false,
+                is_enabled: true,
             },
             AppInfo {
                 id: "beta".to_string(),
@@ -368,6 +450,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
                 distribution_channel: None,
                 install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
                 is_accessible: false,
+                is_enabled: true,
             },
         ]
     );
@@ -382,6 +465,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
             is_accessible: true,
+            is_enabled: true,
         },
         AppInfo {
             id: "alpha".to_string(),
@@ -392,6 +476,7 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             distribution_channel: None,
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
             is_accessible: false,
+            is_enabled: true,
         },
     ];
 
@@ -423,6 +508,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
         AppInfo {
             id: "beta".to_string(),
@@ -433,6 +519,7 @@ async fn list_apps_paginates_results() -> Result<()> {
             distribution_channel: None,
             install_url: None,
             is_accessible: false,
+            is_enabled: true,
         },
     ];
 
@@ -486,6 +573,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         distribution_channel: None,
         install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
         is_accessible: true,
+        is_enabled: true,
     }];
 
     assert_eq!(first_page, expected_first);
@@ -525,6 +613,7 @@ async fn list_apps_paginates_results() -> Result<()> {
         distribution_channel: None,
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
         is_accessible: false,
+        is_enabled: true,
     }];
 
     assert_eq!(second_page, expected_second);
@@ -545,6 +634,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         distribution_channel: None,
         install_url: None,
         is_accessible: false,
+        is_enabled: true,
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
     let (server_url, server_handle) =
@@ -633,6 +723,201 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     Ok(())
 }
 
+#[tokio::test]
+async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Result<()> {
+    let initial_connectors = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha v1".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: true,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "Beta App".to_string(),
+            description: Some("Beta v1".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: true,
+        },
+    ];
+    let initial_tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        initial_connectors,
+        initial_tools,
+        Duration::from_millis(300),
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let warm_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let warm_first_update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(
+        warm_first_update.data,
+        vec![AppInfo {
+            id: "beta".to_string(),
+            name: "Beta App".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+        }]
+    );
+
+    let warm_second_update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(
+        warm_second_update.data,
+        vec![
+            AppInfo {
+                id: "beta".to_string(),
+                name: "Beta App".to_string(),
+                description: Some("Beta v1".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+            },
+            AppInfo {
+                id: "alpha".to_string(),
+                name: "Alpha".to_string(),
+                description: Some("Alpha v1".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            },
+        ]
+    );
+
+    let warm_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(warm_request)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: warm_data,
+        next_cursor: warm_next_cursor,
+    } = to_response(warm_response)?;
+    assert_eq!(warm_data, warm_second_update.data);
+    assert!(warm_next_cursor.is_none());
+
+    server_control.set_connectors(vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha v2".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+    }]);
+    server_control.set_tools(Vec::new());
+
+    let refetch_request = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: None,
+            cursor: None,
+            thread_id: None,
+            force_refetch: true,
+        })
+        .await?;
+
+    let first_update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(
+        first_update.data,
+        vec![
+            AppInfo {
+                id: "alpha".to_string(),
+                name: "Alpha".to_string(),
+                description: Some("Alpha v1".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            },
+            AppInfo {
+                id: "beta".to_string(),
+                name: "Beta App".to_string(),
+                description: Some("Beta v1".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+                is_accessible: false,
+                is_enabled: true,
+            },
+        ]
+    );
+
+    let expected_final = vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha v2".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+        is_accessible: false,
+        is_enabled: true,
+    }];
+    let second_update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(second_update.data, expected_final);
+
+    let refetch_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refetch_request)),
+    )
+    .await??;
+    let AppsListResponse {
+        data: refetch_data,
+        next_cursor: refetch_next_cursor,
+    } = to_response(refetch_response)?;
+    assert_eq!(refetch_data, expected_final);
+    assert!(refetch_next_cursor.is_none());
+
+    server_handle.abort();
+    Ok(())
+}
+
 async fn read_app_list_updated_notification(
     mcp: &mut McpProcess,
 ) -> Result<AppListUpdatedNotification> {
@@ -652,19 +937,43 @@ async fn read_app_list_updated_notification(
 struct AppsServerState {
     expected_bearer: String,
     expected_account_id: String,
-    response: serde_json::Value,
+    response: Arc<StdMutex<serde_json::Value>>,
     directory_delay: Duration,
 }
 
 #[derive(Clone)]
 struct AppListMcpServer {
-    tools: Arc<Vec<Tool>>,
+    tools: Arc<StdMutex<Vec<Tool>>>,
     tools_delay: Duration,
 }
 
 impl AppListMcpServer {
-    fn new(tools: Arc<Vec<Tool>>, tools_delay: Duration) -> Self {
+    fn new(tools: Arc<StdMutex<Vec<Tool>>>, tools_delay: Duration) -> Self {
         Self { tools, tools_delay }
+    }
+}
+
+#[derive(Clone)]
+struct AppsServerControl {
+    response: Arc<StdMutex<serde_json::Value>>,
+    tools: Arc<StdMutex<Vec<Tool>>>,
+}
+
+impl AppsServerControl {
+    fn set_connectors(&self, connectors: Vec<AppInfo>) {
+        let mut response_guard = self
+            .response
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *response_guard = json!({ "apps": connectors, "next_token": null });
+    }
+
+    fn set_tools(&self, tools: Vec<Tool>) {
+        let mut tools_guard = self
+            .tools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *tools_guard = tools;
     }
 }
 
@@ -688,8 +997,12 @@ impl ServerHandler for AppListMcpServer {
             if tools_delay > Duration::ZERO {
                 tokio::time::sleep(tools_delay).await;
             }
+            let tools = tools
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             Ok(ListToolsResult {
-                tools: (*tools).clone(),
+                tools,
                 next_cursor: None,
                 meta: None,
             })
@@ -703,14 +1016,33 @@ async fn start_apps_server_with_delays(
     directory_delay: Duration,
     tools_delay: Duration,
 ) -> Result<(String, JoinHandle<()>)> {
+    let (server_url, server_handle, _server_control) =
+        start_apps_server_with_delays_and_control(connectors, tools, directory_delay, tools_delay)
+            .await?;
+    Ok((server_url, server_handle))
+}
+
+async fn start_apps_server_with_delays_and_control(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+    directory_delay: Duration,
+    tools_delay: Duration,
+) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
+    let response = Arc::new(StdMutex::new(
+        json!({ "apps": connectors, "next_token": null }),
+    ));
+    let tools = Arc::new(StdMutex::new(tools));
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
-        response: json!({ "apps": connectors, "next_token": null }),
+        response: response.clone(),
         directory_delay,
     };
     let state = Arc::new(state);
-    let tools = Arc::new(tools);
+    let server_control = AppsServerControl {
+        response,
+        tools: tools.clone(),
+    };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
@@ -737,7 +1069,7 @@ async fn start_apps_server_with_delays(
         let _ = axum::serve(listener, router).await;
     });
 
-    Ok((format!("http://{addr}"), handle))
+    Ok((format!("http://{addr}"), handle, server_control))
 }
 
 async fn list_directory_connectors(
@@ -758,7 +1090,12 @@ async fn list_directory_connectors(
         .is_some_and(|value| value == state.expected_account_id);
 
     if bearer_ok && account_ok {
-        Ok(Json(state.response.clone()))
+        let response = state
+            .response
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Ok(Json(response))
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
