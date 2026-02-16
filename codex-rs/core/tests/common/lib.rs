@@ -26,6 +26,26 @@ fn enable_deterministic_unified_exec_process_ids_for_tests() {
     codex_core::test_support::set_deterministic_process_ids(true);
 }
 
+#[ctor]
+fn configure_insta_workspace_root_for_snapshot_tests() {
+    if std::env::var_os("INSTA_WORKSPACE_ROOT").is_some() {
+        return;
+    }
+
+    let workspace_root = codex_utils_cargo_bin::repo_root()
+        .ok()
+        .map(|root| root.join("codex-rs"));
+
+    if let Some(workspace_root) = workspace_root
+        && let Ok(workspace_root) = workspace_root.canonicalize()
+    {
+        // Safety: this ctor runs at process startup before test threads begin.
+        unsafe {
+            std::env::set_var("INSTA_WORKSPACE_ROOT", workspace_root);
+        }
+    }
+}
+
 #[track_caller]
 pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
     let regex = Regex::new(pattern).unwrap_or_else(|err| {
