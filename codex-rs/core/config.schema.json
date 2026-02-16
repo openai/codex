@@ -1689,6 +1689,13 @@
       "description": "Base URL for the object store used by /share (enterprise/self-hosted).",
       "type": "string"
     },
+    "session_object_storage_url_cmd": {
+      "description": "Optional command to produce the base URL for the object store used by /share. The command runs as argv and must print a non-empty URL to stdout.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "shell_environment_policy": {
       "allOf": [
         {

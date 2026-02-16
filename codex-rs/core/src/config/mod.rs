@@ -78,6 +78,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 #[cfg(test)]
 use tempfile::tempdir;
 #[cfg(not(target_os = "macos"))]
@@ -952,6 +953,9 @@ pub struct ConfigToml {
 
     /// Base URL for the object store used by /share (enterprise/self-hosted).
     pub session_object_storage_url: Option<String>,
+    /// Optional command to produce the base URL for the object store used by /share.
+    /// The command runs as argv and must print a non-empty URL to stdout.
+    pub session_object_storage_url_cmd: Option<Vec<String>>,
 
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
@@ -1514,6 +1518,7 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
+        let session_object_storage_url = Self::resolve_session_object_storage_url(&cfg)?;
         let mut sandbox_policy = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
@@ -1627,16 +1632,6 @@ impl Config {
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
-
-        let session_object_storage_url =
-            cfg.session_object_storage_url.as_ref().and_then(|value| {
                 let trimmed = value.trim();
                 if trimmed.is_empty() {
                     None
@@ -1939,6 +1934,80 @@ impl Config {
             ))
         } else {
             Ok(Some(s))
+        }
+    }
+
+    fn resolve_session_object_storage_url(cfg: &ConfigToml) -> std::io::Result<Option<String>> {
+        let session_object_storage_url =
+            cfg.session_object_storage_url.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
+        if session_object_storage_url.is_some() {
+            return Ok(session_object_storage_url);
+        }
+
+        Self::try_run_command_for_value(
+            cfg.session_object_storage_url_cmd.as_deref(),
+            "session_object_storage_url_cmd",
+        )
+    }
+
+    fn try_run_command_for_value(
+        command: Option<&[String]>,
+        context: &str,
+    ) -> std::io::Result<Option<String>> {
+        let Some(command) = command else {
+            return Ok(None);
+        };
+
+        if command.is_empty() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("{context} is empty"),
+            ));
+        }
+
+        let mut cmd = Command::new(&command[0]);
+        if let Some(args) = command.get(1..) {
+            cmd.args(args);
+        }
+
+        let output = cmd.output().map_err(|err| {
+            std::io::Error::new(err.kind(), format!("{context} failed to start: {err}"))
+        })?;
+
+        if !output.status.success() {
+            let status = output.status;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            let message = if stderr.is_empty() {
+                format!("{context} failed with status {status}")
+            } else {
+                format!("{context} failed with status {status}: {stderr}")
+            };
+            return Err(std::io::Error::new(ErrorKind::Other, message));
+        }
+
+        let stdout = String::from_utf8(output.stdout).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{context} output was not UTF-8: {err}"),
+            )
+        })?;
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{context} returned empty output"),
+            ))
+        } else {
+            Ok(Some(trimmed.to_string()))
         }
     }
 

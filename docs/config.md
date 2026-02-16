@@ -32,6 +32,16 @@ To enable `/share` for enterprise or self-hosted storage, configure:
 session_object_storage_url = "https://your-object-store.example.com/codex-sessions/"
 ```
 
+If you need a dynamic URL (for example, a short-lived token), you can provide a command
+that prints the URL to stdout:
+
+```
+session_object_storage_url_cmd = ["bash", "-lc", "get-session-store-url"]
+```
+
+If both `session_object_storage_url` and `session_object_storage_url_cmd` are set, the
+static URL wins.
+
 You can also use Azure Blob Storage with a SAS URL, either as a standard HTTPS URL or the shorthand `az://` form:
 
 ```
