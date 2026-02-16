@@ -457,6 +457,76 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
+/// A consolidated agent message cell taht stores raw markdown source and re-renders from it at any
+/// width. This replaces the run of `AgentMessageCell`s after a stream finalizes, so tables and
+/// other width-sensitive content review correctly on terminal resize.
+#[derive(Debug)]
+pub(crate) struct AgentMarkdownCell {
+    markdown_source: String,
+}
+
+impl AgentMarkdownCell {
+    pub(crate) fn new(markdown_source: String) -> Self {
+        Self { markdown_source }
+    }
+}
+
+impl HistoryCell for AgentMarkdownCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
+        // " " prefix prepended below.
+        let wrap_width = (width as usize).saturating_sub(2);
+        crate::markdown::append_markdown_agent(&self.markdown_source, Some(wrap_width), &mut lines);
+        // Use prefix_lines (not word_wrap_lines) so table rows with box-drawing characters are not
+        // broken by word-wrapping. The markdown renderer already output to wrap_width.
+        prefix_lines(lines, "• ".dim(), "  ".into())
+    }
+}
+
+/// Transient active-cell representation of the mutable tail of an agent stream.
+///
+/// During streaming, lines that have not yet been committed to scrollback (because they belong to
+/// an in-progress table or are the last incomplete line) are displayed via this cell in the
+/// `active_cell` slot.  It is replaced on every delta and cleared when the stream finalizes.
+///
+/// Unlike `AgentMessageCell`, this cell is never committed to the transcript. It exists only as a
+/// live preview of content that will eventually be emitted as stable `AgentMessageCell`s or
+/// consolidated into an `AgentMarkdownCell`.
+#[derive(Debug)]
+pub(crate) struct StreamingAgentTailCell {
+    lines: Vec<Line<'static>>,
+    is_first_line: bool,
+}
+
+impl StreamingAgentTailCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+        Self {
+            lines,
+            is_first_line,
+        }
+    }
+}
+
+impl HistoryCell for StreamingAgentTailCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        word_wrap_lines(
+            &self.lines,
+            RtOptions::new(width as usize)
+                .initial_indent(if self.is_first_line {
+                    "• ".dim().into()
+                } else {
+                    "  ".into()
+                })
+                .subsequent_indent("  ".into()),
+        )
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        !self.is_first_line
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
@@ -3699,6 +3769,170 @@ mod tests {
                 "⚠ Feature flag `foo`".to_string(),
                 "Use flag `bar` instead.".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn agent_markdown_cell_renders_table_at_different_widths() {
+        let source = "| Name | Role |\n|------|------|\n| Alice | Engineer |\n| Bob | Designer |\n";
+        let cell = AgentMarkdownCell::new(source.to_string());
+
+        // At width 80 the table should render with box-drawing characters.
+        let lines_80 = render_lines(&cell.display_lines(80));
+        assert!(
+            lines_80.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table at width 80: {lines_80:?}"
+        );
+        // Verify the "• " leader is present on the first line.
+        assert!(
+            lines_80[0].starts_with("• "),
+            "first line should start with bullet prefix: {:?}",
+            lines_80[0]
+        );
+
+        // At width 40 the table should also render correctly (re-rendered from
+        // source, not just word-wrapped).
+        let lines_40 = render_lines(&cell.display_lines(40));
+        assert!(
+            lines_40.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table at width 40: {lines_40:?}"
+        );
+
+        // Verify table borders are intact (not broken by naive word-wrapping).
+        // Every line with a box char should have matching left/right borders.
+        for line in &lines_40 {
+            let trimmed = line.trim();
+            if trimmed.starts_with('│') {
+                assert!(
+                    trimmed.ends_with('│'),
+                    "table row should have matching right border: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn agent_markdown_cell_survives_insert_history_rewrap() {
+        let source = "\
+  | Milestone | Target Date | Outcome | Extended Context |
+  |-----------|-------------|---------|------------------|
+  | Canary Rollout | 2026-01-15 | Completed | Canary remained at limited traffic longer than planned because p95 latency briefly regressed during
+  cold-cache periods |
+  | Regional Expansion | 2026-01-29 | Completed | Expansion succeeded with stable error rates, though internal analytics lagged temporarily |
+  ";
+        let cell = AgentMarkdownCell::new(source.to_string());
+        let width: u16 = 80;
+        let lines = cell.display_lines(width);
+
+        // Simulate what insert_history_lines does: word_wrap_lines with
+        // the terminal width and no indent.
+        let rewrapped = word_wrap_lines(&lines, width as usize);
+        let before = render_lines(&lines);
+        let after = render_lines(&rewrapped);
+        assert_eq!(
+            before, after,
+            "word_wrap_lines should not alter lines that already fit within width"
+        );
+    }
+
+    #[test]
+    fn agent_markdown_cell_table_fits_within_narrow_width() {
+        let source = "\
+  | Milestone | Target Date | Outcome | Extended Context |
+  |-----------|-------------|---------|------------------|
+  | Canary Rollout | 2026-01-15 | Completed | Canary remained at limited traffic longer than planned because p95 latency briefly regressed during
+  cold-cache periods |
+  | Regional Expansion | 2026-01-29 | Completed | Expansion succeeded with stable error rates, though internal analytics lagged temporarily |
+  | Legacy Decommission | 2026-02-10 | In Progress | Most legacy jobs are drained, but final shutdown is blocked by one compliance export workflow |
+  ";
+        let cell = AgentMarkdownCell::new(source.to_string());
+
+        // Render at a narrow width (simulating terminal resize).
+        let narrow_width: u16 = 80;
+        let lines = cell.display_lines(narrow_width);
+        let rendered = render_lines(&lines);
+
+        // Every rendered line must fit within the target width.
+        for line in &rendered {
+            let display_width = unicode_width::UnicodeWidthStr::width(line.as_str());
+            assert!(
+                display_width <= narrow_width as usize,
+                "line exceeds width {narrow_width}: ({display_width} chars) {line:?}"
+            );
+        }
+
+        // Table should still have box-drawing characters.
+        assert!(
+            rendered.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table: {rendered:?}"
+        );
+    }
+
+    /// Simulate the consolidation backward-walk logic from `App::handle_event`
+    /// to verify it correctly identifies and replaces `AgentMessageCell` runs.
+    #[test]
+    fn consolidation_walker_replaces_agent_message_cells() {
+        use std::sync::Arc;
+
+        // Build a transcript with: [UserCell, AgentMsg(head), AgentMsg(cont), AgentMsg(cont)]
+        let user = Arc::new(UserHistoryCell {
+            message: "hello".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        }) as Arc<dyn HistoryCell>;
+        let head = Arc::new(AgentMessageCell::new(vec![Line::from("line 1")], true))
+            as Arc<dyn HistoryCell>;
+        let cont1 = Arc::new(AgentMessageCell::new(vec![Line::from("line 2")], false))
+            as Arc<dyn HistoryCell>;
+        let cont2 = Arc::new(AgentMessageCell::new(vec![Line::from("line 3")], false))
+            as Arc<dyn HistoryCell>;
+
+        let mut transcript_cells: Vec<Arc<dyn HistoryCell>> =
+            vec![user.clone(), head, cont1, cont2];
+
+        // Run the same consolidation logic as the handler.
+        let source = "line 1\nline 2\nline 3\n".to_string();
+        let end = transcript_cells.len();
+        let mut start = end;
+        while start > 0
+            && transcript_cells[start - 1].is_stream_continuation()
+            && transcript_cells[start - 1]
+                .as_any()
+                .is::<AgentMessageCell>()
+        {
+            start -= 1;
+        }
+        if start > 0
+            && transcript_cells[start - 1]
+                .as_any()
+                .is::<AgentMessageCell>()
+            && !transcript_cells[start - 1].is_stream_continuation()
+        {
+            start -= 1;
+        }
+
+        assert_eq!(
+            start, 1,
+            "should find all 3 agent cells starting at index 1"
+        );
+        assert_eq!(end, 4);
+
+        // Splice.
+        let consolidated: Arc<dyn HistoryCell> = Arc::new(AgentMarkdownCell::new(source));
+        transcript_cells.splice(start..end, std::iter::once(consolidated));
+
+        assert_eq!(transcript_cells.len(), 2, "should be [user, consolidated]");
+
+        // Verify first cell is still the user cell.
+        assert!(
+            transcript_cells[0].as_any().is::<UserHistoryCell>(),
+            "first cell should be UserHistoryCell"
+        );
+
+        // Verify second cell is AgentMarkdownCell.
+        assert!(
+            transcript_cells[1].as_any().is::<AgentMarkdownCell>(),
+            "second cell should be AgentMarkdownCell"
         );
     }
 }

@@ -559,6 +559,30 @@ impl TranscriptOverlay {
         }
     }
 
+    ///  Replace a range of committed cells with a single consolidated cell.
+    ///
+    ///  This mirros the splice performed on `App::transcript_cells` during `ConsolidateAgentMessage`
+    ///  so the overlay stays in sync with the main transcript.
+    pub(crate) fn consolidate_cells(
+        &mut self,
+        range: std::ops::Range<usize>,
+        consolidated: Arc<dyn HistoryCell>,
+    ) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        // Clamp the range to the overlay's cell count to avoid panic if the overlay has fewer
+        // cells than the main transcript (e.g. cells were inserted after the overlay has opened).
+        let clamped_end = range.end.min(self.cells.len());
+        let clamped_start = range.start.min(clamped_end);
+        if clamped_start < clamped_end {
+            self.cells
+                .splice(clamped_start..clamped_end, std::iter::once(consolidated));
+            self.rebuild_renderables();
+        }
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
     /// Sync the active-cell live tail with the current width and cell state.
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll

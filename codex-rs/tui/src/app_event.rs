@@ -123,6 +123,10 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of the transcript
+    /// with a single `AgentMarkdownCell` that re-renders from the raw markdown source on resize.
+    ConsolidateAgentMessage(String),
+
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

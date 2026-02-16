@@ -136,6 +136,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use crossterm::terminal;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -821,18 +822,30 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        let had_stream_controller = self.stream_controller.is_some();
+        if let Some(mut controller) = self.stream_controller.take() {
+            self.clear_active_stream_tail();
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
+            // that can re-render from source on resize.
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateAgentMessage(source));
+            }
         }
         self.adaptive_chunking.reset();
+        if had_stream_controller {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
     }
 
     fn stream_controllers_idle(&self) -> bool {
         self.stream_controller
             .as_ref()
-            .map(|controller| controller.queued_lines() == 0)
+            .map(|controller| controller.queued_lines() == 0 && !controller.has_live_tail())
             .unwrap_or(true)
             && self
                 .plan_stream_controller
@@ -1199,9 +1212,8 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.plan_stream_controller.is_none() {
-            self.plan_stream_controller = Some(PlanStreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
-            ));
+            self.plan_stream_controller =
+                Some(PlanStreamController::new(self.current_stream_width(4)));
         }
         if let Some(controller) = self.plan_stream_controller.as_mut()
             && controller.push(&delta)
@@ -2221,6 +2233,7 @@ impl ChatWidget {
             self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
+        self.sync_active_stream_tail();
 
         if outcome.has_controller && outcome.all_idle {
             self.maybe_restore_status_indicator_after_stream_idle();
@@ -2265,11 +2278,11 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
@@ -2288,9 +2301,7 @@ impl ChatWidget {
                 // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
-            ));
+            self.stream_controller = Some(StreamController::new(self.current_stream_width(2)));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
@@ -2298,7 +2309,28 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
             self.run_catch_up_commit_tick();
         }
+        self.sync_active_stream_tail();
         self.request_redraw();
+    }
+
+    fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
+        self.last_rendered_width
+            .get()
+            .or_else(|| terminal::size().ok().map(|(w, _)| usize::from(w)))
+            .map(|w| w.saturating_sub(reserved_cols))
+    }
+
+    pub(crate) fn on_terminal_resize(&mut self, width: u16) {
+        self.last_rendered_width.set(Some(width as usize));
+        let stream_width = self.current_stream_width(2);
+        let plan_stream_width = self.current_stream_width(4);
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_width(stream_width);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_width(plan_stream_width);
+        }
+        self.sync_active_stream_tail();
     }
 
     fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
@@ -3655,6 +3687,15 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        if self.stream_controller.is_some()
+            && self
+                .active_cell
+                .as_ref()
+                .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
+        {
+            return;
+        }
+
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
@@ -3676,10 +3717,51 @@ impl ChatWidget {
 
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_cell();
+            let keep_stream_tail_active = self.stream_controller.is_some()
+                && self.active_cell.as_ref().is_some_and(|active| {
+                    active.as_any().is::<history_cell::StreamingAgentTailCell>()
+                });
+            if !keep_stream_tail_active {
+                self.flush_active_cell();
+            }
             self.needs_final_message_separator = true;
         }
+
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+    }
+
+    fn sync_active_stream_tail(&mut self) {
+        let Some((tail_lines, tail_starts_stream)) =
+            self.stream_controller.as_ref().map(|controller| {
+                (
+                    controller.current_tail_lines(),
+                    controller.tail_starts_stream(),
+                )
+            })
+        else {
+            return;
+        };
+
+        if tail_lines.is_empty() {
+            self.clear_active_stream_tail();
+            return;
+        }
+
+        self.bottom_pane.hide_status_indicator();
+        let tail_cell = history_cell::StreamingAgentTailCell::new(tail_lines, tail_starts_stream);
+        self.active_cell = Some(Box::new(tail_cell));
+        self.bump_active_cell_revision();
+    }
+
+    fn clear_active_stream_tail(&mut self) {
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
+        {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
+        }
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
@@ -6711,6 +6793,11 @@ impl ChatWidget {
 
     fn is_plan_streaming_in_tui(&self) -> bool {
         self.plan_stream_controller.is_some()
+    }
+
+    /// Whether an agent message stream is active (not a plan stream).
+    pub(crate) fn has_active_agent_stream(&self) -> bool {
+        self.stream_controller.is_some()
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
