@@ -4212,6 +4212,7 @@ async fn spawn_review_thread(
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
+        additional_instructions: resolved.additional_instructions,
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;

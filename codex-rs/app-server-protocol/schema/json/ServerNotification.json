@@ -2800,6 +2800,12 @@
         {
           "description": "Entered review mode.",
           "properties": {
+            "additional_instructions": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "target": {
               "$ref": "#/definitions/ReviewTarget"
             },

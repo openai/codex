@@ -850,6 +850,7 @@ fn build_review_request(args: ReviewArgs) -> anyhow::Result<ReviewRequest> {
     Ok(ReviewRequest {
         target,
         user_facing_hint: None,
+        additional_instructions: None,
     })
 }
 
@@ -872,6 +873,7 @@ mod tests {
         let expected = ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            additional_instructions: None,
         };
 
         assert_eq!(request, expected);
@@ -894,6 +896,7 @@ mod tests {
                 title: Some("Add review command".to_string()),
             },
             user_facing_hint: None,
+            additional_instructions: None,
         };
 
         assert_eq!(request, expected);
@@ -915,6 +918,7 @@ mod tests {
                 instructions: "custom review instructions".to_string(),
             },
             user_facing_hint: None,
+            additional_instructions: None,
         };
 
         assert_eq!(request, expected);

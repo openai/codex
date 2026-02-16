@@ -8,6 +8,7 @@ pub struct ResolvedReviewRequest {
     pub target: ReviewTarget,
     pub prompt: String,
     pub user_facing_hint: String,
+    pub additional_instructions: Option<String>,
 }
 
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
@@ -23,16 +24,27 @@ pub fn resolve_review_request(
     request: ReviewRequest,
     cwd: &Path,
 ) -> anyhow::Result<ResolvedReviewRequest> {
-    let target = request.target;
-    let prompt = review_prompt(&target, cwd)?;
-    let user_facing_hint = request
-        .user_facing_hint
-        .unwrap_or_else(|| user_facing_hint(&target));
+    let ReviewRequest {
+        target,
+        user_facing_hint: user_facing_hint_override,
+        additional_instructions,
+    } = request;
+    let additional_instructions = additional_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned);
+    let mut prompt = review_prompt(&target, cwd)?;
+    if let Some(instructions) = &additional_instructions {
+        prompt = format!("{prompt}\n\nAdditional review instructions:\n{instructions}");
+    }
+    let user_facing_hint = user_facing_hint_override.unwrap_or_else(|| user_facing_hint(&target));
 
     Ok(ResolvedReviewRequest {
         target,
         prompt,
         user_facing_hint,
+        additional_instructions,
     })
 }
 
@@ -88,6 +100,51 @@ impl From<ResolvedReviewRequest> for ReviewRequest {
         ReviewRequest {
             target: resolved.target,
             user_facing_hint: Some(resolved.user_facing_hint),
+            additional_instructions: resolved.additional_instructions,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resolve_review_request_appends_trimmed_additional_instructions() {
+        let resolved = resolve_review_request(
+            ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                user_facing_hint: None,
+                additional_instructions: Some("  focus on migrations  ".to_string()),
+            },
+            Path::new("."),
+        )
+        .expect("resolve review request");
+
+        assert_eq!(
+            resolved.prompt,
+            format!("{UNCOMMITTED_PROMPT}\n\nAdditional review instructions:\nfocus on migrations")
+        );
+        assert_eq!(
+            resolved.additional_instructions,
+            Some("focus on migrations".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_review_request_ignores_blank_additional_instructions() {
+        let resolved = resolve_review_request(
+            ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                user_facing_hint: None,
+                additional_instructions: Some("   ".to_string()),
+            },
+            Path::new("."),
+        )
+        .expect("resolve review request");
+
+        assert_eq!(resolved.prompt, UNCOMMITTED_PROMPT.to_string());
+        assert_eq!(resolved.additional_instructions, None);
     }
 }
