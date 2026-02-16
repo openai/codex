@@ -10,9 +10,9 @@ use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
-use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
@@ -1405,7 +1405,6 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -1413,6 +1412,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -1574,17 +1574,17 @@ pub(crate) fn build_specs(
     builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
-        let collab_handler = Arc::new(CollabHandler);
+        let multi_agent_handler = Arc::new(MultiAgentHandler);
         builder.push_spec(create_spawn_agent_tool());
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
         builder.push_spec(create_close_agent_tool());
-        builder.register_handler("spawn_agent", collab_handler.clone());
-        builder.register_handler("send_input", collab_handler.clone());
-        builder.register_handler("resume_agent", collab_handler.clone());
-        builder.register_handler("wait", collab_handler.clone());
-        builder.register_handler("close_agent", collab_handler);
+        builder.register_handler("spawn_agent", multi_agent_handler.clone());
+        builder.register_handler("send_input", multi_agent_handler.clone());
+        builder.register_handler("resume_agent", multi_agent_handler.clone());
+        builder.register_handler("wait", multi_agent_handler.clone());
+        builder.register_handler("close_agent", multi_agent_handler);
     }
 
     if let Some(mcp_tools) = mcp_tools {

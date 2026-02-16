@@ -34,7 +34,7 @@ use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub struct CollabHandler;
+pub struct MultiAgentHandler;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -47,7 +47,7 @@ struct CloseAgentArgs {
 }
 
 #[async_trait]
-impl ToolHandler for CollabHandler {
+impl ToolHandler for MultiAgentHandler {
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -917,7 +917,7 @@ mod tests {
                 input: "hello".to_string(),
             },
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("payload should be rejected");
         };
         assert_eq!(
@@ -937,7 +937,7 @@ mod tests {
             "unknown_tool",
             function_payload(json!({})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("tool should be rejected");
         };
         assert_eq!(
@@ -955,7 +955,7 @@ mod tests {
             "spawn_agent",
             function_payload(json!({"message": "   "})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("empty message should be rejected");
         };
         assert_eq!(
@@ -978,7 +978,7 @@ mod tests {
                 "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
             })),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("message+items should be rejected");
         };
         assert_eq!(
@@ -1016,7 +1016,7 @@ mod tests {
                 "agent_type": "explorer"
             })),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("spawn_agent should succeed");
@@ -1048,7 +1048,7 @@ mod tests {
             "spawn_agent",
             function_payload(json!({"message": "hello"})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("spawn should fail without a manager");
         };
         assert_eq!(
@@ -1074,7 +1074,7 @@ mod tests {
             "spawn_agent",
             function_payload(json!({"message": "hello"})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("spawn should fail when depth limit exceeded");
         };
         assert_eq!(
@@ -1094,7 +1094,7 @@ mod tests {
             "send_input",
             function_payload(json!({"id": ThreadId::new().to_string(), "message": ""})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("empty message should be rejected");
         };
         assert_eq!(
@@ -1118,7 +1118,7 @@ mod tests {
                 "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
             })),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("message+items should be rejected");
         };
         assert_eq!(
@@ -1138,7 +1138,7 @@ mod tests {
             "send_input",
             function_payload(json!({"id": "not-a-uuid", "message": "hi"})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("invalid id should be rejected");
         };
         let FunctionCallError::RespondToModel(msg) = err else {
@@ -1159,7 +1159,7 @@ mod tests {
             "send_input",
             function_payload(json!({"id": agent_id.to_string(), "message": "hi"})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("missing agent should be reported");
         };
         assert_eq!(
@@ -1186,7 +1186,7 @@ mod tests {
                 "interrupt": true
             })),
         );
-        CollabHandler
+        MultiAgentHandler
             .handle(invocation)
             .await
             .expect("send_input should succeed");
@@ -1227,7 +1227,7 @@ mod tests {
                 ]
             })),
         );
-        CollabHandler
+        MultiAgentHandler
             .handle(invocation)
             .await
             .expect("send_input should succeed");
@@ -1267,7 +1267,7 @@ mod tests {
             "resume_agent",
             function_payload(json!({"id": "not-a-uuid"})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("invalid id should be rejected");
         };
         let FunctionCallError::RespondToModel(msg) = err else {
@@ -1288,7 +1288,7 @@ mod tests {
             "resume_agent",
             function_payload(json!({"id": agent_id.to_string()})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("missing agent should be reported");
         };
         assert_eq!(
@@ -1313,7 +1313,7 @@ mod tests {
             function_payload(json!({"id": agent_id.to_string()})),
         );
 
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("resume_agent should succeed");
@@ -1382,7 +1382,7 @@ mod tests {
             "resume_agent",
             function_payload(json!({"id": agent_id.to_string()})),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(resume_invocation)
             .await
             .expect("resume_agent should succeed");
@@ -1405,7 +1405,7 @@ mod tests {
             "send_input",
             function_payload(json!({"id": agent_id.to_string(), "message": "hello"})),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(send_invocation)
             .await
             .expect("send_input should succeed after resume");
@@ -1450,7 +1450,7 @@ mod tests {
             "resume_agent",
             function_payload(json!({"id": ThreadId::new().to_string()})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("resume should fail when depth limit exceeded");
         };
         assert_eq!(
@@ -1479,7 +1479,7 @@ mod tests {
                 "timeout_ms": 0
             })),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("non-positive timeout should be rejected");
         };
         assert_eq!(
@@ -1497,7 +1497,7 @@ mod tests {
             "wait",
             function_payload(json!({"ids": ["invalid"]})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("invalid id should be rejected");
         };
         let FunctionCallError::RespondToModel(msg) = err else {
@@ -1515,7 +1515,7 @@ mod tests {
             "wait",
             function_payload(json!({"ids": []})),
         );
-        let Err(err) = CollabHandler.handle(invocation).await else {
+        let Err(err) = MultiAgentHandler.handle(invocation).await else {
             panic!("empty ids should be rejected");
         };
         assert_eq!(
@@ -1540,7 +1540,7 @@ mod tests {
                 "timeout_ms": 1000
             })),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("wait should succeed");
@@ -1584,7 +1584,7 @@ mod tests {
                 "timeout_ms": MIN_WAIT_TIMEOUT_MS
             })),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("wait should succeed");
@@ -1632,7 +1632,11 @@ mod tests {
             })),
         );
 
-        let early = timeout(Duration::from_millis(50), CollabHandler.handle(invocation)).await;
+        let early = timeout(
+            Duration::from_millis(50),
+            MultiAgentHandler.handle(invocation),
+        )
+        .await;
         assert!(
             early.is_err(),
             "wait should not return before the minimum timeout clamp"
@@ -1677,7 +1681,7 @@ mod tests {
                 "timeout_ms": 1000
             })),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("wait should succeed");
@@ -1717,7 +1721,7 @@ mod tests {
             "close_agent",
             function_payload(json!({"id": agent_id.to_string()})),
         );
-        let output = CollabHandler
+        let output = MultiAgentHandler
             .handle(invocation)
             .await
             .expect("close_agent should succeed");
