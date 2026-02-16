@@ -20,6 +20,7 @@ const BUILT_IN_EXPLORER_CONFIG: &str = include_str!("builtins/explorer.toml");
 const AGENTS_CONFIG_FILENAME: &str = "agents_config.toml";
 const AGENTS_CONFIG_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_ROLE_NAME: &str = "default";
+const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,34 +45,57 @@ pub(crate) async fn apply_role_to_config(
     role_name: Option<&str>,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    let user_agents_config = user_defined::config(config.codex_home.as_path())?;
     let built_in_agents_config = built_in::configs();
+    let user_agents_config = user_defined::config(config.codex_home.as_path()).map_err(|err| {
+        tracing::warn!(
+            agent_type = role_name,
+            error = %err,
+            "failed to load user-defined agents config"
+        );
+        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+    })?;
 
-    let mut agent_config = None;
-    if let Some(role) = user_agents_config.agents.get(role_name) {
+    let agent_config = if let Some(role) = user_agents_config.agents.get(role_name) {
         if let Some(config_file) = &role.config_file {
             let content = tokio::fs::read_to_string(config_file)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|err| {
+                    tracing::warn!(
+                        "failed to read user-defined role config_file: {err:?}"
+                    );
+                    AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+                })?;
             let parsed: TomlValue = toml::from_str(&content).map_err(|err| {
-                format!("failed to parse config_file for role '{role_name}': {err}")
+                tracing::warn!(
+                    "failed to read user-defined role config_file: {err:?}"
+                );
+                AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
             })?;
-            agent_config = Some(parsed);
+            Some(parsed)
+        } else {
+            None
         }
     } else if let Some(role) = built_in_agents_config.agents.get(role_name) {
         if let Some(config_file) = &role.config_file {
-            let content = built_in::config_file(config_file)
-                .ok_or_else(|| "Config file does not exist. This should not happen".to_string())?;
-            let parsed: TomlValue = toml::from_str(content).map_err(|err| {
-                format!("failed to parse config_file for role '{role_name}': {err}")
+            let content = built_in::config_file(config_file).ok_or_else(|| {
+                tracing::warn!(
+                    "failed to read user-defined role config_file."
+                );
+                AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
             })?;
-            agent_config = Some(parsed);
+            let parsed: TomlValue = toml::from_str(content).map_err(|err| {
+                tracing::warn!(
+                    "failed to read user-defined role config_file: {err:?}"
+                );
+                AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+            })?;
+            Some(parsed)
+        } else {
+            None
         }
     } else {
-        return Err(format!(
-            "unknown agent_type '{role_name}'"
-        ));
-    }
+        return Err(format!("unknown agent_type '{role_name}'"));
+    };
 
     let Some(agent_config) = agent_config else {
         return Ok(());
@@ -86,19 +110,34 @@ pub(crate) async fn apply_role_to_config(
         .cloned()
         .collect::<Vec<_>>();
 
-    layers.push(ConfigLayerEntry::new(
-        ConfigLayerSource::SessionFlags,
-        agent_config,
-    ));
+    let role_layer = ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, agent_config);
+    let role_layer_precedence = role_layer.name.precedence();
+    let role_layer_index =
+        layers.partition_point(|layer| layer.name.precedence() <= role_layer_precedence);
+    layers.insert(role_layer_index, role_layer);
     let layered_stack = ConfigLayerStack::new(
         layers,
         original_stack.requirements().clone(),
         original_stack.requirements_toml().clone(),
     )
-    .map_err(|err| format!("failed to build layered config stack: {err}"))?;
+    .map_err(|err| {
+        tracing::warn!(
+            agent_type = role_name,
+            error = %err,
+            "failed to build layered config stack for role"
+        );
+        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+    })?;
     let layered_config =
         deserialize_config_toml_with_base(layered_stack.effective_config(), &original.codex_home)
-            .map_err(|err| format!("failed to deserialize layered config: {err}"))?;
+            .map_err(|err| {
+            tracing::warn!(
+                agent_type = role_name,
+                error = %err,
+                "failed to deserialize layered config for role"
+            );
+            AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+        })?;
 
     *config = Config::load_config_with_layer_stack(
         layered_config,
@@ -110,7 +149,14 @@ pub(crate) async fn apply_role_to_config(
         original.codex_home.clone(),
         layered_stack,
     )
-    .map_err(|err| format!("failed to apply role config layer: {err}"))?;
+    .map_err(|err| {
+        tracing::warn!(
+            agent_type = role_name,
+            error = %err,
+            "failed to apply layered config for role"
+        );
+        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+    })?;
     Ok(())
 }
 
@@ -245,7 +291,21 @@ mod user_defined {
             }
         };
 
-        parse_agents_config(&contents, &config_path.display().to_string())
+        let mut parsed = parse_agents_config(&contents, &config_path.display().to_string())?;
+        let config_dir = config_path.parent().ok_or_else(|| {
+            format!(
+                "failed to resolve parent directory for '{}'",
+                config_path.display()
+            )
+        })?;
+        for role in parsed.agents.values_mut() {
+            if let Some(config_file) = role.config_file.as_mut()
+                && config_file.is_relative()
+            {
+                *config_file = config_dir.join(&*config_file);
+            }
+        }
+        Ok(parsed)
     }
 }
 
@@ -267,6 +327,7 @@ mod tests {
     use super::*;
     use crate::config::test_config;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -336,6 +397,71 @@ sandbox_mode = "read-only"
         );
     }
 
+    /// Resolves relative config_file paths from the agents_config.toml directory.
+    #[tokio::test]
+    async fn apply_role_to_config_supports_relative_custom_role_config_file() {
+        let dir = TempDir::new().expect("tempdir");
+        write_role_config_file(
+            &dir,
+            "agents/planner.toml",
+            r#"
+model = "gpt-5.1-codex"
+sandbox_mode = "read-only"
+"#,
+        );
+        write_agents_config(
+            &dir,
+            r#"
+[agents.planner]
+description = "Planning-focused role."
+config_file = "agents/planner.toml"
+"#,
+        );
+
+        let mut config = test_config();
+        config.codex_home = dir.path().to_path_buf();
+        apply_role_to_config(&mut config, Some("planner"))
+            .await
+            .expect("apply planner role");
+
+        assert_eq!(config.model, Some("gpt-5.1-codex".to_string()));
+        assert_eq!(
+            config.permissions.sandbox_policy.get(),
+            &crate::protocol::SandboxPolicy::new_read_only_policy()
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_role_to_config_reports_unknown_agent_type() {
+        let mut config = test_config();
+
+        let err = apply_role_to_config(&mut config, Some("missing"))
+            .await
+            .expect_err("missing role should fail");
+
+        assert_eq!(err, "unknown agent_type 'missing'");
+    }
+
+    #[tokio::test]
+    async fn apply_role_to_config_reports_unavailable_agent_type() {
+        let dir = TempDir::new().expect("tempdir");
+        write_agents_config(
+            &dir,
+            r#"
+[agents.planner]
+config_file = "agents/does-not-exist.toml"
+"#,
+        );
+
+        let mut config = test_config();
+        config.codex_home = dir.path().to_path_buf();
+        let err = apply_role_to_config(&mut config, Some("planner"))
+            .await
+            .expect_err("missing config file should fail");
+
+        assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    }
+
     /// Lets a user config file override a built-in role config file.
     #[tokio::test]
     async fn apply_role_to_config_lets_user_override_builtin_config_file() {
@@ -394,6 +520,42 @@ enabled_tools = ["search"]
                 .and_then(|server| server.enabled_tools.clone()),
             Some(vec!["search".to_string()])
         );
+    }
+
+    /// Inserts a role SessionFlags layer in precedence order when legacy managed
+    /// layers are already present.
+    #[tokio::test]
+    async fn apply_role_to_config_keeps_layer_ordering_with_legacy_managed_layers() {
+        let mut config = test_config();
+        let dir = TempDir::new().expect("tempdir");
+        let managed_path = dir.path().join("managed_config.toml");
+        std::fs::write(&managed_path, "").expect("write managed config");
+        let managed_file = AbsolutePathBuf::try_from(managed_path).expect("managed file");
+        config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file },
+                TomlValue::Table(toml::map::Map::new()),
+            )],
+            config.config_layer_stack.requirements().clone(),
+            config.config_layer_stack.requirements_toml().clone(),
+        )
+        .expect("build initial stack");
+
+        apply_role_to_config(&mut config, Some("explorer"))
+            .await
+            .expect("apply explorer role");
+
+        let layers = config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true);
+        assert!(matches!(
+            layers.first().map(|layer| &layer.name),
+            Some(ConfigLayerSource::SessionFlags)
+        ));
+        assert!(matches!(
+            layers.last().map(|layer| &layer.name),
+            Some(ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. })
+        ));
     }
 
     #[test]
