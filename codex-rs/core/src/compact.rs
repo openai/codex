@@ -130,6 +130,8 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         None,
+        // Manual `/compact` should not reinsert turn context into compacted history; we reseed
+        // canonical initial context before the next user turn.
         TurnContextReinjection::Skip,
         None,
     )
