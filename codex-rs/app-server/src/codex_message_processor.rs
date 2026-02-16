@@ -1816,6 +1816,11 @@ impl CodexMessageProcessor {
             developer_instructions,
             compact_prompt,
             include_apply_patch_tool,
+            // The v1 MCP interface always expects a persisted rollout path in the response.
+            // If a client tries to override `ephemeral=true` via params.config (or via profile),
+            // we'd otherwise start an ephemeral session and then immediately fail trying to
+            // return a rolloutPath, leaving a "zombie" thread in the UI.
+            ephemeral: Some(false),
             ..Default::default()
         };
 
@@ -4175,6 +4180,8 @@ impl CodexMessageProcessor {
                     developer_instructions,
                     compact_prompt,
                     include_apply_patch_tool,
+                    // v1 resumeConversation responses include rolloutPath, so force persistence.
+                    ephemeral: Some(false),
                     ..Default::default()
                 };
                 (typesafe_overrides, Some(request_overrides))
@@ -4182,6 +4189,8 @@ impl CodexMessageProcessor {
             None => (
                 ConfigOverrides {
                     codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    // v1 resumeConversation responses include rolloutPath, so force persistence.
+                    ephemeral: Some(false),
                     ..Default::default()
                 },
                 None,
@@ -4370,6 +4379,8 @@ impl CodexMessageProcessor {
                     developer_instructions,
                     compact_prompt,
                     include_apply_patch_tool,
+                    // v1 forkConversation responses include rolloutPath, so force persistence.
+                    ephemeral: Some(false),
                     ..Default::default()
                 };
 
@@ -4378,6 +4389,8 @@ impl CodexMessageProcessor {
             None => (
                 ConfigOverrides {
                     codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    // v1 forkConversation responses include rolloutPath, so force persistence.
+                    ephemeral: Some(false),
                     ..Default::default()
                 },
                 None,

@@ -14,6 +14,7 @@ use codex_app_server_protocol::SendUserMessageResponse;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -114,6 +115,45 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
     );
 
     drop(server);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_new_conversation_ignores_ephemeral_override() -> Result<()> {
+    // Even if a client tries to set `ephemeral=true` via params.config, v1 newConversation
+    // must always return a rolloutPath.
+    let server = responses::start_mock_server().await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let mut overrides = HashMap::new();
+    overrides.insert("ephemeral".to_string(), json!(true));
+
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            config: Some(overrides),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await??;
+
+    let NewConversationResponse { rollout_path, .. } =
+        to_response::<NewConversationResponse>(resp)?;
+    assert!(
+        rollout_path.is_absolute(),
+        "expected rollout_path to be absolute, got {}",
+        rollout_path.display()
+    );
+
     Ok(())
 }
 
