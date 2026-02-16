@@ -50,6 +50,22 @@ from .protocol_types import (
 
 ApprovalHandler = Callable[[str, dict[str, Any] | None], dict[str, Any]]
 
+_TYPED_NOTIFICATION_PARSERS = {
+    "turn/completed": TurnCompletedEvent,
+    "turn/started": TurnStartedEvent,
+    "thread/started": ThreadStartedEvent,
+    "item/agentMessage/delta": AgentMessageDeltaEvent,
+    "error": ErrorEvent,
+}
+
+_SCHEMA_NOTIFICATION_PARSERS = {
+    "turn/completed": SchemaTurnCompletedNotificationPayload,
+    "turn/started": SchemaTurnStartedNotificationPayload,
+    "thread/started": SchemaThreadStartedNotificationPayload,
+    "item/agentMessage/delta": SchemaAgentMessageDeltaNotificationPayload,
+    "error": SchemaErrorNotificationPayload,
+}
+
 
 @dataclass(slots=True)
 class AppServerConfig:
@@ -268,6 +284,9 @@ class AppServerClient:
     ) -> TurnStartResult:
         return TurnStartResult.from_dict(self.turn_start(thread_id, input_items, **params))
 
+    def turn_text_typed(self, thread_id: str, text: str, **params: Any) -> TurnStartResult:
+        return TurnStartResult.from_dict(self.turn_text(thread_id, text, **params))
+
     def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
         return SchemaThreadStartResponse.from_dict(self.thread_start(**params))
 
@@ -304,18 +323,7 @@ class AppServerClient:
         | ErrorEvent
         | None
     ):
-        params = notification.params or {}
-        if notification.method == "turn/completed":
-            return TurnCompletedEvent.from_dict(params)
-        if notification.method == "turn/started":
-            return TurnStartedEvent.from_dict(params)
-        if notification.method == "thread/started":
-            return ThreadStartedEvent.from_dict(params)
-        if notification.method == "item/agentMessage/delta":
-            return AgentMessageDeltaEvent.from_dict(params)
-        if notification.method == "error":
-            return ErrorEvent.from_dict(params)
-        return None
+        return self._parse_notification_with(notification, _TYPED_NOTIFICATION_PARSERS)
 
     def parse_notification_schema(
         self, notification: Notification
@@ -327,18 +335,7 @@ class AppServerClient:
         | SchemaErrorNotificationPayload
         | None
     ):
-        params = notification.params or {}
-        if notification.method == "turn/completed":
-            return SchemaTurnCompletedNotificationPayload.from_dict(params)
-        if notification.method == "turn/started":
-            return SchemaTurnStartedNotificationPayload.from_dict(params)
-        if notification.method == "thread/started":
-            return SchemaThreadStartedNotificationPayload.from_dict(params)
-        if notification.method == "item/agentMessage/delta":
-            return SchemaAgentMessageDeltaNotificationPayload.from_dict(params)
-        if notification.method == "error":
-            return SchemaErrorNotificationPayload.from_dict(params)
-        return None
+        return self._parse_notification_with(notification, _SCHEMA_NOTIFICATION_PARSERS)
 
     def request_with_retry_on_overload(
         self,
@@ -405,6 +402,12 @@ class AppServerClient:
         return thread_id, assistant_text
 
     # ---------- Internals ----------
+
+    def _parse_notification_with(self, notification: Notification, parsers: dict[str, Any]) -> Any | None:
+        parser = parsers.get(notification.method)
+        if parser is None:
+            return None
+        return parser.from_dict(notification.params or {})
 
     def _normalize_input_items(
         self, input_items: list[dict[str, Any]] | dict[str, Any] | str

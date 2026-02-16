@@ -125,6 +125,10 @@ def test_typed_wrappers_and_ask_helper_and_approval_flow():
         started = client.thread_start_typed(model="gpt-5")
         assert started.thread.id.startswith("thr_")
 
+        text_turn = client.turn_text_typed(started.thread.id, "hello")
+        assert text_turn.turn.id.startswith("turn_")
+        client.wait_for_turn_completed(text_turn.turn.id)
+
         # Ensure default approval handler responds to server requests.
         turn = client.turn_start(
             started.thread.id,
@@ -170,6 +174,9 @@ def test_async_conversation_and_schema_wrappers():
         async with AsyncAppServerClient(cfg) as client:
             await client.initialize()
 
+            started_typed = await client.thread_start_typed(model="gpt-5")
+            assert started_typed.thread.id.startswith("thr_")
+
             conv = await client.conversation_start(model="gpt-5")
             assert conv.thread_id.startswith("thr_")
 
@@ -189,6 +196,13 @@ def test_async_conversation_and_schema_wrappers():
 
             resumed = await client.thread_resume_schema(conv.thread_id)
             assert resumed.thread.id == conv.thread_id
+
+            typed_turn = await client.turn_text_typed(conv.thread_id, "typed hello")
+            assert typed_turn.turn.id.startswith("turn_")
+
+            first = await client.next_notification()
+            parsed = await client.parse_notification_typed(first)
+            assert parsed is not None
 
     asyncio.run(_run())
 

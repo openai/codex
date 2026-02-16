@@ -6,8 +6,9 @@ These tests mirror the intent of Rust suite cases in a transport-focused way:
 - interrupt
 """
 
-from codex_app_server import AppServerClient, AppServerConfig
 from pathlib import Path
+
+from codex_app_server import AppServerClient, AppServerConfig
 
 FAKE = Path(__file__).parent / "fake_app_server.py"
 
