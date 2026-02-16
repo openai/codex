@@ -1,5 +1,6 @@
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -13,40 +14,155 @@ use textwrap::wrap;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
+use super::scroll_state::ScrollState;
+use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::measure_rows_height;
+use super::selection_popup_common::render_rows;
+use crate::app_event::AppEvent;
+use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
 use crate::wrapping::word_wrap_lines;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppLinkScreen {
+    Link,
+    InstallConfirmation,
+}
+
+pub(crate) struct AppLinkViewParams {
+    pub(crate) app_id: String,
+    pub(crate) title: String,
+    pub(crate) description: Option<String>,
+    pub(crate) instructions: String,
+    pub(crate) url: String,
+    pub(crate) is_installed: bool,
+    pub(crate) is_enabled: bool,
+}
+
 pub(crate) struct AppLinkView {
+    app_id: String,
     title: String,
     description: Option<String>,
     instructions: String,
     url: String,
     is_installed: bool,
+    is_enabled: bool,
+    app_event_tx: AppEventSender,
+    screen: AppLinkScreen,
+    selected_action: usize,
     complete: bool,
 }
 
 impl AppLinkView {
-    pub(crate) fn new(
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-    ) -> Self {
-        Self {
+    pub(crate) fn new(params: AppLinkViewParams, app_event_tx: AppEventSender) -> Self {
+        let AppLinkViewParams {
+            app_id,
             title,
             description,
             instructions,
             url,
             is_installed,
+            is_enabled,
+        } = params;
+        Self {
+            app_id,
+            title,
+            description,
+            instructions,
+            url,
+            is_installed,
+            is_enabled,
+            app_event_tx,
+            screen: AppLinkScreen::Link,
+            selected_action: 0,
             complete: false,
         }
     }
 
+    fn action_labels(&self) -> Vec<&'static str> {
+        match self.screen {
+            AppLinkScreen::Link => {
+                if self.is_installed {
+                    vec![
+                        "Manage on ChatGPT",
+                        if self.is_enabled {
+                            "Disable app"
+                        } else {
+                            "Enable app"
+                        },
+                        "Back",
+                    ]
+                } else {
+                    vec!["Install on ChatGPT", "Back"]
+                }
+            }
+            AppLinkScreen::InstallConfirmation => vec!["I already Installed it", "Back"],
+        }
+    }
+
+    fn move_selection_prev(&mut self) {
+        self.selected_action = self.selected_action.saturating_sub(1);
+    }
+
+    fn move_selection_next(&mut self) {
+        self.selected_action = (self.selected_action + 1).min(self.action_labels().len() - 1);
+    }
+
+    fn open_chatgpt_link(&mut self) {
+        self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
+            url: self.url.clone(),
+        });
+        if !self.is_installed {
+            self.screen = AppLinkScreen::InstallConfirmation;
+            self.selected_action = 0;
+        }
+    }
+
+    fn refresh_connectors_and_close(&mut self) {
+        self.app_event_tx.send(AppEvent::RefreshConnectors {
+            force_refetch: true,
+        });
+        self.complete = true;
+    }
+
+    fn back_to_link_screen(&mut self) {
+        self.screen = AppLinkScreen::Link;
+        self.selected_action = 0;
+    }
+
+    fn toggle_enabled(&mut self) {
+        self.is_enabled = !self.is_enabled;
+        self.app_event_tx.send(AppEvent::SetAppEnabled {
+            id: self.app_id.clone(),
+            enabled: self.is_enabled,
+        });
+    }
+
+    fn activate_selected_action(&mut self) {
+        match self.screen {
+            AppLinkScreen::Link => match self.selected_action {
+                0 => self.open_chatgpt_link(),
+                1 if self.is_installed => self.toggle_enabled(),
+                _ => self.complete = true,
+            },
+            AppLinkScreen::InstallConfirmation => match self.selected_action {
+                0 => self.refresh_connectors_and_close(),
+                _ => self.back_to_link_screen(),
+            },
+        }
+    }
+
     fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
+        match self.screen {
+            AppLinkScreen::Link => self.link_content_lines(width),
+            AppLinkScreen::InstallConfirmation => self.install_confirmation_lines(width),
+        }
+    }
+
+    fn link_content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let usable_width = width.max(1) as usize;
         let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -61,6 +177,7 @@ impl AppLinkView {
                 lines.push(Line::from(line.into_owned().dim()));
             }
         }
+
         lines.push(Line::from(""));
         if self.is_installed {
             for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
@@ -91,21 +208,155 @@ impl AppLinkView {
             lines.push(Line::from(""));
         }
 
-        lines.push(Line::from(vec!["Open:".dim()]));
+        lines
+    }
+
+    fn install_confirmation_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let usable_width = width.max(1) as usize;
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        lines.push(Line::from("Finish App Setup".bold()));
+        lines.push(Line::from(""));
+
+        for line in wrap(
+            "Complete app setup on ChatGPT in the browser window that just opened.",
+            usable_width,
+        ) {
+            lines.push(Line::from(line.into_owned()));
+        }
+        for line in wrap(
+            "Sign in there if needed, then return here and select \"I already Installed it\".",
+            usable_width,
+        ) {
+            lines.push(Line::from(line.into_owned()));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec!["Setup URL:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
         lines.extend(word_wrap_lines(vec![url_line], usable_width));
 
         lines
     }
+
+    fn action_rows(&self) -> Vec<GenericDisplayRow> {
+        self.action_labels()
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let prefix = if self.selected_action == index {
+                    '›'
+                } else {
+                    ' '
+                };
+                GenericDisplayRow {
+                    name: format!("{prefix} {}. {label}", index + 1),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    fn action_state(&self) -> ScrollState {
+        let mut state = ScrollState::new();
+        state.selected_idx = Some(self.selected_action);
+        state
+    }
+
+    fn action_rows_height(&self, width: u16) -> u16 {
+        let rows = self.action_rows();
+        let state = self.action_state();
+        measure_rows_height(&rows, &state, rows.len().max(1), width.max(1))
+    }
+
+    fn hint_line(&self) -> Line<'static> {
+        Line::from(vec![
+            "Use ".into(),
+            key_hint::plain(KeyCode::Tab).into(),
+            " / ".into(),
+            key_hint::plain(KeyCode::Up).into(),
+            " ".into(),
+            key_hint::plain(KeyCode::Down).into(),
+            " to move, ".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " to select, ".into(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to close".into(),
+        ])
+    }
 }
 
 impl BottomPaneView for AppLinkView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if let KeyEvent {
-            code: KeyCode::Esc, ..
-        } = key_event
-        {
-            self.on_ctrl_c();
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.on_ctrl_c();
+            }
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Left,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_selection_prev(),
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Right,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_selection_next(),
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(index) = c
+                    .to_digit(10)
+                    .and_then(|digit| digit.checked_sub(1))
+                    .map(|index| index as usize)
+                    && index < self.action_labels().len()
+                {
+                    self.selected_action = index;
+                    self.activate_selected_action();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.activate_selected_action(),
+            _ => {}
         }
     }
 
@@ -123,7 +374,8 @@ impl crate::render::renderable::Renderable for AppLinkView {
     fn desired_height(&self, width: u16) -> u16 {
         let content_width = width.saturating_sub(4).max(1);
         let content_lines = self.content_lines(content_width);
-        content_lines.len() as u16 + 3
+        let action_rows_height = self.action_rows_height(content_width);
+        content_lines.len() as u16 + action_rows_height + 3
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -135,12 +387,37 @@ impl crate::render::renderable::Renderable for AppLinkView {
             .style(user_message_style())
             .render(area, buf);
 
-        let [content_area, hint_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let actions_height = self.action_rows_height(area.width.saturating_sub(4));
+        let [content_area, actions_area, hint_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(actions_height),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
         let inner = content_area.inset(Insets::vh(1, 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
         Paragraph::new(lines).render(inner, buf);
+
+        if actions_area.height > 0 {
+            let actions_area = Rect {
+                x: actions_area.x.saturating_add(2),
+                y: actions_area.y,
+                width: actions_area.width.saturating_sub(2),
+                height: actions_area.height,
+            };
+            let action_rows = self.action_rows();
+            let action_state = self.action_state();
+            render_rows(
+                actions_area,
+                buf,
+                &action_rows,
+                &action_state,
+                action_rows.len().max(1),
+                "No actions",
+            );
+        }
 
         if hint_area.height > 0 {
             let hint_area = Rect {
@@ -149,15 +426,71 @@ impl crate::render::renderable::Renderable for AppLinkView {
                 width: hint_area.width.saturating_sub(2),
                 height: hint_area.height,
             };
-            hint_line().dim().render(hint_area, buf);
+            self.hint_line().dim().render(hint_area, buf);
         }
     }
 }
 
-fn hint_line() -> Line<'static> {
-    Line::from(vec![
-        "Press ".into(),
-        key_hint::plain(KeyCode::Esc).into(),
-        " to close".into(),
-    ])
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn installed_app_has_toggle_action() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Disable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn toggle_action_sends_set_app_enabled_and_updates_label() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetAppEnabled { id, enabled }) => {
+                assert_eq!(id, "connector_1");
+                assert!(!enabled);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert_eq!(
+            view.action_labels(),
+            vec!["Manage on ChatGPT", "Enable app", "Back"]
+        );
+    }
 }

@@ -46,12 +46,16 @@ pub struct ClientInfo {
 }
 
 /// Client-declared capabilities negotiated during initialize.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeCapabilities {
     /// Opt into receiving experimental API methods and fields.
     #[serde(default)]
     pub experimental_api: bool,
+    /// Exact notification method names that should be suppressed for this
+    /// connection (for example `codex/event/session_configured`).
+    #[ts(optional = nullable)]
+    pub opt_out_notification_methods: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

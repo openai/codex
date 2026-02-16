@@ -76,6 +76,7 @@ async fn run_cmd_result_with_writable_roots(
         expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
         network: None,
+        network_attempt_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
@@ -87,6 +88,7 @@ async fn run_cmd_result_with_writable_roots(
             .iter()
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
+        read_only_access: Default::default(),
         network_access: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
@@ -122,7 +124,7 @@ async fn should_skip_bwrap_tests() -> bool {
     .await
     {
         Ok(output) => is_bwrap_unavailable_output(&output),
-        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => {
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
             is_bwrap_unavailable_output(&output)
         }
         // Probe timeouts are not actionable for the bwrap-specific assertions below;
@@ -141,7 +143,7 @@ fn expect_denied(
             assert_ne!(output.exit_code, 0, "{context}: expected nonzero exit code");
             output
         }
-        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => *output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => *output,
         Err(err) => panic!("{context}: {err:?}"),
     }
 }
@@ -199,7 +201,9 @@ async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
         &[],
-        SHORT_TIMEOUT_MS,
+        // We have seen timeouts when running this test in CI on GitHub,
+        // so we are using a generous timeout until we can diagnose further.
+        LONG_TIMEOUT_MS,
     )
     .await;
     let line = output
@@ -233,6 +237,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
         network: None,
+        network_attempt_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         justification: None,
@@ -254,7 +259,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
 
     let output = match result {
         Ok(output) => output,
-        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => *output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => *output,
         _ => {
             panic!("expected sandbox denied error, got: {result:?}");
         }

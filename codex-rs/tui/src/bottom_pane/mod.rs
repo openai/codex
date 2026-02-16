@@ -44,6 +44,7 @@ mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
 pub(crate) use app_link_view::AppLinkView;
+pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -158,7 +159,10 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
-    /// Unified exec session summary shown above the composer.
+    /// Unified exec session summary source.
+    ///
+    /// When a status row exists, this summary is mirrored inline in that row;
+    /// when no status row exists, it renders as its own footer row.
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
@@ -246,6 +250,7 @@ impl BottomPane {
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
+        let _ = self.take_remote_image_urls();
         let _ = self.take_recent_submission_mention_bindings();
         let _ = self.take_mention_bindings();
     }
@@ -516,6 +521,21 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
+        self.composer.set_remote_image_urls(urls);
+        self.request_redraw();
+    }
+
+    pub(crate) fn remote_image_urls(&self) -> Vec<String> {
+        self.composer.remote_image_urls()
+    }
+
+    pub(crate) fn take_remote_image_urls(&mut self) -> Vec<String> {
+        let urls = self.composer.take_remote_image_urls();
+        self.request_redraw();
+        urls
+    }
+
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
@@ -606,6 +626,7 @@ impl BottomPane {
                 if let Some(status) = self.status.as_mut() {
                     status.set_interrupt_hint_visible(true);
                 }
+                self.sync_status_inline_message();
                 self.request_redraw();
             }
         } else {
@@ -628,6 +649,7 @@ impl BottomPane {
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
+            self.sync_status_inline_message();
             self.request_redraw();
         }
     }
@@ -684,9 +706,24 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the unified-exec process set and refresh whichever summary surface is active.
+    ///
+    /// The summary may be displayed inline in the status row or as a dedicated
+    /// footer row depending on whether a status indicator is currently visible.
     pub(crate) fn set_unified_exec_processes(&mut self, processes: Vec<String>) {
         if self.unified_exec_footer.set_processes(processes) {
+            self.sync_status_inline_message();
             self.request_redraw();
+        }
+    }
+
+    /// Copy unified-exec summary text into the active status row, if any.
+    ///
+    /// This keeps status-line inline text synchronized without forcing the
+    /// standalone unified-exec footer row to be visible.
+    fn sync_status_inline_message(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.update_inline_message(self.unified_exec_footer.summary_text());
         }
     }
 
@@ -884,7 +921,9 @@ impl BottomPane {
             if let Some(status) = &self.status {
                 flex.push(0, RenderableItem::Borrowed(status));
             }
-            if !self.unified_exec_footer.is_empty() {
+            // Avoid double-surfacing the same summary and avoid adding an extra
+            // row while the status line is already visible.
+            if self.status.is_none() && !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
@@ -967,6 +1006,7 @@ mod tests {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
             reason: None,
+            network_approval_context: None,
             proposed_execpolicy_amendment: None,
         }
     }
@@ -1178,6 +1218,35 @@ mod tests {
     }
 
     #[test]
+    fn unified_exec_summary_does_not_increase_height_when_status_visible() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        let width = 120;
+        let before = pane.desired_height(width);
+
+        pane.set_unified_exec_processes(vec!["sleep 5".to_string()]);
+        let after = pane.desired_height(width);
+
+        assert_eq!(after, before);
+
+        let area = Rect::new(0, 0, width, after);
+        let rendered = render_snapshot(&pane, area);
+        assert!(rendered.contains("background terminal running · /ps to view"));
+    }
+
+    #[test]
     fn status_with_details_and_queued_messages_snapshot() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1264,6 +1333,58 @@ mod tests {
     }
 
     #[test]
+    fn remote_images_render_above_composer_text() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_remote_image_urls(vec![
+            "https://example.com/one.png".to_string(),
+            "data:image/png;base64,aGVsbG8=".to_string(),
+        ]);
+
+        assert_eq!(pane.composer_text(), "");
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let snapshot = render_snapshot(&pane, area);
+        assert!(snapshot.contains("[Image #1]"));
+        assert!(snapshot.contains("[Image #2]"));
+    }
+
+    #[test]
+    fn drain_pending_submission_state_clears_remote_image_urls() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
+        assert_eq!(pane.remote_image_urls().len(), 1);
+
+        pane.drain_pending_submission_state();
+
+        assert!(pane.remote_image_urls().is_empty());
+    }
+
+    #[test]
     fn esc_with_skill_popup_does_not_interrupt_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1281,6 +1402,8 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
+                policy: None,
+                permissions: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

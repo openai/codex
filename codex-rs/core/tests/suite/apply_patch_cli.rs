@@ -23,6 +23,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
@@ -578,6 +579,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -634,6 +636,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -783,9 +786,13 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                     } else {
                         "cat source.txt"
                     };
+                    let args = json!({
+                        "command": command,
+                        "login": false,
+                    });
                     let body = sse(vec![
                         ev_response_created("resp-1"),
-                        ev_shell_command_call(&self.read_call_id, command),
+                        ev_shell_command_call_with_args(&self.read_call_id, &args),
                         ev_completed("resp-1"),
                     ]);
                     ResponseTemplate::new(200)

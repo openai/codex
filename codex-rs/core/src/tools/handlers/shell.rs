@@ -53,7 +53,8 @@ impl ShellHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
-            network: turn_context.config.network.clone(),
+            network: turn_context.network.clone(),
+            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -82,7 +83,8 @@ impl ShellCommandHandler {
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
-            network: turn_context.config.network.clone(),
+            network: turn_context.network.clone(),
+            network_attempt_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification.clone(),
@@ -325,10 +327,12 @@ impl ShellHandler {
             turn: turn.as_ref(),
             call_id: call_id.clone(),
             tool_name,
+            network_attempt_id: None,
         };
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
-            .await;
+            .await
+            .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {
@@ -444,7 +448,7 @@ mod tests {
         assert_eq!(exec_params.command, expected_command);
         assert_eq!(exec_params.cwd, expected_cwd);
         assert_eq!(exec_params.env, expected_env);
-        assert_eq!(exec_params.network, turn_context.config.network);
+        assert_eq!(exec_params.network, turn_context.network);
         assert_eq!(exec_params.expiration.timeout_ms(), timeout_ms);
         assert_eq!(exec_params.sandbox_permissions, sandbox_permissions);
         assert_eq!(exec_params.justification, justification);
@@ -455,6 +459,7 @@ mod tests {
     fn shell_command_handler_respects_explicit_login_flag() {
         let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
             path: PathBuf::from("/tmp/snapshot.sh"),
+            cwd: PathBuf::from("/tmp"),
         })));
         let shell = Shell {
             shell_type: ShellType::Bash,

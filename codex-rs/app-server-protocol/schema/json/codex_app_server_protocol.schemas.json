@@ -208,7 +208,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -338,7 +338,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "previousAccountId": {
-          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior ID token did not include a workspace identifier (`chatgpt_account_id`) or when the token could not be parsed.",
+          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior auth state did not include a workspace identifier (`chatgpt_account_id`).",
           "type": [
             "string",
             "null"
@@ -371,13 +371,19 @@
         "accessToken": {
           "type": "string"
         },
-        "idToken": {
+        "chatgptAccountId": {
           "type": "string"
+        },
+        "chatgptPlanType": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "accessToken",
-        "idToken"
+        "chatgptAccountId"
       ],
       "title": "ChatgptAuthTokensRefreshResponse",
       "type": "object"
@@ -1878,6 +1884,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -1886,35 +1893,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -2567,6 +2545,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -2576,6 +2557,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -2590,6 +2572,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -2599,6 +2584,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -2893,6 +2879,17 @@
             },
             "model_provider_id": {
               "type": "string"
+            },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
             },
             "reasoning_effort": {
               "anyOf": [
@@ -3365,6 +3362,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -3393,6 +3398,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -3444,6 +3450,17 @@
             "cwd": {
               "description": "The command's working directory.",
               "type": "string"
+            },
+            "network_approval_context": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NetworkApprovalContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional network context for a blocked request that can be approved."
             },
             "parsed_cmd": {
               "items": {
@@ -3821,6 +3838,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/PatchApplyStatus"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -3848,6 +3873,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -4124,6 +4150,12 @@
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -4939,6 +4971,14 @@
       ],
       "type": "string"
     },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "ExecOneOffCommandParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5383,6 +5423,43 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchSessionCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionCompletedNotification",
+      "type": "object"
+    },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          },
+          "type": "array"
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "files",
+        "query",
+        "sessionId"
+      ],
+      "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "type": "object"
+    },
     "GetAuthStatusParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5593,6 +5670,16 @@
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -6187,6 +6274,30 @@
       ],
       "type": "string"
     },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
+      ],
+      "type": "string"
+    },
     "NewConversationParams": {
       "properties": {
         "approvalPolicy": {
@@ -6409,6 +6520,14 @@
         }
       ]
     },
+    "PatchApplyStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "PlanItemArg": {
       "additionalProperties": false,
       "properties": {
@@ -6514,6 +6633,18 @@
             }
           ]
         },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "plan_type": {
           "anyOf": [
             {
@@ -6575,6 +6706,57 @@
         "used_percent"
       ],
       "type": "object"
+    },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -7589,8 +7771,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -7648,6 +7838,14 @@
               "default": false,
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
+            },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
             },
             "type": {
               "enum": [
@@ -8334,6 +8532,46 @@
           "type": "object"
         },
         {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionUpdated"
+              ],
+              "title": "FuzzyFileSearch/sessionUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionUpdatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fuzzyFileSearch/sessionCompleted"
+              ],
+              "title": "FuzzyFileSearch/sessionCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FuzzyFileSearchSessionCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "FuzzyFileSearch/sessionCompletedNotification",
+          "type": "object"
+        },
+        {
           "description": "Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.",
           "properties": {
             "method": {
@@ -8672,6 +8910,25 @@
       "title": "SessionConfiguredNotification",
       "type": "object"
     },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
+      ],
+      "type": "object"
+    },
     "SessionSource": {
       "oneOf": [
         {
@@ -8937,7 +9194,8 @@
         {
           "enum": [
             "review",
-            "compact"
+            "compact",
+            "memory_consolidation"
           ],
           "type": "string"
         },
@@ -10012,6 +10270,11 @@
             "default": false,
             "type": "boolean"
           },
+          "isEnabled": {
+            "default": true,
+            "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
+            "type": "boolean"
+          },
           "logoUrl": {
             "type": [
               "string",
@@ -10075,6 +10338,13 @@
             "minimum": 0.0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "threadId": {
+            "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
+            "type": [
+              "string",
               "null"
             ]
           }
@@ -10200,6 +10470,7 @@
             "enum": [
               "contextWindowExceeded",
               "usageLimitExceeded",
+              "serverOverloaded",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -10208,35 +10479,6 @@
               "other"
             ],
             "type": "string"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "modelCap": {
-                "properties": {
-                  "model": {
-                    "type": "string"
-                  },
-                  "reset_after_seconds": {
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                      "integer",
-                      "null"
-                    ]
-                  }
-                },
-                "required": [
-                  "model"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "modelCap"
-            ],
-            "title": "ModelCapCodexErrorInfo",
-            "type": "object"
           },
           {
             "additionalProperties": false,
@@ -11770,7 +12012,22 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "rateLimits": {
-            "$ref": "#/definitions/v2/RateLimitSnapshot"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              }
+            ],
+            "description": "Backward-compatible single-bucket view; mirrors the historical payload."
+          },
+          "rateLimitsByLimitId": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/RateLimitSnapshot"
+            },
+            "description": "Multi-bucket view keyed by metered `limit_id` (for example, `codex`).",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12071,12 +12328,19 @@
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
-                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
+                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
                 "type": "string"
               },
-              "idToken": {
-                "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
+              "chatgptAccountId": {
+                "description": "Workspace/account identifier supplied by the client.",
                 "type": "string"
+              },
+              "chatgptPlanType": {
+                "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": {
                 "enum": [
@@ -12088,7 +12352,7 @@
             },
             "required": [
               "accessToken",
-              "idToken",
+              "chatgptAccountId",
               "type"
             ],
             "title": "ChatgptAuthTokensv2::LoginAccountParams",
@@ -12382,6 +12646,9 @@
           "displayName": {
             "type": "string"
           },
+          "hidden": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -12422,6 +12689,7 @@
           "defaultReasoningEffort",
           "description",
           "displayName",
+          "hidden",
           "id",
           "isDefault",
           "model",
@@ -12436,6 +12704,13 @@
             "description": "Opaque pagination cursor returned by a previous call.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "includeHidden": {
+            "description": "When true, include models that are hidden from the default picker list.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -12778,6 +13053,18 @@
               }
             ]
           },
+          "limitId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limitName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "planType": {
             "anyOf": [
               {
@@ -12857,6 +13144,53 @@
         ],
         "title": "RawResponseItemCompletedNotification",
         "type": "object"
+      },
+      "ReadOnlyAccess": {
+        "oneOf": [
+          {
+            "properties": {
+              "includePlatformDefaults": {
+                "default": true,
+                "type": "boolean"
+              },
+              "readableRoots": {
+                "default": [],
+                "items": {
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "restricted"
+                ],
+                "title": "RestrictedReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "RestrictedReadOnlyAccess",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "fullAccess"
+                ],
+                "title": "FullAccessReadOnlyAccessType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "FullAccessReadOnlyAccess",
+            "type": "object"
+          }
+        ]
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -13698,6 +14032,16 @@
           },
           {
             "properties": {
+              "access": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
+              },
               "type": {
                 "enum": [
                   "readOnly"
@@ -13749,6 +14093,16 @@
               "networkAccess": {
                 "default": false,
                 "type": "boolean"
+              },
+              "readOnlyAccess": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReadOnlyAccess"
+                  }
+                ],
+                "default": {
+                  "type": "fullAccess"
+                }
               },
               "type": {
                 "enum": [
@@ -14079,6 +14433,24 @@
         ],
         "type": "object"
       },
+      "SkillsListExtraRootsForCwd": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "extraUserRoots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cwd",
+          "extraUserRoots"
+        ],
+        "type": "object"
+      },
       "SkillsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14092,6 +14464,17 @@
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"
+          },
+          "perCwdExtraUserRoots": {
+            "default": null,
+            "description": "Optional per-cwd extra roots to scan as user-scoped skills.",
+            "items": {
+              "$ref": "#/definitions/v2/SkillsListExtraRootsForCwd"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "title": "SkillsListParams",
@@ -14177,7 +14560,8 @@
           {
             "enum": [
               "review",
-              "compact"
+              "compact",
+              "memory_consolidation"
             ],
             "type": "string"
           },
@@ -15026,6 +15410,13 @@
           },
           "cursor": {
             "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cwd": {
+            "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
             "type": [
               "string",
               "null"

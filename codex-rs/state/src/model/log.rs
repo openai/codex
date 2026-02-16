@@ -9,6 +9,7 @@ pub struct LogEntry {
     pub target: String,
     pub message: Option<String>,
     pub thread_id: Option<String>,
+    pub process_uuid: Option<String>,
     pub module_path: Option<String>,
     pub file: Option<String>,
     pub line: Option<i64>,
@@ -23,6 +24,7 @@ pub struct LogRow {
     pub target: String,
     pub message: Option<String>,
     pub thread_id: Option<String>,
+    pub process_uuid: Option<String>,
     pub file: Option<String>,
     pub line: Option<i64>,
 }

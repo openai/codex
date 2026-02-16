@@ -1,4 +1,3 @@
-use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
@@ -16,7 +15,7 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
@@ -38,6 +37,8 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -572,7 +573,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let auth_manager =
         match CodexAuth::from_auth_storage(codex_home.path(), AuthCredentialsStoreMode::File) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(Some(auth)) => codex_core::test_support::auth_manager_from_auth(auth),
             Ok(None) => panic!("No CodexAuth found in codex_home"),
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
@@ -664,6 +665,77 @@ async fn includes_user_instructions_message_in_request() {
     assert_message_role(&request_body["input"][2], "user");
     assert_message_starts_with(&request_body["input"][2], "<environment_context>");
     assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_apps_guidance_as_developer_message_when_enabled() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config.features.enable(Feature::Apps);
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let input = request_body["input"].as_array().expect("input array");
+    let apps_snippet = "Apps are mentioned in the prompt in the format";
+
+    let has_developer_apps_guidance = input.iter().any(|item| {
+        item.get("role").and_then(|value| value.as_str()) == Some("developer")
+            && item
+                .get("content")
+                .and_then(|value| value.as_array())
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains(apps_snippet))
+    });
+    assert!(
+        has_developer_apps_guidance,
+        "expected apps guidance in a developer message, got {input:#?}"
+    );
+
+    let has_user_apps_guidance = input.iter().any(|item| {
+        item.get("role").and_then(|value| value.as_str()) == Some("user")
+            && item
+                .get("content")
+                .and_then(|value| value.as_array())
+                .and_then(|value| value.first())
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str())
+                .is_some_and(|text| text.contains(apps_snippet))
+    });
+    assert!(
+        !has_user_apps_guidance,
+        "did not expect apps guidance in user messages, got {input:#?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -901,8 +973,8 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                 text_elements: Vec::new(),
             }],
             cwd: config.cwd.clone(),
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
             summary: config.model_reasoning_summary,
@@ -1246,12 +1318,14 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     config.model_provider = provider.clone();
     let effort = config.model_reasoning_effort;
     let summary = config.model_reasoning_summary;
-    let model = ModelsManager::get_model_offline(config.model.as_deref());
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     config.model = Some(model.clone());
     let config = Arc::new(config);
-    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let conversation_id = ThreadId::new();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
@@ -1437,6 +1511,8 @@ async fn token_count_includes_rate_limits_snapshot() {
         json!({
             "info": null,
             "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
@@ -1486,6 +1562,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "model_context_window": 258400
             },
             "rate_limits": {
+                "limit_id": "codex",
+                "limit_name": null,
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
@@ -1558,6 +1636,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let codex = codex_fixture.codex.clone();
 
     let expected_limits = json!({
+        "limit_id": "codex",
+        "limit_name": null,
         "primary": {
             "used_percent": 100.0,
             "window_minutes": 15,
@@ -1706,6 +1786,64 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let incomplete_response = sse(vec![
+        ev_response_created("resp_incomplete"),
+        ev_message_item_added("msg_incomplete", "partial content"),
+        ev_output_text_delta("continued chunk"),
+        json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_incomplete",
+                "object": "response",
+                "status": "incomplete",
+                "error": null,
+                "incomplete_details": {
+                    "reason": "content_filter"
+                }
+            }
+        }),
+    ]);
+
+    let responses_mock = mount_sse_once(&server, incomplete_response).await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build(&server)
+        .await?;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger incomplete".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err)
+                if err.message
+                    == "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+        ),
+        "expected incomplete content filter error; got {error_event:?}"
+    );
+
+    assert_eq!(responses_mock.requests().len(), 1);
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 

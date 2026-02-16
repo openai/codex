@@ -15,13 +15,18 @@ In the codex-rs folder where the rust code lives:
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
+- If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` from the
+  repo root to refresh `MODULE.bazel.lock`, and include that lockfile update in the same change.
+- After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
+  locally before CI.
+- Do not create small helper methods that are referenced only once.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
-Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
+Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
 ## TUI style conventions
 
@@ -59,7 +64,14 @@ See `codex-rs/tui/styles.md`.
 
 ### Snapshot tests
 
-This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
+This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output.
+
+**Requirement:** any change that affects user-visible UI (including adding new UI) must include
+corresponding `insta` snapshot coverage (add a new snapshot test if one doesn't exist yet, or
+update the existing snapshot). Review and accept snapshot updates as part of the PR so UI impact
+is easy to review and future diffs stay visual.
+
+When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
   - `cargo test -p codex-tui`
@@ -157,3 +169,5 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
   `just write-app-server-schema`
   (and `just write-app-server-schema --experimental` when experimental API fixtures are affected).
 - Validate with `cargo test -p codex-app-server-protocol`.
+- Avoid boilerplate tests that only assert experimental field markers for individual
+  request fields in `common.rs`; rely on schema generation/tests and behavioral coverage instead.

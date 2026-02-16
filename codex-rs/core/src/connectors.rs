@@ -9,12 +9,15 @@ use std::time::Instant;
 use async_channel::unbounded;
 pub use codex_app_server_protocol::AppInfo;
 use codex_protocol::protocol::SandboxPolicy;
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
+use crate::config::types::AppsConfigToml;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -49,6 +52,19 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     list_accessible_connectors_from_mcp_tools_with_options(config, false).await
 }
 
+pub async fn list_cached_accessible_connectors_from_mcp_tools(
+    config: &Config,
+) -> Option<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Some(Vec::new());
+    }
+
+    let auth_manager = auth_manager_from_config(config);
+    let auth = auth_manager.auth().await;
+    let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
+    read_cached_accessible_connectors(&cache_key)
+}
+
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     config: &Config,
     force_refetch: bool,
@@ -79,7 +95,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     let cancel_token = CancellationToken::new();
 
     let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::ReadOnly,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
@@ -95,6 +111,16 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
             sandbox_state,
         )
         .await;
+
+    if force_refetch
+        && let Err(err) = mcp_connection_manager
+            .hard_refresh_codex_apps_tools_cache()
+            .await
+    {
+        warn!(
+            "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
+        );
+    }
 
     let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
@@ -254,6 +280,22 @@ pub fn merge_connectors(
     merged
 }
 
+pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
+    let apps = read_apps_config(config).map(|apps_config| apps_config.apps);
+    for connector in &mut connectors {
+        if let Some(app) = apps.as_ref().and_then(|apps| apps.get(&connector.id)) {
+            connector.is_enabled = app.enabled;
+        }
+    }
+    connectors
+}
+
+fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
+    let effective_config = config.config_layer_stack.effective_config();
+    let apps_config = effective_config.as_table()?.get("apps")?.clone();
+    AppsConfigToml::deserialize(apps_config).ok()
+}
+
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
 where
     I: IntoIterator<Item = (String, Option<String>)>,
@@ -280,6 +322,7 @@ where
             distribution_channel: None,
             install_url: Some(connector_install_url(&connector_name, &connector_id)),
             is_accessible: true,
+            is_enabled: true,
         })
         .collect();
     accessible.sort_by(|left, right| {

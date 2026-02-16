@@ -50,6 +50,7 @@ use codex_app_server_protocol::SendUserMessageParams;
 use codex_app_server_protocol::SendUserTurnParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SetDefaultModelParams;
+use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadForkParams;
@@ -173,6 +174,7 @@ impl McpProcess {
             client_info,
             Some(InitializeCapabilities {
                 experimental_api: true,
+                ..Default::default()
             }),
         )
         .await
@@ -333,12 +335,14 @@ impl McpProcess {
     /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.
     pub async fn send_chatgpt_auth_tokens_login_request(
         &mut self,
-        id_token: String,
         access_token: String,
+        chatgpt_account_id: String,
+        chatgpt_plan_type: Option<String>,
     ) -> anyhow::Result<i64> {
         let params = LoginAccountParams::ChatgptAuthTokens {
-            id_token,
             access_token,
+            chatgpt_account_id,
+            chatgpt_plan_type,
         };
         let params = Some(serde_json::to_value(params)?);
         self.send_request("account/login/start", params).await
@@ -488,6 +492,15 @@ impl McpProcess {
     pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("app/list", params).await
+    }
+
+    /// Send a `skills/list` JSON-RPC request.
+    pub async fn send_skills_list_request(
+        &mut self,
+        params: SkillsListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("skills/list", params).await
     }
 
     /// Send a `collaborationMode/list` JSON-RPC request.
@@ -663,6 +676,78 @@ impl McpProcess {
             params["cancellationToken"] = serde_json::json!(token);
         }
         self.send_request("fuzzyFileSearch", Some(params)).await
+    }
+
+    pub async fn send_fuzzy_file_search_session_start_request(
+        &mut self,
+        session_id: &str,
+        roots: Vec<String>,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "roots": roots,
+        });
+        self.send_request("fuzzyFileSearch/sessionStart", Some(params))
+            .await
+    }
+
+    pub async fn start_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+        roots: Vec<String>,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_start_request(session_id, roots)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
+            .await
+    }
+
+    pub async fn send_fuzzy_file_search_session_update_request(
+        &mut self,
+        session_id: &str,
+        query: &str,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "query": query,
+        });
+        self.send_request("fuzzyFileSearch/sessionUpdate", Some(params))
+            .await
+    }
+
+    pub async fn update_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+        query: &str,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_update_request(session_id, query)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
+            .await
+    }
+
+    pub async fn send_fuzzy_file_search_session_stop_request(
+        &mut self,
+        session_id: &str,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+        });
+        self.send_request("fuzzyFileSearch/sessionStop", Some(params))
+            .await
+    }
+
+    pub async fn stop_fuzzy_file_search_session(
+        &mut self,
+        session_id: &str,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let request_id = self
+            .send_fuzzy_file_search_session_stop_request(session_id)
+            .await?;
+        self.read_stream_until_response_message(RequestId::Integer(request_id))
+            .await
     }
 
     async fn send_request(
@@ -849,6 +934,36 @@ impl McpProcess {
             JSONRPCMessage::Response(response) => Some(&response.id),
             JSONRPCMessage::Error(err) => Some(&err.id),
             JSONRPCMessage::Notification(_) => None,
+        }
+    }
+}
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        // These tests spawn a `codex-app-server` child process.
+        //
+        // We keep that child alive for the test and rely on Tokio's `kill_on_drop(true)` when this
+        // helper is dropped. Tokio documents kill-on-drop as best-effort: dropping requests
+        // termination, but it does not guarantee the child has fully exited and been reaped before
+        // teardown continues.
+        //
+        // That makes cleanup timing nondeterministic. Leak detection can occasionally observe the
+        // child still alive at teardown and report `LEAK`, which makes the test flaky.
+        //
+        // Drop can't be async, so we do a bounded synchronous cleanup:
+        //
+        // 1. Request termination with `start_kill()`.
+        // 2. Poll `try_wait()` until the OS reports the child exited, with a short timeout.
+        let _ = self.process.start_kill();
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        while start.elapsed() < timeout {
+            match self.process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return,
+            }
         }
     }
 }

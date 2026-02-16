@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 2003
+assertion_line: 3945
 expression: popup
 ---
   Update Model Permissions
@@ -8,17 +8,16 @@ expression: popup
 › 1. Read Only (current)             Codex can read files in the current
                                      workspace. Approval is required to edit
                                      files or access the internet.
-  2. Default (non-elevated sandbox)  Codex can read and edit files in the
+  2. Default (non-admin sandbox)  Codex can read and edit files in the
                                      current workspace, and run commands.
                                      Approval is required to access the
-                                     internet or edit other files. (Identical
-                                     to Agent mode)
+                                     internet or edit other files.
   3. Full Access                     Codex can edit files outside this
                                      workspace and access the internet without
                                      asking for approval. Exercise caution
                                      when using.
 
-  The non-elevated sandbox protects your files and prevents network access under
+  The non-admin sandbox protects your files and prevents network access under
   most circumstances. However, it carries greater risk if prompt injected. To
-  upgrade to the elevated sandbox, run /setup-elevated-sandbox.
+  upgrade to the default sandbox, run /setup-default-sandbox.
   Press enter to confirm or esc to go back

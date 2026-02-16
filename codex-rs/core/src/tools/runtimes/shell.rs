@@ -4,12 +4,15 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
+use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
+use crate::tools::network_approval::NetworkApprovalMode;
+use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -78,7 +81,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn approval_keys(&self, req: &ShellRequest) -> Vec<Self::ApprovalKey> {
         vec![ApprovalKey {
-            command: req.command.clone(),
+            command: canonicalize_command_for_approval(&req.command),
             cwd: req.cwd.clone(),
             sandbox_permissions: req.sandbox_permissions,
         }]
@@ -108,6 +111,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                         command,
                         cwd,
                         reason,
+                        ctx.network_approval_context.clone(),
                         req.exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
@@ -140,6 +144,20 @@ impl Approvable<ShellRequest> for ShellRuntime {
 }
 
 impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
+    fn network_approval_spec(
+        &self,
+        req: &ShellRequest,
+        _ctx: &ToolCtx<'_>,
+    ) -> Option<NetworkApprovalSpec> {
+        req.network.as_ref()?;
+        Some(NetworkApprovalSpec {
+            command: req.command.clone(),
+            cwd: req.cwd.clone(),
+            network: req.network.clone(),
+            mode: NetworkApprovalMode::Immediate,
+        })
+    }
+
     async fn run(
         &mut self,
         req: &ShellRequest,
@@ -148,7 +166,8 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command =
+            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
@@ -165,17 +184,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.sandbox_permissions,
             req.justification.clone(),
         )?;
-        let env = attempt
-            .env_for(spec)
+        let mut env = attempt
+            .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(
-            env,
-            attempt.policy,
-            req.network.clone(),
-            Self::stdout_stream(ctx),
-        )
-        .await
-        .map_err(ToolError::Codex)?;
+        env.network_attempt_id = ctx.network_attempt_id.clone();
+        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
+            .await
+            .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }

@@ -95,6 +95,7 @@ Rules:
                 reasoning_effort: Some(ReasoningEffort::Medium),
                 description: r#"Use `explorer` for all codebase questions.
 Explorers are fast and authoritative.
+Always prefer them over manual search or file reading.
 Rules:
 - Ask explorers first and precisely.
 - Do not re-read or re-search code they cover.
@@ -121,6 +122,7 @@ Rules:
         }
         if profile.read_only {
             config
+                .permissions
                 .sandbox_policy
                 .set(SandboxPolicy::new_read_only_policy())
                 .map_err(|err| format!("sandbox_policy is invalid: {err}"))?;

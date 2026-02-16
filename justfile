@@ -51,6 +51,14 @@ test:
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
 
+[no-cd]
+bazel-lock-update:
+    bazel mod deps --lockfile_mode=update
+
+[no-cd]
+bazel-lock-check:
+    ./scripts/check-module-bazel-lock.sh
+
 bazel-test:
     bazel test //... --keep_going
 

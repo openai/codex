@@ -64,14 +64,21 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         .expect("expected initial messages to be present for resumed session");
     match initial_messages.as_slice() {
         [
+            EventMsg::TurnStarted(started),
             EventMsg::UserMessage(first_user),
             EventMsg::TokenCount(_),
             EventMsg::AgentMessage(assistant_message),
             EventMsg::TokenCount(_),
+            EventMsg::TurnComplete(completed),
         ] => {
             assert_eq!(first_user.message, "Record some messages");
             assert_eq!(first_user.text_elements, text_elements);
             assert_eq!(assistant_message.message, "Completed first turn");
+            assert_eq!(completed.turn_id, started.turn_id);
+            assert_eq!(
+                completed.last_agent_message.as_deref(),
+                Some("Completed first turn")
+            );
         }
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }
@@ -123,17 +130,24 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
         .expect("expected initial messages to be present for resumed session");
     match initial_messages.as_slice() {
         [
+            EventMsg::TurnStarted(started),
             EventMsg::UserMessage(first_user),
             EventMsg::TokenCount(_),
             EventMsg::AgentReasoning(reasoning),
             EventMsg::AgentReasoningRawContent(raw),
             EventMsg::AgentMessage(assistant_message),
             EventMsg::TokenCount(_),
+            EventMsg::TurnComplete(completed),
         ] => {
             assert_eq!(first_user.message, "Record reasoning messages");
             assert_eq!(reasoning.text, "Summarized step");
             assert_eq!(raw.text, "raw detail");
             assert_eq!(assistant_message.message, "Completed reasoning turn");
+            assert_eq!(completed.turn_id, started.turn_id);
+            assert_eq!(
+                completed.last_agent_message.as_deref(),
+                Some("Completed reasoning turn")
+            );
         }
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }

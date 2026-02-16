@@ -11,12 +11,14 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
+use codex_core::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WarningEvent;
@@ -92,12 +94,13 @@ fn session_configured_produces_thread_started_event() {
             model: "codex-mini-latest".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
+            network_proxy: None,
             rollout_path: Some(rollout_path),
         }),
     );
@@ -116,6 +119,7 @@ fn task_started_produces_turn_started_event() {
     let out = ep.collect_thread_events(&event(
         "t1",
         EventMsg::TurnStarted(codex_core::protocol::TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
             model_context_window: Some(32_000),
             collaboration_mode_kind: ModeKind::Default,
         }),
@@ -309,6 +313,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     let complete = event(
         "p3",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -676,6 +681,7 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
     let complete = event(
         "t2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -828,6 +834,7 @@ fn error_followed_by_task_complete_produces_turn_failed() {
     let complete_event = event(
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: None,
         }),
     );
@@ -896,6 +903,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             exit_code: 0,
             duration: Duration::from_millis(5),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_ok = ep.collect_thread_events(&end_ok);
@@ -983,6 +991,7 @@ fn command_execution_output_delta_updates_item_progress() {
             exit_code: 0,
             duration: Duration::from_millis(3),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1056,6 +1065,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             exit_code: 1,
             duration: Duration::from_millis(2),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Failed,
         }),
     );
     let out_fail = ep.collect_thread_events(&end_fail);
@@ -1097,6 +1107,7 @@ fn exec_command_end_without_begin_is_ignored() {
             exit_code: 0,
             duration: Duration::from_millis(1),
             formatted_output: String::new(),
+            status: CoreExecCommandStatus::Completed,
         }),
     );
     let out = ep.collect_thread_events(&end_only);
@@ -1152,6 +1163,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             stderr: String::new(),
             success: true,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Completed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1223,6 +1235,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             stderr: "failed to apply".to_string(),
             success: false,
             changes: changes.clone(),
+            status: CorePatchApplyStatus::Failed,
         }),
     );
     let out_end = ep.collect_thread_events(&end);
@@ -1275,6 +1288,7 @@ fn task_complete_produces_turn_completed_with_usage() {
     let complete_event = event(
         "e2",
         EventMsg::TurnComplete(codex_core::protocol::TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
             last_agent_message: Some("done".to_string()),
         }),
     );

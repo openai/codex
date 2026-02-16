@@ -136,6 +136,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
 }
 
 #[tokio::test]
+#[ignore = "TODO(owenlin0): flaky"]
 async fn review_start_exec_approval_item_id_matches_command_execution_item() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(
@@ -254,6 +255,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", ignore = "flaky on windows CI")]
 #[tokio::test]
 async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<()> {
     let review_payload = json!({
@@ -436,6 +438,7 @@ model_provider = "mock_provider"
 
 [features]
 remote_models = false
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider"

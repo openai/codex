@@ -26,19 +26,47 @@ pub(crate) struct BwrapOptions {
     /// This is the secure default, but some restrictive container environments
     /// deny `--proc /proc` even when PID namespaces are available.
     pub mount_proc: bool,
+    /// How networking should be configured inside the bubblewrap sandbox.
+    pub network_mode: BwrapNetworkMode,
 }
 
 impl Default for BwrapOptions {
     fn default() -> Self {
-        Self { mount_proc: true }
+        Self {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+        }
+    }
+}
+
+/// Network policy modes for bubblewrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BwrapNetworkMode {
+    /// Keep access to the host network namespace.
+    #[default]
+    FullAccess,
+    /// Remove access to the host network namespace.
+    Isolated,
+    /// Intended proxy-only mode.
+    ///
+    /// Bubblewrap does not currently enforce proxy-only egress, so this is
+    /// treated as isolated for fail-closed behavior.
+    ProxyOnly,
+}
+
+impl BwrapNetworkMode {
+    fn should_unshare_network(self) -> bool {
+        !matches!(self, Self::FullAccess)
     }
 }
 
 /// Wrap a command with bubblewrap so the filesystem is read-only by default,
 /// with explicit writable roots and read-only subpaths layered afterward.
 ///
-/// When the policy grants full disk write access, this returns `command`
-/// unchanged so we avoid unnecessary sandboxing overhead.
+/// When the policy grants full disk write access and full network access, this
+/// returns `command` unchanged so we avoid unnecessary sandboxing overhead.
+/// If network isolation is requested, we still wrap with bubblewrap so network
+/// namespace restrictions apply while preserving full filesystem access.
 pub(crate) fn create_bwrap_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
@@ -46,10 +74,35 @@ pub(crate) fn create_bwrap_command_args(
     options: BwrapOptions,
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
-        return Ok(command);
+        return if options.network_mode == BwrapNetworkMode::FullAccess {
+            Ok(command)
+        } else {
+            Ok(create_bwrap_flags_full_filesystem(command, options))
+        };
     }
 
     create_bwrap_flags(command, sandbox_policy, cwd, options)
+}
+
+fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> Vec<String> {
+    let mut args = vec![
+        "--new-session".to_string(),
+        "--die-with-parent".to_string(),
+        "--bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--unshare-pid".to_string(),
+    ];
+    if options.network_mode.should_unshare_network() {
+        args.push("--unshare-net".to_string());
+    }
+    if options.mount_proc {
+        args.push("--proc".to_string());
+        args.push("/proc".to_string());
+    }
+    args.push("--".to_string());
+    args.extend(command);
+    args
 }
 
 /// Build the bubblewrap flags (everything after `argv[0]`).
@@ -65,6 +118,9 @@ fn create_bwrap_flags(
     args.extend(create_filesystem_args(sandbox_policy, cwd)?);
     // Isolate the PID namespace.
     args.push("--unshare-pid".to_string());
+    if options.network_mode.should_unshare_network() {
+        args.push("--unshare-net".to_string());
+    }
     // Mount a fresh /proc unless the caller explicitly disables it.
     if options.mount_proc {
         args.push("--proc".to_string());
@@ -85,6 +141,13 @@ fn create_bwrap_flags(
 /// 4. `--dev-bind /dev/null /dev/null` preserves the common sink even under a
 ///    read-only root.
 fn create_filesystem_args(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Result<Vec<String>> {
+    if !sandbox_policy.has_full_disk_read_access() {
+        return Err(CodexErr::UnsupportedOperation(
+            "Restricted read-only access is not yet supported by the Linux bubblewrap backend."
+                .to_string(),
+        ));
+    }
+
     let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
     ensure_mount_targets_exist(&writable_roots)?;
 
@@ -249,4 +312,60 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::SandboxPolicy;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn full_disk_write_full_network_returns_unwrapped_command() {
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command.clone(),
+            &SandboxPolicy::DangerFullAccess,
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_eq!(args, command);
+    }
+
+    #[test]
+    fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
+        let command = vec!["/bin/true".to_string()];
+        let args = create_bwrap_command_args(
+            command,
+            &SandboxPolicy::DangerFullAccess,
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::ProxyOnly,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert_eq!(
+            args,
+            vec![
+                "--new-session".to_string(),
+                "--die-with-parent".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--unshare-pid".to_string(),
+                "--unshare-net".to_string(),
+                "--proc".to_string(),
+                "/proc".to_string(),
+                "--".to_string(),
+                "/bin/true".to_string(),
+            ]
+        );
+    }
 }

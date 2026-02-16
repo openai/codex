@@ -560,9 +560,22 @@ fn assert_layers_user_then_optional_system(
     layers: &[codex_app_server_protocol::ConfigLayer],
     user_file: AbsolutePathBuf,
 ) -> Result<()> {
-    assert_eq!(layers.len(), 2);
-    assert_eq!(layers[0].name, ConfigLayerSource::User { file: user_file });
-    assert!(matches!(layers[1].name, ConfigLayerSource::System { .. }));
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
+    }
+    assert_eq!(layers.len(), first_index + 2);
+    assert_eq!(
+        layers[first_index].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::System { .. }
+    ));
     Ok(())
 }
 
@@ -571,12 +584,25 @@ fn assert_layers_managed_user_then_optional_system(
     managed_file: AbsolutePathBuf,
     user_file: AbsolutePathBuf,
 ) -> Result<()> {
-    assert_eq!(layers.len(), 3);
+    let mut first_index = 0;
+    if matches!(
+        layers.first().map(|layer| &layer.name),
+        Some(ConfigLayerSource::LegacyManagedConfigTomlFromMdm)
+    ) {
+        first_index = 1;
+    }
+    assert_eq!(layers.len(), first_index + 3);
     assert_eq!(
-        layers[0].name,
+        layers[first_index].name,
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
     );
-    assert_eq!(layers[1].name, ConfigLayerSource::User { file: user_file });
-    assert!(matches!(layers[2].name, ConfigLayerSource::System { .. }));
+    assert_eq!(
+        layers[first_index + 1].name,
+        ConfigLayerSource::User { file: user_file }
+    );
+    assert!(matches!(
+        layers[first_index + 2].name,
+        ConfigLayerSource::System { .. }
+    ));
     Ok(())
 }
