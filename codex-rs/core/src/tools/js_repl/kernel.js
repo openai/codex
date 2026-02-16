@@ -111,6 +111,31 @@ const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
 // Explicit long-lived mutable store exposed as `codex.state`. This is useful
 // when callers want shared state without relying on lexical binding carry-over.
 const state = {};
+const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
+const moduleSearchBases = (() => {
+  const bases = [];
+  const seen = new Set();
+  for (const entry of nodeModuleDirEnv.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.isAbsolute(trimmed)
+      ? trimmed
+      : path.resolve(process.cwd(), trimmed);
+    const base = path.basename(resolved) === "node_modules" ? path.dirname(resolved) : resolved;
+    if (seen.has(base)) {
+      continue;
+    }
+    seen.add(base);
+    bases.push(base);
+  }
+  const cwd = process.cwd();
+  if (!seen.has(cwd)) {
+    bases.push(cwd);
+  }
+  return bases;
+})();
 
 function resolveSpecifier(specifier) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
@@ -128,6 +153,14 @@ function resolveSpecifier(specifier) {
     return { kind: "path", path: path.resolve(process.cwd(), specifier) };
   }
 
+  for (const base of moduleSearchBases) {
+    try {
+      const resolvedBare = require.resolve(specifier, { paths: [base] });
+      return { kind: "path", path: resolvedBare };
+    } catch {
+      // Try next search base.
+    }
+  }
   return { kind: "bare", specifier };
 }
 

@@ -52,7 +52,7 @@ const JS_REPL_MODEL_DIAG_ERROR_MAX_BYTES: usize = 256;
 /// Per-task js_repl handle stored on the turn context.
 pub(crate) struct JsReplHandle {
     node_path: Option<PathBuf>,
-    codex_home: PathBuf,
+    node_module_dirs: Vec<PathBuf>,
     cell: OnceCell<Arc<JsReplManager>>,
 }
 
@@ -63,10 +63,13 @@ impl fmt::Debug for JsReplHandle {
 }
 
 impl JsReplHandle {
-    pub(crate) fn with_node_path(node_path: Option<PathBuf>, codex_home: PathBuf) -> Self {
+    pub(crate) fn with_node_path(
+        node_path: Option<PathBuf>,
+        node_module_dirs: Vec<PathBuf>,
+    ) -> Self {
         Self {
             node_path,
-            codex_home,
+            node_module_dirs,
             cell: OnceCell::new(),
         }
     }
@@ -74,7 +77,7 @@ impl JsReplHandle {
     pub(crate) async fn manager(&self) -> Result<Arc<JsReplManager>, FunctionCallError> {
         self.cell
             .get_or_try_init(|| async {
-                JsReplManager::new(self.node_path.clone(), self.codex_home.clone()).await
+                JsReplManager::new(self.node_path.clone(), self.node_module_dirs.clone()).await
             })
             .await
             .cloned()
@@ -263,7 +266,7 @@ fn with_model_kernel_failure_message(
 
 pub struct JsReplManager {
     node_path: Option<PathBuf>,
-    codex_home: PathBuf,
+    node_module_dirs: Vec<PathBuf>,
     tmp_dir: tempfile::TempDir,
     kernel: Mutex<Option<KernelState>>,
     exec_lock: Arc<tokio::sync::Semaphore>,
@@ -273,7 +276,7 @@ pub struct JsReplManager {
 impl JsReplManager {
     async fn new(
         node_path: Option<PathBuf>,
-        codex_home: PathBuf,
+        node_module_dirs: Vec<PathBuf>,
     ) -> Result<Arc<Self>, FunctionCallError> {
         let tmp_dir = tempfile::tempdir().map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to create js_repl temp dir: {err}"))
@@ -281,7 +284,7 @@ impl JsReplManager {
 
         let manager = Arc::new(Self {
             node_path,
-            codex_home,
+            node_module_dirs,
             tmp_dir,
             kernel: Mutex::new(None),
             exec_lock: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -563,13 +566,14 @@ impl JsReplManager {
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
         );
-        env.insert(
-            "CODEX_JS_REPL_HOME".to_string(),
-            self.codex_home
-                .join("js_repl")
-                .to_string_lossy()
-                .to_string(),
-        );
+        if !self.node_module_dirs.is_empty() {
+            let joined = std::env::join_paths(&self.node_module_dirs)
+                .map_err(|err| format!("failed to join js_repl_node_module_dirs: {err}"))?;
+            env.insert(
+                "CODEX_JS_REPL_NODE_MODULE_DIRS".to_string(),
+                joined.to_string_lossy().to_string(),
+            );
+        }
 
         let spec = CommandSpec {
             program: node_path.to_string_lossy().to_string(),

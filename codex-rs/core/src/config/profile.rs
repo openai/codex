@@ -31,6 +31,8 @@ pub struct ConfigProfile {
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
     pub js_repl_node_path: Option<AbsolutePathBuf>,
+    /// Ordered list of directories to search for Node modules in `js_repl`.
+    pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,
     /// Deprecated: ignored. Use `model_instructions_file`.
     #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,

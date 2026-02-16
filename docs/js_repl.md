@@ -37,6 +37,25 @@ You can configure an explicit runtime path:
 js_repl_node_path = "/absolute/path/to/node"
 ```
 
+## Module resolution
+
+`js_repl` resolves bare specifiers (for example `await import("atlas")`) using an ordered
+search path:
+
+1. `CODEX_JS_REPL_NODE_MODULE_DIRS` (PATH-delimited list)
+2. `js_repl_node_module_dirs` in config/profile (array of absolute paths)
+3. Thread working directory (cwd)
+
+If an entry ends in `node_modules`, the parent directory is treated as the base
+for module resolution. This allows both of these forms:
+
+```toml
+js_repl_node_module_dirs = [
+  "/Users/aaronl/.codex/js_repl/codex_node_modules/node_modules",
+  "/Users/aaronl/code/codex-main/codex-rs",
+]
+```
+
 ## Usage
 
 - `js_repl` is a freeform tool: send raw JavaScript source text.
