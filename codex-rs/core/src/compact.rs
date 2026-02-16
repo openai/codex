@@ -88,6 +88,17 @@ pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
     Some(model_switch_item)
 }
 
+fn extract_latest_model_switch_update_from_items(
+    items: &mut Vec<ResponseItem>,
+) -> Option<ResponseItem> {
+    let model_switch_index = items
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, item)| Session::is_model_switch_developer_message(item).then_some(i))?;
+    Some(items.remove(model_switch_index))
+}
+
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -152,10 +163,14 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
+    let mut incoming_items = incoming_items;
     // Keep compaction prompts in-distribution: if a model-switch update was injected at the
-    // tail of history (between turns), exclude it from the compaction request payload.
-    let stripped_model_switch_item =
-        extract_trailing_model_switch_update_for_compaction_request(&mut history);
+    // tail of incoming turn items (pre-turn path) or between turns in history, exclude it from
+    // the compaction request payload.
+    let stripped_model_switch_item = incoming_items
+        .as_mut()
+        .and_then(extract_latest_model_switch_update_from_items)
+        .or_else(|| extract_trailing_model_switch_update_for_compaction_request(&mut history));
     if let Some(incoming_items) = incoming_items.as_ref() {
         history.record_items(incoming_items.iter(), turn_context.truncation_policy);
     }
@@ -702,6 +717,95 @@ mod tests {
 
         assert_eq!(history.raw_items().len(), 4);
         assert!(model_switch_item.is_none());
+        assert!(
+            history
+                .raw_items()
+                .iter()
+                .any(Session::is_model_switch_developer_message)
+        );
+    }
+
+    #[test]
+    fn extract_model_switch_update_for_compaction_request_prefers_incoming_items() {
+        let mut history = ContextManager::new();
+        history.replace(vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "ASSISTANT_REPLY".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<model_switch>\nHISTORY_MODEL_INSTRUCTIONS".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ]);
+        let mut incoming_items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<model_switch>\nINCOMING_MODEL_INSTRUCTIONS".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "INCOMING_USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ];
+
+        let model_switch_item = Some(&mut incoming_items)
+            .and_then(extract_latest_model_switch_update_from_items)
+            .or_else(|| extract_trailing_model_switch_update_for_compaction_request(&mut history));
+
+        assert_eq!(
+            model_switch_item,
+            Some(ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<model_switch>\nINCOMING_MODEL_INSTRUCTIONS".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            })
+        );
+        assert_eq!(
+            incoming_items,
+            vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "INCOMING_USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }]
+        );
         assert!(
             history
                 .raw_items()
