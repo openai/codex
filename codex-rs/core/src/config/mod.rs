@@ -1417,7 +1417,7 @@ impl Config {
         Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
     }
 
-    fn load_config_with_layer_stack(
+    pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
