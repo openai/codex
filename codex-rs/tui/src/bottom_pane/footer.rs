@@ -1014,7 +1014,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        snapshot_footer_with_mode_indicator(name, 80, &props, None);
+        snapshot_footer_with_mode_indicator(name, 80, &props, None, None);
     }
 
     fn draw_footer_frame<B: Backend>(
@@ -1022,6 +1022,7 @@ mod tests {
         height: u16,
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+        right_context_override: Option<Line<'static>>,
     ) {
         terminal
             .draw(|f| {
@@ -1084,7 +1085,9 @@ mod tests {
                         compact
                     }
                 } else {
-                    Some(context_window_line(None, None))
+                    right_context_override
+                        .clone()
+                        .or_else(|| Some(context_window_line(None, None)))
                 };
                 let right_width = right_line
                     .as_ref()
@@ -1172,10 +1175,17 @@ mod tests {
         width: u16,
         props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+        right_context_override: Option<Line<'static>>,
     ) {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        draw_footer_frame(&mut terminal, height, props, collaboration_mode_indicator);
+        draw_footer_frame(
+            &mut terminal,
+            height,
+            props,
+            collaboration_mode_indicator,
+            right_context_override,
+        );
         assert_snapshot!(name, terminal.backend());
     }
 
@@ -1186,7 +1196,13 @@ mod tests {
     ) -> String {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
-        draw_footer_frame(&mut terminal, height, props, collaboration_mode_indicator);
+        draw_footer_frame(
+            &mut terminal,
+            height,
+            props,
+            collaboration_mode_indicator,
+            None,
+        );
         terminal.backend().vt100().screen().contents()
     }
 
@@ -1304,36 +1320,44 @@ mod tests {
             },
         );
 
-        snapshot_footer(
+        let context_running = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            status_line_value: None,
+            status_line_enabled: false,
+        };
+        snapshot_footer_with_mode_indicator(
             "footer_shortcuts_context_running",
-            FooterProps {
-                mode: FooterMode::ComposerEmpty,
-                esc_backtrack_hint: false,
-                use_shift_enter_hint: false,
-                is_task_running: true,
-                steer_enabled: false,
-                collaboration_modes_enabled: false,
-                is_wsl: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                status_line_value: None,
-                status_line_enabled: false,
-            },
+            80,
+            &context_running,
+            None,
+            Some(context_window_line(Some(72), None)),
         );
 
-        snapshot_footer(
+        let context_tokens_used = FooterProps {
+            mode: FooterMode::ComposerEmpty,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            status_line_value: None,
+            status_line_enabled: false,
+        };
+        snapshot_footer_with_mode_indicator(
             "footer_context_tokens_used",
-            FooterProps {
-                mode: FooterMode::ComposerEmpty,
-                esc_backtrack_hint: false,
-                use_shift_enter_hint: false,
-                is_task_running: false,
-                steer_enabled: false,
-                collaboration_modes_enabled: false,
-                is_wsl: false,
-                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
-                status_line_value: None,
-                status_line_enabled: false,
-            },
+            80,
+            &context_tokens_used,
+            None,
+            Some(context_window_line(None, Some(123_456))),
         );
 
         snapshot_footer(
@@ -1386,6 +1410,7 @@ mod tests {
             120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            None,
         );
 
         snapshot_footer_with_mode_indicator(
@@ -1393,6 +1418,7 @@ mod tests {
             50,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            None,
         );
 
         let props = FooterProps {
@@ -1413,6 +1439,7 @@ mod tests {
             120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            None,
         );
 
         let props = FooterProps {
@@ -1448,6 +1475,7 @@ mod tests {
             120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            None,
         );
 
         let props = FooterProps {
@@ -1468,6 +1496,7 @@ mod tests {
             120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            Some(context_window_line(Some(50), None)),
         );
 
         let props = FooterProps {
@@ -1488,6 +1517,7 @@ mod tests {
             "footer_status_line_enabled_no_mode_right",
             120,
             &props,
+            None,
             None,
         );
 
@@ -1511,6 +1541,7 @@ mod tests {
             40,
             &props,
             Some(CollaborationModeIndicator::Plan),
+            None,
         );
     }
 
