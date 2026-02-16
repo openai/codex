@@ -1,4 +1,3 @@
-use crate::agent::AgentRole;
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
@@ -542,10 +541,7 @@ fn create_spawn_agent_tool() -> ToolSpec {
         (
             "agent_type".to_string(),
             JsonSchema::String {
-                description: Some(format!(
-                    "Optional agent type ({}). Use an explicit type when delegating.",
-                    AgentRole::enum_values().join(", ")
-                )),
+                description: Some(crate::agent::role::spawn_tool_spec::build()),
             },
         ),
     ]);

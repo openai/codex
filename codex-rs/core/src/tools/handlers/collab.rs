@@ -90,7 +90,7 @@ impl ToolHandler for CollabHandler {
 
 mod spawn {
     use super::*;
-    use crate::agent::AgentRole;
+    use crate::agent::role::apply_role_to_config;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
@@ -100,7 +100,7 @@ mod spawn {
     struct SpawnAgentArgs {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
-        agent_type: Option<AgentRole>,
+        agent_type: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -115,7 +115,11 @@ mod spawn {
         arguments: String,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-        let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
+        let role_name = args
+            .agent_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|role| !role.is_empty());
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
@@ -141,8 +145,8 @@ mod spawn {
             turn.as_ref(),
             child_depth,
         )?;
-        agent_role
-            .apply_to_config(&mut config)
+        apply_role_to_config(&mut config, role_name)
+            .await
             .map_err(FunctionCallError::RespondToModel)?;
 
         let result = session
