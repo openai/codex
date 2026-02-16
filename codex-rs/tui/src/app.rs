@@ -1227,24 +1227,6 @@ impl App {
             }
         }
 
-        if wait_for_initial_session_configured {
-            while app.primary_thread_id.is_none() {
-                let Some(event) = app_event_rx.recv().await else {
-                    break;
-                };
-                let control = app.handle_event(tui, event).await?;
-                if let AppRunControl::Exit(exit_reason) = control {
-                    return Ok(AppExitInfo {
-                        token_usage: app.token_usage(),
-                        thread_id: app.chat_widget.thread_id(),
-                        thread_name: app.chat_widget.thread_name(),
-                        update_action: app.pending_update_action,
-                        exit_reason,
-                    });
-                }
-            }
-        }
-
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
             let control = app
@@ -1274,6 +1256,7 @@ impl App {
 
         let mut thread_created_rx = thread_manager.subscribe_thread_created();
         let mut listen_for_threads = true;
+        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
             let control = select! {
@@ -1286,7 +1269,7 @@ impl App {
                     } else {
                         None
                     }
-                }, if app.active_thread_rx.is_some() => {
+                }, if app.active_thread_rx.is_some() && !waiting_for_initial_session_configured => {
                     if let Some(event) = active {
                         app.handle_active_thread_event(tui, event).await?;
                     } else {
@@ -1313,6 +1296,9 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            if waiting_for_initial_session_configured && app.primary_thread_id.is_some() {
+                waiting_for_initial_session_configured = false;
+            }
             match control {
                 AppRunControl::Continue => {}
                 AppRunControl::Exit(reason) => break reason,
