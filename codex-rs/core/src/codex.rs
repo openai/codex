@@ -1794,7 +1794,7 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            model_info.clone(),
+            model_info,
             self.services
                 .network_proxy
                 .as_ref()
