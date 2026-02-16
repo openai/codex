@@ -14,15 +14,21 @@ from .errors import AppServerError, JsonRpcError, TransportClosedError, map_json
 from .models import Notification
 from .typed import (
     AgentMessageDeltaEvent,
+    EmptyResult,
     ErrorEvent,
+    ItemLifecycleEvent,
     ModelListResult,
+    ThreadForkResult,
     ThreadListResult,
+    ThreadNameUpdatedEvent,
     ThreadReadResult,
     ThreadResumeResult,
     ThreadStartResult,
     ThreadStartedEvent,
+    ThreadTokenUsageUpdatedEvent,
     TurnCompletedEvent,
     TurnStartResult,
+    TurnSteerResult,
     TurnStartedEvent,
 )
 from .retry import retry_on_overload
@@ -31,13 +37,22 @@ from .schema_types import (
     AgentMessageDeltaNotificationPayload as SchemaAgentMessageDeltaNotificationPayload,
     ErrorNotificationPayload as SchemaErrorNotificationPayload,
     ModelListResponse as SchemaModelListResponse,
+    ItemCompletedNotificationPayload as SchemaItemCompletedNotificationPayload,
+    ItemStartedNotificationPayload as SchemaItemStartedNotificationPayload,
+    ThreadArchiveResponse as SchemaThreadArchiveResponse,
+    ThreadForkResponse as SchemaThreadForkResponse,
     ThreadListResponse as SchemaThreadListResponse,
+    ThreadNameUpdatedNotificationPayload as SchemaThreadNameUpdatedNotificationPayload,
     ThreadReadResponse as SchemaThreadReadResponse,
     ThreadResumeResponse as SchemaThreadResumeResponse,
     ThreadStartResponse as SchemaThreadStartResponse,
     ThreadStartedNotificationPayload as SchemaThreadStartedNotificationPayload,
+    ThreadTokenUsageUpdatedNotificationPayload as SchemaThreadTokenUsageUpdatedNotificationPayload,
+    ThreadUnarchiveResponse as SchemaThreadUnarchiveResponse,
+    ThreadSetNameResponse as SchemaThreadSetNameResponse,
     TurnCompletedNotificationPayload as SchemaTurnCompletedNotificationPayload,
     TurnStartResponse as SchemaTurnStartResponse,
+    TurnSteerResponse as SchemaTurnSteerResponse,
     TurnStartedNotificationPayload as SchemaTurnStartedNotificationPayload,
 )
 from .protocol_types import (
@@ -55,6 +70,10 @@ _TYPED_NOTIFICATION_PARSERS = {
     "turn/started": TurnStartedEvent,
     "thread/started": ThreadStartedEvent,
     "item/agentMessage/delta": AgentMessageDeltaEvent,
+    "item/started": ItemLifecycleEvent,
+    "item/completed": ItemLifecycleEvent,
+    "thread/nameUpdated": ThreadNameUpdatedEvent,
+    "thread/tokenUsageUpdated": ThreadTokenUsageUpdatedEvent,
     "error": ErrorEvent,
 }
 
@@ -63,6 +82,10 @@ _SCHEMA_NOTIFICATION_PARSERS = {
     "turn/started": SchemaTurnStartedNotificationPayload,
     "thread/started": SchemaThreadStartedNotificationPayload,
     "item/agentMessage/delta": SchemaAgentMessageDeltaNotificationPayload,
+    "item/started": SchemaItemStartedNotificationPayload,
+    "item/completed": SchemaItemCompletedNotificationPayload,
+    "thread/nameUpdated": SchemaThreadNameUpdatedNotificationPayload,
+    "thread/tokenUsageUpdated": SchemaThreadTokenUsageUpdatedNotificationPayload,
     "error": SchemaErrorNotificationPayload,
 }
 
@@ -76,7 +99,7 @@ class AppServerConfig:
     env: dict[str, str] | None = None
     client_name: str = "codex_python_sdk"
     client_title: str = "Codex Python SDK"
-    client_version: str = "0.1.0"
+    client_version: str = "0.2.0"
     experimental_api: bool = True
 
 
@@ -230,6 +253,18 @@ class AppServerClient:
     def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         return self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
 
+    def thread_fork(self, thread_id: str, **params: Any) -> dict[str, Any]:
+        return self.request("thread/fork", {"threadId": thread_id, **params})
+
+    def thread_archive(self, thread_id: str) -> dict[str, Any]:
+        return self.request("thread/archive", {"threadId": thread_id})
+
+    def thread_unarchive(self, thread_id: str) -> dict[str, Any]:
+        return self.request("thread/unarchive", {"threadId": thread_id})
+
+    def thread_set_name(self, thread_id: str, name: str) -> dict[str, Any]:
+        return self.request("thread/setName", {"threadId": thread_id, "name": name})
+
     def turn_start(
         self,
         thread_id: str,
@@ -245,6 +280,21 @@ class AppServerClient:
 
     def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         return self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
+
+    def turn_steer(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> dict[str, Any]:
+        return self.request(
+            "turn/steer",
+            {
+                "threadId": thread_id,
+                "expectedTurnId": expected_turn_id,
+                "input": self._normalize_input_items(input_items),
+            },
+        )
 
     def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
         return self.request("model/list", {"includeHidden": include_hidden})
@@ -270,6 +320,18 @@ class AppServerClient:
     def thread_read_typed(self, thread_id: str, include_turns: bool = False) -> ThreadReadResult:
         return ThreadReadResult.from_dict(self.thread_read(thread_id, include_turns=include_turns))
 
+    def thread_fork_typed(self, thread_id: str, **params: Any) -> ThreadForkResult:
+        return ThreadForkResult.from_dict(self.thread_fork(thread_id, **params))
+
+    def thread_archive_typed(self, thread_id: str) -> EmptyResult:
+        return EmptyResult.from_dict(self.thread_archive(thread_id))
+
+    def thread_unarchive_typed(self, thread_id: str) -> EmptyResult:
+        return EmptyResult.from_dict(self.thread_unarchive(thread_id))
+
+    def thread_set_name_typed(self, thread_id: str, name: str) -> EmptyResult:
+        return EmptyResult.from_dict(self.thread_set_name(thread_id, name))
+
     def thread_list_typed(self, **params: Any) -> ThreadListResult:
         return ThreadListResult.from_dict(self.thread_list(**params))
 
@@ -287,6 +349,14 @@ class AppServerClient:
     def turn_text_typed(self, thread_id: str, text: str, **params: Any) -> TurnStartResult:
         return TurnStartResult.from_dict(self.turn_text(thread_id, text, **params))
 
+    def turn_steer_typed(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> TurnSteerResult:
+        return TurnSteerResult.from_dict(self.turn_steer(thread_id, expected_turn_id, input_items))
+
     def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
         return SchemaThreadStartResponse.from_dict(self.thread_start(**params))
 
@@ -298,6 +368,18 @@ class AppServerClient:
 
     def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
         return SchemaThreadListResponse.from_dict(self.thread_list(**params))
+
+    def thread_fork_schema(self, thread_id: str, **params: Any) -> SchemaThreadForkResponse:
+        return SchemaThreadForkResponse.from_dict(self.thread_fork(thread_id, **params))
+
+    def thread_archive_schema(self, thread_id: str) -> SchemaThreadArchiveResponse:
+        return SchemaThreadArchiveResponse.from_dict(self.thread_archive(thread_id))
+
+    def thread_unarchive_schema(self, thread_id: str) -> SchemaThreadUnarchiveResponse:
+        return SchemaThreadUnarchiveResponse.from_dict(self.thread_unarchive(thread_id))
+
+    def thread_set_name_schema(self, thread_id: str, name: str) -> SchemaThreadSetNameResponse:
+        return SchemaThreadSetNameResponse.from_dict(self.thread_set_name(thread_id, name))
 
     def model_list_schema(self, include_hidden: bool = False) -> SchemaModelListResponse:
         return SchemaModelListResponse.from_dict(self.model_list(include_hidden=include_hidden))
@@ -313,6 +395,14 @@ class AppServerClient:
     def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
         return self.turn_start_schema(thread_id, text, **params)
 
+    def turn_steer_schema(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> SchemaTurnSteerResponse:
+        return SchemaTurnSteerResponse.from_dict(self.turn_steer(thread_id, expected_turn_id, input_items))
+
     def parse_notification_typed(
         self, notification: Notification
     ) -> (
@@ -320,6 +410,9 @@ class AppServerClient:
         | TurnStartedEvent
         | ThreadStartedEvent
         | AgentMessageDeltaEvent
+        | ItemLifecycleEvent
+        | ThreadNameUpdatedEvent
+        | ThreadTokenUsageUpdatedEvent
         | ErrorEvent
         | None
     ):
@@ -332,6 +425,10 @@ class AppServerClient:
         | SchemaTurnStartedNotificationPayload
         | SchemaThreadStartedNotificationPayload
         | SchemaAgentMessageDeltaNotificationPayload
+        | SchemaItemStartedNotificationPayload
+        | SchemaItemCompletedNotificationPayload
+        | SchemaThreadNameUpdatedNotificationPayload
+        | SchemaThreadTokenUsageUpdatedNotificationPayload
         | SchemaErrorNotificationPayload
         | None
     ):

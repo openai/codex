@@ -17,26 +17,41 @@ from .schema_types import (
     AgentMessageDeltaNotificationPayload as SchemaAgentMessageDeltaNotificationPayload,
     ErrorNotificationPayload as SchemaErrorNotificationPayload,
     ModelListResponse as SchemaModelListResponse,
+    ItemCompletedNotificationPayload as SchemaItemCompletedNotificationPayload,
+    ItemStartedNotificationPayload as SchemaItemStartedNotificationPayload,
+    ThreadArchiveResponse as SchemaThreadArchiveResponse,
+    ThreadForkResponse as SchemaThreadForkResponse,
     ThreadListResponse as SchemaThreadListResponse,
+    ThreadNameUpdatedNotificationPayload as SchemaThreadNameUpdatedNotificationPayload,
     ThreadReadResponse as SchemaThreadReadResponse,
     ThreadResumeResponse as SchemaThreadResumeResponse,
     ThreadStartResponse as SchemaThreadStartResponse,
     ThreadStartedNotificationPayload as SchemaThreadStartedNotificationPayload,
+    ThreadTokenUsageUpdatedNotificationPayload as SchemaThreadTokenUsageUpdatedNotificationPayload,
+    ThreadUnarchiveResponse as SchemaThreadUnarchiveResponse,
+    ThreadSetNameResponse as SchemaThreadSetNameResponse,
     TurnCompletedNotificationPayload as SchemaTurnCompletedNotificationPayload,
     TurnStartResponse as SchemaTurnStartResponse,
+    TurnSteerResponse as SchemaTurnSteerResponse,
     TurnStartedNotificationPayload as SchemaTurnStartedNotificationPayload,
 )
 from .typed import (
     AgentMessageDeltaEvent,
+    EmptyResult,
     ErrorEvent,
+    ItemLifecycleEvent,
     ModelListResult,
+    ThreadForkResult,
     ThreadListResult,
+    ThreadNameUpdatedEvent,
     ThreadReadResult,
     ThreadResumeResult,
     ThreadStartResult,
     ThreadStartedEvent,
+    ThreadTokenUsageUpdatedEvent,
     TurnCompletedEvent,
     TurnStartResult,
+    TurnSteerResult,
     TurnStartedEvent,
 )
 
@@ -82,6 +97,18 @@ class AsyncAppServerClient:
     async def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         return await self._call_sync(self._sync.thread_read, thread_id, include_turns)
 
+    async def thread_fork(self, thread_id: str, **params: Any) -> dict[str, Any]:
+        return await self._call_sync(self._sync.thread_fork, thread_id, **params)
+
+    async def thread_archive(self, thread_id: str) -> dict[str, Any]:
+        return await self._call_sync(self._sync.thread_archive, thread_id)
+
+    async def thread_unarchive(self, thread_id: str) -> dict[str, Any]:
+        return await self._call_sync(self._sync.thread_unarchive, thread_id)
+
+    async def thread_set_name(self, thread_id: str, name: str) -> dict[str, Any]:
+        return await self._call_sync(self._sync.thread_set_name, thread_id, name)
+
     async def turn_start(
         self,
         thread_id: str,
@@ -95,6 +122,14 @@ class AsyncAppServerClient:
 
     async def turn_interrupt(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         return await self._call_sync(self._sync.turn_interrupt, thread_id, turn_id)
+
+    async def turn_steer(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> dict[str, Any]:
+        return await self._call_sync(self._sync.turn_steer, thread_id, expected_turn_id, input_items)
 
     async def model_list(self, include_hidden: bool = False) -> dict[str, Any]:
         return await self._call_sync(self._sync.model_list, include_hidden)
@@ -118,6 +153,18 @@ class AsyncAppServerClient:
     async def thread_read_typed(self, thread_id: str, include_turns: bool = False) -> ThreadReadResult:
         return await self._call_sync(self._sync.thread_read_typed, thread_id, include_turns)
 
+    async def thread_fork_typed(self, thread_id: str, **params: Any) -> ThreadForkResult:
+        return await self._call_sync(self._sync.thread_fork_typed, thread_id, **params)
+
+    async def thread_archive_typed(self, thread_id: str) -> EmptyResult:
+        return await self._call_sync(self._sync.thread_archive_typed, thread_id)
+
+    async def thread_unarchive_typed(self, thread_id: str) -> EmptyResult:
+        return await self._call_sync(self._sync.thread_unarchive_typed, thread_id)
+
+    async def thread_set_name_typed(self, thread_id: str, name: str) -> EmptyResult:
+        return await self._call_sync(self._sync.thread_set_name_typed, thread_id, name)
+
     async def thread_list_typed(self, **params: Any) -> ThreadListResult:
         return await self._call_sync(self._sync.thread_list_typed, **params)
 
@@ -135,6 +182,14 @@ class AsyncAppServerClient:
     async def turn_text_typed(self, thread_id: str, text: str, **params: Any) -> TurnStartResult:
         return await self._call_sync(self._sync.turn_text_typed, thread_id, text, **params)
 
+    async def turn_steer_typed(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> TurnSteerResult:
+        return await self._call_sync(self._sync.turn_steer_typed, thread_id, expected_turn_id, input_items)
+
     async def thread_start_schema(self, **params: Any) -> SchemaThreadStartResponse:
         return await self._call_sync(self._sync.thread_start_schema, **params)
 
@@ -146,6 +201,18 @@ class AsyncAppServerClient:
 
     async def thread_list_schema(self, **params: Any) -> SchemaThreadListResponse:
         return await self._call_sync(self._sync.thread_list_schema, **params)
+
+    async def thread_fork_schema(self, thread_id: str, **params: Any) -> SchemaThreadForkResponse:
+        return await self._call_sync(self._sync.thread_fork_schema, thread_id, **params)
+
+    async def thread_archive_schema(self, thread_id: str) -> SchemaThreadArchiveResponse:
+        return await self._call_sync(self._sync.thread_archive_schema, thread_id)
+
+    async def thread_unarchive_schema(self, thread_id: str) -> SchemaThreadUnarchiveResponse:
+        return await self._call_sync(self._sync.thread_unarchive_schema, thread_id)
+
+    async def thread_set_name_schema(self, thread_id: str, name: str) -> SchemaThreadSetNameResponse:
+        return await self._call_sync(self._sync.thread_set_name_schema, thread_id, name)
 
     async def model_list_schema(self, include_hidden: bool = False) -> SchemaModelListResponse:
         return await self._call_sync(self._sync.model_list_schema, include_hidden)
@@ -161,6 +228,14 @@ class AsyncAppServerClient:
     async def turn_text_schema(self, thread_id: str, text: str, **params: Any) -> SchemaTurnStartResponse:
         return await self._call_sync(self._sync.turn_text_schema, thread_id, text, **params)
 
+    async def turn_steer_schema(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        input_items: list[dict[str, Any]] | dict[str, Any] | str,
+    ) -> SchemaTurnSteerResponse:
+        return await self._call_sync(self._sync.turn_steer_schema, thread_id, expected_turn_id, input_items)
+
     async def parse_notification_typed(
         self, notification: Notification
     ) -> (
@@ -168,6 +243,9 @@ class AsyncAppServerClient:
         | TurnStartedEvent
         | ThreadStartedEvent
         | AgentMessageDeltaEvent
+        | ItemLifecycleEvent
+        | ThreadNameUpdatedEvent
+        | ThreadTokenUsageUpdatedEvent
         | ErrorEvent
         | None
     ):
@@ -180,6 +258,10 @@ class AsyncAppServerClient:
         | SchemaTurnStartedNotificationPayload
         | SchemaThreadStartedNotificationPayload
         | SchemaAgentMessageDeltaNotificationPayload
+        | SchemaItemStartedNotificationPayload
+        | SchemaItemCompletedNotificationPayload
+        | SchemaThreadNameUpdatedNotificationPayload
+        | SchemaThreadTokenUsageUpdatedNotificationPayload
         | SchemaErrorNotificationPayload
         | None
     ):

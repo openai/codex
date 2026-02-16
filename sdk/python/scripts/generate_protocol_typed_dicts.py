@@ -33,7 +33,16 @@ def field_type(v: dict) -> str:
             return "ThreadObject"
         if ref.endswith("Turn"):
             return "TurnObject"
+        if ref.endswith("ThreadTokenUsage"):
+            return "ThreadTokenUsage"
         return "dict[str, Any]"
+
+    if "anyOf" in v:
+        non_null = [x for x in v["anyOf"] if x.get("type") != "null"]
+        if len(non_null) == 1:
+            t = field_type(non_null[0])
+            return f"{t} | None"
+
     t = v.get("type")
     if t == "string":
         return "str"
@@ -42,6 +51,10 @@ def field_type(v: dict) -> str:
     if t == "boolean":
         return "bool"
     if t == "array":
+        if (v.get("items") or {}).get("$ref", "").endswith("Thread"):
+            return "list[ThreadObject]"
+        if (v.get("items") or {}).get("$ref", "").endswith("Turn"):
+            return "list[TurnObject]"
         return "list[dict[str, Any]]"
     if isinstance(t, list) and "null" in t and "string" in t:
         return "str | None"
@@ -67,17 +80,28 @@ def main() -> None:
     trr = load("ThreadResumeResponse")
     tlr = load("ThreadListResponse")
     trd = load("ThreadReadResponse")
+    tfr = load("ThreadForkResponse")
     turs = load("TurnStartResponse")
+    tsers = load("TurnSteerResponse")
+    tun = load("ThreadUnarchiveResponse")
+    tnu = load("ThreadNameUpdatedNotification")
+    ttu = load("ThreadTokenUsageUpdatedNotification")
 
     thread_props, thread_req = object_props(tsr, tsr["definitions"].get("Thread", {}))
     turn_props, turn_req = object_props(turs, turs["definitions"].get("Turn", {}))
+    usage_props, usage_req = object_props(ttu, ttu["definitions"].get("ThreadTokenUsage", {}))
 
     root_props = {
         "ThreadStartResponse": object_props(tsr, tsr),
         "ThreadResumeResponse": object_props(trr, trr),
         "ThreadListResponse": object_props(tlr, tlr),
         "ThreadReadResponse": object_props(trd, trd),
+        "ThreadForkResponse": object_props(tfr, tfr),
+        "ThreadUnarchiveResponse": object_props(tun, tun),
         "TurnStartResponse": object_props(turs, turs),
+        "TurnSteerResponse": object_props(tsers, tsers),
+        "ThreadNameUpdatedNotificationParams": object_props(tnu, tnu),
+        "ThreadTokenUsageUpdatedNotificationParams": object_props(ttu, ttu),
     }
 
     parts = [
@@ -91,13 +115,14 @@ def main() -> None:
         "",
         render_typed_dict("TurnObject", turn_props, turn_req),
         "",
+        render_typed_dict("ThreadTokenUsage", usage_props, usage_req),
+        "",
     ]
 
     for name, (props, req) in root_props.items():
         parts.append(render_typed_dict(name, props, req))
         parts.append("")
 
-    # Notification params shape used heavily by the SDK helper code.
     parts.append("class TurnCompletedNotificationParams(TypedDict):")
     parts.append("    threadId: str")
     parts.append("    turn: TurnObject")

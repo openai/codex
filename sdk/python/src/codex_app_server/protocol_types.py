@@ -8,27 +8,32 @@ class ThreadObject(TypedDict):
     cliVersion: str
     createdAt: int
     cwd: str
-    gitInfo: NotRequired[dict[str, Any]]
+    gitInfo: NotRequired[dict[str, Any] | None]
     id: str
     modelProvider: str
     path: NotRequired[str | None]
     preview: str
     source: dict[str, Any]
-    turns: list[dict[str, Any]]
+    turns: list[TurnObject]
     updatedAt: int
 
 class TurnObject(TypedDict):
-    error: NotRequired[dict[str, Any]]
+    error: NotRequired[dict[str, Any] | None]
     id: str
     items: list[dict[str, Any]]
     status: dict[str, Any]
+
+class ThreadTokenUsage(TypedDict):
+    last: dict[str, Any]
+    modelContextWindow: NotRequired[dict[str, Any]]
+    total: dict[str, Any]
 
 class ThreadStartResponse(TypedDict):
     approvalPolicy: dict[str, Any]
     cwd: str
     model: str
     modelProvider: str
-    reasoningEffort: NotRequired[dict[str, Any]]
+    reasoningEffort: NotRequired[dict[str, Any] | None]
     sandbox: dict[str, Any]
     thread: ThreadObject
 
@@ -37,19 +42,43 @@ class ThreadResumeResponse(TypedDict):
     cwd: str
     model: str
     modelProvider: str
-    reasoningEffort: NotRequired[dict[str, Any]]
+    reasoningEffort: NotRequired[dict[str, Any] | None]
     sandbox: dict[str, Any]
     thread: ThreadObject
 
 class ThreadListResponse(TypedDict):
-    data: list[dict[str, Any]]
+    data: list[ThreadObject]
     nextCursor: NotRequired[str | None]
 
 class ThreadReadResponse(TypedDict):
     thread: ThreadObject
 
+class ThreadForkResponse(TypedDict):
+    approvalPolicy: dict[str, Any]
+    cwd: str
+    model: str
+    modelProvider: str
+    reasoningEffort: NotRequired[dict[str, Any] | None]
+    sandbox: dict[str, Any]
+    thread: ThreadObject
+
+class ThreadUnarchiveResponse(TypedDict):
+    thread: ThreadObject
+
 class TurnStartResponse(TypedDict):
     turn: TurnObject
+
+class TurnSteerResponse(TypedDict):
+    turnId: str
+
+class ThreadNameUpdatedNotificationParams(TypedDict):
+    threadId: str
+    threadName: NotRequired[str | None]
+
+class ThreadTokenUsageUpdatedNotificationParams(TypedDict):
+    threadId: str
+    tokenUsage: ThreadTokenUsage
+    turnId: str
 
 class TurnCompletedNotificationParams(TypedDict):
     threadId: str

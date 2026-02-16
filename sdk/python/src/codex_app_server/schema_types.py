@@ -174,6 +174,80 @@ class ThreadListResponse:
         )
 
 
+class ThreadForkResponseDict(TypedDict, total=False):
+    approvalPolicy: str
+    cwd: str
+    model: str
+    modelProvider: str
+    reasoningEffort: str | None
+    sandbox: Any
+    thread: Thread
+
+@dataclass(slots=True, kw_only=True)
+class ThreadForkResponse:
+    approvalPolicy: str
+    cwd: str
+    model: str
+    modelProvider: str
+    reasoningEffort: str | None = None
+    sandbox: Any
+    thread: Thread
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadForkResponse":
+        payload = payload or {}
+        return cls(
+            approvalPolicy=str(payload.get("approvalPolicy", None) or ""),
+            cwd=str(payload.get("cwd", None) or ""),
+            model=str(payload.get("model", None) or ""),
+            modelProvider=str(payload.get("modelProvider", None) or ""),
+            reasoningEffort=None if payload.get("reasoningEffort") is None else str(payload.get("reasoningEffort")),
+            sandbox=payload.get("sandbox", None),
+            thread=Thread.from_dict(payload.get("thread") or {}),
+        )
+
+
+class ThreadArchiveResponseDict(TypedDict, total=False):
+    pass
+
+@dataclass(slots=True, kw_only=True)
+class ThreadArchiveResponse:
+    pass
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadArchiveResponse":
+        payload = payload or {}
+        return cls()
+
+
+class ThreadUnarchiveResponseDict(TypedDict, total=False):
+    thread: Thread
+
+@dataclass(slots=True, kw_only=True)
+class ThreadUnarchiveResponse:
+    thread: Thread
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadUnarchiveResponse":
+        payload = payload or {}
+        return cls(
+            thread=Thread.from_dict(payload.get("thread") or {}),
+        )
+
+
+class ThreadSetNameResponseDict(TypedDict, total=False):
+    pass
+
+@dataclass(slots=True, kw_only=True)
+class ThreadSetNameResponse:
+    pass
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadSetNameResponse":
+        payload = payload or {}
+        return cls()
+
+
 class TurnStartResponseDict(TypedDict, total=False):
     turn: Turn
 
@@ -186,6 +260,21 @@ class TurnStartResponse:
         payload = payload or {}
         return cls(
             turn=Turn.from_dict(payload.get("turn") or {}),
+        )
+
+
+class TurnSteerResponseDict(TypedDict, total=False):
+    turnId: str
+
+@dataclass(slots=True, kw_only=True)
+class TurnSteerResponse:
+    turnId: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TurnSteerResponse":
+        payload = payload or {}
+        return cls(
+            turnId=str(payload.get("turnId", None) or ""),
         )
 
 
@@ -306,6 +395,87 @@ class ErrorNotificationPayload:
         )
 
 
+class ItemStartedNotificationPayloadDict(TypedDict, total=False):
+    item: Any
+    threadId: str
+    turnId: str
+
+@dataclass(slots=True, kw_only=True)
+class ItemStartedNotificationPayload:
+    item: Any
+    threadId: str
+    turnId: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ItemStartedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            item=payload.get("item", None),
+            threadId=str(payload.get("threadId", None) or ""),
+            turnId=str(payload.get("turnId", None) or ""),
+        )
+
+
+class ItemCompletedNotificationPayloadDict(TypedDict, total=False):
+    item: Any
+    threadId: str
+    turnId: str
+
+@dataclass(slots=True, kw_only=True)
+class ItemCompletedNotificationPayload:
+    item: Any
+    threadId: str
+    turnId: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ItemCompletedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            item=payload.get("item", None),
+            threadId=str(payload.get("threadId", None) or ""),
+            turnId=str(payload.get("turnId", None) or ""),
+        )
+
+
+class ThreadNameUpdatedNotificationPayloadDict(TypedDict, total=False):
+    threadId: str
+    threadName: str | None
+
+@dataclass(slots=True, kw_only=True)
+class ThreadNameUpdatedNotificationPayload:
+    threadId: str
+    threadName: str | None = None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadNameUpdatedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            threadId=str(payload.get("threadId", None) or ""),
+            threadName=None if payload.get("threadName") is None else str(payload.get("threadName")),
+        )
+
+
+class ThreadTokenUsageUpdatedNotificationPayloadDict(TypedDict, total=False):
+    threadId: str
+    tokenUsage: Any
+    turnId: str
+
+@dataclass(slots=True, kw_only=True)
+class ThreadTokenUsageUpdatedNotificationPayload:
+    threadId: str
+    tokenUsage: Any
+    turnId: str
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "ThreadTokenUsageUpdatedNotificationPayload":
+        payload = payload or {}
+        return cls(
+            threadId=str(payload.get("threadId", None) or ""),
+            tokenUsage=payload.get("tokenUsage", None),
+            turnId=str(payload.get("turnId", None) or ""),
+        )
+
+
 __all__ = [
     "Thread",
     "Turn",
@@ -313,24 +483,42 @@ __all__ = [
     "ThreadResumeResponse",
     "ThreadReadResponse",
     "ThreadListResponse",
+    "ThreadForkResponse",
+    "ThreadArchiveResponse",
+    "ThreadUnarchiveResponse",
+    "ThreadSetNameResponse",
     "TurnStartResponse",
+    "TurnSteerResponse",
     "ModelListResponse",
     "ThreadStartedNotificationPayload",
     "TurnStartedNotificationPayload",
     "TurnCompletedNotificationPayload",
     "AgentMessageDeltaNotificationPayload",
     "ErrorNotificationPayload",
+    "ItemStartedNotificationPayload",
+    "ItemCompletedNotificationPayload",
+    "ThreadNameUpdatedNotificationPayload",
+    "ThreadTokenUsageUpdatedNotificationPayload",
     "ThreadDict",
     "TurnDict",
     "ThreadStartResponseDict",
     "ThreadResumeResponseDict",
     "ThreadReadResponseDict",
     "ThreadListResponseDict",
+    "ThreadForkResponseDict",
+    "ThreadArchiveResponseDict",
+    "ThreadUnarchiveResponseDict",
+    "ThreadSetNameResponseDict",
     "TurnStartResponseDict",
+    "TurnSteerResponseDict",
     "ModelListResponseDict",
     "ThreadStartedNotificationPayloadDict",
     "TurnStartedNotificationPayloadDict",
     "TurnCompletedNotificationPayloadDict",
     "AgentMessageDeltaNotificationPayloadDict",
     "ErrorNotificationPayloadDict",
+    "ItemStartedNotificationPayloadDict",
+    "ItemCompletedNotificationPayloadDict",
+    "ThreadNameUpdatedNotificationPayloadDict",
+    "ThreadTokenUsageUpdatedNotificationPayloadDict",
 ]

@@ -5,6 +5,8 @@ from typing import Any, AsyncIterator, Iterator
 
 from .models import Notification
 from .schema_types import TurnStartResponse as SchemaTurnStartResponse
+from .typed import TurnStartResult as TypedTurnStartResult
+from .typed import TurnSteerResult as TypedTurnSteerResult
 
 if False:  # pragma: no cover
     from .async_client import AsyncAppServerClient
@@ -30,6 +32,14 @@ class Conversation:
 
     def turn_text_schema(self, text: str, **params: Any) -> SchemaTurnStartResponse:
         return self.client.turn_text_schema(self.thread_id, text, **params)
+
+    def turn_text_typed(self, text: str, **params: Any) -> TypedTurnStartResult:
+        return self.client.turn_text_typed(self.thread_id, text, **params)
+
+    def turn_steer_typed(
+        self, expected_turn_id: str, input_items: list[dict[str, Any]] | dict[str, Any] | str
+    ) -> TypedTurnSteerResult:
+        return self.client.turn_steer_typed(self.thread_id, expected_turn_id, input_items)
 
     def ask(self, text: str, **params: Any) -> str:
         answer, _ = self.client.run_text_turn(self.thread_id, text, **params)
@@ -64,6 +74,14 @@ class AsyncConversation:
 
     async def turn_text_schema(self, text: str, **params: Any) -> SchemaTurnStartResponse:
         return await self.client.turn_text_schema(self.thread_id, text, **params)
+
+    async def turn_text_typed(self, text: str, **params: Any) -> TypedTurnStartResult:
+        return await self.client.turn_text_typed(self.thread_id, text, **params)
+
+    async def turn_steer_typed(
+        self, expected_turn_id: str, input_items: list[dict[str, Any]] | dict[str, Any] | str
+    ) -> TypedTurnSteerResult:
+        return await self.client.turn_steer_typed(self.thread_id, expected_turn_id, input_items)
 
     async def ask(self, text: str, **params: Any) -> str:
         answer, _ = await self.client.run_text_turn(self.thread_id, text, **params)

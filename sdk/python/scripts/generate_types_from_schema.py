@@ -19,13 +19,22 @@ TARGET_SCHEMAS = {
     "ThreadResumeResponse": "ThreadResumeResponse.json",
     "ThreadReadResponse": "ThreadReadResponse.json",
     "ThreadListResponse": "ThreadListResponse.json",
+    "ThreadForkResponse": "ThreadForkResponse.json",
+    "ThreadArchiveResponse": "ThreadArchiveResponse.json",
+    "ThreadUnarchiveResponse": "ThreadUnarchiveResponse.json",
+    "ThreadSetNameResponse": "ThreadSetNameResponse.json",
     "TurnStartResponse": "TurnStartResponse.json",
+    "TurnSteerResponse": "TurnSteerResponse.json",
     "ModelListResponse": "ModelListResponse.json",
     "ThreadStartedNotificationPayload": "ThreadStartedNotification.json",
     "TurnStartedNotificationPayload": "TurnStartedNotification.json",
     "TurnCompletedNotificationPayload": "TurnCompletedNotification.json",
     "AgentMessageDeltaNotificationPayload": "AgentMessageDeltaNotification.json",
     "ErrorNotificationPayload": "ErrorNotification.json",
+    "ItemStartedNotificationPayload": "ItemStartedNotification.json",
+    "ItemCompletedNotificationPayload": "ItemCompletedNotification.json",
+    "ThreadNameUpdatedNotificationPayload": "ThreadNameUpdatedNotification.json",
+    "ThreadTokenUsageUpdatedNotificationPayload": "ThreadTokenUsageUpdatedNotification.json",
 }
 
 
