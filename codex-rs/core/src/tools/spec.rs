@@ -8,6 +8,7 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
@@ -913,7 +914,7 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
         SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str());
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "search_tool_bm25".to_string(),
+        name: SEARCH_TOOL_BM25_TOOL_NAME.to_string(),
         description,
         strict: false,
         parameters: JsonSchema::Object {
@@ -1507,7 +1508,7 @@ pub(crate) fn build_specs(
         && let Some(app_tools) = app_tools
     {
         builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
-        builder.register_handler("search_tool_bm25", search_tool_handler);
+        builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -2579,7 +2580,7 @@ mod tests {
         )
         .build();
 
-        let search_tool = find_tool(&tools, "search_tool_bm25");
+        let search_tool = find_tool(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
         let ToolSpec::Function(ResponsesApiTool { description, .. }) = &search_tool.spec else {
             panic!("expected function tool");
         };

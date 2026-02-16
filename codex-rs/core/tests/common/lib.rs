@@ -12,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
 
+pub mod apps_test_server;
 pub mod context_snapshot;
 pub mod process;
 pub mod responses;

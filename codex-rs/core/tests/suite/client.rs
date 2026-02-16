@@ -34,6 +34,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
+use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -671,6 +672,10 @@ async fn includes_user_instructions_message_in_request() {
 async fn includes_apps_guidance_as_developer_message_when_enabled() {
     skip_if_no_network!();
     let server = MockServer::start().await;
+    let apps_server = AppsTestServer::mount(&server)
+        .await
+        .expect("mount apps MCP mock");
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
 
     let resp_mock = mount_sse_once(
         &server,
@@ -680,8 +685,10 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
-        .with_config(|config| {
+        .with_config(move |config| {
             config.features.enable(Feature::Apps);
+            config.features.disable(Feature::AppsMcpGateway);
+            config.chatgpt_base_url = apps_base_url;
         });
     let codex = builder
         .build(&server)
