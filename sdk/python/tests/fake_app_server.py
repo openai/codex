@@ -11,6 +11,7 @@ def send(obj):
 
 thread_counter = 0
 turn_counter = 0
+state = {"overload_once_seen": False}
 
 for raw in sys.stdin:
     raw = raw.strip()
@@ -70,6 +71,32 @@ for raw in sys.stdin:
             send({"id": req_id, "result": {}})
         elif method == "model/list":
             send({"id": req_id, "result": {"data": [{"id": "gpt-5"}]}})
+        elif method == "test/overload-once":
+            if not state["overload_once_seen"]:
+                state["overload_once_seen"] = True
+                send(
+                    {
+                        "id": req_id,
+                        "error": {
+                            "code": -32001,
+                            "message": "server busy",
+                            "data": {"codex_error_info": "server_overloaded"},
+                        },
+                    }
+                )
+            else:
+                send({"id": req_id, "result": {"ok": True}})
+        elif method == "test/always-overload":
+            send(
+                {
+                    "id": req_id,
+                    "error": {
+                        "code": -32001,
+                        "message": "retry limit exceeded",
+                        "data": {"codex_error_info": "server_overloaded"},
+                    },
+                }
+            )
         else:
             send({"id": req_id, "error": {"code": -32601, "message": f"unknown method {method}"}})
 

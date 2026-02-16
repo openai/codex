@@ -4,7 +4,10 @@ from pathlib import Path
 
 import asyncio
 
+import pytest
+
 from codex_app_server import AppServerClient, AppServerConfig, AsyncAppServerClient
+from codex_app_server.errors import MethodNotFoundError, RetryLimitExceededError, ServerBusyError
 
 
 HERE = Path(__file__).parent
@@ -184,4 +187,51 @@ def test_async_conversation_and_schema_wrappers():
             started = await client.thread_start_schema(model="gpt-5")
             assert started.thread.id.startswith("thr_")
 
+            resumed = await client.thread_resume_schema(conv.thread_id)
+            assert resumed.thread.id == conv.thread_id
+
     asyncio.run(_run())
+
+
+def test_extended_typed_and_schema_wrappers_plus_notification_parsing():
+    with make_client() as client:
+        client.initialize()
+        started = client.thread_start_typed()
+
+        resumed = client.thread_resume_typed(started.thread.id)
+        assert resumed.thread.id == started.thread.id
+
+        read = client.thread_read_typed(started.thread.id, include_turns=True)
+        assert read.thread.id == started.thread.id
+
+        listed = client.thread_list_typed(limit=1)
+        assert listed.data[0].id == "thr_1"
+
+        models = client.model_list_typed()
+        assert models.data[0].id == "gpt-5"
+
+        client.turn_text(started.thread.id, "hello")
+        first = client.next_notification()
+        typed = client.parse_notification_typed(first)
+        assert typed is not None
+
+        second = client.next_notification()
+        schema = client.parse_notification_schema(second)
+        assert schema is not None
+
+
+def test_jsonrpc_error_mapping_and_retry_helper():
+    with make_client() as client:
+        client.initialize()
+
+        with pytest.raises(MethodNotFoundError):
+            client.request("missing/method")
+
+        out = client.request_with_retry_on_overload("test/overload-once", max_attempts=2)
+        assert out["ok"] is True
+
+        with pytest.raises(RetryLimitExceededError):
+            client.request("test/always-overload")
+
+        with pytest.raises(ServerBusyError):
+            client.request_with_retry_on_overload("test/always-overload", max_attempts=2)
