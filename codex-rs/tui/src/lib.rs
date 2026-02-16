@@ -115,6 +115,7 @@ mod version;
 
 mod wrapping;
 
+mod table_detect;
 #[cfg(test)]
 pub mod test_backend;
 
