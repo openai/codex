@@ -4290,14 +4290,16 @@ pub(crate) async fn run_turn(
     sess.send_event(&turn_context, event).await;
 
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    if !maybe_run_previous_model_inline_compact(
+    if maybe_run_previous_model_inline_compact(
         &sess,
         &turn_context,
         total_usage_tokens_before_compaction,
         &pre_turn_context_items,
     )
     .await
+    .is_err()
     {
+        // Error messaging is emitted inside maybe_run_previous_model_inline_compact.
         return None;
     }
 
@@ -4674,14 +4676,18 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
+/// Runs the pre-sampling model-switch compaction pass when needed.
+///
+/// On failure this function emits any user-visible error event itself and returns `Err(())` as a
+/// sentinel so callers can stop the turn without duplicating error messaging logic.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
     pre_turn_context_items: &[ResponseItem],
-) -> bool {
+) -> Result<(), ()> {
     let Some(previous_model) = sess.previous_model().await else {
-        return true;
+        return Ok(());
     };
     let previous_turn_context = Arc::new(
         turn_context
@@ -4690,10 +4696,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_turn_context.model_context_window() else {
-        return true;
+        return Ok(());
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return true;
+        return Ok(());
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -4703,7 +4709,7 @@ async fn maybe_run_previous_model_inline_compact(
         && previous_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
     if !should_run {
-        return true;
+        return Ok(());
     }
 
     match run_auto_compact(
@@ -4719,7 +4725,7 @@ async fn maybe_run_previous_model_inline_compact(
     )
     .await
     {
-        Ok(()) => true,
+        Ok(()) => Ok(()),
         Err(err) => {
             if !pre_turn_context_items.is_empty() {
                 // Preserve model-visible settings updates even when pre-turn compaction fails
@@ -4734,7 +4740,7 @@ async fn maybe_run_previous_model_inline_compact(
             };
             let event = EventMsg::Error(err.to_error_event(Some(compact_error_prefix.to_string())));
             sess.send_event(turn_context, event).await;
-            false
+            Err(())
         }
     }
 }
