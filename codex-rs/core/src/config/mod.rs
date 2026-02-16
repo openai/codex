@@ -1334,7 +1334,7 @@ impl ConfigOverrides {
         let additional_writable_roots = match config.permissions.sandbox_policy.get() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => writable_roots
                 .iter()
-                .map(|root| root.to_path_buf())
+                .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
                 .collect(),
             SandboxPolicy::DangerFullAccess
             | SandboxPolicy::ExternalSandbox { .. }
