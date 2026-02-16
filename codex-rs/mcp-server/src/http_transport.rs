@@ -19,7 +19,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::outgoing_message::OutgoingJsonRpcMessage;
 use crate::outgoing_message::OutgoingMessage;
@@ -93,7 +93,7 @@ async fn handle_mcp_post(
 
         if wants_sse {
             // Return SSE stream: first the response, then ongoing notifications.
-            let (sse_tx, mut sse_rx) =
+            let (sse_tx, sse_rx) =
                 mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
 
             // Wait for the response in a spawned task and push it as SSE event.
@@ -205,7 +205,7 @@ fn extract_request_id(msg: &crate::IncomingMessage) -> Option<String> {
 /// Intercepts outgoing messages from the [`MessageProcessor`] and routes
 /// JSON-RPC responses to their matching HTTP request handler via the pending
 /// map.  Notifications are broadcast to all SSE listeners.
-pub async fn outgoing_http_interceptor(
+pub(crate) async fn outgoing_http_interceptor(
     mut outgoing_rx: mpsc::UnboundedReceiver<OutgoingMessage>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<OutgoingJsonRpcMessage>>>>,
     sse_tx: tokio::sync::broadcast::Sender<String>,

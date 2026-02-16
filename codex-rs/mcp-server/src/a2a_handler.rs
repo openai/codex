@@ -7,7 +7,6 @@ use std::sync::Arc;
 use a2a_rs::{
     A2AError, AgentCapabilities, AgentCard, AgentExecutor, AgentInterface,
     AgentProvider, AgentSkill, EventBus, ExecutionEvent, RequestContext,
-    SendMessageResponse,
     completed_task, failed_task,
 };
 use serde_json::json;
@@ -147,7 +146,7 @@ impl AgentExecutor for CodexA2AExecutor {
             version: "0.1.0".into(),
             documentation_url: None,
             capabilities: AgentCapabilities {
-                streaming: Some(false),
+                streaming: Some(true),
                 push_notifications: Some(false),
                 extended_agent_card: None,
             },
