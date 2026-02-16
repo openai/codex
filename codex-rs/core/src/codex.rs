@@ -4290,26 +4290,14 @@ pub(crate) async fn run_turn(
     sess.send_event(&turn_context, event).await;
 
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    if let Err(err) = maybe_run_previous_model_inline_compact(
+    if !maybe_run_previous_model_inline_compact(
         &sess,
         &turn_context,
         total_usage_tokens_before_compaction,
+        &pre_turn_context_items,
     )
     .await
     {
-        if !pre_turn_context_items.is_empty() {
-            // Preserve model-visible settings updates even when pre-turn compaction fails
-            // before we can persist turn input.
-            sess.record_conversation_items(&turn_context, &pre_turn_context_items)
-                .await;
-        }
-        let compact_error_prefix = if should_use_remote_compact_task(&turn_context.provider) {
-            "Error running remote compact task"
-        } else {
-            "Error running local compact task"
-        };
-        let event = EventMsg::Error(err.to_error_event(Some(compact_error_prefix.to_string())));
-        sess.send_event(&turn_context, event).await;
         return None;
     }
 
@@ -4690,9 +4678,10 @@ async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
-) -> CodexResult<()> {
+    pre_turn_context_items: &[ResponseItem],
+) -> bool {
     let Some(previous_model) = sess.previous_model().await else {
-        return Ok(());
+        return true;
     };
     let previous_turn_context = Arc::new(
         turn_context
@@ -4701,10 +4690,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_turn_context.model_context_window() else {
-        return Ok(());
+        return true;
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(());
+        return true;
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -4713,21 +4702,41 @@ async fn maybe_run_previous_model_inline_compact(
     let should_run = total_usage_tokens > new_auto_compact_limit
         && previous_turn_context.model_info.slug != turn_context.model_info.slug
         && old_context_window > new_context_window;
-    if should_run {
-        run_auto_compact(
-            sess,
-            &previous_turn_context,
-            AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-            // Even though incoming turn items are excluded here, this pass can be the only
-            // compaction run before submission. Reinject canonical context so unchanged
-            // model-visible instructions remain present if no follow-up pre-turn compaction
-            // is needed.
-            TurnContextReinjection::ReinjectAboveLastRealUser,
-            None,
-        )
-        .await?;
+    if !should_run {
+        return true;
     }
-    Ok(())
+
+    match run_auto_compact(
+        sess,
+        &previous_turn_context,
+        AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
+        // Even though incoming turn items are excluded here, this pass can be the only
+        // compaction run before submission. Reinject canonical context so unchanged
+        // model-visible instructions remain present if no follow-up pre-turn compaction
+        // is needed.
+        TurnContextReinjection::ReinjectAboveLastRealUser,
+        None,
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(err) => {
+            if !pre_turn_context_items.is_empty() {
+                // Preserve model-visible settings updates even when pre-turn compaction fails
+                // before we can persist turn input.
+                sess.record_conversation_items(turn_context, pre_turn_context_items)
+                    .await;
+            }
+            let compact_error_prefix = if should_use_remote_compact_task(&turn_context.provider) {
+                "Error running remote compact task"
+            } else {
+                "Error running local compact task"
+            };
+            let event = EventMsg::Error(err.to_error_event(Some(compact_error_prefix.to_string())));
+            sess.send_event(turn_context, event).await;
+            false
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreTurnCompactionOutcome {
