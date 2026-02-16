@@ -24,9 +24,10 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
-const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
+const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 3] = [
     "MCP tools (`mcp__...`) are hidden until you search for them.",
     "Matching tools are added to `active_selected_tools`.",
+    "do not run that name as a shell command",
 ];
 
 fn tool_names(body: &Value) -> Vec<String> {

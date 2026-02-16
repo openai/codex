@@ -24,6 +24,7 @@ Notes:
   - `connector_name`
   - `connector_id`
   - input schema property keys (`input_keys`)
+- If the user names an MCP tool directly (for example `query_project`), do not run that name as a shell command. First call `search_tool_bm25` with that tool name, then invoke the matching `mcp__...` tool.
 - When the user asks to search/lookup/query any external system (logs, tickets, metrics, Slack, etc.), you must call `search_tool_bm25` first before running any shell command or repo search.
 - Only use shell commands if (a) MCP tools for that system are not available or not sufficient, and (b) the user explicitly wants a local file/CLI search.
 - If unsure which system/tool applies, ask a clarifying question after checking MCP tools.

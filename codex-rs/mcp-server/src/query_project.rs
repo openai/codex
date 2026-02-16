@@ -25,16 +25,26 @@ use sqlx::sqlite::SqliteSynchronous;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 200;
 const DEFAULT_ALPHA: f32 = 0.6;
 const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_VOYAGE_EMBEDDINGS_URL: &str = "https://api.voyageai.com/v1/embeddings";
+const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
+const VOYAGE_API_KEY_ENV_VAR: &str = "VOYAGE_API_KEY";
 const INDEX_DIR: &str = ".codex/repo_hybrid_index";
 const DB_FILE_NAME: &str = "index.sqlite";
 const CHUNK_LINE_COUNT: usize = 40;
@@ -46,9 +56,13 @@ const VECTOR_CANDIDATE_MULTIPLIER: usize = 8;
 const LEXICAL_CANDIDATE_MULTIPLIER: usize = 8;
 const FALLBACK_RG_LIMIT: usize = 2_000;
 const SQLITE_BIND_CHUNK_SIZE: usize = 900;
+const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
+const EMBEDDING_REQUEST_TIMEOUT_SECS: u64 = 30;
+const EMBEDDING_CONNECT_TIMEOUT_SECS: u64 = 10;
 const METADATA_EMBEDDING_MODEL: &str = "embedding_model";
 const METADATA_EMBEDDING_READY: &str = "embedding_ready";
 const EMBEDDING_REASON_MISSING_API_KEY: &str = "missing_api_key";
+const EMBEDDING_REASON_QUERY_FAILED: &str = "embedding_query_failed";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +173,43 @@ impl SelectedEmbeddingMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmbeddingProvider {
+    OpenAiCompatible,
+    Voyage,
+}
+
+impl EmbeddingProvider {
+    fn from_model(model: &str) -> Self {
+        if model
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("voyage-")
+        {
+            return Self::Voyage;
+        }
+        Self::OpenAiCompatible
+    }
+
+    fn api_key_env_var(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => OPENAI_API_KEY_ENV_VAR,
+            Self::Voyage => VOYAGE_API_KEY_ENV_VAR,
+        }
+    }
+
+    fn embeddings_url(self) -> String {
+        match self {
+            Self::OpenAiCompatible => {
+                let base_url = std::env::var(OPENAI_BASE_URL_ENV_VAR)
+                    .unwrap_or_else(|_| DEFAULT_OPENAI_BASE_URL.to_string());
+                format!("{}/embeddings", base_url.trim_end_matches('/'))
+            }
+            Self::Voyage => DEFAULT_VOYAGE_EMBEDDINGS_URL.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ChunkDraft {
     start_line: usize,
@@ -173,6 +224,12 @@ struct ChunkRecord {
     start_line: usize,
     end_line: usize,
     snippet: String,
+}
+
+#[derive(Debug, Clone)]
+struct SearchOutcome {
+    results: Vec<RepoHybridSearchResultItem>,
+    embedding_fallback_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +270,7 @@ pub(crate) fn create_tool_for_query_project() -> Tool {
                 .into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }
@@ -237,6 +295,7 @@ pub(crate) fn create_tool_for_repo_index_refresh() -> Tool {
                 .into(),
         ),
         annotations: None,
+        execution: None,
         icons: None,
         meta: None,
     }
@@ -311,12 +370,13 @@ async fn refresh_repo_index(
     let index = RepoHybridIndex::open(&repo_root)
         .await
         .with_context(|| format!("failed to initialize index at `{}`", repo_root.display()))?;
-    let embedding_mode = resolve_embedding_mode(require_embeddings)?;
+    let embedding_model = embedding_model_or_default(embedding_model);
+    let embedding_mode = resolve_embedding_mode(require_embeddings, &embedding_model)?;
     let stats = index
         .refresh(
             &file_globs,
             force_full,
-            embedding_model_or_default(embedding_model),
+            embedding_model,
             embedding_mode.mode,
         )
         .await?;
@@ -364,8 +424,10 @@ pub(crate) async fn handle_query_project(
             .embedding_model
             .or_else(|| config.query_project_index.embedding_model.clone()),
     );
-    let embedding_mode = match resolve_embedding_mode(config.query_project_index.require_embeddings)
-    {
+    let embedding_mode = match resolve_embedding_mode(
+        config.query_project_index.require_embeddings,
+        &embedding_model,
+    ) {
         Ok(embedding_mode) => embedding_mode,
         Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
     };
@@ -393,7 +455,7 @@ pub(crate) async fn handle_query_project(
         Err(err) => return call_tool_error(format!("index refresh failed: {err}")),
     };
 
-    let results = match index
+    let search_outcome = match index
         .search(
             query,
             limit,
@@ -406,6 +468,15 @@ pub(crate) async fn handle_query_project(
         Ok(results) => results,
         Err(err) => return call_tool_error(format!("hybrid search failed: {err}")),
     };
+    let embedding_status = if let Some(reason) = search_outcome.embedding_fallback_reason {
+        RepoEmbeddingStatus {
+            mode_used: embedding_mode.mode,
+            ready: false,
+            reason: Some(reason.to_string()),
+        }
+    } else {
+        embedding_mode.status()
+    };
 
     let payload = json!({
         "repo_root": repo_root.display().to_string(),
@@ -413,9 +484,9 @@ pub(crate) async fn handle_query_project(
         "limit": limit,
         "alpha": params.alpha,
         "embedding_model": embedding_model,
-        "embedding_status": embedding_mode.status(),
+        "embedding_status": embedding_status,
         "refresh": refresh_stats,
-        "results": results,
+        "results": search_outcome.results,
     });
     call_tool_success(payload)
 }
@@ -435,14 +506,23 @@ fn embedding_model_or_default(model: Option<String>) -> String {
     }
 }
 
-fn resolve_embedding_mode(require_embeddings: bool) -> anyhow::Result<SelectedEmbeddingMode> {
-    let api_key = std::env::var("OPENAI_API_KEY").ok();
-    resolve_embedding_mode_from_api_key(require_embeddings, api_key.as_deref())
+fn resolve_embedding_mode(
+    require_embeddings: bool,
+    model: &str,
+) -> anyhow::Result<SelectedEmbeddingMode> {
+    let provider = EmbeddingProvider::from_model(model);
+    let api_key = std::env::var(provider.api_key_env_var()).ok();
+    resolve_embedding_mode_from_api_key(
+        require_embeddings,
+        api_key.as_deref(),
+        provider.api_key_env_var(),
+    )
 }
 
 fn resolve_embedding_mode_from_api_key(
     require_embeddings: bool,
     api_key: Option<&str>,
+    api_key_env_var: &str,
 ) -> anyhow::Result<SelectedEmbeddingMode> {
     if api_key.is_some_and(|value| !value.trim().is_empty()) {
         return Ok(SelectedEmbeddingMode {
@@ -451,7 +531,7 @@ fn resolve_embedding_mode_from_api_key(
         });
     }
     if require_embeddings {
-        anyhow::bail!("OPENAI_API_KEY is required when require_embeddings=true");
+        anyhow::bail!("{api_key_env_var} is required when require_embeddings=true");
     }
     Ok(SelectedEmbeddingMode {
         mode: EmbeddingMode::Skip,
@@ -538,6 +618,7 @@ fn create_tool_input_schema(schema: schemars::schema::RootSchema) -> Arc<JsonObj
 struct RepoHybridIndex {
     repo_root: PathBuf,
     pool: SqlitePool,
+    refresh_lock: Arc<AsyncMutex<()>>,
 }
 
 impl RepoHybridIndex {
@@ -551,15 +632,33 @@ impl RepoHybridIndex {
             .filename(&db_path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(SQLITE_BUSY_TIMEOUT_SECS));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(connect_options)
             .await
             .with_context(|| format!("failed to open SQLite DB `{}`", db_path.display()))?;
+        static REFRESH_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> =
+            OnceLock::new();
+        let refresh_lock = {
+            let locks = REFRESH_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut guard = locks
+                .lock()
+                .expect("repo index refresh lock map should not be poisoned");
+            match guard.get(repo_root) {
+                Some(lock) => Arc::clone(lock),
+                None => {
+                    let lock = Arc::new(AsyncMutex::new(()));
+                    guard.insert(repo_root.to_path_buf(), Arc::clone(&lock));
+                    lock
+                }
+            }
+        };
         let index = Self {
             repo_root: repo_root.to_path_buf(),
             pool,
+            refresh_lock,
         };
         index.ensure_schema().await?;
         Ok(index)
@@ -673,6 +772,7 @@ impl RepoHybridIndex {
         embedding_model: String,
         embedding_mode: EmbeddingMode,
     ) -> anyhow::Result<RepoIndexRefreshStats> {
+        let _refresh_guard = self.refresh_lock.lock().await;
         let glob_set = build_glob_set(file_globs)?;
         let stored_model = self.load_metadata(METADATA_EMBEDDING_MODEL).await?;
         let stored_ready = self.embedding_ready().await?;
@@ -871,23 +971,29 @@ impl RepoHybridIndex {
         alpha: f32,
         file_globs: &[String],
         embedding_model: String,
-    ) -> anyhow::Result<Vec<RepoHybridSearchResultItem>> {
+    ) -> anyhow::Result<SearchOutcome> {
         let glob_set = build_glob_set(file_globs)?;
         let mut vector_scores = Vec::new();
         let mut effective_alpha = 0.0;
+        let mut embedding_fallback_reason = None;
         if self.embedding_ready().await? {
             match embed_texts(&embedding_model, &[query.to_string()]).await {
-                Ok(mut embeddings) => {
-                    let query_embedding = embeddings
-                        .pop()
-                        .context("embedding service returned no query embedding")?;
-                    vector_scores = self
-                        .vector_scores(&query_embedding, limit, glob_set.as_ref())
-                        .await?;
-                    effective_alpha = alpha;
+                Ok(embeddings) => {
+                    let (query_embedding, fallback_reason) =
+                        query_embedding_or_fallback_reason(embeddings);
+                    if let Some(query_embedding) = query_embedding {
+                        vector_scores = self
+                            .vector_scores(&query_embedding, limit, glob_set.as_ref())
+                            .await?;
+                        effective_alpha = alpha;
+                    } else {
+                        effective_alpha = 0.0;
+                        embedding_fallback_reason = fallback_reason;
+                    }
                 }
                 Err(_) => {
                     effective_alpha = 0.0;
+                    embedding_fallback_reason = Some(EMBEDDING_REASON_QUERY_FAILED);
                 }
             }
         }
@@ -901,7 +1007,10 @@ impl RepoHybridIndex {
             .await?;
 
         if vector_scores.is_empty() && lexical_scores.is_empty() {
-            return Ok(Vec::new());
+            return Ok(SearchOutcome {
+                results: Vec::new(),
+                embedding_fallback_reason,
+            });
         }
 
         let lexical_score_pairs = lexical_scores.into_iter().collect::<Vec<_>>();
@@ -954,7 +1063,10 @@ impl RepoHybridIndex {
                 });
             }
         }
-        Ok(results)
+        Ok(SearchOutcome {
+            results,
+            embedding_fallback_reason,
+        })
     }
 
     async fn vector_scores(
@@ -1089,7 +1201,13 @@ impl RepoHybridIndex {
             .arg("--")
             .arg(query)
             .arg(".");
-        let output = command.output().await?;
+        let output = match command.output().await {
+            Ok(output) => output,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                return Ok(HashMap::new());
+            }
+            Err(err) => return Err(err.into()),
+        };
         if output.status.code() == Some(1) {
             return Ok(HashMap::new());
         }
@@ -1172,8 +1290,17 @@ fn build_glob_set(file_globs: &[String]) -> anyhow::Result<Option<GlobSet>> {
         return Ok(None);
     }
     let mut builder = GlobSetBuilder::new();
-    for file_glob in file_globs.iter().filter(|glob| !glob.trim().is_empty()) {
-        builder.add(Glob::new(file_glob).with_context(|| format!("invalid glob `{file_glob}`"))?);
+    let mut has_globs = false;
+    for file_glob in file_globs {
+        let trimmed = file_glob.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        builder.add(Glob::new(trimmed).with_context(|| format!("invalid glob `{trimmed}`"))?);
+        has_globs = true;
+    }
+    if !has_globs {
+        return Ok(None);
     }
     Ok(Some(builder.build()?))
 }
@@ -1331,6 +1458,15 @@ fn normalize_scores(scores: &[(i64, f32)]) -> HashMap<i64, f32> {
         .collect()
 }
 
+fn query_embedding_or_fallback_reason(
+    mut embeddings: Vec<Vec<f32>>,
+) -> (Option<Vec<f32>>, Option<&'static str>) {
+    match embeddings.pop() {
+        Some(embedding) => (Some(embedding), None),
+        None => (None, Some(EMBEDDING_REASON_QUERY_FAILED)),
+    }
+}
+
 fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
     if left.is_empty() || right.is_empty() || left.len() != right.len() {
         return 0.0;
@@ -1385,12 +1521,15 @@ async fn embed_texts(model: &str, inputs: &[String]) -> anyhow::Result<Vec<Vec<f
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .context("OPENAI_API_KEY is required for query_project embeddings")?;
-    let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let embeddings_url = format!("{}/embeddings", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let provider = EmbeddingProvider::from_model(model);
+    let api_key_env_var = provider.api_key_env_var();
+    let api_key = std::env::var(api_key_env_var)
+        .with_context(|| format!("{api_key_env_var} is required for query_project embeddings"))?;
+    let embeddings_url = provider.embeddings_url();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(EMBEDDING_REQUEST_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(EMBEDDING_CONNECT_TIMEOUT_SECS))
+        .build()?;
 
     let mut all_embeddings = Vec::<Vec<f32>>::with_capacity(inputs.len());
     for batch in inputs.chunks(EMBED_BATCH_SIZE) {
@@ -1450,9 +1589,31 @@ mod tests {
     }
 
     #[test]
+    fn query_embedding_or_fallback_reason_returns_embedding_when_present() {
+        let (embedding, reason) =
+            query_embedding_or_fallback_reason(vec![vec![0.25_f32, 0.75_f32]]);
+        assert_eq!(embedding, Some(vec![0.25_f32, 0.75_f32]));
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn query_embedding_or_fallback_reason_sets_reason_when_missing() {
+        let (embedding, reason) = query_embedding_or_fallback_reason(Vec::new());
+        assert_eq!(embedding, None);
+        assert_eq!(reason, Some(EMBEDDING_REASON_QUERY_FAILED));
+    }
+
+    #[test]
+    fn build_glob_set_ignores_blank_entries() {
+        let glob_set = build_glob_set(&["  ".to_string(), "\n".to_string()]).expect("glob set");
+        assert!(glob_set.is_none());
+    }
+
+    #[test]
     fn resolve_embedding_mode_uses_required_when_api_key_is_present() {
-        let mode = resolve_embedding_mode_from_api_key(false, Some("test-key"))
-            .expect("mode should resolve");
+        let mode =
+            resolve_embedding_mode_from_api_key(false, Some("test-key"), OPENAI_API_KEY_ENV_VAR)
+                .expect("mode should resolve");
         assert_eq!(mode.mode, EmbeddingMode::Required);
         assert_eq!(mode.reason, None);
         assert_eq!(mode.status().ready, true);
@@ -1460,8 +1621,8 @@ mod tests {
 
     #[test]
     fn resolve_embedding_mode_defaults_to_skip_without_api_key() {
-        let mode =
-            resolve_embedding_mode_from_api_key(false, None).expect("mode should resolve to skip");
+        let mode = resolve_embedding_mode_from_api_key(false, None, OPENAI_API_KEY_ENV_VAR)
+            .expect("mode should resolve to skip");
         assert_eq!(mode.mode, EmbeddingMode::Skip);
         assert_eq!(mode.reason, Some(EMBEDDING_REASON_MISSING_API_KEY));
         assert_eq!(mode.status().ready, false);
@@ -1469,11 +1630,33 @@ mod tests {
 
     #[test]
     fn resolve_embedding_mode_requires_api_key_in_strict_mode() {
-        let err = resolve_embedding_mode_from_api_key(true, None)
+        let err = resolve_embedding_mode_from_api_key(true, None, OPENAI_API_KEY_ENV_VAR)
             .expect_err("strict mode should fail without api key");
         assert_eq!(
             err.to_string(),
             "OPENAI_API_KEY is required when require_embeddings=true"
+        );
+    }
+
+    #[test]
+    fn embedding_provider_uses_voyage_for_voyage_models() {
+        assert_eq!(
+            EmbeddingProvider::from_model("voyage-3-large"),
+            EmbeddingProvider::Voyage
+        );
+        assert_eq!(
+            EmbeddingProvider::from_model("text-embedding-3-small"),
+            EmbeddingProvider::OpenAiCompatible
+        );
+    }
+
+    #[test]
+    fn resolve_embedding_mode_requires_voyage_api_key_in_strict_mode() {
+        let err = resolve_embedding_mode_from_api_key(true, None, VOYAGE_API_KEY_ENV_VAR)
+            .expect_err("strict mode should fail without voyage api key");
+        assert_eq!(
+            err.to_string(),
+            "VOYAGE_API_KEY is required when require_embeddings=true"
         );
     }
 
@@ -1513,8 +1696,8 @@ mod tests {
         std::fs::write(repo_root.join("README.md"), "needle").expect("write README");
 
         let index = RepoHybridIndex::open(repo_root).await.expect("open index");
-        let mode =
-            resolve_embedding_mode_from_api_key(false, None).expect("mode should resolve to skip");
+        let mode = resolve_embedding_mode_from_api_key(false, None, OPENAI_API_KEY_ENV_VAR)
+            .expect("mode should resolve to skip");
         index
             .refresh(&[], false, "model".to_string(), mode.mode)
             .await
@@ -1539,17 +1722,19 @@ mod tests {
             .refresh(&[], false, "model".to_string(), EmbeddingMode::Skip)
             .await
             .expect("refresh");
-        let results = index
+        let outcome = index
             .search("needle", 5, 1.0, &[], "model".to_string())
             .await
             .expect("search");
 
         assert!(
-            results
+            outcome
+                .results
                 .iter()
                 .any(|result| result.snippet.contains("needle")),
-            "expected lexical match in results: {results:?}"
+            "expected lexical match in results: {outcome:?}"
         );
+        assert_eq!(outcome.embedding_fallback_reason, None);
     }
 
     #[tokio::test]
