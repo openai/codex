@@ -146,18 +146,9 @@ pub async fn upload_rollout_with_owner(
             upload_meta(&store, &meta_key, &updated).await?;
         }
         (true, None) => {
-            // Recover from a previous metadata upload failure by restoring metadata
-            // and overwriting the rollout blob.
-            let meta = SessionShareMeta {
-                owner: owner.to_string(),
-                created_at: now,
-                updated_at: now,
-            };
-            upload_meta(&store, &meta_key, &meta).await?;
-            store
-                .put_object(&key, data, "application/x-ndjson")
-                .await
-                .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
+            return Err(anyhow::anyhow!(
+                "remote session already exists but has no metadata; refusing to overwrite"
+            ));
         }
         (false, Some(meta)) => {
             if meta.owner != owner {

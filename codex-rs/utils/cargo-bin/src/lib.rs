@@ -126,7 +126,7 @@ fn cargo_target_dir() -> Result<PathBuf, CargoBinError> {
 
 fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> {
     path.absolutize()
-        .map(|abs| abs.into_owned())
+        .map(std::borrow::Cow::into_owned)
         .map_err(|source| CargoBinError::CurrentDir { source })
 }
 
