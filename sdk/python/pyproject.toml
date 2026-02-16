@@ -32,8 +32,27 @@ Issues = "https://github.com/openai/codex/issues"
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[tool.hatch.build]
+exclude = [
+  ".venv/**",
+  ".venv2/**",
+  ".pytest_cache/**",
+  "dist/**",
+  "build/**",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/codex_app_server"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/codex_app_server/**",
+  "README.md",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "RELEASE_CHECKLIST.md",
+  "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"
