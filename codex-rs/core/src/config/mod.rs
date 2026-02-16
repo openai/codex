@@ -1323,6 +1323,41 @@ pub struct ConfigOverrides {
     pub additional_writable_roots: Vec<PathBuf>,
 }
 
+impl ConfigOverrides {
+    /// Builds the set of "runtime-only" overrides that must be preserved when
+    /// reloading a `Config` from a modified `ConfigLayerStack` (for example,
+    /// when applying an agent role config layer).
+    ///
+    /// This intentionally excludes fields that an agent role config is
+    /// expected to override (for example `model` or `sandbox_mode`).
+    pub(crate) fn for_role_reload(config: &Config) -> Self {
+        let additional_writable_roots = match config.permissions.sandbox_policy.get() {
+            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => writable_roots
+                .iter()
+                .map(|root| root.to_path_buf())
+                .collect(),
+            SandboxPolicy::DangerFullAccess
+            | SandboxPolicy::ExternalSandbox { .. }
+            | SandboxPolicy::ReadOnly { .. } => Vec::new(),
+        };
+
+        Self {
+            cwd: Some(config.cwd.clone()),
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            model_provider: Some(config.model_provider_id.clone()),
+            js_repl_node_path: config.js_repl_node_path.clone(),
+            base_instructions: config.base_instructions.clone(),
+            developer_instructions: config.developer_instructions.clone(),
+            personality: config.personality,
+            compact_prompt: config.compact_prompt.clone(),
+            show_raw_agent_reasoning: Some(config.show_raw_agent_reasoning),
+            ephemeral: Some(config.ephemeral),
+            additional_writable_roots,
+            ..Default::default()
+        }
+    }
+}
+
 /// Resolves the OSS provider from CLI override, profile config, or global config.
 /// Returns `None` if no provider is configured at any level.
 pub fn resolve_oss_provider(

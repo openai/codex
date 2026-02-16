@@ -6,6 +6,7 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::config_types::SandboxMode;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -95,6 +96,16 @@ pub(crate) async fn apply_role_to_config(
     };
 
     let original = config.clone();
+    let role_overrides_sandbox_mode = agent_config
+        .as_table()
+        .and_then(|table| table.get("sandbox_mode"))
+        .is_some();
+    let runtime_sandbox_mode = match original.permissions.sandbox_policy.get() {
+        crate::protocol::SandboxPolicy::ReadOnly { .. } => Some(SandboxMode::ReadOnly),
+        crate::protocol::SandboxPolicy::WorkspaceWrite { .. } => Some(SandboxMode::WorkspaceWrite),
+        crate::protocol::SandboxPolicy::DangerFullAccess => Some(SandboxMode::DangerFullAccess),
+        crate::protocol::SandboxPolicy::ExternalSandbox { .. } => None,
+    };
     let original_stack = &original.config_layer_stack;
     let mut layers = original
         .config_layer_stack
@@ -132,13 +143,13 @@ pub(crate) async fn apply_role_to_config(
             AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
         })?;
 
+    let mut overrides = ConfigOverrides::for_role_reload(&original);
+    if !role_overrides_sandbox_mode {
+        overrides.sandbox_mode = runtime_sandbox_mode;
+    }
     *config = Config::load_config_with_layer_stack(
         layered_config,
-        ConfigOverrides {
-            cwd: Some(original.cwd.clone()),
-            codex_linux_sandbox_exe: original.codex_linux_sandbox_exe.clone(),
-            ..Default::default()
-        },
+        overrides,
         original.codex_home.clone(),
         layered_stack,
     )
@@ -318,6 +329,7 @@ fn parse_agents_config(contents: &str, source: &str) -> Result<AgentsConfigToml,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::built_in_model_providers;
     use crate::config::test_config;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -571,6 +583,51 @@ enabled_tools = ["search"]
             layers.last().map(|layer| &layer.name),
             Some(ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. })
         ));
+    }
+
+    /// Preserves runtime-only harness overrides (provider, ephemeral, writable roots)
+    /// when a role config layer forces a reload via `load_config_with_layer_stack`.
+    #[tokio::test]
+    async fn apply_role_to_config_preserves_runtime_overrides() {
+        let mut config = test_config();
+        config.model_provider_id = "lmstudio".to_string();
+        config.model_provider = built_in_model_providers()["lmstudio"].clone();
+        config.ephemeral = true;
+
+        let dir = TempDir::new().expect("tempdir");
+        let extra_root = AbsolutePathBuf::try_from(dir.path().to_path_buf()).expect("extra root");
+        config
+            .permissions
+            .sandbox_policy
+            .set(crate::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![extra_root.clone()],
+                read_only_access: crate::protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            })
+            .expect("sandbox_policy");
+
+        apply_role_to_config(&mut config, Some("explorer"))
+            .await
+            .expect("apply explorer role");
+
+        assert_eq!(config.model_provider_id, "lmstudio".to_string());
+        assert_eq!(
+            config.model_provider,
+            built_in_model_providers()["lmstudio"].clone()
+        );
+        assert_eq!(config.ephemeral, true);
+        assert_eq!(
+            config.permissions.sandbox_policy.get(),
+            &crate::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![extra_root],
+                read_only_access: crate::protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }
+        );
     }
 
     #[test]
