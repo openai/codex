@@ -11,6 +11,7 @@ Python SDK for `codex app-server` JSON-RPC v2 over stdio.
 - ✅ integration-test harness with fake app-server
 - ✅ async client (`AsyncAppServerClient`)
 - ✅ typed convenience wrappers (`ThreadStartResult`, `TurnStartResult`)
+- ✅ protocol TypedDicts for v2 core responses (`ThreadStartResponse`, `TurnStartResponse`, etc.)
 - ✅ optional real app-server integration test (gated by env var)
 - 🔜 full generated models from app-server JSON schema
 

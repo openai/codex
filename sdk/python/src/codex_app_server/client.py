@@ -13,6 +13,13 @@ from typing import Any, Callable
 from .errors import AppServerError, JsonRpcError, TransportClosedError
 from .models import Notification
 from .typed import ThreadStartResult, TurnStartResult
+from .protocol_types import (
+    ThreadListResponse,
+    ThreadReadResponse,
+    ThreadResumeResponse,
+    ThreadStartResponse,
+    TurnStartResponse,
+)
 
 ApprovalHandler = Callable[[str, dict[str, Any] | None], dict[str, Any]]
 
@@ -163,20 +170,20 @@ class AppServerClient:
 
     # ---------- High-level v2 API ----------
 
-    def thread_start(self, **params: Any) -> dict[str, Any]:
+    def thread_start(self, **params: Any) -> ThreadStartResponse:
         return self.request("thread/start", params)
 
-    def thread_resume(self, thread_id: str, **params: Any) -> dict[str, Any]:
+    def thread_resume(self, thread_id: str, **params: Any) -> ThreadResumeResponse:
         payload = {"threadId": thread_id, **params}
         return self.request("thread/resume", payload)
 
-    def thread_list(self, **params: Any) -> dict[str, Any]:
+    def thread_list(self, **params: Any) -> ThreadListResponse:
         return self.request("thread/list", params)
 
-    def thread_read(self, thread_id: str, include_turns: bool = False) -> dict[str, Any]:
+    def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
         return self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
 
-    def turn_start(self, thread_id: str, input_items: list[dict[str, Any]], **params: Any) -> dict[str, Any]:
+    def turn_start(self, thread_id: str, input_items: list[dict[str, Any]], **params: Any) -> TurnStartResponse:
         payload = {"threadId": thread_id, "input": input_items, **params}
         return self.request("turn/start", payload)
 
