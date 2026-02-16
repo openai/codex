@@ -1,0 +1,9 @@
+---
+source: core/src/compact.rs
+expression: "context_snapshot::format_labeled_items_snapshot(\"When compaction output contains only a summary user message, canonical context is still reinserted before the summary.\",\n&[(\"Refreshed History Layout\", refreshed_items.as_slice())],\n&ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 64 }),)"
+---
+Scenario: When compaction output contains only a summary user message, canonical context is still reinserted before the summary.
+
+## Refreshed History Layout
+00:message/developer:fresh permissions
+01:message/user:<COMPACTION_SUMMARY>\nsummary text

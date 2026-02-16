@@ -389,15 +389,27 @@ pub(crate) fn process_compacted_history(
 
     match turn_context_reinjection {
         TurnContextReinjection::ReinjectAboveLastRealUser => {
-            // Insert immediately above the last real user message so turn context applies to that
-            // user input rather than an earlier turn.
-            if let Some(insertion_index) = compacted_history
+            // Prefer inserting immediately above the last real user message so turn context
+            // applies to that user input rather than an earlier turn. If compaction output is
+            // summary-only, insert before the first summary user message to keep canonical context
+            // present for the next sampling request.
+            let insertion_index = if let Some(last_real_user_index) = compacted_history
                 .iter()
                 .rposition(is_non_summary_user_message)
             {
-                compacted_history
-                    .splice(insertion_index..insertion_index, initial_context.to_vec());
-            }
+                last_real_user_index
+            } else if let Some(first_summary_index) = compacted_history.iter().position(|item| {
+                matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(user_message))
+                        if is_summary_message(&user_message.message())
+                )
+            }) {
+                first_summary_index
+            } else {
+                compacted_history.len()
+            };
+            compacted_history.splice(insertion_index..insertion_index, initial_context.to_vec());
         }
         TurnContextReinjection::Skip => {}
     }
@@ -560,7 +572,12 @@ async fn drain_to_completed(
 mod tests {
 
     use super::*;
+    use core_test_support::context_snapshot;
+    use core_test_support::context_snapshot::ContextSnapshotOptions;
+    use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
 
     #[test]
     fn content_items_to_text_joins_non_empty_segments() {
@@ -1534,7 +1551,7 @@ keep me updated
     }
 
     #[test]
-    fn process_compacted_history_reinject_noops_without_real_user_message() {
+    fn process_compacted_history_reinjects_context_when_compaction_output_is_summary_only() {
         let compacted_history = vec![ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1559,16 +1576,21 @@ keep me updated
             &initial_context,
             TurnContextReinjection::ReinjectAboveLastRealUser,
         );
-        let expected = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("{SUMMARY_PREFIX}\nsummary text"),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
-        assert_eq!(refreshed, expected);
+        let refreshed_value =
+            serde_json::to_value(&refreshed).expect("serialize refreshed history");
+        let Value::Array(refreshed_items) = refreshed_value else {
+            panic!("expected refreshed history to serialize as array");
+        };
+
+        assert_snapshot!(
+            "process_compacted_history_reinject_summary_only_shapes",
+            context_snapshot::format_labeled_items_snapshot(
+                "When compaction output contains only a summary user message, canonical context is still reinserted before the summary.",
+                &[("Refreshed History Layout", refreshed_items.as_slice())],
+                &ContextSnapshotOptions::default()
+                    .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+            )
+        );
     }
 
     #[test]
