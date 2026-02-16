@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-app-server-sdk"
+version = "0.1.0"
+description = "Python SDK for Codex app-server v2"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "OpenClaw Assistant" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_app_server"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
