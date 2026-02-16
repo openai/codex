@@ -512,7 +512,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RequestRule,
         key: "request_rule",
         stage: Stage::Removed,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

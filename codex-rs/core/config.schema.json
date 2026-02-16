@@ -248,6 +248,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "request_rule": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -1376,6 +1379,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "request_rule": {
           "type": "boolean"
         },
         "responses_websockets": {
