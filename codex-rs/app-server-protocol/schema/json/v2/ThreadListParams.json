@@ -39,6 +39,13 @@
         "null"
       ]
     },
+    "cwd": {
+      "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "limit": {
       "description": "Optional page size; defaults to a reasonable server-side value.",
       "format": "uint32",

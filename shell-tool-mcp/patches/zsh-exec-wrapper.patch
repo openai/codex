@@ -1,0 +1,34 @@
+diff --git a/Src/exec.c b/Src/exec.c
+index 27bca11..baea760 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -507,7 +507,9 @@ zexecve(char *pth, char **argv, char **newenvp)
+ {
+     int eno;
+     static char buf[PATH_MAX * 2+1];
+-    char **eep;
++    char **eep, **exec_argv;
++    char *orig_pth = pth;
++    char *exec_wrapper;
+ 
+     unmetafy(pth, NULL);
+     for (eep = argv; *eep; eep++)
+@@ -526,8 +528,17 @@ zexecve(char *pth, char **argv, char **newenvp)
+ 
+     if (newenvp == NULL)
+ 	    newenvp = environ;
++    exec_argv = argv;
++    if ((exec_wrapper = getenv("EXEC_WRAPPER")) &&
++	*exec_wrapper && !inblank(*exec_wrapper)) {
++	exec_argv = argv - 2;
++	exec_argv[0] = exec_wrapper;
++	exec_argv[1] = orig_pth;
++	pth = exec_wrapper;
++    }
+     winch_unblock();
+-    execve(pth, argv, newenvp);
++    execve(pth, exec_argv, newenvp);
++    pth = orig_pth;
+ 
+     /* If the execve returns (which in general shouldn't happen),   *
+      * then check for an errno equal to ENOEXEC.  This errno is set *

@@ -16,7 +16,7 @@ pub fn add_dir_warning_message(
         SandboxPolicy::WorkspaceWrite { .. }
         | SandboxPolicy::DangerFullAccess
         | SandboxPolicy::ExternalSandbox { .. } => None,
-        SandboxPolicy::ReadOnly => Some(format_warning(additional_dirs)),
+        SandboxPolicy::ReadOnly { .. } => Some(format_warning(additional_dirs)),
     }
 }
 
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn warns_for_read_only() {
-        let sandbox = SandboxPolicy::ReadOnly;
+        let sandbox = SandboxPolicy::new_read_only_policy();
         let dirs = vec![PathBuf::from("relative"), PathBuf::from("/abs")];
         let message = add_dir_warning_message(&dirs, &sandbox)
             .expect("expected warning for read-only sandbox");
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn returns_none_when_no_additional_dirs() {
-        let sandbox = SandboxPolicy::ReadOnly;
+        let sandbox = SandboxPolicy::new_read_only_policy();
         let dirs: Vec<PathBuf> = Vec::new();
         assert_eq!(add_dir_warning_message(&dirs, &sandbox), None);
     }

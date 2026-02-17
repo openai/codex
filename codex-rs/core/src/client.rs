@@ -325,6 +325,9 @@ impl ModelClient {
             let subagent = match sub {
                 crate::protocol::SubAgentSource::Review => "review".to_string(),
                 crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::MemoryConsolidation => {
+                    "memory_consolidation".to_string()
+                }
                 crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
                 crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
@@ -346,7 +349,7 @@ impl ModelClient {
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.provider.supports_websockets
             && (self.state.enable_responses_websockets || model_info.prefer_websockets)
     }
@@ -630,7 +633,6 @@ impl ModelClientSession {
         &mut self,
         otel_manager: &OtelManager,
         model_info: &ModelInfo,
-        turn_metadata_header: Option<&str>,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
         {
@@ -653,7 +655,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
+                None,
             )
             .await?;
         self.connection = Some(connection);

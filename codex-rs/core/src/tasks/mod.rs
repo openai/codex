@@ -120,7 +120,7 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
-        self.clear_mcp_tool_selection().await;
+        self.clear_connector_selection().await;
         self.seed_initial_context_if_needed(turn_context.as_ref())
             .await;
 
@@ -149,18 +149,16 @@ impl Session {
                             task_cancellation_token.child_token(),
                         )
                         .await;
-                    session_ctx.clone_session().flush_rollout().await;
+                    let sess = session_ctx.clone_session();
+                    sess.flush_rollout().await;
+                    // Update previous model before TurnComplete is emitted so
+                    // immediately following turns observe the correct switch state.
+                    sess.set_previous_model(Some(model_slug)).await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        let sess = session_ctx.clone_session();
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
-                    // Set previous model regardless of completion or interruption for model-switch handling.
-                    session_ctx
-                        .clone_session()
-                        .set_previous_model(Some(model_slug))
-                        .await;
                     done_clone.notify_waiters();
                 }
                 .instrument(session_span),
@@ -198,6 +196,10 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
+
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
@@ -261,6 +263,9 @@ impl Session {
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
+        task.turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
         let session_task = task.task;
 
         select! {

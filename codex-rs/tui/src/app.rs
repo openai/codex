@@ -3,8 +3,6 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
-#[cfg(target_os = "windows")]
-use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
@@ -365,6 +363,13 @@ fn should_show_model_migration_prompt(
         return false;
     }
 
+    if !available_models
+        .iter()
+        .any(|preset| preset.model == target_model && preset.show_in_picker)
+    {
+        return false;
+    }
+
     if available_models
         .iter()
         .any(|preset| preset.model == current_model && preset.upgrade.is_some())
@@ -401,7 +406,7 @@ fn target_preset_for_upgrade<'a>(
 ) -> Option<&'a ModelPreset> {
     available_models
         .iter()
-        .find(|preset| preset.model == target_model)
+        .find(|preset| preset.model == target_model && preset.show_in_picker)
 }
 
 async fn handle_model_migration_prompt_if_needed(
@@ -551,9 +556,21 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// Ignore the next ShutdownComplete event when we're intentionally
-    /// stopping a thread (e.g., before starting a new one).
+    /// One-shot guard used while switching threads.
+    ///
+    /// We set this when intentionally stopping the current thread before moving
+    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
+    /// misclassified as an unexpected sub-agent death.
     suppress_shutdown_complete: bool,
+    /// Tracks the thread we intentionally shut down while exiting the app.
+    ///
+    /// When this matches the active thread, its `ShutdownComplete` should lead to
+    /// process exit instead of being treated as an unexpected sub-agent death that
+    /// triggers failover to the primary thread.
+    ///
+    /// This is thread-scoped state (`Option<ThreadId>`) instead of a global bool
+    /// so shutdown events from other threads still take the normal failover path.
+    pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
 
@@ -626,9 +643,16 @@ impl App {
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
     }
 
+    async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
+        let mut config = self.rebuild_config_for_cwd(self.config.cwd.clone()).await?;
+        self.apply_runtime_policy_overrides(&mut config);
+        self.config = config;
+        Ok(())
+    }
+
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
         if let Some(policy) = self.runtime_approval_policy_override.as_ref()
-            && let Err(err) = config.approval_policy.set(*policy)
+            && let Err(err) = config.permissions.approval_policy.set(*policy)
         {
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
@@ -636,7 +660,7 @@ impl App {
             ));
         }
         if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
-            && let Err(err) = config.sandbox_policy.set(policy.clone())
+            && let Err(err) = config.permissions.sandbox_policy.set(policy.clone())
         {
             tracing::warn!(%err, "failed to carry forward sandbox policy override");
             self.chat_widget.add_error_message(format!(
@@ -921,6 +945,29 @@ impl App {
         Ok(())
     }
 
+    /// Returns `(closed_thread_id, primary_thread_id)` when a non-primary active
+    /// thread has died and we should fail over to the primary thread.
+    ///
+    /// A user-requested shutdown (`ExitMode::ShutdownFirst`) sets
+    /// `pending_shutdown_exit_thread_id`; matching shutdown completions are ignored
+    /// here so Ctrl+C-like exits don't accidentally resurrect the main thread.
+    ///
+    /// Failover is only eligible when all of these are true:
+    /// 1. the event is `ShutdownComplete`;
+    /// 2. the active thread differs from the primary thread;
+    /// 3. the active thread is not the pending shutdown-exit thread.
+    fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
+        if !matches!(msg, EventMsg::ShutdownComplete) {
+            return None;
+        }
+        let active_thread_id = self.active_thread_id?;
+        let primary_thread_id = self.primary_thread_id?;
+        if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
+            return None;
+        }
+        (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
+    }
+
     fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
@@ -929,6 +976,27 @@ impl App {
             self.handle_codex_event_replay(event);
         }
         self.refresh_status_line();
+    }
+
+    fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
+        matches!(
+            session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        )
+    }
+
+    fn should_handle_active_thread_events(
+        waiting_for_initial_session_configured: bool,
+        has_active_thread_receiver: bool,
+    ) -> bool {
+        has_active_thread_receiver && !waiting_for_initial_session_configured
+    }
+
+    fn should_stop_waiting_for_initial_session(
+        waiting_for_initial_session_configured: bool,
+        primary_thread_id: Option<ThreadId>,
+    ) -> bool {
+        waiting_for_initial_session_configured && primary_thread_id.is_some()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1021,6 +1089,8 @@ impl App {
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let wait_for_initial_session_configured =
+            Self::should_wait_for_initial_session(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1078,7 +1148,7 @@ impl App {
             SessionSelection::Fork(path) => {
                 otel_manager.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .fork_thread(usize::MAX, config.clone(), path.clone(), false)
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -1141,6 +1211,7 @@ impl App {
             feedback_audience,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -1156,9 +1227,9 @@ impl App {
             let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && matches!(
-                    app.config.sandbox_policy.get(),
+                    app.config.permissions.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 )
                 && !app
                     .config
@@ -1170,7 +1241,7 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.get().clone();
+                let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
@@ -1204,6 +1275,7 @@ impl App {
 
         let mut thread_created_rx = thread_manager.subscribe_thread_created();
         let mut listen_for_threads = true;
+        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
             let control = select! {
@@ -1216,9 +1288,12 @@ impl App {
                     } else {
                         None
                     }
-                }, if app.active_thread_rx.is_some() => {
+                }, if App::should_handle_active_thread_events(
+                    waiting_for_initial_session_configured,
+                    app.active_thread_rx.is_some()
+                ) => {
                     if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event)?;
+                        app.handle_active_thread_event(tui, event).await?;
                     } else {
                         app.clear_active_thread().await;
                     }
@@ -1243,6 +1318,12 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            if App::should_stop_waiting_for_initial_session(
+                waiting_for_initial_session_configured,
+                app.primary_thread_id,
+            ) {
+                waiting_for_initial_session_configured = false;
+            }
             match control {
                 AppRunControl::Continue => {}
                 AppRunControl::Exit(reason) => break reason,
@@ -1463,7 +1544,7 @@ impl App {
                     if path.exists() {
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
                             .await
                         {
                             Ok(forked) => {
@@ -1570,8 +1651,15 @@ impl App {
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::Exit(mode) => match mode {
-                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::ShutdownFirst => {
+                    // Mark the thread we are explicitly shutting down for exit so
+                    // its shutdown completion does not trigger agent failover.
+                    self.pending_shutdown_exit_thread_id =
+                        self.active_thread_id.or(self.chat_widget.thread_id());
+                    self.chat_widget.submit_op(Op::Shutdown);
+                }
                 ExitMode::Immediate => {
+                    self.pending_shutdown_exit_thread_id = None;
                     return Ok(AppRunControl::Exit(ExitReason::UserRequested));
                 }
             },
@@ -1598,19 +1686,24 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAppLink {
+                app_id,
                 title,
                 description,
                 instructions,
                 url,
                 is_installed,
+                is_enabled,
             } => {
-                self.chat_widget.open_app_link_view(
-                    title,
-                    description,
-                    instructions,
-                    url,
-                    is_installed,
-                );
+                self.chat_widget
+                    .open_app_link_view(crate::bottom_pane::AppLinkViewParams {
+                        app_id,
+                        title,
+                        description,
+                        instructions,
+                        url,
+                        is_installed,
+                        is_enabled,
+                    });
             }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
@@ -1688,7 +1781,7 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
                 self.otel_manager
                     .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
@@ -1700,7 +1793,7 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset, reason);
+                    .open_windows_sandbox_fallback_prompt(preset);
             }
             AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
@@ -1776,10 +1869,7 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt {
-                                    preset,
-                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
-                                }
+                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
                             }
                         };
                         tx.send(event);
@@ -1800,6 +1890,7 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
+                    let otel_manager = self.otel_manager.clone();
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
@@ -1810,6 +1901,11 @@ impl App {
                             &env_map,
                             codex_home.as_path(),
                         ) {
+                            otel_manager.counter(
+                                "codex.windows_sandbox.legacy_setup_preflight_failed",
+                                1,
+                                &[],
+                            );
                             tracing::warn!(
                                 error = %err,
                                 "failed to preflight non-admin Windows sandbox setup"
@@ -1826,6 +1922,63 @@ impl App {
                     let _ = preset;
                 }
             }
+            AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Granting sandbox read access to {path} ..."),
+                            None,
+                        ));
+
+                    let policy = self.config.permissions.sandbox_policy.get().clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = self.config.cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    tokio::task::spawn_blocking(move || {
+                        let requested_path = PathBuf::from(path);
+                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                            requested_path.as_path(),
+                        ) {
+                            Ok(canonical_path) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: canonical_path,
+                                error: None,
+                            },
+                            Err(err) => AppEvent::WindowsSandboxGrantReadRootCompleted {
+                                path: requested_path,
+                                error: Some(err.to_string()),
+                            },
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = path;
+                }
+            }
+            AppEvent::WindowsSandboxGrantReadRootCompleted { path, error } => match error {
+                Some(err) => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_error_event(format!("Error: {err}")));
+                }
+                None => {
+                    self.chat_widget
+                        .add_to_history(history_cell::new_info_event(
+                            format!("Sandbox read access granted for {}", path.display()),
+                            None,
+                        ));
+                }
+            },
             AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
                 #[cfg(target_os = "windows")]
                 {
@@ -1856,8 +2009,9 @@ impl App {
                                 self.config.set_windows_sandbox_enabled(true);
                                 self.config.set_windows_elevated_sandbox_enabled(false);
                             }
-                            self.chat_widget
-                                .set_windows_sandbox_mode(self.config.windows_sandbox_mode);
+                            self.chat_widget.set_windows_sandbox_mode(
+                                self.config.permissions.windows_sandbox_mode,
+                            );
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
@@ -2003,7 +2157,7 @@ impl App {
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.runtime_approval_policy_override = Some(policy);
-                if let Err(err) = self.config.approval_policy.set(policy) {
+                if let Err(err) = self.config.permissions.approval_policy.set(policy) {
                     tracing::warn!(%err, "failed to set approval policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set approval policy: {err}"));
@@ -2016,18 +2170,16 @@ impl App {
                 let policy_is_workspace_write_or_ro = matches!(
                     &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
-                        | codex_core::protocol::SandboxPolicy::ReadOnly
+                        | codex_core::protocol::SandboxPolicy::ReadOnly { .. }
                 );
-                #[cfg(target_os = "windows")]
                 let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.sandbox_policy.set(policy) {
+                if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
-                #[cfg(target_os = "windows")]
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
@@ -2035,7 +2187,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 self.runtime_sandbox_policy_override =
-                    Some(self.config.sandbox_policy.get().clone());
+                    Some(self.config.permissions.sandbox_policy.get().clone());
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -2056,7 +2208,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.get().clone();
+                        let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -2230,11 +2382,66 @@ impl App {
                 {
                     Ok(()) => {
                         self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after skill toggle"
+                            );
+                        }
                     }
                     Err(err) => {
                         let path_display = path.display();
                         self.chat_widget.add_error_message(format!(
                             "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::SetAppEnabled { id, enabled } => {
+                let edits = if enabled {
+                    vec![
+                        ConfigEdit::ClearPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                        },
+                        ConfigEdit::ClearPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                        },
+                    ]
+                } else {
+                    vec![
+                        ConfigEdit::SetPath {
+                            segments: vec!["apps".to_string(), id.clone(), "enabled".to_string()],
+                            value: false.into(),
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec![
+                                "apps".to_string(),
+                                id.clone(),
+                                "disabled_reason".to_string(),
+                            ],
+                            value: "user".into(),
+                        },
+                    ]
+                };
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_connector_enabled(&id, enabled);
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(error = %err, "failed to refresh config after app toggle");
+                        }
+                        self.chat_widget.submit_op(Op::ReloadUserConfig);
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update app config for {id}: {err}"
                         ));
                     }
                 }
@@ -2336,6 +2543,9 @@ impl App {
             event.msg,
             EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
         );
+        // This guard is only for intentional thread-switch shutdowns.
+        // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
+        // and resolved in `handle_active_thread_event`.
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2357,7 +2567,51 @@ impl App {
         self.chat_widget.handle_codex_event_replay(event);
     }
 
-    fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    /// Handles an event emitted by the currently active thread.
+    ///
+    /// This function enforces shutdown intent routing: unexpected non-primary
+    /// thread shutdowns fail over to the primary thread, while user-requested
+    /// app exits consume only the tracked shutdown completion and then proceed.
+    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        // Capture this before any potential thread switch: we only want to clear
+        // the exit marker when the currently active thread acknowledges shutdown.
+        let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
+            && self.pending_shutdown_exit_thread_id == self.active_thread_id;
+
+        // Processing order matters:
+        //
+        // 1. handle unexpected non-primary shutdown failover first;
+        // 2. clear pending exit marker for matching shutdown;
+        // 3. forward the event through normal handling.
+        //
+        // This preserves the mental model that user-requested exits do not trigger
+        // failover, while true sub-agent deaths still do.
+        if let Some((closed_thread_id, primary_thread_id)) =
+            self.active_non_primary_shutdown_target(&event.msg)
+        {
+            self.thread_event_channels.remove(&closed_thread_id);
+            self.select_agent_thread(tui, primary_thread_id).await?;
+            if self.active_thread_id == Some(primary_thread_id) {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Agent thread {closed_thread_id} closed. Switched back to main thread."
+                    ),
+                    None,
+                );
+            } else {
+                self.clear_active_thread().await;
+                self.chat_widget.add_error_message(format!(
+                    "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
+                ));
+            }
+            return Ok(());
+        }
+
+        if pending_shutdown_exit_completed {
+            // Clear only after seeing the shutdown completion for the tracked
+            // thread, so unrelated shutdowns cannot consume this marker.
+            self.pending_shutdown_exit_thread_id = None;
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
@@ -2641,6 +2895,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -2663,6 +2918,8 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
+    use codex_protocol::user_input::UserInput;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2689,6 +2946,76 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Exit),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Resume(PathBuf::from(
+                "/tmp/restore"
+            ))),
+            false
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Fork(PathBuf::from(
+                "/tmp/fork"
+            ))),
+            false
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_holds_active_thread_events_until_primary_thread_configured() {
+        let mut wait_for_initial_session =
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh);
+        assert_eq!(wait_for_initial_session, true);
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            false
+        );
+
+        assert_eq!(
+            App::should_stop_waiting_for_initial_session(wait_for_initial_session, None),
+            false
+        );
+        if App::should_stop_waiting_for_initial_session(
+            wait_for_initial_session,
+            Some(ThreadId::new()),
+        ) {
+            wait_for_initial_session = false;
+        }
+        assert_eq!(wait_for_initial_session, false);
+
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            true
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
+        let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
+            PathBuf::from("/tmp/restore"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_resume, true),
+            true
+        );
+        let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
+            PathBuf::from("/tmp/fork"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_fork, true),
+            true
+        );
     }
 
     #[tokio::test]
@@ -2745,6 +3072,85 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        app.active_thread_id = Some(ThreadId::new());
+        app.primary_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_for_primary_thread_shutdown()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_ids_for_non_primary_shutdown() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_returns_none_when_shutdown_exit_is_pending()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(active_thread_id);
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_non_primary_shutdown_target_still_switches_for_other_pending_exit_thread()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let active_thread_id = ThreadId::new();
+        let primary_thread_id = ThreadId::new();
+        app.active_thread_id = Some(active_thread_id);
+        app.primary_thread_id = Some(primary_thread_id);
+        app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
+
+        assert_eq!(
+            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            Some((active_thread_id, primary_thread_id))
+        );
+        Ok(())
+    }
+
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
@@ -2787,6 +3193,7 @@ mod tests {
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
             suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             active_thread_id: None,
@@ -2844,6 +3251,7 @@ mod tests {
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
+                pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 active_thread_id: None,
@@ -2871,6 +3279,19 @@ mod tests {
             "test".to_string(),
             SessionSource::Cli,
         )
+    }
+
+    fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
+        config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|table| table.get("apps"))
+            .and_then(TomlValue::as_table)
+            .and_then(|apps| apps.get(app_id))
+            .and_then(TomlValue::as_table)
+            .and_then(|app| app.get("enabled"))
+            .and_then(TomlValue::as_bool)
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
@@ -2903,25 +3324,25 @@ mod tests {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
-            "gpt-5.1",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex",
-            "gpt-5.1-codex",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5-codex-mini",
-            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
         assert!(should_show_model_migration_prompt(
             "gpt-5.1-codex",
-            "gpt-5.1-codex-max",
+            "gpt-5.2-codex",
             &seen,
             &all_model_presets()
         ));
@@ -2952,7 +3373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn model_migration_prompt_skips_when_target_missing() {
+    async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         let mut available = all_model_presets();
         let mut current = available
             .iter()
@@ -2970,7 +3391,7 @@ mod tests {
         available.retain(|preset| preset.model != "gpt-5-codex");
         available.push(current.clone());
 
-        assert!(should_show_model_migration_prompt(
+        assert!(!should_show_model_migration_prompt(
             &current.model,
             "missing-target",
             &BTreeMap::new(),
@@ -2978,6 +3399,21 @@ mod tests {
         ));
 
         assert!(target_preset_for_upgrade(&available, "missing-target").is_none());
+
+        let mut with_hidden_target = all_model_presets();
+        let target = with_hidden_target
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2-codex")
+            .expect("target preset present");
+        target.show_in_picker = false;
+
+        assert!(!should_show_model_migration_prompt(
+            "gpt-5-codex",
+            "gpt-5.2-codex",
+            &BTreeMap::new(),
+            &with_hidden_target,
+        ));
+        assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.2-codex").is_none());
     }
 
     #[tokio::test]
@@ -3053,17 +3489,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        ConfigEditsBuilder::new(&app.config.codex_home)
+            .with_edits([
+                ConfigEdit::SetPath {
+                    segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
+                    value: false.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec![
+                        "apps".to_string(),
+                        app_id.clone(),
+                        "disabled_reason".to_string(),
+                    ],
+                    value: "user".into(),
+                },
+            ])
+            .apply()
+            .await
+            .expect("persist app toggle");
+
+        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+
+        app.refresh_in_memory_config_from_disk().await?;
+
+        assert_eq!(
+            app_enabled_in_effective_config(&app.config, &app_id),
+            Some(false)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str,
                          text_elements: Vec<TextElement>,
-                         local_image_paths: Vec<PathBuf>|
+                         local_image_paths: Vec<PathBuf>,
+                         remote_image_urls: Vec<String>|
          -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
                 text_elements,
                 local_image_paths,
+                remote_image_urls,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3081,7 +3558,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3109,17 +3586,18 @@ mod tests {
         // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up", Vec::new(), Vec::new()),
+            user_cell("follow-up", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer follow-up"),
             make_header(false),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
             user_cell(
                 &edited_text,
                 edited_text_elements.clone(),
                 edited_local_image_paths.clone(),
+                vec!["https://example.com/backtrack.png".to_string()],
             ),
             agent_cell("answer edited"),
         ];
@@ -3136,7 +3614,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3158,8 +3636,16 @@ mod tests {
         assert_eq!(selection.prefill, edited_text);
         assert_eq!(selection.text_elements, edited_text_elements);
         assert_eq!(selection.local_image_paths, edited_local_image_paths);
+        assert_eq!(
+            selection.remote_image_urls,
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         app.apply_backtrack_rollback(selection);
+        assert_eq!(
+            app.chat_widget.remote_image_urls(),
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {
@@ -3169,6 +3655,104 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        let remote_image_url = "https://example.com/remote-only.png".to_string();
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![remote_image_url.clone()],
+        });
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let data_image_url = "data:image/png;base64,abc123".to_string();
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        }) as Arc<dyn HistoryCell>];
+
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        });
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut saw_rollback = false;
+        let mut submitted_items: Option<Vec<UserInput>> = None;
+        while let Ok(op) = op_rx.try_recv() {
+            match op {
+                Op::ThreadRollback { .. } => saw_rollback = true,
+                Op::UserTurn { items, .. } => submitted_items = Some(items),
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let items = submitted_items.expect("expected user turn after backtrack resubmit");
+        assert!(items.iter().any(|item| {
+            matches!(
+                item,
+                UserInput::Image { image_url } if image_url == &data_image_url
+            )
+        }));
     }
 
     #[tokio::test]
@@ -3185,7 +3769,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3264,7 +3848,7 @@ mod tests {
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::ReadOnly,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -3333,6 +3917,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after first")],
@@ -3342,6 +3927,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after second")],
@@ -3388,7 +3974,7 @@ mod tests {
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
             history_log_id: 0,

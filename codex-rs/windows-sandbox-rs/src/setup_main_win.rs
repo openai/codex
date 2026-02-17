@@ -16,6 +16,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::protect_workspace_agents_dir;
 use codex_windows_sandbox::protect_workspace_codex_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -788,9 +789,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    // Protect the current workspace's `.codex` directory from tampering (write/delete) by using a
-    // workspace-specific capability SID. If `.codex` doesn't exist yet, skip it (it will be picked
-    // up on the next refresh).
+    // Protect the current workspace's `.codex` and `.agents` directories from tampering
+    // (write/delete) by using a workspace-specific capability SID. If a directory doesn't exist
+    // yet, skip it (it will be picked up on the next refresh).
     match unsafe { protect_workspace_codex_dir(&payload.command_cwd, workspace_psid) } {
         Ok(true) => {
             let cwd_codex = payload.command_cwd.join(".codex");
@@ -809,6 +810,30 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             log_line(
                 log,
                 &format!("deny ACE failed on {}: {err}", cwd_codex.display()),
+            )?;
+        }
+    }
+    match unsafe { protect_workspace_agents_dir(&payload.command_cwd, workspace_psid) } {
+        Ok(true) => {
+            let cwd_agents = payload.command_cwd.join(".agents");
+            log_line(
+                log,
+                &format!(
+                    "applied deny ACE to protect workspace .agents {}",
+                    cwd_agents.display()
+                ),
+            )?;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            let cwd_agents = payload.command_cwd.join(".agents");
+            refresh_errors.push(format!(
+                "deny ACE failed on {}: {err}",
+                cwd_agents.display()
+            ));
+            log_line(
+                log,
+                &format!("deny ACE failed on {}: {err}", cwd_agents.display()),
             )?;
         }
     }

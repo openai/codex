@@ -1,8 +1,7 @@
 //! Build-time bubblewrap entrypoint.
 //!
-//! This module is intentionally behind a build-time opt-in. When enabled, the
-//! build script compiles bubblewrap's C sources and exposes a `bwrap_main`
-//! symbol that we can call via FFI.
+//! On Linux targets, the build script compiles bubblewrap's C sources and
+//! exposes a `bwrap_main` symbol that we can call via FFI.
 
 #[cfg(vendored_bwrap_available)]
 mod imp {
@@ -51,15 +50,12 @@ mod imp {
     /// Panics with a clear error when the build-time bwrap path is not enabled.
     pub(crate) fn run_vendored_bwrap_main(_argv: &[String]) -> libc::c_int {
         panic!(
-            "build-time bubblewrap is not available in this build.\n\
-Rebuild codex-linux-sandbox on Linux with CODEX_BWRAP_ENABLE_FFI=1.\n\
-Example:\n\
-- cd codex-rs && CODEX_BWRAP_ENABLE_FFI=1 cargo build -p codex-linux-sandbox\n\
-If this crate was already built without it, run:\n\
-- cargo clean -p codex-linux-sandbox\n\
-Notes:\n\
-- libcap headers must be available via pkg-config\n\
-- bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"
+            r#"build-time bubblewrap is not available in this build.
+codex-linux-sandbox should always compile vendored bubblewrap on Linux targets.
+Notes:
+- ensure the target OS is Linux
+- libcap headers must be available via pkg-config
+- bubblewrap sources expected at codex-rs/vendor/bubblewrap (default)"#
         );
     }
 

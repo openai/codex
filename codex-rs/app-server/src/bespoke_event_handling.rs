@@ -4,6 +4,7 @@ use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -67,6 +68,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -94,6 +96,8 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -120,6 +124,35 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnStarted(_) => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+        }
+        EventMsg::Warning(warning_event) => {
+            if matches!(api_version, ApiVersion::V2)
+                && is_safety_check_downgrade_warning(&warning_event.message)
+            {
+                let item = ThreadItem::UserMessage {
+                    id: warning_item_id(&event_turn_id, &warning_event.message),
+                    content: vec![V2UserInput::Text {
+                        text: format!("Warning: {}", warning_event.message),
+                        text_elements: Vec::new(),
+                    }],
+                };
+                let started = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item: item.clone(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(started))
+                    .await;
+                let completed = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(completed))
+                    .await;
+            }
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
@@ -205,6 +238,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            ..
         }) => match api_version {
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {
@@ -717,6 +751,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             };
 
+            if !ev.affects_turn_status() {
+                return;
+            }
+
             let turn_error = TurnError {
                 message: ev.message,
                 codex_error_info: ev.codex_error_info.map(V2CodexErrorInfo::from),
@@ -887,11 +925,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
             let item_id = patch_end_event.call_id.clone();
 
-            let status = if patch_end_event.success {
-                PatchApplyStatus::Completed
-            } else {
-                PatchApplyStatus::Failed
-            };
+            let status: PatchApplyStatus = (&patch_end_event.status).into();
             let changes = convert_patch_changes(&patch_end_event.changes);
             complete_file_change_item(
                 conversation_id,
@@ -998,14 +1032,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code,
                 duration,
+                status,
                 ..
             } = exec_command_end_event;
 
-            let status = if exit_code == 0 {
-                CommandExecutionStatus::Completed
-            } else {
-                CommandExecutionStatus::Failed
-            };
+            let status: CommandExecutionStatus = (&status).into();
             let command_actions = parsed_cmd
                 .into_iter()
                 .map(V2ParsedCommand::from)
@@ -1287,6 +1318,18 @@ async fn complete_command_execution_item(
         .await;
 }
 
+fn is_safety_check_downgrade_warning(message: &str) -> bool {
+    message.contains("Your account was flagged for potentially high-risk cyber activity")
+        && message.contains("apply for trusted access: https://chatgpt.com/cyber")
+}
+
+fn warning_item_id(turn_id: &str, message: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    message.hash(&mut hasher);
+    let digest = hasher.finish();
+    format!("{turn_id}-warning-{digest:x}")
+}
+
 async fn maybe_emit_raw_response_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
@@ -1411,12 +1454,25 @@ async fn handle_error(
 
 async fn on_patch_approval_response(
     call_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            if let Err(submit_err) = codex
+                .submit(Op::PatchApproval {
+                    id: call_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied PatchApproval after request failure: {submit_err}");
+            }
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
@@ -1454,12 +1510,16 @@ async fn on_patch_approval_response(
 async fn on_exec_approval_response(
     call_id: String,
     turn_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             return;
@@ -1491,12 +1551,28 @@ async fn on_exec_approval_response(
 
 async fn on_request_user_input_response(
     event_turn_id: String,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {
-        Ok(value) => value,
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            let empty = CoreRequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::UserInputAnswer {
+                    id: event_turn_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit UserInputAnswer: {err}");
+            }
+            return;
+        }
         Err(err) => {
             error!("request failed: {err:?}");
             let empty = CoreRequestUserInputResponse {
@@ -1631,14 +1707,14 @@ async fn on_file_change_request_approval_response(
     conversation_id: ThreadId,
     item_id: String,
     changes: Vec<FileUpdateChange>,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<Mutex<ThreadState>>,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
-        Ok(value) => {
+        Ok(Ok(value)) => {
             let response = serde_json::from_value::<FileChangeRequestApprovalResponse>(value)
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize FileChangeRequestApprovalResponse: {err}");
@@ -1652,6 +1728,10 @@ async fn on_file_change_request_approval_response(
             // Allow EventMsg::PatchApplyEnd to emit ItemCompleted for accepted patches.
             // Only short-circuit on declines/cancels/failures.
             (decision, completion_status)
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            (ReviewDecision::Denied, Some(PatchApplyStatus::Failed))
         }
         Err(err) => {
             error!("request failed: {err:?}");
@@ -1691,13 +1771,13 @@ async fn on_command_execution_request_approval_response(
     command: String,
     cwd: PathBuf,
     command_actions: Vec<V2ParsedCommand>,
-    receiver: oneshot::Receiver<JsonValue>,
+    receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
     outgoing: ThreadScopedOutgoingMessageSender,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
-        Ok(value) => {
+        Ok(Ok(value)) => {
             let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(value)
                 .unwrap_or_else(|err| {
                     error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
@@ -1731,6 +1811,10 @@ async fn on_command_execution_request_approval_response(
                 ),
             };
             (decision, completion_status)
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            (ReviewDecision::Denied, Some(CommandExecutionStatus::Failed))
         }
         Err(err) => {
             error!("request failed: {err:?}");
@@ -1974,6 +2058,18 @@ mod tests {
             .collect(),
         };
         assert_eq!(item, expected);
+    }
+
+    #[test]
+    fn safety_check_downgrade_warning_detection_matches_expected_message() {
+        let warning = "Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: https://chatgpt.com/cyber\nLearn more: https://developers.openai.com/codex/concepts/cyber-safety";
+        assert!(is_safety_check_downgrade_warning(warning));
+    }
+
+    #[test]
+    fn safety_check_downgrade_warning_detection_ignores_other_warnings() {
+        let warning = "Model metadata for `mock-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+        assert!(!is_safety_check_downgrade_warning(warning));
     }
 
     #[tokio::test]
