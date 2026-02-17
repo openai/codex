@@ -111,6 +111,8 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] =
+    ["openai", OLLAMA_OSS_PROVIDER_ID, LMSTUDIO_OSS_PROVIDER_ID];
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
@@ -283,7 +285,7 @@ pub struct Config {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
-    /// Combined provider map (defaults merged with user-defined overrides).
+    /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -947,8 +949,9 @@ pub struct ConfigToml {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
-    /// User-defined provider entries that extend/override the built-in list.
-    #[serde(default)]
+    /// User-defined provider entries that extend the built-in list. Built-in
+    /// IDs cannot be overridden.
+    #[serde(default, deserialize_with = "deserialize_model_providers")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -1323,6 +1326,37 @@ pub struct ConfigOverrides {
     pub additional_writable_roots: Vec<PathBuf>,
 }
 
+fn validate_reserved_model_provider_ids(
+    model_providers: &HashMap<String, ModelProviderInfo>,
+) -> Result<(), String> {
+    let mut conflicts = model_providers
+        .keys()
+        .filter(|key| RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str()))
+        .map(|key| format!("`{key}`"))
+        .collect::<Vec<_>>();
+    conflicts.sort_unstable();
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "model_providers contains reserved built-in provider IDs: {}. \
+Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`).",
+            conflicts.join(", ")
+        ))
+    }
+}
+
+fn deserialize_model_providers<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ModelProviderInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let model_providers = HashMap::<String, ModelProviderInfo>::deserialize(deserializer)?;
+    validate_reserved_model_provider_ids(&model_providers).map_err(serde::de::Error::custom)?;
+    Ok(model_providers)
+}
+
 /// Resolves the OSS provider from CLI override, profile config, or global config.
 /// Returns `None` if no provider is configured at any level.
 pub fn resolve_oss_provider(
@@ -1423,6 +1457,8 @@ impl Config {
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        validate_reserved_model_provider_ids(&cfg.model_providers)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
         let mut startup_warnings = Vec::new();
@@ -2135,6 +2171,49 @@ phase_2_model = "gpt-5"
                 phase_2_model: Some("gpt-5".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn test_toml_parsing_rejects_reserved_model_provider_override_openai() {
+        let cfg = r#"
+[model_providers.openai]
+name = "OpenAI Custom"
+"#;
+
+        let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved provider");
+        let message = err.to_string();
+        assert!(message.contains("reserved built-in provider IDs"));
+        assert!(message.contains("`openai`"));
+    }
+
+    #[test]
+    fn test_toml_parsing_rejects_multiple_reserved_model_provider_overrides() {
+        let cfg = r#"
+[model_providers.ollama]
+name = "Ollama Override"
+
+[model_providers.openai]
+name = "OpenAI Override"
+"#;
+
+        let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved providers");
+        let message = err.to_string();
+        assert!(message.contains("`openai`"));
+        assert!(message.contains("`ollama`"));
+    }
+
+    #[test]
+    fn test_toml_parsing_allows_non_reserved_model_provider() {
+        let cfg = r#"
+[model_providers.openai-custom]
+name = "OpenAI Custom"
+base_url = "https://example.com/v1"
+env_key = "OPENAI_API_KEY"
+"#;
+
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("non-reserved provider should deserialize");
+        assert!(parsed.model_providers.contains_key("openai-custom"));
     }
 
     #[test]
@@ -4738,6 +4817,30 @@ trust_level = "trusted"
                 .to_string()
                 .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_config_rejects_programmatic_reserved_model_provider_override()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut cfg = ConfigToml::default();
+        cfg.model_providers.insert(
+            "openai".to_string(),
+            ModelProviderInfo::create_openai_provider(),
+        );
+
+        let result = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        );
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("reserved built-in provider IDs"));
+        assert!(error.to_string().contains("`openai`"));
 
         Ok(())
     }
