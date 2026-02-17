@@ -5331,11 +5331,6 @@ impl ChatWidget {
         );
     }
 
-    /// Open the permissions popup (alias for /permissions).
-    pub(crate) fn open_approvals_popup(&mut self) {
-        self.open_permissions_popup();
-    }
-
     /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
     pub(crate) fn open_permissions_popup(&mut self) {
         let items: Vec<SelectionItem> = visible_permissions_options(&self.config);
@@ -5664,7 +5659,7 @@ impl ChatWidget {
                     name: "Go back".to_string(),
                     description: None,
                     actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenApprovalsPopup);
+                        tx.send(AppEvent::OpenPermissionsPopup);
                     })],
                     dismiss_on_select: true,
                     ..Default::default()

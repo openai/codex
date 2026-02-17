@@ -277,9 +277,6 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     SkipNextWorldWritableScan,
 
-    /// Re-open the approval presets popup.
-    OpenApprovalsPopup,
-
     /// Open the skills list popup.
     OpenSkillsList,
 

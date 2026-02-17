@@ -9,6 +9,7 @@ use codex_core::config::Config;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+#[cfg(target_os = "windows")]
 use codex_core::protocol_config_types::WindowsSandboxLevel;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
@@ -39,7 +40,7 @@ pub fn builtin_permissions_presets() -> Vec<PermissionsPreset> {
         PermissionsPreset {
             id: "auto",
             label: "Default",
-            description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files. (Identical to Agent mode)",
+            description: "Codex can read and edit files in the current workspace, and run commands. Approval is required to access the internet or edit other files.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
@@ -56,23 +57,15 @@ pub fn builtin_permissions_presets() -> Vec<PermissionsPreset> {
 pub(crate) fn visible_permissions_options(config: &Config) -> Vec<SelectionItem> {
     builtin_permissions_presets()
         .into_iter()
-        .filter(|preset| preset.is_visible(config))
+        .filter(PermissionsPreset::is_visible)
         .map(|preset| preset.to_selection_item(config))
         .collect()
 }
 
 impl PermissionsPreset {
-    pub(crate) fn is_visible(&self, config: &Config) -> bool {
-        match self.id {
-            "read-only" => cfg!(target_os = "windows"),
-            "auto" => {
-                !cfg!(target_os = "windows")
-                    || codex_core::windows_sandbox::windows_sandbox_level_from_config(config)
-                        == WindowsSandboxLevel::Disabled
-            }
-            "full-access" => true,
-            _ => false,
-        }
+    fn is_visible(&self) -> bool {
+        matches!(self.id, "auto" | "full-access")
+            || (cfg!(target_os = "windows") && matches!(self.id, "read-only"))
     }
 
     pub(crate) fn to_selection_item(&self, config: &Config) -> SelectionItem {
@@ -141,7 +134,11 @@ impl PermissionsPreset {
 
         let approval = self.approval;
         let sandbox = self.sandbox.clone();
-        let label = self.label.to_string();
+        let label = if self.id == "auto" && windows_degraded_sandbox_enabled(config) {
+            "Default (non-admin sandbox)".to_string()
+        } else {
+            self.label.to_string()
+        };
         vec![Box::new(move |tx: &AppEventSender| {
             let sandbox_clone = sandbox.clone();
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
@@ -215,7 +212,7 @@ fn windows_permissions_actions(
 pub(crate) fn windows_degraded_sandbox_enabled(config: &Config) -> bool {
     let windows_sandbox_level =
         codex_core::windows_sandbox::windows_sandbox_level_from_config(config);
-    matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
+    matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
 }
 
 #[cfg(target_os = "windows")]
