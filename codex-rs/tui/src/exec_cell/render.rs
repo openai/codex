@@ -205,10 +205,6 @@ impl HistoryCell for ExecCell {
         }
     }
 
-    fn desired_transcript_height(&self, width: u16) -> u16 {
-        self.transcript_lines(width).len() as u16
-    }
-
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![];
         for (i, call) in self.iter_calls().enumerate() {
@@ -831,6 +827,35 @@ mod tests {
             rendered.iter().filter(|line| line.contains(url)).count(),
             1,
             "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn desired_transcript_height_accounts_for_wrapped_url_like_rows() {
+        let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going/for/testing/purposes";
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: url.to_string(),
+                aggregated_output: url.to_string(),
+            }),
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, false);
+        let width: u16 = 36;
+        let logical_height = cell.transcript_lines(width).len() as u16;
+        let wrapped_height = cell.desired_transcript_height(width);
+
+        assert!(
+            wrapped_height > logical_height,
+            "expected transcript height to account for wrapped URL-like rows, logical_height={logical_height}, wrapped_height={wrapped_height}"
         );
     }
 }
