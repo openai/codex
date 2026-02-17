@@ -399,6 +399,9 @@ impl JsReplManager {
     }
 
     pub async fn reset(&self) -> Result<(), FunctionCallError> {
+        let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
+            FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
+        })?;
         self.reset_kernel().await;
         Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
         Ok(())
@@ -527,7 +530,9 @@ impl JsReplManager {
                 return Err(FunctionCallError::RespondToModel(message));
             }
             Err(_) => {
-                self.reset().await?;
+                self.reset_kernel().await;
+                self.wait_for_exec_tool_calls(&req_id).await;
+                self.exec_tool_calls.lock().await.clear();
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
                 ));
@@ -1454,6 +1459,46 @@ mod tests {
 
             JsReplManager::clear_exec_tool_calls_map(&exec_tool_calls, &exec_id).await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reset_waits_for_exec_lock_before_clearing_exec_tool_calls() {
+        let manager = JsReplManager::new(None, PathBuf::from("."))
+            .await
+            .expect("manager should initialize");
+        let permit = manager
+            .exec_lock
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("lock should be acquirable");
+        let exec_id = Uuid::new_v4().to_string();
+        manager.register_exec_tool_calls(&exec_id).await;
+
+        let reset_manager = Arc::clone(&manager);
+        let mut reset_task = tokio::spawn(async move { reset_manager.reset().await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(
+            !reset_task.is_finished(),
+            "reset should wait until execute lock is released"
+        );
+        assert!(
+            manager.exec_tool_calls.lock().await.contains_key(&exec_id),
+            "reset must not clear tool-call contexts while execute lock is held"
+        );
+
+        drop(permit);
+
+        tokio::time::timeout(Duration::from_secs(1), &mut reset_task)
+            .await
+            .expect("reset should complete after execute lock release")
+            .expect("reset task should not panic")
+            .expect("reset should succeed");
+        assert!(
+            !manager.exec_tool_calls.lock().await.contains_key(&exec_id),
+            "reset should clear tool-call contexts after lock acquisition"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
