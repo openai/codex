@@ -39,7 +39,6 @@ codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
-codex-utils-approval-presets = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
