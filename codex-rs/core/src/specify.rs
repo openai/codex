@@ -14,14 +14,11 @@ use serde::Deserialize;
 // ---------------------------------------------------------------------------
 
 /// Agent directories that store commands as `.toml` files.
-const TOML_AGENT_DIRS: &[&str] = &[
-    ".codex/commands",
-    ".gemini/commands",
-    ".qwen/commands",
-];
+const TOML_AGENT_DIRS: &[&str] = &[".codex/commands", ".gemini/commands", ".qwen/commands"];
 
 /// Agent directories that store commands as `.md` files.
 const MD_AGENT_DIRS: &[&str] = &[
+    ".codex/prompts",
     ".claude/commands",
     ".cursor/commands",
     ".github/agents",
@@ -76,16 +73,36 @@ pub fn is_specify_initialized(cwd: &Path) -> bool {
 /// The function scans known agent directories (TOML first, then Markdown),
 /// and returns the commands found in the **first** directory that exists.
 pub fn discover_specify_commands(cwd: &Path) -> Vec<SpecifyCommand> {
-    // Try TOML agent directories first.
+    // 1. Check for .codex specific directories first (Highest Priority)
+
+    // .codex/commands (TOML)
+    let codex_toml = cwd.join(".codex/commands");
+    if codex_toml.is_dir() {
+        return read_toml_commands(&codex_toml);
+    }
+
+    // .codex/prompts (MD)
+    let codex_md = cwd.join(".codex/prompts");
+    if codex_md.is_dir() {
+        return read_md_commands(&codex_md);
+    }
+
+    // 2. Check other TOML agent directories
     for dir in TOML_AGENT_DIRS {
+        if *dir == ".codex/commands" {
+            continue;
+        }
         let commands_dir = cwd.join(dir);
         if commands_dir.is_dir() {
             return read_toml_commands(&commands_dir);
         }
     }
 
-    // Fall back to Markdown agent directories.
+    // 3. Check other MD agent directories
     for dir in MD_AGENT_DIRS {
+        if *dir == ".codex/prompts" {
+            continue;
+        }
         let commands_dir = cwd.join(dir);
         if commands_dir.is_dir() {
             return read_md_commands(&commands_dir);
@@ -117,6 +134,9 @@ fn read_toml_commands(dir: &Path) -> Vec<SpecifyCommand> {
             None => continue,
         };
 
+        // Strip the "speckit." prefix for the command name shown in the TUI.
+        let display_name = name.strip_prefix("speckit.").unwrap_or(&name).to_string();
+
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -128,7 +148,7 @@ fn read_toml_commands(dir: &Path) -> Vec<SpecifyCommand> {
         };
 
         commands.push(SpecifyCommand {
-            name,
+            name: display_name,
             description: template.description.unwrap_or_default(),
             prompt: template.prompt.unwrap_or_default(),
             path,
@@ -161,6 +181,15 @@ fn read_md_commands(dir: &Path) -> Vec<SpecifyCommand> {
             None => continue,
         };
 
+        // Only include speckit command files (prefixed with "speckit.")
+        // to avoid picking up unrelated prompts.
+        if !name.starts_with("speckit.") {
+            continue;
+        }
+
+        // Strip the "speckit." prefix for the command name shown in the TUI.
+        let display_name = name.strip_prefix("speckit.").unwrap_or(&name).to_string();
+
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -169,7 +198,7 @@ fn read_md_commands(dir: &Path) -> Vec<SpecifyCommand> {
         let (description, body) = parse_md_frontmatter(&content);
 
         commands.push(SpecifyCommand {
-            name,
+            name: display_name,
             description,
             prompt: body,
             path,
@@ -385,8 +414,7 @@ Create a detailed plan.
 
     #[test]
     fn test_parse_md_frontmatter() {
-        let content =
-            "---\ndescription: Create specification\nhandoffs:\n  - label: Next\n---\n\nBody content here.\n";
+        let content = "---\ndescription: Create specification\nhandoffs:\n  - label: Next\n---\n\nBody content here.\n";
         let (desc, body) = parse_md_frontmatter(content);
         assert_eq!(desc, "Create specification");
         assert!(body.contains("Body content here."));

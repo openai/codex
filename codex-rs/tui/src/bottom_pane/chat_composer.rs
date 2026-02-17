@@ -315,6 +315,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
     specify_commands: Vec<SpecifyCommand>,
+    specify_initialized: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
@@ -419,6 +420,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
             specify_commands: Vec::new(),
+            specify_initialized: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             remote_image_urls: Vec::new(),
@@ -2148,7 +2150,12 @@ impl ChatComposer {
                             .any(|prompt| prompt.name == prompt_name)
                     })
                     .unwrap_or(false);
-                if !is_builtin && !is_known_prompt {
+                let specify_prefix = format!("{SPECIFY_CMD_PREFIX}.");
+                let is_known_specify = name
+                    .strip_prefix(&specify_prefix)
+                    .map(|cmd_name| self.specify_commands.iter().any(|sc| sc.name == cmd_name))
+                    .unwrap_or(false);
+                if !is_builtin && !is_known_prompt && !is_known_specify {
                     let message = format!(
                         r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
                     );
@@ -3084,10 +3091,7 @@ impl ChatComposer {
         if let Some(rest) = name.strip_prefix(SPECIFY_CMD_PREFIX)
             && let Some(cmd_name) = rest.strip_prefix('.')
         {
-            return self
-                .specify_commands
-                .iter()
-                .any(|sc| sc.name == cmd_name);
+            return self.specify_commands.iter().any(|sc| sc.name == cmd_name);
         }
         false
     }
@@ -3143,9 +3147,10 @@ impl ChatComposer {
 
         self.custom_prompts.iter().any(|prompt| {
             fuzzy_match(&format!("{PROMPTS_CMD_PREFIX}:{}", prompt.name), name).is_some()
-        }) || self.specify_commands.iter().any(|sc| {
-            fuzzy_match(&format!("{SPECIFY_CMD_PREFIX}.{}", sc.name), name).is_some()
-        })
+        }) || self
+            .specify_commands
+            .iter()
+            .any(|sc| fuzzy_match(&format!("{SPECIFY_CMD_PREFIX}.{}", sc.name), name).is_some())
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -3200,6 +3205,10 @@ impl ChatComposer {
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
+                    command_popup.set_specify_commands(
+                        self.specify_commands.clone(),
+                        self.specify_initialized,
+                    );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -3219,6 +3228,7 @@ impl ChatComposer {
         initialized: bool,
     ) {
         self.specify_commands = commands.clone();
+        self.specify_initialized = initialized;
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_specify_commands(commands, initialized);
         }
@@ -5507,6 +5517,9 @@ mod tests {
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/mo'")
                 }
+                Some(CommandItem::SpecifyCommand(_)) => {
+                    panic!("unexpected specify command selected for '/mo'")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -5563,6 +5576,9 @@ mod tests {
                 }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")
+                }
+                Some(CommandItem::SpecifyCommand(_)) => {
+                    panic!("unexpected specify command selected for '/res'")
                 }
                 None => panic!("no selected command for '/res'"),
             },

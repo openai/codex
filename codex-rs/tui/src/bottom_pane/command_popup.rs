@@ -242,9 +242,12 @@ impl CommandPopup {
             .into_iter()
             .map(|(item, indices)| {
                 let (name, description, is_disabled, disabled_reason) = match item {
-                    CommandItem::Builtin(cmd) => {
-                        (format!("/{}", cmd.command()), cmd.description().to_string(), false, None)
-                    }
+                    CommandItem::Builtin(cmd) => (
+                        format!("/{}", cmd.command()),
+                        cmd.description().to_string(),
+                        false,
+                        None,
+                    ),
                     CommandItem::UserPrompt(i) => {
                         let prompt = &self.prompts[i];
                         let description = prompt
@@ -343,6 +346,7 @@ mod tests {
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
             CommandItem::UserPrompt(_) => false,
+            CommandItem::SpecifyCommand(_) => false,
         });
         assert!(
             has_init,
@@ -361,6 +365,7 @@ mod tests {
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
             Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
+            Some(CommandItem::SpecifyCommand(_)) => panic!("unexpected specify command selected"),
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -374,6 +379,9 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
             Some(CommandItem::UserPrompt(_)) => {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            Some(CommandItem::SpecifyCommand(_)) => {
+                panic!("unexpected specify command ranked before '/model'")
             }
             None => panic!("expected at least one match for '/mo'"),
         }
@@ -389,7 +397,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::SpecifyCommand(_) => None,
             })
             .collect();
         assert_eq!(cmds, vec!["model", "mention", "mcp"]);
@@ -451,6 +459,55 @@ mod tests {
     }
 
     #[test]
+    fn specify_commands_filtering() {
+        use codex_core::specify::SpecifyCommand;
+        use std::path::PathBuf;
+
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        let cmds = vec![
+            SpecifyCommand {
+                name: "plan".to_string(),
+                description: "desc".to_string(),
+                prompt: "prompt".to_string(),
+                path: PathBuf::from("/tmp/plan.md"),
+            },
+            SpecifyCommand {
+                name: "analyze".to_string(),
+                description: "desc".to_string(),
+                prompt: "prompt".to_string(),
+                path: PathBuf::from("/tmp/analyze.md"),
+            },
+        ];
+        popup.set_specify_commands(cmds, true);
+
+        // Filter by prefix "/specify."
+        popup.on_composer_text_change("/specify.".to_string());
+        let items = popup.filtered_items();
+        let names: Vec<String> = items
+            .into_iter()
+            .filter_map(|it| match it {
+                CommandItem::SpecifyCommand(idx) => {
+                    popup.specify_command(idx).map(|c| c.name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"plan".to_string()));
+        assert!(names.contains(&"analyze".to_string()));
+
+        // Filter by short name "/plan"
+        popup.on_composer_text_change("/plan".to_string());
+        let items = popup.filtered_items();
+        let has_plan = items.into_iter().any(|it| match it {
+            CommandItem::SpecifyCommand(idx) => {
+                popup.specify_command(idx).is_some_and(|c| c.name == "plan")
+            }
+            _ => false,
+        });
+        assert!(has_plan);
+    }
+
+    #[test]
     fn prompt_description_uses_frontmatter_metadata() {
         let popup = CommandPopup::new(
             vec![CustomPrompt {
@@ -497,7 +554,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::SpecifyCommand(_) => None,
             })
             .collect();
         assert!(
@@ -528,7 +585,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::SpecifyCommand(_) => None,
             })
             .collect();
         assert!(
@@ -597,7 +654,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::SpecifyCommand(_) => None,
             })
             .collect();
         assert!(
@@ -633,7 +690,7 @@ mod tests {
             .into_iter()
             .filter_map(|item| match item {
                 CommandItem::Builtin(cmd) => Some(cmd.command()),
-                CommandItem::UserPrompt(_) => None,
+                CommandItem::UserPrompt(_) | CommandItem::SpecifyCommand(_) => None,
             })
             .collect();
 
