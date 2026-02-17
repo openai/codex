@@ -203,5 +203,224 @@ Rules:
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::ConfigBuilder;
+    use crate::config_loader::ConfigLayerStackOrdering;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
+    async fn test_config_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> (TempDir, Config) {
+        let home = TempDir::new().expect("create temp dir");
+        let home_path = home.path().to_path_buf();
+        let config = ConfigBuilder::default()
+            .codex_home(home_path.clone())
+            .cli_overrides(cli_overrides)
+            .fallback_cwd(Some(home_path))
+            .build()
+            .await
+            .expect("load test config");
+        (home, config)
+    }
+
+    async fn write_role_config(home: &TempDir, name: &str, contents: &str) -> PathBuf {
+        let role_path = home.path().join(name);
+        tokio::fs::write(&role_path, contents)
+            .await
+            .expect("write role config");
+        role_path
+    }
+
+    fn session_flags_layer_count(config: &Config) -> usize {
+        config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .into_iter()
+            .filter(|layer| layer.name == ConfigLayerSource::SessionFlags)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
+        let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let before = config.clone();
+
+        apply_role_to_config(&mut config, None)
+            .await
+            .expect("default role should apply");
+
+        assert_eq!(before, config);
+    }
+
+    #[tokio::test]
+    async fn apply_role_returns_error_for_unknown_role() {
+        let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+
+        let err = apply_role_to_config(&mut config, Some("missing-role"))
+            .await
+            .expect_err("unknown role should fail");
+
+        assert_eq!(err, "unknown agent_type 'missing-role'");
+    }
+
+    #[tokio::test]
+    async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
+        let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let before_layers = session_flags_layer_count(&config);
+
+        apply_role_to_config(&mut config, Some("explorer"))
+            .await
+            .expect("explorer role should apply");
+
+        assert_eq!(config.model.as_deref(), Some("gpt-5.1-codex-mini"));
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(session_flags_layer_count(&config), before_layers + 1);
+    }
+
+    #[tokio::test]
+    async fn apply_role_returns_unavailable_for_missing_user_role_file() {
+        let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(PathBuf::from("/path/does/not/exist.toml")),
+            },
+        );
+
+        let err = apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect_err("missing role file should fail");
+
+        assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    }
+
+    #[tokio::test]
+    async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let role_path = write_role_config(&home, "invalid-role.toml", "model = [")
+            .await
+            .to_path_buf();
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        let err = apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect_err("invalid role file should fail");
+
+        assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    }
+
+    #[tokio::test]
+    async fn apply_role_preserves_unspecified_keys() {
+        let (home, mut config) = test_config_with_cli_overrides(vec![(
+            "model".to_string(),
+            TomlValue::String("base-model".to_string()),
+        )])
+        .await;
+        let role_path = write_role_config(
+            &home,
+            "effort-only.toml",
+            "model_reasoning_effort = \"high\"",
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.model.as_deref(), Some("base-model"));
+        assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    #[tokio::test]
+    async fn apply_role_takes_precedence_over_existing_session_flags_for_same_key() {
+        let (home, mut config) = test_config_with_cli_overrides(vec![(
+            "model".to_string(),
+            TomlValue::String("cli-model".to_string()),
+        )])
+        .await;
+        let before_layers = session_flags_layer_count(&config);
+        let role_path = write_role_config(&home, "model-role.toml", "model = \"role-model\"").await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        assert_eq!(config.model.as_deref(), Some("role-model"));
+        assert_eq!(session_flags_layer_count(&config), before_layers + 1);
+    }
+
+    #[test]
+    fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
+        let user_defined_roles = BTreeMap::from([
+            (
+                "explorer".to_string(),
+                AgentRoleConfig {
+                    description: Some("user override".to_string()),
+                    config_file: None,
+                },
+            ),
+            ("researcher".to_string(), AgentRoleConfig::default()),
+        ]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+
+        assert!(spec.contains("researcher: no description"));
+        assert!(spec.contains("explorer: {\nuser override\n}"));
+        assert!(spec.contains("default: no description"));
+        assert!(!spec.contains("Explorers are fast and authoritative."));
+    }
+
+    #[test]
+    fn spawn_tool_spec_lists_user_defined_roles_before_built_ins() {
+        let user_defined_roles = BTreeMap::from([(
+            "aaa".to_string(),
+            AgentRoleConfig {
+                description: Some("first".to_string()),
+                config_file: None,
+            },
+        )]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+        let user_index = spec.find("aaa: {\nfirst\n}").expect("find user role");
+        let built_in_index = spec
+            .find("default: no description")
+            .expect("find built-in role");
+
+        assert!(user_index < built_in_index);
+    }
+
+    #[test]
+    fn built_in_config_file_contents_resolves_explorer_only() {
+        assert_eq!(
+            built_in::config_file_contents(Path::new("explorer.toml")),
+            Some(BUILT_IN_EXPLORER_CONFIG)
+        );
+        assert_eq!(
+            built_in::config_file_contents(Path::new("missing.toml")),
+            None
+        );
+    }
 }
