@@ -170,20 +170,28 @@ def codex_rust_crate(
         cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
-        test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
+        test_file_stem = test.removeprefix("tests/").removesuffix(".rs")
+        test_crate_name = test_file_stem.replace("-", "_")
+        test_name = name + "-" + test_file_stem.replace("/", "-")
         if not test_name.endswith("-test"):
             test_name += "-test"
 
         rust_test(
             name = test_name,
+            crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = maybe_lib + deps + dev_deps + integration_deps_extra,
             proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
-            rustc_flags = rustc_flags_extra,
+            # Keep `file!()` paths Cargo-like (`core/tests/...`) instead of
+            # Bazel workspace-prefixed (`codex-rs/core/tests/...`) for snapshot parity.
+            rustc_flags = rustc_flags_extra + ["--remap-path-prefix=codex-rs="],
             rustc_env = rustc_env,
-            env = test_env | cargo_env,
+            # Important: do not merge `test_env` here. Its unit-test-only
+            # `INSTA_WORKSPACE_ROOT="."` can point integration tests at the
+            # runfiles cwd and cause false `.snap.new` churn on Linux.
+            env = cargo_env,
             tags = test_tags,
         )
