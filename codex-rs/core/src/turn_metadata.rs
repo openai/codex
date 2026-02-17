@@ -132,9 +132,17 @@ impl TurnMetadataState {
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
+        use_linux_sandbox_bwrap: bool,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
-        let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
+        let sandbox = Some(
+            sandbox_tag(
+                sandbox_policy,
+                windows_sandbox_level,
+                use_linux_sandbox_bwrap,
+            )
+            .to_string(),
+        );
         let base_metadata = build_turn_metadata_bag(Some(turn_id), sandbox, None, None);
         let base_header = base_metadata
             .to_header_value()
@@ -289,5 +297,53 @@ mod tests {
             workspace.get("has_changes").and_then(Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn turn_metadata_state_respects_linux_bubblewrap_toggle() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cwd = temp_dir.path().to_path_buf();
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+
+        let without_bubblewrap = TurnMetadataState::new(
+            "turn-a".to_string(),
+            cwd.clone(),
+            &sandbox_policy,
+            WindowsSandboxLevel::Disabled,
+            false,
+        );
+        let with_bubblewrap = TurnMetadataState::new(
+            "turn-b".to_string(),
+            cwd,
+            &sandbox_policy,
+            WindowsSandboxLevel::Disabled,
+            true,
+        );
+
+        let without_bubblewrap_header = without_bubblewrap
+            .current_header_value()
+            .expect("without_bubblewrap_header");
+        let with_bubblewrap_header = with_bubblewrap
+            .current_header_value()
+            .expect("with_bubblewrap_header");
+
+        let without_bubblewrap_json: Value =
+            serde_json::from_str(&without_bubblewrap_header).expect("without_bubblewrap_json");
+        let with_bubblewrap_json: Value =
+            serde_json::from_str(&with_bubblewrap_header).expect("with_bubblewrap_json");
+
+        let without_bubblewrap_sandbox = without_bubblewrap_json
+            .get("sandbox")
+            .and_then(Value::as_str);
+        let with_bubblewrap_sandbox = with_bubblewrap_json.get("sandbox").and_then(Value::as_str);
+
+        let expected_with_bubblewrap =
+            sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled, true);
+        assert_eq!(with_bubblewrap_sandbox, Some(expected_with_bubblewrap));
+
+        if cfg!(target_os = "linux") {
+            assert_eq!(with_bubblewrap_sandbox, Some("linux_bubblewrap"));
+            assert_ne!(with_bubblewrap_sandbox, without_bubblewrap_sandbox);
+        }
     }
 }

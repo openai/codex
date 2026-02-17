@@ -7,6 +7,7 @@ use crate::client_common::ResponseEvent;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::get_last_assistant_message_from_turn;
+use crate::context_manager::ContextManager;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
@@ -33,6 +34,31 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
+}
+
+pub(crate) fn extract_trailing_model_switch_update_for_compaction_request(
+    history: &mut ContextManager,
+) -> Option<ResponseItem> {
+    let history_items = history.raw_items();
+    let last_user_turn_boundary_index = history_items
+        .iter()
+        .rposition(crate::context_manager::is_user_turn_boundary);
+    let model_switch_index = history_items
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, item)| {
+            let is_trailing = last_user_turn_boundary_index.is_none_or(|boundary| i > boundary);
+            if is_trailing && Session::is_model_switch_developer_message(item) {
+                Some(i)
+            } else {
+                None
+            }
+        })?;
+    let mut replacement = history_items.to_vec();
+    let model_switch_item = replacement.remove(model_switch_index);
+    history.replace(replacement);
+    Some(model_switch_item)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(
@@ -75,6 +101,10 @@ async fn run_compact_task_inner(
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
+    // Keep compaction prompts in-distribution: if a model-switch update was injected at the
+    // tail of history (between turns), exclude it from the compaction request payload.
+    let stripped_model_switch_item =
+        extract_trailing_model_switch_update_for_compaction_request(&mut history);
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -180,6 +210,11 @@ async fn run_compact_task_inner(
 
     let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    // Reattach the stripped model-switch update only after successful compaction so the model
+    // still sees the switch instructions on the next real sampling request.
+    if let Some(model_switch_item) = stripped_model_switch_item {
+        new_history.push(model_switch_item);
+    }
     let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
@@ -441,6 +476,107 @@ mod tests {
         let joined = content_items_to_text(&items);
 
         assert_eq!(None, joined);
+    }
+
+    #[test]
+    fn extract_trailing_model_switch_update_for_compaction_request_removes_trailing_item() {
+        let mut history = ContextManager::new();
+        history.replace(vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "ASSISTANT_REPLY".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<model_switch>\nNEW_MODEL_INSTRUCTIONS".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ]);
+
+        let model_switch_item =
+            extract_trailing_model_switch_update_for_compaction_request(&mut history);
+
+        assert_eq!(history.raw_items().len(), 2);
+        assert!(model_switch_item.is_some());
+        assert!(
+            history
+                .raw_items()
+                .iter()
+                .all(|item| !Session::is_model_switch_developer_message(item))
+        );
+    }
+
+    #[test]
+    fn extract_trailing_model_switch_update_for_compaction_request_keeps_historical_item() {
+        let mut history = ContextManager::new();
+        history.replace(vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "FIRST_USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<model_switch>\nOLDER_MODEL_INSTRUCTIONS".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "ASSISTANT_REPLY".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "SECOND_USER_MESSAGE".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ]);
+
+        let model_switch_item =
+            extract_trailing_model_switch_update_for_compaction_request(&mut history);
+
+        assert_eq!(history.raw_items().len(), 4);
+        assert!(model_switch_item.is_none());
+        assert!(
+            history
+                .raw_items()
+                .iter()
+                .any(Session::is_model_switch_developer_message)
+        );
     }
 
     #[test]

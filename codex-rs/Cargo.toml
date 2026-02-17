@@ -170,7 +170,7 @@ dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
-env_logger = "0.11.5"
+env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"

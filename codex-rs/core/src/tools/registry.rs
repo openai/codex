@@ -4,6 +4,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
@@ -14,6 +15,7 @@ use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
+use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
@@ -88,6 +90,10 @@ impl ToolRegistry {
                 sandbox_tag(
                     &invocation.turn.sandbox_policy,
                     invocation.turn.windows_sandbox_level,
+                    invocation
+                        .turn
+                        .features
+                        .enabled(Feature::UseLinuxSandboxBwrap),
                 ),
             ),
             (
@@ -167,7 +173,7 @@ impl ToolRegistry {
             Ok((preview, success)) => (preview.clone(), *success),
             Err(err) => (err.to_string(), false),
         };
-        dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+        let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
             success,
@@ -176,6 +182,10 @@ impl ToolRegistry {
             mutating: is_mutating,
         })
         .await;
+
+        if let Some(err) = hook_abort_error {
+            return Err(err);
+        }
 
         match result {
             Ok(_) => {
@@ -334,12 +344,14 @@ struct AfterToolUseHookDispatch<'a> {
     mutating: bool,
 }
 
-async fn dispatch_after_tool_use_hook(dispatch: AfterToolUseHookDispatch<'_>) {
+async fn dispatch_after_tool_use_hook(
+    dispatch: AfterToolUseHookDispatch<'_>,
+) -> Option<FunctionCallError> {
     let AfterToolUseHookDispatch { invocation, .. } = dispatch;
     let session = invocation.session.as_ref();
     let turn = invocation.turn.as_ref();
     let tool_input = HookToolInput::from(&invocation.payload);
-    session
+    let hook_outcomes = session
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
@@ -356,12 +368,46 @@ async fn dispatch_after_tool_use_hook(dispatch: AfterToolUseHookDispatch<'_>) {
                     success: dispatch.success,
                     duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
                     mutating: dispatch.mutating,
-                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
-                        .to_string(),
+                    sandbox: sandbox_tag(
+                        &turn.sandbox_policy,
+                        turn.windows_sandbox_level,
+                        turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+                    )
+                    .to_string(),
                     sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
                     output_preview: dispatch.output_preview.clone(),
                 },
             },
         })
         .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "after_tool_use hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "after_tool_use hook failed; aborting operation"
+                );
+                return Some(FunctionCallError::Fatal(format!(
+                    "after_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    None
 }
