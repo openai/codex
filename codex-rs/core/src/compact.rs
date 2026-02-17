@@ -595,6 +595,7 @@ mod tests {
     use serde_json::Value;
     use std::path::Path;
 
+    // This is to make Bazel happy
     fn assert_compact_snapshot(name: &str, rendered: String) {
         let mut settings = insta::Settings::clone_current();
         settings.set_snapshot_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/snapshots"));
