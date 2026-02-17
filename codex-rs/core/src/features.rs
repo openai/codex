@@ -101,10 +101,12 @@ pub enum Feature {
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Refresh remote models and emit AppReady once the list is available.
+    /// Legacy remote models flag kept for backward compatibility.
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable git commit attribution guidance via model instructions.
+    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
@@ -356,7 +358,8 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
                 }
                 _ => alias,
             };
-            let summary = format!("`{label}` is deprecated. Use `web_search` instead.");
+            let summary =
+                format!("`{label}` is deprecated because web search is enabled by default.");
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
@@ -374,7 +377,7 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 }
 
 fn web_search_details() -> &'static str {
-    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml."
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
@@ -466,6 +469,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
         stage: Stage::UnderDevelopment,
@@ -529,8 +538,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,

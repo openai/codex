@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ModelRerouteReason;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -53,6 +54,17 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             personality: None,
         })
         .await?;
+
+    let reroute = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ModelReroute(_))
+    })
+    .await;
+    let EventMsg::ModelReroute(reroute) = reroute else {
+        panic!("expected model reroute event");
+    };
+    assert_eq!(reroute.from_model, REQUESTED_MODEL);
+    assert_eq!(reroute.to_model, SERVER_MODEL);
+    assert_eq!(reroute.reason, ModelRerouteReason::HighRiskCyberActivity);
 
     let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;
     let EventMsg::Warning(warning) = warning else {
@@ -138,6 +150,17 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
         })
         .await?;
 
+    let reroute = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ModelReroute(_))
+    })
+    .await;
+    let EventMsg::ModelReroute(reroute) = reroute else {
+        panic!("expected model reroute event");
+    };
+    assert_eq!(reroute.from_model, REQUESTED_MODEL);
+    assert_eq!(reroute.to_model, SERVER_MODEL);
+    assert_eq!(reroute.reason, ModelRerouteReason::HighRiskCyberActivity);
+
     let warning = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -151,7 +174,8 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
     let EventMsg::Warning(warning) = warning else {
         panic!("expected warning event");
     };
-    assert!(warning.message.contains("gpt-5.2 as a fallback"));
+    assert!(warning.message.contains(REQUESTED_MODEL));
+    assert!(warning.message.contains(SERVER_MODEL));
 
     let _ = wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
