@@ -243,7 +243,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
-        assert_eq!(thread.status, ThreadStatus::Idle);
+        assert_eq!(thread.status, ThreadStatus::NotLoaded);
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
 
@@ -270,7 +270,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
-        assert_eq!(thread.status, ThreadStatus::Idle);
+        assert_eq!(thread.status, ThreadStatus::NotLoaded);
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 

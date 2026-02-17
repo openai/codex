@@ -825,8 +825,8 @@
     "ThreadActiveFlag": {
       "enum": [
         "running",
-        "waitingPermission",
-        "waitingUserInput"
+        "waitingOnApproval",
+        "waitingOnUserInput"
       ],
       "type": "string"
     },
@@ -1307,6 +1307,22 @@
     },
     "ThreadStatus": {
       "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "notLoaded"
+              ],
+              "title": "NotLoadedThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "NotLoadedThreadStatus",
+          "type": "object"
+        },
         {
           "properties": {
             "type": {

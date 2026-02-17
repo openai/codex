@@ -1841,6 +1841,7 @@ pub struct ThreadLoadedListResponse {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadStatus {
+    NotLoaded,
     Idle,
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1859,8 +1860,8 @@ pub enum ThreadStatus {
 #[ts(export_to = "v2/")]
 pub enum ThreadActiveFlag {
     Running,
-    WaitingPermission,
-    WaitingUserInput,
+    WaitingOnApproval,
+    WaitingOnUserInput,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

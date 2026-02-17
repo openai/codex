@@ -117,13 +117,14 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                 match notification.status {
                     ThreadStatus::Active { active_flags } => {
                         saw_waiting_user_input |=
-                            active_flags.contains(&ThreadActiveFlag::WaitingUserInput);
+                            active_flags.contains(&ThreadActiveFlag::WaitingOnUserInput);
                     }
                     ThreadStatus::Terminal { outcome } => {
                         if outcome == ThreadTerminalOutcome::Completed {
                             saw_terminal_completed = true;
                         }
                     }
+                    ThreadStatus::NotLoaded => {}
                     ThreadStatus::Idle => {}
                 }
             }
@@ -137,7 +138,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
 
     assert!(
         saw_waiting_user_input,
-        "expected waitingUserInput active flag in thread/status/changed notifications"
+        "expected waitingOnUserInput active flag in thread/status/changed notifications"
     );
     assert!(
         saw_terminal_completed,

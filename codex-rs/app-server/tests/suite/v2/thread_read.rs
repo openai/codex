@@ -74,7 +74,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
     assert_eq!(thread.turns.len(), 0);
-    assert_eq!(thread.status, ThreadStatus::Idle);
+    assert_eq!(thread.status, ThreadStatus::NotLoaded);
 
     Ok(())
 }
@@ -135,7 +135,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
-    assert_eq!(thread.status, ThreadStatus::Idle);
+    assert_eq!(thread.status, ThreadStatus::NotLoaded);
 
     Ok(())
 }

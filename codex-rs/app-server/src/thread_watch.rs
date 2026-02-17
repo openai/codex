@@ -277,7 +277,8 @@ impl ThreadWatchState {
     }
 
     fn loaded_status_for_thread(&self, thread_id: &str) -> ThreadStatus {
-        self.status_for(thread_id).unwrap_or(ThreadStatus::Idle)
+        self.status_for(thread_id)
+            .unwrap_or(ThreadStatus::NotLoaded)
     }
 
     fn status_changed_notification(
@@ -309,10 +310,10 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
         active_flags.push(ThreadActiveFlag::Running);
     }
     if runtime.pending_permission_requests > 0 {
-        active_flags.push(ThreadActiveFlag::WaitingPermission);
+        active_flags.push(ThreadActiveFlag::WaitingOnApproval);
     }
     if runtime.pending_user_input_requests > 0 {
-        active_flags.push(ThreadActiveFlag::WaitingUserInput);
+        active_flags.push(ThreadActiveFlag::WaitingOnUserInput);
     }
 
     if !active_flags.is_empty() {
@@ -320,6 +321,7 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
     }
 
     match runtime.last_terminal_outcome {
+        Some(ThreadTerminalOutcome::Shutdown) => ThreadStatus::NotLoaded,
         Some(outcome) => ThreadStatus::Terminal { outcome },
         None => ThreadStatus::Idle,
     }
@@ -336,14 +338,14 @@ mod tests {
     const NON_INTERACTIVE_THREAD_ID: &str = "00000000-0000-0000-0000-000000000002";
 
     #[tokio::test]
-    async fn loaded_status_defaults_to_idle_for_untracked_threads() {
+    async fn loaded_status_defaults_to_not_loaded_for_untracked_threads() {
         let manager = ThreadWatchManager::new();
 
         assert_eq!(
             manager
                 .loaded_status_for_thread("00000000-0000-0000-0000-000000000003")
                 .await,
-            ThreadStatus::Idle,
+            ThreadStatus::NotLoaded,
         );
     }
 
@@ -399,7 +401,7 @@ mod tests {
             ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
-                    ThreadActiveFlag::WaitingPermission,
+                    ThreadActiveFlag::WaitingOnApproval,
                 ],
             },
         );
@@ -414,8 +416,8 @@ mod tests {
             ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
-                    ThreadActiveFlag::WaitingPermission,
-                    ThreadActiveFlag::WaitingUserInput,
+                    ThreadActiveFlag::WaitingOnApproval,
+                    ThreadActiveFlag::WaitingOnUserInput,
                 ],
             },
         );
@@ -427,7 +429,7 @@ mod tests {
             ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
-                    ThreadActiveFlag::WaitingUserInput,
+                    ThreadActiveFlag::WaitingOnUserInput,
                 ],
             },
         )
@@ -457,7 +459,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loaded_statuses_default_to_idle_for_untracked_threads() {
+    async fn shutdown_marks_thread_not_loaded() {
+        let manager = ThreadWatchManager::new();
+        manager
+            .upsert_thread(test_thread(
+                INTERACTIVE_THREAD_ID,
+                codex_app_server_protocol::SessionSource::Cli,
+            ))
+            .await;
+
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        manager.note_thread_shutdown(INTERACTIVE_THREAD_ID).await;
+
+        assert_eq!(
+            manager
+                .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
+                .await,
+            ThreadStatus::NotLoaded,
+        );
+    }
+
+    #[tokio::test]
+    async fn loaded_statuses_default_to_not_loaded_for_untracked_threads() {
         let manager = ThreadWatchManager::new();
         manager
             .upsert_thread(test_thread(
@@ -482,7 +505,7 @@ mod tests {
         );
         assert_eq!(
             statuses.get(NON_INTERACTIVE_THREAD_ID),
-            Some(&ThreadStatus::Idle),
+            Some(&ThreadStatus::NotLoaded),
         );
     }
 
