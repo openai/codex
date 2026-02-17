@@ -624,6 +624,8 @@ pub struct Tui {
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
+    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
+    /// `project-root`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 }
