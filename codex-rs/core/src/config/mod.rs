@@ -1710,11 +1710,7 @@ impl Config {
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
-            .or_else(|| {
-                features
-                    .enabled(Feature::Personality)
-                    .then_some(Personality::Pragmatic)
-            });
+            .or(Some(Personality::Pragmatic));
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file

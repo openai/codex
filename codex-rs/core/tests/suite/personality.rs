@@ -459,7 +459,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
+async fn instructions_use_personality_template_even_if_feature_disabled() -> anyhow::Result<()> {
     let codex_home = TempDir::new().expect("create temp dir");
     let mut config = load_default_config_for_test(&codex_home).await;
     config.features.disable(Feature::Personality);
@@ -467,16 +467,17 @@ async fn instructions_uses_base_if_feature_disabled() -> anyhow::Result<()> {
 
     let model_info =
         codex_core::test_support::construct_model_info_offline("gpt-5.2-codex", &config);
-    assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        model_info.base_instructions
+    let instructions = model_info.get_model_instructions(config.personality);
+    assert!(
+        instructions.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected local friendly personality template, got: {instructions:?}"
     );
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()> {
+async fn user_turn_personality_updates_even_if_feature_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -522,7 +523,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             effort: None,
             summary: None,
             collaboration_mode: None,
-            personality: Some(Personality::Pragmatic),
+            personality: Some(Personality::Friendly),
         })
         .await?;
 
@@ -555,10 +556,11 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"));
+        .find(|text| text.contains("<personality_spec>"))
+        .expect("expected personality preamble");
     assert!(
-        personality_text.is_none(),
-        "expected no personality preamble, got {personality_text:?}"
+        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected friendly personality update, got {personality_text:?}"
     );
     Ok(())
 }
