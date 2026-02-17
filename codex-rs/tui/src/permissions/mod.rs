@@ -6,6 +6,8 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::history_cell;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
+use codex_core::config::Permissions;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
@@ -54,9 +56,10 @@ pub fn builtin_permissions_presets() -> Vec<PermissionsPreset> {
 }
 
 pub(crate) fn visible_permissions_options(config: &Config) -> Vec<SelectionItem> {
-    let mut presets = builtin_permissions_presets()
+    let presets = builtin_permissions_presets()
         .into_iter()
-        .filter(|preset| preset.is_visible(config));
+        .filter(|preset| preset.is_visible(config))
+        .filter(|preset| preset.satisfies_requirements(config));
 
     presets
         .map(|preset| preset.to_selection_item(config))
@@ -90,7 +93,6 @@ impl PermissionsPreset {
             is_current: self.is_current(config),
             actions: self.actions(config),
             dismiss_on_select: true,
-            disabled_reason: self.disabled_reason(config),
             ..Default::default()
         }
     }
@@ -100,31 +102,26 @@ impl PermissionsPreset {
             && self.sandbox == *config.permissions.sandbox_policy.get()
     }
 
-    fn disabled_reason(&self, config: &Config) -> Option<String> {
-        let disabled_sandbox_reason = match config.permissions.sandbox_policy.can_set(&self.sandbox)
-        {
-            Ok(()) => None,
-            Err(err) => Some(err.to_string()),
-        };
-        if disabled_sandbox_reason.is_some() {
-            return disabled_sandbox_reason;
-        }
-
-        let disabled_approval_reason =
-            match config.permissions.approval_policy.can_set(&self.approval) {
-                Ok(()) => None,
-                Err(err) => Some(err.to_string()),
-            };
-        if disabled_approval_reason.is_some() {
-            return disabled_approval_reason;
-        }
-
-        None
+    fn satisfies_requirements(&self, config: &Config) -> bool {
+        config
+            .permissions_satisfy_requirements(&Permissions {
+                approval_policy: Constrained::allow_any(self.approval),
+                sandbox_policy: Constrained::allow_any(self.sandbox.clone()),
+                network: config.permissions.network.clone(),
+                shell_environment_policy: config.permissions.shell_environment_policy.clone(),
+                windows_sandbox_mode: config.permissions.windows_sandbox_mode,
+                macos_seatbelt_profile_extensions: config
+                    .permissions
+                    .macos_seatbelt_profile_extensions
+                    .clone(),
+            })
+            .is_ok()
     }
 
     pub(crate) fn actions(&self, config: &Config) -> Vec<SelectionAction> {
         let requires_full_access_confirmation =
-            self.id == "full-access" && !config.notices.hide_full_access_warning.unwrap_or(false);
+            matches!(self.sandbox, SandboxPolicy::DangerFullAccess)
+                && !config.notices.hide_full_access_warning.unwrap_or(false);
         if requires_full_access_confirmation {
             let preset = self.clone();
             return vec![Box::new(move |tx: &AppEventSender| {

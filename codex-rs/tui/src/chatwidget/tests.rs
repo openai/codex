@@ -5342,16 +5342,13 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 }
 
 #[tokio::test]
-async fn approvals_popup_shows_disabled_presets() {
+async fn approvals_popup_constrains_disallowed_presets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.permissions.approval_policy =
         Constrained::new(AskForApproval::OnRequest, |candidate| match candidate {
             AskForApproval::OnRequest => Ok(()),
-            _ => Err(invalid_value(
-                candidate.to_string(),
-                "this message should be printed in the description",
-            )),
+            _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
         })
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
@@ -5368,17 +5365,17 @@ async fn approvals_popup_shows_disabled_presets() {
     let screen = terminal.backend().vt100().screen().contents();
     let collapsed = screen.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        collapsed.contains("(disabled)"),
-        "disabled preset label should be shown"
+        !collapsed.contains("(disabled)"),
+        "disallowed presets should be omitted, not rendered disabled"
     );
     assert!(
-        collapsed.contains("this message should be printed in the description"),
-        "disabled preset reason should be shown"
+        !collapsed.contains("Full Access"),
+        "full-access preset should be omitted when disallowed"
     );
 }
 
 #[tokio::test]
-async fn approvals_popup_navigation_skips_disabled() {
+async fn approvals_popup_selection_ignores_missing_numeric_shortcuts() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.permissions.approval_policy =
@@ -5389,13 +5386,7 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("construct constrained approval policy");
     chat.open_approvals_popup();
 
-    // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
-    // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
-    // and selection should wrap back to idx 0 (also enabled).
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-
-    // Press numeric shortcut for the disabled row (3 => idx 2); should not close or accept.
+    // Press numeric shortcut for an item that does not exist after filtering.
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('3')));
 
     // Ensure the popup remains open and no selection actions were sent.
@@ -5406,11 +5397,11 @@ async fn approvals_popup_navigation_skips_disabled() {
     terminal.set_viewport_area(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("render approvals popup after disabled selection");
+        .expect("render approvals popup after invalid numeric shortcut");
     let screen = terminal.backend().vt100().screen().contents();
     assert!(
         screen.contains("Update Model Permissions"),
-        "popup should remain open after selecting a disabled entry"
+        "popup should remain open after selecting a non-existent entry"
     );
     assert!(
         op_rx.try_recv().is_err(),
@@ -5444,7 +5435,7 @@ async fn approvals_popup_navigation_skips_disabled() {
                 ..
             })
         )),
-        "disabled preset should not be selected"
+        "disallowed preset should not be selectable"
     );
 }
 
