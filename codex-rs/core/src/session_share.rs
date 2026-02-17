@@ -342,8 +342,7 @@ async fn create_meta_if_absent(
 }
 
 fn build_rollout_download_path(codex_home: &Path, session_id: ThreadId) -> anyhow::Result<PathBuf> {
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| anyhow::anyhow!("failed to get local time: {e}"))?;
+    let timestamp = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let date_str = timestamp
