@@ -56,6 +56,7 @@ impl PlatformSleepInhibitor for LinuxSleepInhibitor {
                         reason = %error,
                         "Failed to query Linux sleep inhibitor backend status"
                     );
+                    return;
                 }
             }
         }
@@ -152,7 +153,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
     match backend {
         LinuxBackend::SystemdInhibit => Command::new("systemd-inhibit")
             .args([
-                "--what=sleep",
+                "--what=idle",
                 "--mode=block",
                 "--who",
                 APP_ID,
@@ -166,7 +167,7 @@ fn spawn_backend(backend: LinuxBackend) -> Result<Child, std::io::Error> {
         LinuxBackend::GnomeSessionInhibit => Command::new("gnome-session-inhibit")
             .args([
                 "--inhibit",
-                "suspend",
+                "idle",
                 "--reason",
                 ASSERTION_REASON,
                 "sleep",
