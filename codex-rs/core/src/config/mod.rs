@@ -1918,23 +1918,21 @@ impl Config {
         let mut handle = tokio::task::spawn_blocking(move || {
             Self::try_run_command_for_value(Some(&command), "session_object_storage_url_cmd")
         });
-        let resolved =
-            match tokio::time::timeout(SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT, &mut handle).await {
-                Ok(result) => result.map_err(|err| {
-                    std::io::Error::other(format!("session_object_storage_url_cmd panicked: {err}"))
-                })?,
-                Err(_) => {
-                    handle.abort();
-                    return Err(std::io::Error::new(
-                        ErrorKind::TimedOut,
-                        format!(
-                            "session_object_storage_url_cmd timed out after {}s",
-                            SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT.as_secs()
-                        ),
-                    ));
-                }
-            };
-        resolved
+        match tokio::time::timeout(SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT, &mut handle).await {
+            Ok(result) => result.map_err(|err| {
+                std::io::Error::other(format!("session_object_storage_url_cmd panicked: {err}"))
+            })?,
+            Err(_) => {
+                handle.abort();
+                Err(std::io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!(
+                        "session_object_storage_url_cmd timed out after {}s",
+                        SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT.as_secs()
+                    ),
+                ))
+            }
+        }
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
