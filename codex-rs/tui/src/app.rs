@@ -483,6 +483,31 @@ fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
     )));
 }
 
+fn trailing_agent_message_run_start(transcript_cells: &[Arc<dyn HistoryCell>]) -> usize {
+    let end = transcript_cells.len();
+    let mut start = end;
+
+    while start > 0
+        && transcript_cells[start - 1].is_stream_continuation()
+        && transcript_cells[start - 1]
+            .as_any()
+            .is::<history_cell::AgentMessageCell>()
+    {
+        start -= 1;
+    }
+
+    if start > 0
+        && transcript_cells[start - 1]
+            .as_any()
+            .is::<history_cell::AgentMessageCell>()
+        && !transcript_cells[start - 1].is_stream_continuation()
+    {
+        start -= 1;
+    }
+
+    start
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -3366,9 +3391,10 @@ impl App {
         self.has_emitted_history_lines = false;
         self.deferred_history_lines.clear();
 
-        // Track that a reflow happened durin an active agent stream so ConsolidateAgentMessage can
-        // schedule a follow-up reflow with the correct AgentMarkdownCell rendering.
-        if self.chat_widget.has_active_agent_stream() {
+        // Track that a reflow happened during an active stream or while trailing
+        // unconsolidated AgentMessageCells are still pending consolidation so
+        // ConsolidateAgentMessage can schedule a follow-up reflow.
+        if self.should_mark_reflow_as_stream_time() {
             self.reflow_ran_during_stream = true;
         }
 
@@ -3378,6 +3404,12 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn should_mark_reflow_as_stream_time(&self) -> bool {
+        self.chat_widget.has_active_agent_stream()
+            || trailing_agent_message_run_start(&self.transcript_cells)
+                < self.transcript_cells.len()
     }
 
     fn reset_thread_event_state(&mut self) {
@@ -4351,33 +4383,14 @@ impl App {
                 );
             }
             AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                // Walk backward to find the contiguous run of streaming AgentMarkdownCells that
+                // Walk backward to find the contiguous run of streaming AgentMessageCells that
                 // belong to the just-finalized stream
                 let end = self.transcript_cells.len();
                 tracing::debug!(
                     "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
                     source.len()
                 );
-                let mut start = end;
-                // Include continuation cells that are AgentMarkdownCells.
-                while start > 0
-                    && self.transcript_cells[start - 1].is_stream_continuation()
-                    && self.transcript_cells[start - 1]
-                        .as_any()
-                        .is::<history_cell::AgentMessageCell>()
-                {
-                    start -= 1;
-                }
-                // Include the head cell (is_stream_continuation == false) that started this agent
-                // message run
-                if start > 0
-                    && self.transcript_cells[start - 1]
-                        .as_any()
-                        .is::<history_cell::AgentMessageCell>()
-                    && !self.transcript_cells[start - 1].is_stream_continuation()
-                {
-                    start -= 1;
-                }
+                let start = trailing_agent_message_run_start(&self.transcript_cells);
                 if start < end {
                     tracing::debug!(
                         "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
@@ -9251,6 +9264,24 @@ guardian_approval = true
         assert!(
             app.resize_reflow_pending_until.is_none(),
             "resize reflow should drain on draw even when commit animation is idle",
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_reflow_repro_marks_stream_time_before_consolidation() {
+        let mut app = make_test_app().await;
+        app.transcript_cells.push(Arc::new(AgentMessageCell::new(
+            vec![Line::from("| Key | Value |")],
+            false,
+        )));
+
+        assert!(
+            !app.chat_widget.has_active_agent_stream(),
+            "repro requires stream controller to be cleared before consolidate event",
+        );
+        assert!(
+            app.should_mark_reflow_as_stream_time(),
+            "reflow in the pre-consolidation window should still be treated as stream-time",
         );
     }
 
