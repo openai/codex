@@ -3076,7 +3076,7 @@ async fn ctrl_d_quits_without_prompt() {
 async fn ctrl_d_with_modal_open_does_not_quit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
 
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
@@ -5024,7 +5024,7 @@ async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.notices.hide_full_access_warning = None;
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let popup = render_bottom_popup(&chat, 80);
     #[cfg(target_os = "windows")]
@@ -5045,7 +5045,7 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     chat.set_feature_enabled(Feature::WindowsSandbox, true);
     chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
 
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -5399,7 +5399,7 @@ async fn approvals_popup_shows_disabled_presets() {
             )),
         })
         .expect("construct constrained approval policy");
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -5432,7 +5432,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             _ => Err(invalid_value(candidate.to_string(), "[on-request]")),
         })
         .expect("construct constrained approval policy");
-    chat.open_approvals_popup();
+    chat.open_permissions_popup();
 
     // The approvals popup is the active bottom-pane view; drive navigation via chat handle_key_event.
     // Start selected at idx 0 (enabled), move down twice; the disabled option should be skipped
