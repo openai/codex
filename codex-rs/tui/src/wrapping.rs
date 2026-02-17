@@ -93,9 +93,7 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
             continue;
         }
 
-        panic!(
-            "wrap_ranges: could not map owned line {wrapped:?} to source near byte {cursor}"
-        );
+        panic!("wrap_ranges: could not map owned line {wrapped:?} to source near byte {cursor}");
     }
 
     start..end

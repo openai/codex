@@ -139,15 +139,16 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.display_lines(area.width);
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
         } else {
-            let overflow = lines.len().saturating_sub(usize::from(area.height));
+            let overflow = paragraph
+                .line_count(area.width)
+                .saturating_sub(usize::from(area.height));
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
-        Paragraph::new(Text::from(lines))
-            .scroll((y, 0))
-            .render(area, buf);
+        paragraph.scroll((y, 0)).render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
@@ -560,10 +561,6 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
             .subsequent_indent(self.subsequent_prefix.clone());
         adaptive_wrap_lines(&self.text, opts)
     }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
-    }
 }
 
 #[derive(Debug)]
@@ -624,10 +621,6 @@ impl HistoryCell for UnifiedExecInteractionCell {
         );
         out.extend(input_wrapped);
         out
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
     }
 }
 
@@ -2760,6 +2753,79 @@ mod tests {
     }
 
     #[test]
+    fn prefixed_wrapped_history_cell_height_matches_wrapped_rendering() {
+        let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
+        let cell: Box<dyn HistoryCell> = Box::new(PrefixedWrappedHistoryCell::new(
+            Line::from(url_like),
+            "✔ ".green(),
+            "  ",
+        ));
+
+        let width: u16 = 24;
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        assert!(
+            wrapped_height > logical_height,
+            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("✔"),
+            "expected first rendered row to keep the prefix visible, got: {first_row:?}"
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_height_matches_wrapped_rendering() {
+        let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
+        let cell: Box<dyn HistoryCell> = Box::new(UnifiedExecInteractionCell::new(
+            Some("true".to_string()),
+            url_like.to_string(),
+        ));
+
+        let width: u16 = 24;
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        assert!(
+            wrapped_height > logical_height,
+            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("Interacted with"),
+            "expected first rendered row to keep the header visible, got: {first_row:?}"
+        );
+    }
+
+    #[test]
     fn web_search_history_cell_snapshot() {
         let query =
             "example search query with several generic words to exercise wrapping".to_string();
@@ -3608,6 +3674,55 @@ mod tests {
             .count();
         assert_eq!(trailing_blank_count, 1);
         assert!(rendered.iter().any(|line| line.contains("tokenized")));
+    }
+
+    #[test]
+    fn render_uses_wrapping_for_long_url_like_line() {
+        let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going/for/testing/purposes-only-and-does/not/need/to/resolve/index.html?session_id=abc123def456ghi789jkl012mno345pqr678stu901vwx234yz";
+        let cell: Box<dyn HistoryCell> = Box::new(UserHistoryCell {
+            message: url.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        });
+
+        let width: u16 = 52;
+        let height = cell.desired_height(width);
+        assert!(
+            height > 1,
+            "expected wrapped height for long URL, got {height}"
+        );
+
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| {
+                        let symbol = buf[(x, y)].symbol();
+                        if symbol.is_empty() {
+                            ' '
+                        } else {
+                            symbol.chars().next().unwrap_or(' ')
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let rendered_blob = rendered.join("\n");
+
+        assert!(
+            rendered_blob.contains("session_id=abc123"),
+            "expected URL tail to be visible after wrapping, got:\n{rendered_blob}"
+        );
+
+        let non_empty_rows = rendered.iter().filter(|row| !row.trim().is_empty()).count() as u16;
+        assert!(
+            non_empty_rows > 3,
+            "expected long URL to span multiple visible rows, got:\n{rendered_blob}"
+        );
     }
 
     #[test]

@@ -409,8 +409,9 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p =
-            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
+        let p = Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
+            .style(self.style)
+            .wrap(Wrap { trim: false });
         p.render(area, buf);
     }
 
@@ -645,7 +646,7 @@ impl TranscriptOverlay {
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
