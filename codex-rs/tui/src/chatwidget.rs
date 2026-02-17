@@ -3746,9 +3746,12 @@ impl ChatWidget {
             self.add_error_message("Current session is not ready to share yet.".to_string());
             return;
         }
-        if self.config.session_object_storage_url.is_none() {
+        if self.config.session_object_storage_url.is_none()
+            && self.config.session_object_storage_url_cmd.is_none()
+        {
             self.add_error_message(
-                "Sharing requires `session_object_storage_url` in config.toml.".to_string(),
+                "Sharing requires `session_object_storage_url` or `session_object_storage_url_cmd` in config.toml."
+                    .to_string(),
             );
             return;
         }
@@ -3801,11 +3804,21 @@ impl ChatWidget {
 
         // TODO: Enforce email-based access once we have a server-side auth check.
 
-        let Some(storage_url) = self.config.session_object_storage_url.clone() else {
-            self.add_error_message(
-                "Sharing requires `session_object_storage_url` in config.toml.".to_string(),
-            );
-            return;
+        let storage_url = match self.config.resolve_session_object_storage_url() {
+            Ok(Some(url)) => url,
+            Ok(None) => {
+                self.add_error_message(
+                    "Sharing requires `session_object_storage_url` or `session_object_storage_url_cmd` in config.toml."
+                        .to_string(),
+                );
+                return;
+            }
+            Err(err) => {
+                self.add_error_message(format!(
+                    "Failed to resolve session object storage URL: {err}"
+                ));
+                return;
+            }
         };
         let owner = self
             .auth_manager

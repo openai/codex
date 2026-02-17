@@ -582,14 +582,25 @@ async fn run_ratatui_app(
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
                 None => {
-                    let Some(storage_url) = config.session_object_storage_url.as_deref() else {
-                        return missing_session_exit(&mut tui, id_str, "fork");
+                    let storage_url = match config.resolve_session_object_storage_url() {
+                        Ok(Some(url)) => url,
+                        Ok(None) => return missing_session_exit(&mut tui, id_str, "fork"),
+                        Err(err) => {
+                            return fatal_exit(
+                                &mut tui,
+                                format!("Failed to resolve session object storage URL: {err}"),
+                            );
+                        }
                     };
                     let Ok(session_id) = ThreadId::from_string(id_str) else {
                         return missing_session_exit(&mut tui, id_str, "fork");
                     };
-                    match download_rollout_if_available(storage_url, session_id, &config.codex_home)
-                        .await
+                    match download_rollout_if_available(
+                        &storage_url,
+                        session_id,
+                        &config.codex_home,
+                    )
+                    .await
                     {
                         Ok(Some(path)) => {
                             remote_fork_downloaded = true;

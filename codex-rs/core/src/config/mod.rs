@@ -349,6 +349,8 @@ pub struct Config {
 
     /// Optional base URL for storing shared session rollouts in an object store.
     pub session_object_storage_url: Option<String>,
+    /// Optional command to produce the base URL for storing shared session rollouts.
+    pub session_object_storage_url_cmd: Option<Vec<String>>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -1518,7 +1520,15 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
-        let session_object_storage_url = Self::resolve_session_object_storage_url(&cfg)?;
+        let session_object_storage_url =
+            cfg.session_object_storage_url.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
         let mut sandbox_policy = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
@@ -1827,6 +1837,7 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             session_object_storage_url,
+            session_object_storage_url_cmd: cfg.session_object_storage_url_cmd,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -1893,6 +1904,17 @@ impl Config {
         Ok(config)
     }
 
+    pub fn resolve_session_object_storage_url(&self) -> std::io::Result<Option<String>> {
+        if let Some(url) = self.session_object_storage_url.as_ref() {
+            return Ok(Some(url.clone()));
+        }
+
+        Self::try_run_command_for_value(
+            self.session_object_storage_url_cmd.as_deref(),
+            "session_object_storage_url_cmd",
+        )
+    }
+
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
@@ -1935,27 +1957,6 @@ impl Config {
         } else {
             Ok(Some(s))
         }
-    }
-
-    fn resolve_session_object_storage_url(cfg: &ConfigToml) -> std::io::Result<Option<String>> {
-        let session_object_storage_url =
-            cfg.session_object_storage_url.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
-
-        if session_object_storage_url.is_some() {
-            return Ok(session_object_storage_url);
-        }
-
-        Self::try_run_command_for_value(
-            cfg.session_object_storage_url_cmd.as_deref(),
-            "session_object_storage_url_cmd",
-        )
     }
 
     fn try_run_command_for_value(
@@ -4220,6 +4221,7 @@ model_verbosity = "high"
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 session_object_storage_url: None,
+                session_object_storage_url_cmd: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4332,6 +4334,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4442,6 +4445,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4538,6 +4542,7 @@ model_verbosity = "high"
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
