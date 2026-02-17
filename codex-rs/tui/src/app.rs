@@ -55,6 +55,8 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::read_session_meta_line;
+use codex_core::session_share::local_share_owner;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -1442,6 +1444,46 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(path) => {
+                        let current_owner = self
+                            .auth_manager
+                            .auth_cached()
+                            .and_then(|auth| auth.get_account_email());
+                        match local_share_owner(&path) {
+                            Ok(Some(owner)) => {
+                                if current_owner.as_deref() != Some(owner.as_str()) {
+                                    let session_id = read_session_meta_line(&path)
+                                        .await
+                                        .ok()
+                                        .map(|meta| meta.meta.id.to_string());
+                                    let (id_display, fork_hint) = match session_id {
+                                        Some(id) => {
+                                            (id.clone(), format!("Use `codex fork {id}` instead."))
+                                        }
+                                        None => (
+                                            "this session".to_string(),
+                                            "Use `codex fork` to select it instead.".to_string(),
+                                        ),
+                                    };
+                                    self.chat_widget.add_error_message(format!(
+                                        "Cannot resume shared session {id_display} owned by {owner}. {fork_hint}"
+                                    ));
+                                    return Ok(AppRunControl::Continue);
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                tracing::warn!(
+                                    error = %err,
+                                    "failed to read shared session metadata; treating session as unshared"
+                                );
+                                self.chat_widget.add_info_message(
+                                    "Share metadata unreadable; proceeding without owner check."
+                                        .to_string(),
+                                    None,
+                                );
+                            }
+                        }
+
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
                             tui,
@@ -1449,6 +1491,7 @@ impl App {
                             &path,
                             CwdPromptAction::Resume,
                             true,
+                            false,
                         )
                         .await?
                         {
@@ -1667,7 +1710,16 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
-                self.chat_widget.submit_op(op);
+                if let Op::UserInputAnswer { id, response } = op {
+                    if crate::chatwidget::ChatWidget::is_share_request_id(&id) {
+                        self.chat_widget.handle_share_response(response);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    self.chat_widget
+                        .submit_op(Op::UserInputAnswer { id, response });
+                } else {
+                    self.chat_widget.submit_op(op);
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane

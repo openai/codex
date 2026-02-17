@@ -32,8 +32,11 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
+use codex_core::session_share::download_rollout_if_available;
+use codex_core::session_share::local_share_owner;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -49,6 +52,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
+use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -544,8 +548,8 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
-    let mut missing_session_exit = |id_str: &str, action: &str| {
-        error!("Error finding conversation path: {id_str}");
+    let fatal_exit = |tui: &mut Tui, message: String| {
+        error!("{message}");
         restore();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
@@ -554,13 +558,20 @@ async fn run_ratatui_app(
             thread_id: None,
             thread_name: None,
             update_action: None,
-            exit_reason: ExitReason::Fatal(format!(
-                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
-            )),
+            exit_reason: ExitReason::Fatal(message),
         })
+    };
+    let missing_session_exit = |tui: &mut Tui, id_str: &str, action: &str| {
+        fatal_exit(
+            tui,
+            format!(
+                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+            ),
+        )
     };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
+    let mut remote_fork_downloaded = false;
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
@@ -571,7 +582,40 @@ async fn run_ratatui_app(
             };
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
-                None => return missing_session_exit(id_str, "fork"),
+                None => {
+                    let storage_url = match config.resolve_session_object_storage_url().await {
+                        Ok(Some(url)) => url,
+                        Ok(None) => return missing_session_exit(&mut tui, id_str, "fork"),
+                        Err(err) => {
+                            return fatal_exit(
+                                &mut tui,
+                                format!("Failed to resolve session object storage URL: {err}"),
+                            );
+                        }
+                    };
+                    let Ok(session_id) = ThreadId::from_string(id_str) else {
+                        return missing_session_exit(&mut tui, id_str, "fork");
+                    };
+                    match download_rollout_if_available(
+                        &storage_url,
+                        session_id,
+                        &config.codex_home,
+                    )
+                    .await
+                    {
+                        Ok(Some(path)) => {
+                            remote_fork_downloaded = true;
+                            resume_picker::SessionSelection::Fork(path)
+                        }
+                        Ok(None) => return missing_session_exit(&mut tui, id_str, "fork"),
+                        Err(err) => {
+                            return fatal_exit(
+                                &mut tui,
+                                format!("Failed to fetch remote session {id_str}: {err}"),
+                            );
+                        }
+                    }
+                }
             }
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
@@ -620,7 +664,7 @@ async fn run_ratatui_app(
         };
         match path {
             Some(path) => resume_picker::SessionSelection::Resume(path),
-            None => return missing_session_exit(id_str, "resume"),
+            None => return missing_session_exit(&mut tui, id_str, "resume"),
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
@@ -663,6 +707,43 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
+    let current_owner = auth_manager
+        .auth_cached()
+        .and_then(|auth| auth.get_account_email());
+
+    if let resume_picker::SessionSelection::Resume(path) = &session_selection {
+        match local_share_owner(path) {
+            Ok(Some(owner)) => {
+                if current_owner.as_deref() != Some(owner.as_str()) {
+                    let session_id = read_session_meta_line(path)
+                        .await
+                        .ok()
+                        .map(|meta| meta.meta.id.to_string());
+                    let (id_display, fork_hint) = match session_id {
+                        Some(id) => (id.clone(), format!("Use `codex fork {id}` instead.")),
+                        None => (
+                            "this session".to_string(),
+                            "Use `codex fork` to select it instead.".to_string(),
+                        ),
+                    };
+                    return fatal_exit(
+                        &mut tui,
+                        format!(
+                            "Cannot resume shared session {id_display} owned by {owner}. {fork_hint}"
+                        ),
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "failed to read shared session metadata; treating session as unshared"
+                );
+            }
+        }
+    }
+
     let current_cwd = config.cwd.clone();
     let allow_prompt = cli.cwd.is_none();
     let action_and_path_if_resume_or_fork = match &session_selection {
@@ -672,8 +753,25 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_path_if_resume_or_fork {
         Some((action, path)) => {
-            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
-                .await?
+            let shared_owner = match action {
+                CwdPromptAction::Fork => local_share_owner(path).ok().flatten(),
+                CwdPromptAction::Resume => None,
+            };
+            let shared_by_other = shared_owner
+                .as_deref()
+                .map(|owner| current_owner.as_deref() != Some(owner))
+                .unwrap_or(false);
+            let prefer_current_cwd =
+                (remote_fork_downloaded || shared_by_other) && action == CwdPromptAction::Fork;
+            resolve_cwd_for_resume_or_fork(
+                &mut tui,
+                &current_cwd,
+                path,
+                action,
+                allow_prompt,
+                prefer_current_cwd,
+            )
+            .await?
         }
         None => None,
     };
@@ -786,10 +884,17 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
+    prefer_current_cwd: bool,
 ) -> color_eyre::Result<Option<PathBuf>> {
+    if prefer_current_cwd {
+        return Ok(Some(current_cwd.to_path_buf()));
+    }
     let Some(history_cwd) = read_session_cwd(path).await else {
         return Ok(None);
     };
+    if action == CwdPromptAction::Fork && !history_cwd.exists() {
+        return Ok(Some(current_cwd.to_path_buf()));
+    }
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
         let selection =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;

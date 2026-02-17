@@ -78,6 +78,8 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
 #[cfg(test)]
 use tempfile::tempdir;
 #[cfg(not(target_os = "macos"))]
@@ -109,6 +111,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
+const SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -348,6 +351,11 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// Optional base URL for storing shared session rollouts in an object store.
+    pub session_object_storage_url: Option<String>,
+    /// Optional command to produce the base URL for storing shared session rollouts.
+    pub session_object_storage_url_cmd: Option<Vec<String>>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -950,6 +958,12 @@ pub struct ConfigToml {
     /// When unset, Codex will bind to an ephemeral port chosen by the OS.
     pub mcp_oauth_callback_port: Option<u16>,
 
+    /// Base URL for the object store used by /share (enterprise/self-hosted).
+    pub session_object_storage_url: Option<String>,
+    /// Optional command to produce the base URL for the object store used by /share.
+    /// The command runs as argv and must print a non-empty URL to stdout.
+    pub session_object_storage_url_cmd: Option<Vec<String>>,
+
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -1540,6 +1554,15 @@ impl Config {
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
             None => WindowsSandboxLevel::from_features(&features),
         };
+        let session_object_storage_url =
+            cfg.session_object_storage_url.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
         let mut sandbox_policy = cfg.derive_sandbox_policy(
             sandbox_mode,
             config_profile.sandbox_mode,
@@ -1870,6 +1893,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            session_object_storage_url,
+            session_object_storage_url_cmd: cfg.session_object_storage_url_cmd,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -1936,6 +1961,35 @@ impl Config {
         Ok(config)
     }
 
+    pub async fn resolve_session_object_storage_url(&self) -> std::io::Result<Option<String>> {
+        if let Some(url) = self.session_object_storage_url.as_ref() {
+            return Ok(Some(url.clone()));
+        }
+
+        let Some(command) = self.session_object_storage_url_cmd.clone() else {
+            return Ok(None);
+        };
+
+        let mut handle = tokio::task::spawn_blocking(move || {
+            Self::try_run_command_for_value(Some(&command), "session_object_storage_url_cmd")
+        });
+        match tokio::time::timeout(SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT, &mut handle).await {
+            Ok(result) => result.map_err(|err| {
+                std::io::Error::other(format!("session_object_storage_url_cmd panicked: {err}"))
+            })?,
+            Err(_) => {
+                handle.abort();
+                Err(std::io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!(
+                        "session_object_storage_url_cmd timed out after {}s",
+                        SESSION_OBJECT_STORAGE_URL_CMD_TIMEOUT.as_secs()
+                    ),
+                ))
+            }
+        }
+    }
+
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
@@ -1977,6 +2031,59 @@ impl Config {
             ))
         } else {
             Ok(Some(s))
+        }
+    }
+
+    fn try_run_command_for_value(
+        command: Option<&[String]>,
+        context: &str,
+    ) -> std::io::Result<Option<String>> {
+        let Some(command) = command else {
+            return Ok(None);
+        };
+
+        if command.is_empty() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("{context} is empty"),
+            ));
+        }
+
+        let mut cmd = Command::new(&command[0]);
+        if let Some(args) = command.get(1..) {
+            cmd.args(args);
+        }
+
+        let output = cmd.output().map_err(|err| {
+            std::io::Error::new(err.kind(), format!("{context} failed to start: {err}"))
+        })?;
+
+        if !output.status.success() {
+            let status = output.status;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            let message = if stderr.is_empty() {
+                format!("{context} failed with status {status}")
+            } else {
+                format!("{context} failed with status {status}: {stderr}")
+            };
+            return Err(std::io::Error::other(message));
+        }
+
+        let stdout = String::from_utf8(output.stdout).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{context} output was not UTF-8: {err}"),
+            )
+        })?;
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{context} returned empty output"),
+            ))
+        } else {
+            Ok(Some(trimmed.to_string()))
         }
     }
 
@@ -4189,6 +4296,8 @@ model_verbosity = "high"
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                session_object_storage_url: None,
+                session_object_storage_url_cmd: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4301,6 +4410,8 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4411,6 +4522,8 @@ model_verbosity = "high"
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4507,6 +4620,8 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            session_object_storage_url: None,
+            session_object_storage_url_cmd: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,

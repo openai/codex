@@ -57,6 +57,7 @@ mod proposed_plan_parser;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
+pub mod session_share;
 mod shell_detect;
 mod stream_events_utils;
 mod tagged_block_parser;
