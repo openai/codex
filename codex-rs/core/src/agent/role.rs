@@ -299,9 +299,7 @@ mod tests {
     #[tokio::test]
     async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
         let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
-        let role_path = write_role_config(&home, "invalid-role.toml", "model = [")
-            .await
-            ;
+        let role_path = write_role_config(&home, "invalid-role.toml", "model = [").await;
         config.agent_roles.insert(
             "custom".to_string(),
             AgentRoleConfig {
