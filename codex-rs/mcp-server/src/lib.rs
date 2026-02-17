@@ -48,6 +48,9 @@ const CHANNEL_CAPACITY: usize = 128;
 
 type IncomingMessage = JsonRpcMessage<ClientRequest, Value, ClientNotification>;
 
+/// Shared pending map type for routing MCP responses to their requestors.
+type PendingMap = Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::outgoing_message::OutgoingJsonRpcMessage>>>>;
+
 /// Options for controlling which transports to start.
 #[derive(Default)]
 pub struct TransportOptions {
@@ -125,21 +128,26 @@ pub async fn run_main_with_transport(
         None
     };
 
+    // Shared pending map: routes MCP responses to HTTP and A2A requestors.
+    // Both A2A executor and HTTP handlers register oneshot channels here
+    // using unique request IDs (A2A prefixes with "a2a-").
+    let shared_pending: PendingMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
     // --- A2A server (optional) ---
     let a2a_handle = if let Some(a2a_port) = transport.a2a_port {
-        let pending = Arc::new(tokio::sync::Mutex::new(
-            HashMap::<String, tokio::sync::oneshot::Sender<crate::outgoing_message::OutgoingJsonRpcMessage>>::new(),
-        ));
+        // Broadcast channel for forwarding MCP notifications to A2A event bus.
+        let (a2a_notif_tx, _) = tokio::sync::broadcast::channel::<String>(256);
 
         let handler = a2a_handler::CodexA2AExecutor::new(
             incoming_tx.clone(),
-            pending.clone(),
+            shared_pending.clone(),
+            a2a_notif_tx.clone(),
         );
 
         let addr = format!("0.0.0.0:{a2a_port}");
         info!("A2A server listening on http://{addr}/");
 
-        Some(tokio::spawn(async move {
+        Some((tokio::spawn(async move {
             if let Err(e) = a2a_rs::A2AServer::new(handler, a2a_rs::InMemoryTaskStore::new())
                 .bind(&addr)
                 .run()
@@ -147,7 +155,7 @@ pub async fn run_main_with_transport(
             {
                 error!("A2A server error: {e}");
             }
-        }))
+        }), a2a_notif_tx))
     } else {
         None
     };
@@ -155,28 +163,27 @@ pub async fn run_main_with_transport(
     // --- HTTP server (optional) ---
     let mut outgoing_rx = Some(outgoing_rx);
     let http_handle = if let Some(port) = transport.http_port {
-        let pending = Arc::new(tokio::sync::Mutex::new(
-            HashMap::<String, tokio::sync::oneshot::Sender<crate::outgoing_message::OutgoingJsonRpcMessage>>::new(),
-        ));
         let (sse_tx, _) = tokio::sync::broadcast::channel::<String>(256);
 
         let state = http_transport::HttpState {
             incoming_tx: incoming_tx.clone(),
-            pending: pending.clone(),
+            pending: shared_pending.clone(),
             sse_tx: sse_tx.clone(),
         };
 
         let router = http_transport::build_router(state);
 
-        // Start the outgoing interceptor that routes responses to HTTP
+        // Start the outgoing interceptor that routes responses to HTTP/A2A
         // handlers and/or stdout.
         let write_stdout = !transport.http_only;
+        let a2a_notif_tx_for_http = a2a_handle.as_ref().map(|(_, tx)| tx.clone());
         let interceptor_handle = tokio::spawn(
             http_transport::outgoing_http_interceptor(
                 outgoing_rx.take().expect("outgoing_rx already taken"),
-                pending,
+                shared_pending.clone(),
                 sse_tx,
                 write_stdout,
+                a2a_notif_tx_for_http,
             ),
         );
 
@@ -204,6 +211,8 @@ pub async fn run_main_with_transport(
     };
 
     // --- Stdout writer (when no HTTP or dual mode without interceptor) ---
+    let a2a_notif_tx_for_stdout = a2a_handle.as_ref().map(|(_, tx)| tx.clone());
+    let stdout_pending = shared_pending.clone();
     let stdout_handle = if let Some(mut outgoing_rx) = outgoing_rx.take() {
         Some(tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
@@ -211,15 +220,33 @@ pub async fn run_main_with_transport(
             while let Some(outgoing_message) = outgoing_rx.recv().await {
                 let msg: crate::outgoing_message::OutgoingJsonRpcMessage =
                     outgoing_message.into();
+
+                // Route responses to pending requestors (from A2A executor).
+                let id_str = extract_outgoing_id(&msg);
+                let mut routed = false;
+                if let Some(id) = id_str {
+                    let mut map = stdout_pending.lock().await;
+                    if let Some(tx) = map.remove(&id) {
+                        let _ = tx.send(msg.clone());
+                        routed = true;
+                    }
+                }
+
                 match serde_json::to_string(&msg) {
                     Ok(json) => {
-                        if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                            error!("Failed to write to stdout: {e}");
-                            break;
+                        // Forward notifications to A2A broadcast channel.
+                        if let Some(ref a2a_tx) = a2a_notif_tx_for_stdout {
+                            let _ = a2a_tx.send(json.clone());
                         }
-                        if let Err(e) = stdout.write_all(b"\n").await {
-                            error!("Failed to write newline to stdout: {e}");
-                            break;
+                        if !routed {
+                            if let Err(e) = stdout.write_all(json.as_bytes()).await {
+                                error!("Failed to write to stdout: {e}");
+                                break;
+                            }
+                            if let Err(e) = stdout.write_all(b"\n").await {
+                                error!("Failed to write newline to stdout: {e}");
+                                break;
+                            }
                         }
                     }
                     Err(e) => error!("Failed to serialize JSON-RPC message: {e}"),
@@ -263,9 +290,21 @@ pub async fn run_main_with_transport(
     if let Some((server_h, interceptor_h)) = http_handle {
         let _ = tokio::join!(server_h, interceptor_h);
     }
-    if let Some(h) = a2a_handle {
+    if let Some((h, _)) = a2a_handle {
         let _ = h.await;
     }
 
     Ok(())
+}
+
+/// Extract the JSON-RPC `id` field from a serialized outgoing message.
+fn extract_outgoing_id(msg: &crate::outgoing_message::OutgoingJsonRpcMessage) -> Option<String> {
+    if let Ok(v) = serde_json::to_value(msg) {
+        if let Some(id) = v.get("id") {
+            if !id.is_null() {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
 }

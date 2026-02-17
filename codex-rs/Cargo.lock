@@ -17,10 +17,12 @@ name = "a2a-rs"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "futures",
  "http 1.4.0",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
 ]
@@ -2046,6 +2048,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",

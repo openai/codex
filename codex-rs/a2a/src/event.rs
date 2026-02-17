@@ -43,6 +43,14 @@ impl EventBus {
         self.tx.subscribe()
     }
 
+    /// Create a lightweight clone of this EventBus that shares the same
+    /// broadcast sender. Useful for spawning forwarder tasks.
+    pub fn clone_sender(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+
     /// Publish a completed status for the given task.
     pub fn publish_task_completed(&self, task: Task) {
         self.publish(ExecutionEvent::Task(task));
