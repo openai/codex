@@ -1,17 +1,29 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::analytics_client::InvokeType;
+use crate::analytics_client::SkillInvocation;
+use crate::analytics_client::TrackEventsContext;
+use crate::analytics_client::skill_id_for_local_skill;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::function_tool::FunctionCallError;
+use crate::git_info::collect_git_info;
+use crate::git_info::get_git_repo_root;
 use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
+use crate::skills::SkillMetadata;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -35,16 +47,100 @@ pub(crate) struct OutputItemResult {
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) struct HandleOutputCtx {
+#[derive(Clone)]
+struct ImplicitSkillCandidate {
+    invocation: SkillInvocation,
+    skill_id: String,
+}
+
+#[derive(Default)]
+struct ImplicitSkillDetector {
+    by_scripts_workdir: HashMap<PathBuf, ImplicitSkillCandidate>,
+    by_skill_doc_path: HashMap<PathBuf, ImplicitSkillCandidate>,
+}
+
+pub(crate) struct ImplicitInvocationContext {
+    detector: ImplicitSkillDetector,
+    seen_skill_ids: HashSet<String>,
+    tracking: TrackEventsContext,
+}
+
+#[derive(Deserialize)]
+struct ShellCommandDetectionArgs {
+    command: String,
+    workdir: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ExecCommandDetectionArgs {
+    cmd: String,
+    workdir: Option<String>,
+}
+
+pub(crate) async fn build_implicit_invocation_context(
+    skills: Vec<SkillMetadata>,
+    tracking: TrackEventsContext,
+) -> Option<ImplicitInvocationContext> {
+    if skills.is_empty() {
+        return None;
+    }
+
+    let mut detector = ImplicitSkillDetector::default();
+    for skill in skills {
+        let invocation = SkillInvocation {
+            skill_name: skill.name,
+            skill_scope: skill.scope,
+            skill_path: skill.path,
+            invoke_type: InvokeType::Implicit,
+        };
+        let repo_root = get_git_repo_root(invocation.skill_path.as_path());
+        let repo_url = if let Some(root) = repo_root.as_ref() {
+            collect_git_info(root)
+                .await
+                .and_then(|info| info.repository_url)
+        } else {
+            None
+        };
+        let skill_id = skill_id_for_local_skill(
+            repo_url.as_deref(),
+            repo_root.as_deref(),
+            invocation.skill_path.as_path(),
+            invocation.skill_name.as_str(),
+        );
+        let candidate = ImplicitSkillCandidate {
+            invocation,
+            skill_id,
+        };
+
+        let skill_doc_path = normalize_path(candidate.invocation.skill_path.as_path());
+        detector
+            .by_skill_doc_path
+            .insert(skill_doc_path, candidate.clone());
+
+        if let Some(skill_dir) = candidate.invocation.skill_path.parent() {
+            let scripts_dir = normalize_path(&skill_dir.join("scripts"));
+            detector.by_scripts_workdir.insert(scripts_dir, candidate);
+        }
+    }
+
+    Some(ImplicitInvocationContext {
+        detector,
+        seen_skill_ids: HashSet::new(),
+        tracking,
+    })
+}
+
+pub(crate) struct HandleOutputCtx<'a> {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
+    pub implicit_invocation_context: Option<&'a mut ImplicitInvocationContext>,
 }
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
-    ctx: &mut HandleOutputCtx,
+    ctx: &mut HandleOutputCtx<'_>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
@@ -61,6 +157,8 @@ pub(crate) async fn handle_output_item_done(
                 call.tool_name,
                 payload_preview
             );
+
+            maybe_emit_implicit_skill_invocation(ctx, &item).await;
 
             ctx.sess
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))
@@ -158,6 +256,171 @@ pub(crate) async fn handle_output_item_done(
     Ok(output)
 }
 
+async fn maybe_emit_implicit_skill_invocation(ctx: &mut HandleOutputCtx<'_>, item: &ResponseItem) {
+    let Some(implicit) = ctx.implicit_invocation_context.as_deref_mut() else {
+        return;
+    };
+    let Some(candidate) =
+        detect_implicit_skill_invocation(&implicit.detector, ctx.turn_context.as_ref(), item)
+    else {
+        return;
+    };
+    if !implicit.seen_skill_ids.insert(candidate.skill_id) {
+        return;
+    }
+
+    let skill_name = candidate.invocation.skill_name.as_str();
+    ctx.turn_context.otel_manager.counter(
+        "codex.skill.injected",
+        1,
+        &[
+            ("status", "ok"),
+            ("skill", skill_name),
+            ("invoke_type", "implicit"),
+        ],
+    );
+    ctx.sess
+        .services
+        .analytics_events_client
+        .track_skill_invocations(implicit.tracking.clone(), vec![candidate.invocation]);
+}
+
+fn detect_implicit_skill_invocation(
+    detector: &ImplicitSkillDetector,
+    turn_context: &TurnContext,
+    item: &ResponseItem,
+) -> Option<ImplicitSkillCandidate> {
+    let ResponseItem::FunctionCall {
+        name, arguments, ..
+    } = item
+    else {
+        return None;
+    };
+    let (command, workdir) = parse_implicit_detection_command(name, arguments)?;
+    let workdir = turn_context.resolve_path(workdir);
+    let workdir = normalize_path(workdir.as_path());
+    let tokens = tokenize_command(command.as_str());
+
+    if command_looks_like_script_run(tokens.as_slice())
+        && let Some(candidate) = detector.by_scripts_workdir.get(&workdir)
+    {
+        return Some(candidate.clone());
+    }
+
+    if let Some(candidate) = detect_skill_doc_read(detector, tokens.as_slice(), workdir.as_path()) {
+        return Some(candidate);
+    }
+
+    None
+}
+
+fn parse_implicit_detection_command(
+    tool_name: &str,
+    arguments: &str,
+) -> Option<(String, Option<String>)> {
+    match tool_name {
+        "shell_command" => serde_json::from_str::<ShellCommandDetectionArgs>(arguments)
+            .ok()
+            .map(|args| (args.command, args.workdir)),
+        "exec_command" => serde_json::from_str::<ExecCommandDetectionArgs>(arguments)
+            .ok()
+            .map(|args| (args.cmd, args.workdir)),
+        _ => None,
+    }
+}
+
+fn tokenize_command(command: &str) -> Vec<String> {
+    shlex::split(command).unwrap_or_else(|| {
+        command
+            .split_whitespace()
+            .map(std::string::ToString::to_string)
+            .collect()
+    })
+}
+
+fn command_looks_like_script_run(tokens: &[String]) -> bool {
+    const RUNNERS: [&str; 10] = [
+        "python", "python3", "bash", "zsh", "sh", "node", "deno", "ruby", "perl", "pwsh",
+    ];
+    const SCRIPT_EXTENSIONS: [&str; 7] = [".py", ".sh", ".js", ".ts", ".rb", ".pl", ".ps1"];
+
+    let Some(runner_token) = tokens.first() else {
+        return false;
+    };
+    let runner = command_basename(runner_token).to_ascii_lowercase();
+    let runner = runner.strip_suffix(".exe").unwrap_or(&runner);
+    if !RUNNERS.contains(&runner) {
+        return false;
+    }
+
+    let mut script_token: Option<&str> = None;
+    for token in tokens.iter().skip(1) {
+        if token == "--" {
+            continue;
+        }
+        if token.starts_with('-') {
+            continue;
+        }
+        script_token = Some(token.as_str());
+        break;
+    }
+    let Some(script_token) = script_token else {
+        return false;
+    };
+    let script_token = script_token.to_ascii_lowercase();
+    SCRIPT_EXTENSIONS
+        .iter()
+        .any(|extension| script_token.ends_with(extension))
+}
+
+fn detect_skill_doc_read(
+    detector: &ImplicitSkillDetector,
+    tokens: &[String],
+    workdir: &Path,
+) -> Option<ImplicitSkillCandidate> {
+    if !command_reads_file(tokens) {
+        return None;
+    }
+
+    for token in tokens.iter().skip(1) {
+        if token.starts_with('-') {
+            continue;
+        }
+        let path = Path::new(token);
+        let candidate_path = if path.is_absolute() {
+            normalize_path(path)
+        } else {
+            normalize_path(&workdir.join(path))
+        };
+        if let Some(candidate) = detector.by_skill_doc_path.get(&candidate_path) {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
+}
+
+fn command_reads_file(tokens: &[String]) -> bool {
+    const READERS: [&str; 8] = ["cat", "sed", "head", "tail", "less", "more", "bat", "awk"];
+    let Some(program) = tokens.first() else {
+        return false;
+    };
+    let program = command_basename(program).to_ascii_lowercase();
+    READERS.contains(&program.as_str())
+}
+
+fn command_basename(command: &str) -> String {
+    Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+        .to_string()
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 pub(crate) async fn handle_non_tool_response_item(
     item: &ResponseItem,
     plan_mode: bool,
@@ -246,5 +509,76 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImplicitSkillCandidate;
+    use super::ImplicitSkillDetector;
+    use super::InvokeType;
+    use super::SkillInvocation;
+    use super::command_looks_like_script_run;
+    use super::detect_skill_doc_read;
+    use super::normalize_path;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn script_run_detection_matches_runner_plus_extension() {
+        let tokens = vec![
+            "python3".to_string(),
+            "-u".to_string(),
+            "scripts/fetch_comments.py".to_string(),
+        ];
+
+        assert_eq!(command_looks_like_script_run(&tokens), true);
+    }
+
+    #[test]
+    fn script_run_detection_excludes_python_c() {
+        let tokens = vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "print(1)".to_string(),
+        ];
+
+        assert_eq!(command_looks_like_script_run(&tokens), false);
+    }
+
+    #[test]
+    fn skill_doc_read_detection_matches_absolute_path() {
+        let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
+        let normalized_skill_doc_path = normalize_path(skill_doc_path.as_path());
+        let invocation = SkillInvocation {
+            skill_name: "test-skill".to_string(),
+            skill_scope: codex_protocol::protocol::SkillScope::User,
+            skill_path: skill_doc_path,
+            invoke_type: InvokeType::Implicit,
+        };
+        let candidate = ImplicitSkillCandidate {
+            invocation,
+            skill_id: "skill-id".to_string(),
+        };
+
+        let detector = ImplicitSkillDetector {
+            by_scripts_workdir: HashMap::new(),
+            by_skill_doc_path: HashMap::from([(normalized_skill_doc_path, candidate)]),
+        };
+
+        let tokens = vec![
+            "cat".to_string(),
+            "/tmp/skill-test/SKILL.md".to_string(),
+            "|".to_string(),
+            "head".to_string(),
+        ];
+        let found = detect_skill_doc_read(&detector, &tokens, Path::new("/tmp"));
+
+        assert_eq!(
+            found.map(|value| value.skill_id),
+            Some("skill-id".to_string())
+        );
     }
 }

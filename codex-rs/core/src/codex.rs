@@ -15,6 +15,7 @@ use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::InvokeType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
@@ -33,6 +34,8 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
+use crate::stream_events_utils::ImplicitInvocationContext;
+use crate::stream_events_utils::build_implicit_invocation_context;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -4324,6 +4327,13 @@ pub(crate) async fn run_turn(
         thread_id,
         turn_context.sub_id.clone(),
     );
+    let mut implicit_invocation_context = build_implicit_invocation_context(
+        skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+            outcome.allowed_skills_for_implicit_invocation()
+        }),
+        tracking.clone(),
+    )
+    .await;
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
@@ -4357,7 +4367,7 @@ pub(crate) async fn run_turn(
             app_name: connector_names_by_id
                 .get(connector_id.as_str())
                 .map(|name| (*name).to_string()),
-            invoke_type: Some("explicit".to_string()),
+            invoke_type: Some(InvokeType::Explicit),
         })
         .collect::<Vec<_>>();
     sess.services
@@ -4446,6 +4456,7 @@ pub(crate) async fn run_turn(
             &explicitly_enabled_connectors,
             skills_outcome.as_ref(),
             &mut server_model_warning_emitted_for_turn,
+            implicit_invocation_context.as_mut(),
             cancellation_token.child_token(),
         )
         .await
@@ -4820,6 +4831,7 @@ async fn run_sampling_request(
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
+    mut implicit_invocation_context: Option<&mut ImplicitInvocationContext>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let router = built_tools(
@@ -4858,6 +4870,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
+            implicit_invocation_context.as_deref_mut(),
             cancellation_token.child_token(),
         )
         .await
@@ -5427,6 +5440,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
+    mut implicit_invocation_context: Option<&mut ImplicitInvocationContext>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let collaboration_mode = sess.current_collaboration_mode().await;
@@ -5540,6 +5554,7 @@ async fn try_run_sampling_request(
                     turn_context: turn_context.clone(),
                     tool_runtime: tool_runtime.clone(),
                     cancellation_token: cancellation_token.child_token(),
+                    implicit_invocation_context: implicit_invocation_context.as_deref_mut(),
                 };
 
                 let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
