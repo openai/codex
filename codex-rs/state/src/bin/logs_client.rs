@@ -46,6 +46,10 @@ struct Args {
     #[arg(long = "thread-id")]
     thread_id: Vec<String>,
 
+    /// Substring match against the log message.
+    #[arg(long)]
+    search: Option<String>,
+
     /// Include logs that do not have a thread id.
     #[arg(long)]
     threadless: bool,
@@ -67,6 +71,7 @@ struct LogFilter {
     module_like: Vec<String>,
     file_like: Vec<String>,
     thread_ids: Vec<String>,
+    search: Option<String>,
     include_threadless: bool,
 }
 
@@ -154,6 +159,7 @@ fn build_filter(args: &Args) -> anyhow::Result<LogFilter> {
         module_like,
         file_like,
         thread_ids,
+        search: args.search.clone(),
         include_threadless: args.threadless,
     })
 }
@@ -233,6 +239,7 @@ fn to_log_query(
         module_like: filter.module_like.clone(),
         file_like: filter.file_like.clone(),
         thread_ids: filter.thread_ids.clone(),
+        search: filter.search.clone(),
         include_threadless: filter.include_threadless,
         after_id,
         limit,
