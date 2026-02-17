@@ -9,6 +9,7 @@ use anyhow::Context;
 use azure_core::auth::TokenCredential;
 use azure_identity::AzureCliCredential;
 use codex_protocol::ThreadId;
+use futures::StreamExt;
 use reqwest::StatusCode;
 use reqwest::Url;
 use serde::Deserialize;
@@ -16,6 +17,8 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 
 const SHARE_OBJECT_PREFIX: &str = "sessions";
 const SHARE_OBJECT_SUFFIX: &str = ".jsonl";
@@ -103,10 +106,31 @@ impl SessionObjectStore {
         }
     }
 
+    async fn put_object_file(
+        &self,
+        key: &str,
+        path: &Path,
+        content_type: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            SessionObjectStore::Http(store) => store.put_object_file(key, path, content_type).await,
+            SessionObjectStore::Azure(store) => {
+                store.put_object_file(key, path, content_type).await
+            }
+        }
+    }
+
     async fn get_object_bytes(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         match self {
             SessionObjectStore::Http(store) => store.get_object_bytes(key).await,
             SessionObjectStore::Azure(store) => store.get_object_bytes(key).await,
+        }
+    }
+
+    async fn get_object_to_file(&self, key: &str, path: &Path) -> anyhow::Result<bool> {
+        match self {
+            SessionObjectStore::Http(store) => store.get_object_to_file(key, path).await,
+            SessionObjectStore::Azure(store) => store.get_object_to_file(key, path).await,
         }
     }
 }
@@ -117,9 +141,6 @@ pub async fn upload_rollout_with_owner(
     owner: &str,
     rollout_path: &Path,
 ) -> anyhow::Result<SessionShareResult> {
-    let data = tokio::fs::read(rollout_path)
-        .await
-        .with_context(|| format!("failed to read rollout at {}", rollout_path.display()))?;
     let store = SessionObjectStore::new(base_url).await?;
     let key = object_key(session_id);
     let meta_key = meta_key(session_id);
@@ -135,7 +156,7 @@ pub async fn upload_rollout_with_owner(
                 ));
             }
             store
-                .put_object(&key, data, "application/x-ndjson")
+                .put_object_file(&key, rollout_path, "application/x-ndjson")
                 .await
                 .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
             let updated = SessionShareMeta {
@@ -157,7 +178,7 @@ pub async fn upload_rollout_with_owner(
                 ));
             }
             store
-                .put_object(&key, data, "application/x-ndjson")
+                .put_object_file(&key, rollout_path, "application/x-ndjson")
                 .await
                 .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
             let updated = SessionShareMeta {
@@ -175,7 +196,7 @@ pub async fn upload_rollout_with_owner(
             };
             upload_meta(&store, &meta_key, &meta).await?;
             store
-                .put_object(&key, data, "application/x-ndjson")
+                .put_object_file(&key, rollout_path, "application/x-ndjson")
                 .await
                 .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
         }
@@ -196,19 +217,10 @@ pub async fn download_rollout_if_available(
     let store = SessionObjectStore::new(base_url).await?;
     let key = object_key(session_id);
     let meta_key = meta_key(session_id);
-    let Some(data) = store.get_object_bytes(&key).await? else {
-        return Ok(None);
-    };
     let path = build_rollout_download_path(codex_home, session_id)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("failed to resolve rollout directory"))?;
-    tokio::fs::create_dir_all(parent)
-        .await
-        .with_context(|| format!("failed to create rollout directory {}", parent.display()))?;
-    tokio::fs::write(&path, data)
-        .await
-        .with_context(|| format!("failed to write rollout file {}", path.display()))?;
+    if !store.get_object_to_file(&key, &path).await? {
+        return Ok(None);
+    }
     let meta_path = share_meta_path_for_rollout_path(&path);
     match fetch_meta(&store, &meta_key).await? {
         Some(meta) => {
@@ -361,6 +373,34 @@ impl HttpObjectStore {
         }
     }
 
+    async fn put_object_file(
+        &self,
+        key: &str,
+        path: &Path,
+        content_type: &str,
+    ) -> anyhow::Result<()> {
+        let url = self.object_url(key)?;
+        let file = tokio::fs::File::open(path)
+            .await
+            .with_context(|| format!("failed to open rollout at {}", path.display()))?;
+        let stream = ReaderStream::new(file);
+        let response = self
+            .client
+            .put(url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "object store PUT failed with status {}",
+                response.status()
+            ))
+        }
+    }
+
     async fn get_object_bytes(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let url = self.object_url(key)?;
         let response = self.client.get(url).send().await?;
@@ -369,6 +409,21 @@ impl HttpObjectStore {
             status if status.is_success() => {
                 let bytes = response.bytes().await?;
                 Ok(Some(bytes.to_vec()))
+            }
+            status => Err(anyhow::anyhow!(
+                "object store GET failed with status {status}"
+            )),
+        }
+    }
+
+    async fn get_object_to_file(&self, key: &str, path: &Path) -> anyhow::Result<bool> {
+        let url = self.object_url(key)?;
+        let response = self.client.get(url).send().await?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(false),
+            status if status.is_success() => {
+                write_response_to_file(path, response).await?;
+                Ok(true)
             }
             status => Err(anyhow::anyhow!(
                 "object store GET failed with status {status}"
@@ -478,6 +533,41 @@ impl AzureObjectStore {
         }
     }
 
+    async fn put_object_file(
+        &self,
+        key: &str,
+        path: &Path,
+        content_type: &str,
+    ) -> anyhow::Result<()> {
+        let url = self.object_url(key)?;
+        let file = tokio::fs::File::open(path)
+            .await
+            .with_context(|| format!("failed to open rollout at {}", path.display()))?;
+        let stream = ReaderStream::new(file);
+        let response = self
+            .authorized_request(
+                self.client
+                    .put(url)
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header(reqwest::header::CONTENT_TYPE, content_type)
+                    .body(reqwest::Body::wrap_stream(stream)),
+            )
+            .await?
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let headers = azure_response_context(response.headers());
+            let body = response.text().await.unwrap_or_default();
+            let body_snippet = azure_response_body_snippet(&body);
+            Err(anyhow::anyhow!(
+                "azure blob PUT failed with status {status}{headers}{body_snippet}"
+            ))
+        }
+    }
+
     async fn get_object_bytes(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         let url = self.object_url(key)?;
         let response = self
@@ -490,6 +580,26 @@ impl AzureObjectStore {
             status if status.is_success() => {
                 let bytes = response.bytes().await?;
                 Ok(Some(bytes.to_vec()))
+            }
+            status => Err(anyhow::anyhow!(
+                "azure blob GET failed with status {status}{}",
+                azure_response_context(response.headers())
+            )),
+        }
+    }
+
+    async fn get_object_to_file(&self, key: &str, path: &Path) -> anyhow::Result<bool> {
+        let url = self.object_url(key)?;
+        let response = self
+            .authorized_request(self.client.get(url))
+            .await?
+            .send()
+            .await?;
+        match response.status() {
+            StatusCode::NOT_FOUND => Ok(false),
+            status if status.is_success() => {
+                write_response_to_file(path, response).await?;
+                Ok(true)
             }
             status => Err(anyhow::anyhow!(
                 "azure blob GET failed with status {status}{}",
@@ -621,4 +731,38 @@ fn azure_response_body_snippet(body: &str) -> String {
         format!("{truncated}...")
     };
     format!(" (body={snippet})")
+}
+
+async fn write_response_to_file(path: &Path, response: reqwest::Response) -> anyhow::Result<()> {
+    let path = path.to_path_buf();
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve rollout directory"))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("failed to create rollout directory {}", parent.display()))?;
+    let result = async {
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .with_context(|| format!("failed to create rollout file {}", path.display()))?;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk)
+                .await
+                .with_context(|| format!("failed to write rollout file {}", path.display()))?;
+        }
+        file.flush()
+            .await
+            .with_context(|| format!("failed to flush rollout file {}", path.display()))?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(err) = result {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(err);
+    }
+
+    Ok(())
 }
