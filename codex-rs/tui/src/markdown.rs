@@ -147,6 +147,12 @@ impl NormalizedMarkdown {
 }
 
 fn unwrap_markdown_fences_with_mapping(markdown_source: &str) -> NormalizedMarkdown {
+    if !markdown_source.contains("```") && !markdown_source.contains("~~~") {
+        let mut out = NormalizedMarkdown::new(markdown_source.len(), markdown_source.len());
+        out.push_source_range(markdown_source, 0..markdown_source.len());
+        return out;
+    }
+
     #[derive(Clone, Copy)]
     struct Fence {
         marker: char,
