@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_core::ThreadManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
@@ -11,7 +12,7 @@ pub async fn supported_models(
     include_hidden: bool,
 ) -> Vec<Model> {
     thread_manager
-        .list_models(codex_core::models_manager::manager::RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await
         .into_iter()
         .filter(|preset| include_hidden || preset.show_in_picker)
