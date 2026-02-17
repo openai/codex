@@ -865,6 +865,77 @@ pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Valu
     .await
 }
 
+pub async fn mount_compact_user_history_with_summary_once(
+    server: &MockServer,
+    summary_text: &str,
+) -> ResponseMock {
+    mount_compact_user_history_with_summary_sequence(server, vec![summary_text.to_string()]).await
+}
+
+pub async fn mount_compact_user_history_with_summary_sequence(
+    server: &MockServer,
+    summary_texts: Vec<String>,
+) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    struct UserHistorySummaryResponder {
+        num_calls: AtomicUsize,
+        summary_texts: Vec<String>,
+    }
+
+    impl Respond for UserHistorySummaryResponder {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            let Some(summary_text) = self.summary_texts.get(call_num) else {
+                panic!("no summary text for compact request {call_num}");
+            };
+            let body_bytes = decode_body_bytes(
+                &request.body,
+                request
+                    .headers
+                    .get("content-encoding")
+                    .and_then(|value| value.to_str().ok()),
+            );
+            let body_json: Value = serde_json::from_slice(&body_bytes)
+                .unwrap_or_else(|err| panic!("failed to parse compact request body: {err}"));
+            let mut output = body_json
+                .get("input")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("message")
+                        && item.get("role").and_then(Value::as_str) == Some("user")
+                })
+                .collect::<Vec<Value>>();
+            output.push(serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": summary_text}],
+            }));
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(serde_json::json!({ "output": output }))
+        }
+    }
+
+    let num_calls = summary_texts.len();
+    let responder = UserHistorySummaryResponder {
+        num_calls: AtomicUsize::new(0),
+        summary_texts,
+    };
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
+    response_mock
+}
+
 pub async fn mount_compact_response_once(
     server: &MockServer,
     response: ResponseTemplate,

@@ -1353,14 +1353,9 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
     )
     .await;
 
-    let compacted_history = vec![
-        responses::user_message_item("USER_ONE"),
-        responses::user_message_item("USER_TWO"),
-        responses::user_message_item(&summary_with_prefix("REMOTE_PRE_TURN_SUMMARY")),
-    ];
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        serde_json::json!({ "output": compacted_history }),
+        &summary_with_prefix("REMOTE_PRE_TURN_SUMMARY"),
     )
     .await;
 
@@ -1456,15 +1451,9 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         ],
     )
     .await;
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        serde_json::json!({
-            "output": [
-                responses::user_message_item("BEFORE_SWITCH_USER"),
-                responses::user_message_item("AFTER_SWITCH_USER"),
-                responses::user_message_item(&summary_with_prefix("REMOTE_SWITCH_SUMMARY"))
-            ]
-        }),
+        &summary_with_prefix("REMOTE_SWITCH_SUMMARY"),
     )
     .await;
 
@@ -1533,7 +1522,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     );
     assert!(
         follow_up_body.contains("AFTER_SWITCH_USER"),
-        "post-compaction follow-up should preserve incoming user message from compact output"
+        "post-compaction follow-up should preserve incoming user message via runtime append"
     );
     assert!(
         follow_up_body.contains("<model_switch>"),
@@ -1686,13 +1675,9 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
     )
     .await;
 
-    let compacted_history = vec![
-        responses::user_message_item("USER_ONE"),
-        responses::user_message_item(&summary_with_prefix("REMOTE_MID_TURN_SUMMARY")),
-    ];
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
         harness.server(),
-        serde_json::json!({ "output": compacted_history }),
+        &summary_with_prefix("REMOTE_MID_TURN_SUMMARY"),
     )
     .await;
 
@@ -1822,24 +1807,23 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
         harness.server(),
         vec![
             responses::sse(vec![
-                responses::ev_function_call("call-remote-multi-summary", DUMMY_FUNCTION_NAME, "{}"),
-                responses::ev_completed_with_tokens("r1", 500),
+                responses::ev_assistant_message("setup", "REMOTE_SETUP_REPLY"),
+                responses::ev_completed_with_tokens("setup-response", 60),
             ]),
             responses::sse(vec![
-                responses::ev_assistant_message("m2", "REMOTE_MULTI_SUMMARY_FINAL_REPLY"),
-                responses::ev_completed_with_tokens("r2", 80),
+                responses::ev_shell_command_call("call-remote-multi-summary", "echo multi-summary"),
+                responses::ev_completed_with_tokens("r1", 1_000),
             ]),
         ],
     )
     .await;
 
-    let compacted_history = vec![
-        responses::user_message_item(&summary_with_prefix("REMOTE_OLDER_SUMMARY")),
-        responses::user_message_item(&summary_with_prefix("REMOTE_LATEST_SUMMARY")),
-    ];
-    let compact_mock = responses::mount_compact_json_once(
+    let compact_mock = responses::mount_compact_user_history_with_summary_sequence(
         harness.server(),
-        serde_json::json!({ "output": compacted_history }),
+        vec![
+            summary_with_prefix("REMOTE_OLDER_SUMMARY"),
+            summary_with_prefix("REMOTE_LATEST_SUMMARY"),
+        ],
     )
     .await;
 
@@ -1854,22 +1838,49 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert_eq!(compact_mock.requests().len(), 1);
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 2);
     let requests = responses_mock.requests();
     assert_eq!(
         requests.len(),
         2,
-        "expected initial and post-compact requests"
+        "expected setup turn request and second-turn pre-compaction request"
     );
 
-    let compact_request = compact_mock.single_request();
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        2,
+        "expected one setup compact and one mid-turn compact request"
+    );
+    let compact_request = compact_requests[1].clone();
+    assert!(
+        compact_request.body_contains_text("REMOTE_OLDER_SUMMARY"),
+        "older summary should round-trip from conversation history into the next compact request"
+    );
     insta::assert_snapshot!(
         "remote_mid_turn_compaction_multi_summary_reinjects_above_last_summary_shapes",
         format_labeled_requests_snapshot(
-            "Remote mid-turn compaction where compact output has multiple summary-only user messages: continuation layout reinjects canonical context above the latest summary.",
+            "Remote mid-turn compaction after an earlier summary compaction: the older summary remains in model-visible history and round-trips into the next compact request.",
             &[
+                (
+                    "Second Turn Request (Before Mid-Turn Compaction)",
+                    &requests[1]
+                ),
                 ("Remote Compaction Request", &compact_request),
-                ("Remote Post-Compaction History Layout", &requests[1]),
             ]
         )
     );
