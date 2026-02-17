@@ -123,8 +123,14 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
-    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of the transcript
-    /// with a single `AgentMarkdownCell` that re-renders from the raw markdown source on resize.
+    /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
+    /// the transcript with a single `AgentMarkdownCell` that stores the raw
+    /// markdown source.
+    ///
+    /// Emitted by `ChatWidget::flush_answer_stream_with_separator` after stream
+    /// finalization. The `App` handler walks backward through `transcript_cells`
+    /// to find the `AgentMessageCell` run and splices in the consolidated cell.
+    /// If `reflow_ran_during_stream` is set, a follow-up reflow is scheduled.
     ConsolidateAgentMessage(String),
 
     /// Apply rollback semantics to local transcript cells.

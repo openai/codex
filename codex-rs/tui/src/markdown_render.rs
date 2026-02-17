@@ -706,11 +706,17 @@ where
         }
     }
 
-    /// Convert a completed `TableState` into styled `Line`s with Unicode box-drawing borders.
+    /// Convert a completed `TableState` into styled `Line`s with Unicode
+    /// box-drawing borders.
     ///
-    /// The pipeline is: filter spillover rows -> normalize column counts -> compute column widths
-    /// -> render box grid (or fall back to pipe format if widths can't fit). Spillover rows are
-    /// appended after the table grid.
+    /// Pipeline: filter spillover rows -> normalize column counts -> compute
+    /// column widths -> render box grid (or fall back to pipe format if the
+    /// minimum column widths exceed available terminal width). Spillover rows
+    /// are appended as plain text after the table grid.
+    ///
+    /// Falls back to `render_table_pipe_fallback` (raw `| A | B |` format)
+    /// when `compute_column_widths` returns `None` (terminal too narrow for
+    /// even 3-char-wide columns).
     fn render_table_lines(&self, mut table_state: TableState) -> Vec<Line<'static>> {
         let column_count = table_state.alignments.len();
         if column_count == 0 {
@@ -799,6 +805,13 @@ where
         })
     }
 
+    /// Allocate column widths for box-drawing table rendering.
+    ///
+    /// Each column starts at its natural (max cell content) width, then columns
+    /// are iteratively shrunk one character at a time until the total fits within
+    /// `available_width`. Narrative columns (long prose) are shrunk before
+    /// Structured columns (short tokens). Returns `None` when even the minimum
+    /// width (3 chars per column) cannot fit.
     fn compute_column_widths(
         &self,
         header: &[TableCell],
@@ -925,6 +938,12 @@ where
         metrics
     }
 
+    /// Compute the preferred minimum width for a column before the shrink loop
+    /// starts reducing it further.
+    ///
+    /// Narrative columns floor at the header's longest token (capped at 10).
+    /// Structured columns floor at the larger of the header and body token widths
+    /// (body capped at 16). The result is clamped to `[min_column_width, max_width]`.
     fn preferred_column_floor(metrics: &TableColumnMetrics, min_column_width: usize) -> usize {
         let token_target = match metrics.kind {
             TableColumnKind::Narrative => metrics.header_token_width.min(10),
@@ -935,6 +954,12 @@ where
         token_target.max(min_column_width).min(metrics.max_width)
     }
 
+    /// Pick the next column to shrink by one character during width allocation.
+    ///
+    /// Priority: Narrative columns are shrunk before Structured. Within the same
+    /// kind, the column with the most slack above its floor is chosen. A guard
+    /// cost is added when the width would fall below the header's longest token
+    /// (to avoid truncating column headers).
     fn next_column_to_shrink(
         widths: &[usize],
         floors: &[usize],
@@ -1100,10 +1125,16 @@ where
         wrapped
     }
 
-    /// Detect rows that are artifacts of pulldown-cmark's lenient table parsing rather than real
-    /// table data. These "spillover" rows -- typically trailing paragraphs absorbed into the table
-    /// because they lack leading pipes -- are extracted and rendered as plain text after the table
-    /// grid.
+    /// Detect rows that are artifacts of pulldown-cmark's lenient table parsing.
+    ///
+    /// pulldown-cmark accepts body rows without leading pipes, which can absorb a
+    /// trailing paragraph as a single-cell row in a multi-column table. These
+    /// "spillover" rows are extracted and rendered as plain text after the table
+    /// grid so they don't appear as malformed table content.
+    ///
+    /// Heuristic: a row is spillover if its only non-empty cell is the first one
+    /// AND (the row has only one cell, or the content looks like HTML, or it's a
+    /// label line followed by HTML content).
     fn is_spillover_row(row: &[TableCell], next_row: Option<&Vec<TableCell>>) -> bool {
         let Some(first_text) = Self::first_non_empty_only_text(row) else {
             return false;
@@ -1213,13 +1244,13 @@ where
         }
     }
 
-    // Like push_line, but skips word wrapping.
-    //
-    // It just prepends the indent prefix in case blockquote is active and pushed directly to the
-    // output.
-    //
-    // Table lines are already laid out with the exact column widths. We don't want word wrapping
-    // to break the box-drawing borders.
+    /// Push a line that has already been laid out at the correct width, skipping
+    /// word wrapping.
+    ///
+    /// Table lines are pre-formatted with exact column widths and box-drawing
+    /// borders. Passing them through `word_wrap_line` would break the grid at
+    /// arbitrary positions. This method prepends the indent/blockquote prefix
+    /// and pushes directly to `self.text.lines`.
     fn push_prewrapped_line(&mut self, line: Line<'static>, pending_marker_line: bool) {
         self.flush_current_line();
         let blockquote_active = self

@@ -457,9 +457,17 @@ impl HistoryCell for AgentMessageCell {
     }
 }
 
-/// A consolidated agent message cell taht stores raw markdown source and re-renders from it at any
-/// width. This replaces the run of `AgentMessageCell`s after a stream finalizes, so tables and
-/// other width-sensitive content review correctly on terminal resize.
+/// A consolidated agent message cell that stores raw markdown source and
+/// re-renders from it at any width.
+///
+/// After a stream finalizes, the `ConsolidateAgentMessage` handler in `App`
+/// replaces the contiguous run of `AgentMessageCell`s with a single
+/// `AgentMarkdownCell`. On terminal resize, `display_lines(width)` re-renders
+/// from source via `append_markdown_agent`, producing correctly-sized tables
+/// with box-drawing borders.
+///
+/// Uses `prefix_lines` (not `word_wrap_lines`) so table rows with box-drawing
+/// characters pass through without re-wrapping.
 #[derive(Debug)]
 pub(crate) struct AgentMarkdownCell {
     markdown_source: String,

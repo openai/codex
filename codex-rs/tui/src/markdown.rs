@@ -110,23 +110,25 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
     }
 
     fn markdown_fence_contains_table(content: &str) -> bool {
-        let mut saw_candidate = false;
-        let mut saw_delimiter = false;
+        let mut previous_non_empty: Option<&str> = None;
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
+                previous_non_empty = None;
                 continue;
             }
-            if !table_detect::is_table_header_line(trimmed) {
-                continue;
+
+            if let Some(previous) = previous_non_empty
+                && table_detect::is_table_header_line(previous)
+                && !table_detect::is_table_delimiter_line(previous)
+                && table_detect::is_table_delimiter_line(trimmed)
+            {
+                return true;
             }
-            if table_detect::is_table_delimiter_line(trimmed) {
-                saw_delimiter = true;
-            } else {
-                saw_candidate = true;
-            }
+
+            previous_non_empty = Some(trimmed);
         }
-        saw_candidate && saw_delimiter
+        false
     }
 
     enum ActiveFence {
@@ -368,5 +370,12 @@ mod tests {
         append_markdown_agent(src, None, &mut out);
         let rendered = lines_to_strings(&out);
         assert_eq!(rendered, vec!["**bold**".to_string()]);
+    }
+
+    #[test]
+    fn unwrap_markdown_fences_repro_keeps_fence_without_header_delimiter_pair() {
+        let src = "```markdown\n| A | B |\nnot a delimiter row\n| --- | --- |\n# Heading\n```\n";
+        let normalized = unwrap_markdown_fences(src);
+        assert_eq!(normalized, src);
     }
 }

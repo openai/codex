@@ -960,6 +960,51 @@ impl App {
         self.resize_reflow_pending_until = Some(Instant::now() + RESIZE_REFLOW_DEBOUNCE);
     }
 
+    fn handle_draw_size_change(
+        &mut self,
+        size: ratatui::layout::Size,
+        last_known_screen_size: ratatui::layout::Size,
+        frame_requester: &tui::FrameRequester,
+    ) {
+        let previous_width = self.last_transcript_render_width.replace(size.width);
+        if previous_width.is_some_and(|width| width != size.width) {
+            self.chat_widget.on_terminal_resize(size.width);
+            self.schedule_resize_reflow();
+            frame_requester.schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
+        } else if previous_width.is_none() {
+            self.chat_widget.on_terminal_resize(size.width);
+        }
+        if size != last_known_screen_size {
+            self.refresh_status_line();
+        }
+        self.maybe_clear_resize_reflow_without_terminal();
+    }
+
+    fn maybe_clear_resize_reflow_without_terminal(&mut self) {
+        let Some(deadline) = self.resize_reflow_pending_until else {
+            return;
+        };
+        if Instant::now() < deadline || self.overlay.is_some() || !self.transcript_cells.is_empty()
+        {
+            return;
+        }
+
+        self.resize_reflow_pending_until = None;
+        self.has_emitted_history_lines = false;
+        self.deferred_history_lines.clear();
+    }
+
+    fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let size = tui.terminal.size()?;
+        self.handle_draw_size_change(
+            size,
+            tui.terminal.last_known_screen_size,
+            &tui.frame_requester(),
+        );
+        self.maybe_run_resize_reflow(tui)?;
+        Ok(())
+    }
+
     fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         let Some(deadline) = self.resize_reflow_pending_until else {
             return Ok(());
@@ -1435,19 +1480,7 @@ impl App {
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
-            let size = tui.terminal.size()?;
-            let previous_width = self.last_transcript_render_width.replace(size.width);
-            if previous_width.is_some_and(|width| width != size.width) {
-                self.chat_widget.on_terminal_resize(size.width);
-                self.schedule_resize_reflow();
-                tui.frame_requester()
-                    .schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
-            } else if previous_width.is_none() {
-                self.chat_widget.on_terminal_resize(size.width);
-            }
-            if size != tui.terminal.last_known_screen_size {
-                self.refresh_status_line();
-            }
+            self.handle_draw_pre_render(tui)?;
         }
 
         if self.overlay.is_some() {
@@ -3072,6 +3105,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Size;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3299,6 +3333,25 @@ mod tests {
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn resize_reflow_repro_draw_should_drain_pending_without_commit_tick() {
+        let mut app = make_test_app().await;
+        let frame_requester = crate::tui::FrameRequester::test_dummy();
+        let size = Size::new(120, 40);
+
+        app.last_transcript_render_width = Some(100);
+        app.handle_draw_size_change(size, size, &frame_requester);
+
+        app.resize_reflow_pending_until = Some(Instant::now() - Duration::from_millis(1));
+
+        app.handle_draw_size_change(size, size, &frame_requester);
+
+        assert!(
+            app.resize_reflow_pending_until.is_none(),
+            "resize reflow should drain on draw even when commit animation is idle",
+        );
     }
 
     async fn make_test_app() -> App {
