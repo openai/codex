@@ -3804,22 +3804,6 @@ impl ChatWidget {
 
         // TODO: Enforce email-based access once we have a server-side auth check.
 
-        let storage_url = match self.config.resolve_session_object_storage_url() {
-            Ok(Some(url)) => url,
-            Ok(None) => {
-                self.add_error_message(
-                    "Sharing requires `session_object_storage_url` or `session_object_storage_url_cmd` in config.toml."
-                        .to_string(),
-                );
-                return;
-            }
-            Err(err) => {
-                self.add_error_message(format!(
-                    "Failed to resolve session object storage URL: {err}"
-                ));
-                return;
-            }
-        };
         let owner = self
             .auth_manager
             .auth_cached()
@@ -3841,8 +3825,27 @@ impl ChatWidget {
 
         self.add_info_message("Sharing current session…".to_string(), None);
 
+        let config = self.config.clone();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
+            let storage_url = match config.resolve_session_object_storage_url().await {
+                Ok(Some(url)) => url,
+                Ok(None) => {
+                    let cell = history_cell::new_error_event(
+                        "Sharing requires `session_object_storage_url` or `session_object_storage_url_cmd` in config.toml."
+                            .to_string(),
+                    );
+                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                    return;
+                }
+                Err(err) => {
+                    let cell = history_cell::new_error_event(format!(
+                        "Failed to resolve session object storage URL: {err}"
+                    ));
+                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+                    return;
+                }
+            };
             let result = codex_core::session_share::upload_rollout_with_owner(
                 &storage_url,
                 thread_id,

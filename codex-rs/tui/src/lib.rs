@@ -582,7 +582,7 @@ async fn run_ratatui_app(
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
                 None => {
-                    let storage_url = match config.resolve_session_object_storage_url() {
+                    let storage_url = match config.resolve_session_object_storage_url().await {
                         Ok(Some(url)) => url,
                         Ok(None) => return missing_session_exit(&mut tui, id_str, "fork"),
                         Err(err) => {
