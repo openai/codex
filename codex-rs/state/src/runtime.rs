@@ -463,6 +463,9 @@ WHERE id IN (
             .filter(|entry| entry.thread_id.is_none())
             .filter_map(|entry| entry.process_uuid.as_deref())
             .collect();
+        let has_threadless_null_process_uuid = entries
+            .iter()
+            .any(|entry| entry.thread_id.is_none() && entry.process_uuid.is_none());
         if !threadless_process_uuids.is_empty() {
             // Threadless logs are budgeted separately per process UUID.
             let mut over_limit_processes_query = QueryBuilder::<Sqlite>::new(
@@ -527,6 +530,54 @@ WHERE id IN (
                 prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
                 prune_threadless_process_logs.push("\n)");
                 prune_threadless_process_logs
+                    .build()
+                    .execute(self.pool.as_ref())
+                    .await?;
+            }
+        }
+        if has_threadless_null_process_uuid {
+            // Rows without a process UUID still need a cap; treat NULL as its
+            // own threadless partition.
+            let mut null_process_usage_query = QueryBuilder::<Sqlite>::new("SELECT SUM(");
+            null_process_usage_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            null_process_usage_query.push(
+                ") AS total_bytes FROM logs WHERE thread_id IS NULL AND process_uuid IS NULL",
+            );
+            let total_null_process_bytes: Option<i64> = null_process_usage_query
+                .build()
+                .fetch_one(self.pool.as_ref())
+                .await?
+                .try_get("total_bytes")?;
+
+            if total_null_process_bytes.unwrap_or(0) > LOG_PARTITION_SIZE_LIMIT_BYTES {
+                let mut prune_threadless_null_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+                );
+                prune_threadless_null_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threadless_null_process_logs.push(
+                    r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IS NULL
+    )
+    WHERE cumulative_bytes >
+"#,
+                );
+                prune_threadless_null_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_null_process_logs.push("\n)");
+                prune_threadless_null_process_logs
                     .build()
                     .execute(self.pool.as_ref())
                     .await?;
@@ -2820,6 +2871,71 @@ VALUES (?, ?, ?, ?, ?)
             })
             .await
             .expect("query thread and threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_with_null_process_uuid() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "c".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: None,
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("small".to_string()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query threadless logs");
 
         let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
         timestamps.sort_unstable();
