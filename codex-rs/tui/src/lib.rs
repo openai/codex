@@ -208,6 +208,7 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
 
 mod wrapping;
 

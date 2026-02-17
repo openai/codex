@@ -111,6 +111,21 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
         "expected /status to avoid raw config context window, got: {context_line}"
     );
 }
+
+#[tokio::test]
+async fn current_stream_width_returns_none_when_reserved_columns_exhaust_width() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.last_rendered_width.set(Some(2));
+    assert_eq!(chat.current_stream_width(2), None);
+
+    chat.last_rendered_width.set(Some(4));
+    assert_eq!(chat.current_stream_width(4), None);
+
+    chat.last_rendered_width.set(Some(5));
+    assert_eq!(chat.current_stream_width(4), Some(1));
+}
+
 #[tokio::test]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
