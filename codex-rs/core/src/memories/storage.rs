@@ -1,5 +1,5 @@
 use codex_state::Stage1Output;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
 use tracing::warn;
@@ -7,8 +7,6 @@ use tracing::warn;
 use crate::memories::ensure_layout;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
-
-//TODO(jif) clean.
 
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
@@ -28,17 +26,14 @@ pub(super) async fn sync_rollout_summaries_from_memories(
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
-    let retained = memories
-        .iter()
-        .take(max_raw_memories_for_global)
-        .collect::<Vec<_>>();
+    let retained = retained_memories(memories, max_raw_memories_for_global);
     let keep = retained
         .iter()
-        .map(|memory| rollout_summary_file_stem(memory))
-        .collect::<BTreeSet<_>>();
+        .map(rollout_summary_file_stem)
+        .collect::<HashSet<_>>();
     prune_rollout_summaries(root, &keep).await?;
 
-    for memory in &retained {
+    for memory in retained {
         write_rollout_summary_for_thread(root, memory).await?;
     }
 
@@ -68,10 +63,7 @@ async fn rebuild_raw_memories_file(
     memories: &[Stage1Output],
     max_raw_memories_for_global: usize,
 ) -> std::io::Result<()> {
-    let retained = memories
-        .iter()
-        .take(max_raw_memories_for_global)
-        .collect::<Vec<_>>();
+    let retained = retained_memories(memories, max_raw_memories_for_global);
     let mut body = String::from("# Raw Memories\n\n");
 
     if retained.is_empty() {
@@ -81,18 +73,15 @@ async fn rebuild_raw_memories_file(
 
     body.push_str("Merged stage-1 raw memories (latest first):\n\n");
     for memory in retained {
-        writeln!(body, "## Thread `{}`", memory.thread_id)
-            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
+        writeln!(body, "## Thread `{}`", memory.thread_id).map_err(raw_memories_format_error)?;
         writeln!(
             body,
             "updated_at: {}",
             memory.source_updated_at.to_rfc3339()
         )
-        .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
-        writeln!(body, "cwd: {}", memory.cwd.display())
-            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
-        writeln!(body)
-            .map_err(|err| std::io::Error::other(format!("format raw memories: {err}")))?;
+        .map_err(raw_memories_format_error)?;
+        writeln!(body, "cwd: {}", memory.cwd.display()).map_err(raw_memories_format_error)?;
+        writeln!(body).map_err(raw_memories_format_error)?;
         body.push_str(memory.raw_memory.trim());
         body.push_str("\n\n");
     }
@@ -100,7 +89,7 @@ async fn rebuild_raw_memories_file(
     tokio::fs::write(raw_memories_file(root), body).await
 }
 
-async fn prune_rollout_summaries(root: &Path, keep: &BTreeSet<String>) -> std::io::Result<()> {
+async fn prune_rollout_summaries(root: &Path, keep: &HashSet<String>) -> std::io::Result<()> {
     let dir_path = rollout_summaries_dir(root);
     let mut dir = match tokio::fs::read_dir(&dir_path).await {
         Ok(dir) => dir,
@@ -138,22 +127,34 @@ async fn write_rollout_summary_for_thread(
     let path = rollout_summaries_dir(root).join(format!("{file_stem}.md"));
 
     let mut body = String::new();
-    writeln!(body, "thread_id: {}", memory.thread_id)
-        .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
+    writeln!(body, "thread_id: {}", memory.thread_id).map_err(rollout_summary_format_error)?;
     writeln!(
         body,
         "updated_at: {}",
         memory.source_updated_at.to_rfc3339()
     )
-    .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
-    writeln!(body, "cwd: {}", memory.cwd.display())
-        .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
-    writeln!(body)
-        .map_err(|err| std::io::Error::other(format!("format rollout summary: {err}")))?;
+    .map_err(rollout_summary_format_error)?;
+    writeln!(body, "cwd: {}", memory.cwd.display()).map_err(rollout_summary_format_error)?;
+    writeln!(body).map_err(rollout_summary_format_error)?;
     body.push_str(&memory.rollout_summary);
     body.push('\n');
 
     tokio::fs::write(path, body).await
+}
+
+fn retained_memories(
+    memories: &[Stage1Output],
+    max_raw_memories_for_global: usize,
+) -> &[Stage1Output] {
+    &memories[..memories.len().min(max_raw_memories_for_global)]
+}
+
+fn raw_memories_format_error(err: std::fmt::Error) -> std::io::Error {
+    std::io::Error::other(format!("format raw memories: {err}"))
+}
+
+fn rollout_summary_format_error(err: std::fmt::Error) -> std::io::Error {
+    std::io::Error::other(format!("format rollout summary: {err}"))
 }
 
 fn rollout_summary_file_stem(memory: &Stage1Output) -> String {

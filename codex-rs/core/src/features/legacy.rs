@@ -33,6 +33,10 @@ const ALIASES: &[Alias] = &[
         legacy_key: "web_search",
         feature: Feature::WebSearchRequest,
     },
+    Alias {
+        legacy_key: "collab",
+        feature: Feature::Collab,
+    },
 ];
 
 pub(crate) fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {

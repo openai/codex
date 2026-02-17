@@ -52,9 +52,11 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                let git_entry = canonical.join(".git");
-                if git_entry.exists() {
-                    add_deny(git_entry);
+                for protected_subdir in [".git", ".codex", ".agents"] {
+                    let protected_entry = canonical.join(protected_subdir);
+                    if protected_entry.exists() {
+                        add_deny(protected_entry);
+                    }
                 }
             };
 
@@ -210,7 +212,39 @@ mod tests {
     }
 
     #[test]
-    fn skips_git_dir_when_missing() {
+    fn denies_codex_and_agents_inside_writable_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let codex_dir = command_cwd.join(".codex");
+        let agents_dir = command_cwd.join(".agents");
+        let _ = fs::create_dir_all(&codex_dir);
+        let _ = fs::create_dir_all(&agents_dir);
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
+            .into_iter()
+            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&codex_dir).unwrap(),
+            dunce::canonicalize(&agents_dir).unwrap(),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert_eq!(expected_deny, paths.deny);
+    }
+
+    #[test]
+    fn skips_protected_subdirs_when_missing() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
         let _ = fs::create_dir_all(&command_cwd);
@@ -225,6 +259,6 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         assert_eq!(paths.allow.len(), 1);
-        assert!(paths.deny.is_empty(), "no deny when .git is absent");
+        assert!(paths.deny.is_empty(), "no deny when protected dirs are absent");
     }
 }
