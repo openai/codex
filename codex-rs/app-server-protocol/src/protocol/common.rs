@@ -1003,6 +1003,7 @@ mod tests {
         let params = v1::ExecCommandApprovalParams {
             conversation_id,
             call_id: "call-42".to_string(),
+            approval_id: Some("approval-42".to_string()),
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
@@ -1022,6 +1023,7 @@ mod tests {
                 "params": {
                     "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                     "callId": "call-42",
+                    "approvalId": "approval-42",
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",

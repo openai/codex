@@ -2155,7 +2155,7 @@ impl Session {
 
     /// Emit an exec approval request event and await the user's decision.
     ///
-    /// The request is keyed by `call_id` so matching responses are delivered
+    /// The request is keyed by `call_id` + `approval_id` so matching responses are delivered
     /// to the correct in-flight turn. If the task is aborted, this returns the
     /// default `ReviewDecision` (`Denied`).
     #[allow(clippy::too_many_arguments)]
@@ -2163,32 +2163,36 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         call_id: String,
+        approval_id: Option<String>,
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
         network_approval_context: Option<NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
+        //  command-level approvals use `call_id`.
+        // `approval_id` is only present for subcommand callbacks (execve intercept)
+        let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let approval_id = call_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
                 None => None,
             }
         };
         if prev_entry.is_some() {
-            warn!("Overwriting existing pending approval for call_id: {approval_id}");
+            warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
         }
 
         let parsed_cmd = parse_command(&command);
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
+            approval_id,
             turn_id: turn_context.sub_id.clone(),
             command,
             cwd,
