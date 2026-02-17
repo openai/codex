@@ -3687,12 +3687,17 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
-        if self.stream_controller.is_some()
-            && self
-                .active_cell
-                .as_ref()
-                .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::StreamingAgentTailCell>())
         {
+            if self.stream_controller.is_some() {
+                return;
+            }
+            // If stream cleanup already cleared the controller, drop the transient tail instead
+            // of committing preview-only content to transcript history.
+            self.active_cell.take();
             return;
         }
 
