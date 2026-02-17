@@ -1168,6 +1168,28 @@ fn table_spillover_prose_wraps_in_narrow_width() {
 }
 
 #[test]
+fn table_keeps_sparse_comparison_row_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| x < y > z | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ x < y > z") && line.ends_with('│')),
+        "expected sparse comparison row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "x < y > z"),
+        "did not expect sparse comparison row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
 fn table_keeps_sparse_rows_with_empty_trailing_cells() {
     let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
     let text = render_markdown_text(md);

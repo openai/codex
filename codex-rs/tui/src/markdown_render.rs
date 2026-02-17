@@ -1270,7 +1270,25 @@ where
     }
 
     fn looks_like_html_content(text: &str) -> bool {
-        text.contains('<') && text.contains('>')
+        let bytes = text.as_bytes();
+        for idx in 0..bytes.len() {
+            if bytes[idx] != b'<' {
+                continue;
+            }
+
+            let mut tag_start = idx + 1;
+            if tag_start < bytes.len() && (bytes[tag_start] == b'/' || bytes[tag_start] == b'!') {
+                tag_start += 1;
+            }
+
+            if tag_start < bytes.len()
+                && bytes[tag_start].is_ascii_alphabetic()
+                && bytes[tag_start + 1..].contains(&b'>')
+            {
+                return true;
+            }
+        }
+        false
     }
 
     fn looks_like_html_label_line(text: &str) -> bool {

@@ -589,7 +589,15 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
             },
         });
 
-        let trimmed = raw_line.trim_start();
+        let leading_spaces = raw_line
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b' ')
+            .count();
+        if leading_spaces > 3 {
+            continue;
+        }
+        let trimmed = &raw_line[leading_spaces..];
         if let Some((marker, len)) = parse_fence_marker(trimmed) {
             if !in_fence {
                 in_fence = true;
@@ -1344,6 +1352,15 @@ mod tests {
         assert!(
             matches!(table_holdback_state(source), TableHoldbackState::None),
             "table holdback should ignore pipe lines inside an open non-markdown fence",
+        );
+    }
+
+    #[test]
+    fn table_holdback_state_treats_indented_fence_text_as_plain_content() {
+        let source = "    ```sh\n| Key | Description |\n| --- | --- |\n";
+        assert!(
+            matches!(table_holdback_state(source), TableHoldbackState::Confirmed),
+            "indented fence-like text should not open a fence and should not block table detection",
         );
     }
 
