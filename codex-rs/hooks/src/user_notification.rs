@@ -6,8 +6,8 @@ use serde::Serialize;
 
 use crate::Hook;
 use crate::HookEvent;
-use crate::HookOutcome;
 use crate::HookPayload;
+use crate::HookResult;
 use crate::command_from_argv;
 
 /// Legacy notify payload appended as the final argv argument for backward compatibility.
@@ -48,12 +48,13 @@ pub fn legacy_notify_json(hook_event: &HookEvent, cwd: &Path) -> Result<String, 
 pub fn notify_hook(argv: Vec<String>) -> Hook {
     let argv = Arc::new(argv);
     Hook {
+        name: "legacy_notify".to_string(),
         func: Arc::new(move |payload: &HookPayload| {
             let argv = Arc::clone(&argv);
             Box::pin(async move {
                 let mut command = match command_from_argv(&argv) {
                     Some(command) => command,
-                    None => return HookOutcome::Continue,
+                    None => return HookResult::Success,
                 };
                 if let Ok(notify_payload) = legacy_notify_json(&payload.hook_event, &payload.cwd) {
                     command.arg(notify_payload);
@@ -65,8 +66,10 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
 
-                let _ = command.spawn();
-                HookOutcome::Continue
+                match command.spawn() {
+                    Ok(_) => HookResult::Success,
+                    Err(err) => HookResult::FailedContinue(err.into()),
+                }
             })
         }),
     }

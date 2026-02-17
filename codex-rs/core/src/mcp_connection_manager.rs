@@ -353,6 +353,10 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    pub(crate) fn has_servers(&self) -> bool {
+        !self.clients.is_empty()
+    }
+
     pub async fn initialize(
         &mut self,
         mcp_servers: &HashMap<String, McpServerConfig>,
@@ -904,6 +908,16 @@ pub(crate) fn filter_codex_apps_mcp_tools_only(
             };
             allowed.contains(connector_id)
         })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
+}
+
+pub(crate) fn filter_non_codex_apps_mcp_tools_only(
+    mcp_tools: &HashMap<String, ToolInfo>,
+) -> HashMap<String, ToolInfo> {
+    mcp_tools
+        .iter()
+        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
 }

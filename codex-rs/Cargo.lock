@@ -1772,6 +1772,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.13.0",
  "indoc",
+ "insta",
  "keyring",
  "landlock",
  "libc",
