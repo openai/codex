@@ -3079,11 +3079,19 @@ pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
+    /// Unique identifier for this specific approval callback.
+    ///
+    /// For regular shell/unified_exec approvals, this is the same as
+    /// `itemId` (one approval callback per command item).
+    ///
+    /// For zsh-sidecar subcommand approvals, multiple callbacks can belong to
+    /// one parent `itemId`, so `approvalId` is a distinct opaque callback id
+    /// (a UUID) used to disambiguate routing.
+    pub approval_id: String,
     /// Optional explanatory reason (e.g. request for network access).
     #[ts(optional = nullable)]
     pub reason: Option<String>,
     /// The command to be executed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub command: Option<String>,
     /// The command's working directory.

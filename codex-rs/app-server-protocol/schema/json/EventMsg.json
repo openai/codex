@@ -1423,8 +1423,12 @@
         },
         {
           "properties": {
+            "approval_id": {
+              "description": "Identifier for this specific approval callback.",
+              "type": "string"
+            },
             "call_id": {
-              "description": "Identifier for the associated exec call, if available.",
+              "description": "Identifier for the associated command execution item.",
               "type": "string"
             },
             "command": {
@@ -1486,6 +1490,7 @@
             }
           },
           "required": [
+            "approval_id",
             "call_id",
             "command",
             "cwd",
@@ -6328,8 +6333,12 @@
     },
     {
       "properties": {
+        "approval_id": {
+          "description": "Identifier for this specific approval callback.",
+          "type": "string"
+        },
         "call_id": {
-          "description": "Identifier for the associated exec call, if available.",
+          "description": "Identifier for the associated command execution item.",
           "type": "string"
         },
         "command": {
@@ -6391,6 +6400,7 @@
         }
       },
       "required": [
+        "approval_id",
         "call_id",
         "command",
         "cwd",
