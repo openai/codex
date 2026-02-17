@@ -55,6 +55,8 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_network_proxy::NetworkMode;
+use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
@@ -904,6 +906,11 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
+    /// Nested permissions settings.
+    #[serde(default)]
+    #[schemars(skip)]
+    pub permissions: Option<PermissionsToml>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1129,6 +1136,85 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PermissionsToml {
+    /// Network proxy settings used by managed network mode.
+    pub network: Option<NetworkToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkToml {
+    pub enabled: Option<bool>,
+    pub proxy_url: Option<String>,
+    pub admin_url: Option<String>,
+    pub enable_socks5: Option<bool>,
+    pub socks_url: Option<String>,
+    pub enable_socks5_udp: Option<bool>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_admin: Option<bool>,
+    pub mode: Option<NetworkMode>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+impl NetworkToml {
+    pub(crate) fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
+        if let Some(enabled) = self.enabled {
+            config.network.enabled = enabled;
+        }
+        if let Some(proxy_url) = self.proxy_url.as_ref() {
+            config.network.proxy_url = proxy_url.clone();
+        }
+        if let Some(admin_url) = self.admin_url.as_ref() {
+            config.network.admin_url = admin_url.clone();
+        }
+        if let Some(enable_socks5) = self.enable_socks5 {
+            config.network.enable_socks5 = enable_socks5;
+        }
+        if let Some(socks_url) = self.socks_url.as_ref() {
+            config.network.socks_url = socks_url.clone();
+        }
+        if let Some(enable_socks5_udp) = self.enable_socks5_udp {
+            config.network.enable_socks5_udp = enable_socks5_udp;
+        }
+        if let Some(allow_upstream_proxy) = self.allow_upstream_proxy {
+            config.network.allow_upstream_proxy = allow_upstream_proxy;
+        }
+        if let Some(dangerously_allow_non_loopback_proxy) =
+            self.dangerously_allow_non_loopback_proxy
+        {
+            config.network.dangerously_allow_non_loopback_proxy =
+                dangerously_allow_non_loopback_proxy;
+        }
+        if let Some(dangerously_allow_non_loopback_admin) =
+            self.dangerously_allow_non_loopback_admin
+        {
+            config.network.dangerously_allow_non_loopback_admin =
+                dangerously_allow_non_loopback_admin;
+        }
+        if let Some(mode) = self.mode {
+            config.network.mode = mode;
+        }
+        if let Some(allowed_domains) = self.allowed_domains.as_ref() {
+            config.network.allowed_domains = allowed_domains.clone();
+        }
+        if let Some(denied_domains) = self.denied_domains.as_ref() {
+            config.network.denied_domains = denied_domains.clone();
+        }
+        if let Some(allow_unix_sockets) = self.allow_unix_sockets.as_ref() {
+            config.network.allow_unix_sockets = allow_unix_sockets.clone();
+        }
+        if let Some(allow_local_binding) = self.allow_local_binding {
+            config.network.allow_local_binding = allow_local_binding;
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -1218,6 +1304,16 @@ pub struct GhostSnapshotToml {
 }
 
 impl ConfigToml {
+    pub(crate) fn network_proxy_config(&self) -> NetworkProxyConfig {
+        let mut config = NetworkProxyConfig::default();
+        if let Some(permissions) = self.permissions.as_ref()
+            && let Some(network) = permissions.network.as_ref()
+        {
+            network.apply_to_network_proxy_config(&mut config);
+        }
+        config
+    }
+
     /// Derive the effective sandbox policy from the configuration.
     fn derive_sandbox_policy(
         &self,
@@ -1697,6 +1793,8 @@ impl Config {
 
         let forced_login_method = cfg.forced_login_method;
 
+        let configured_network_proxy_config = cfg.network_proxy_config();
+
         let model = model.or(config_profile.model).or(cfg.model);
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
@@ -1793,16 +1891,25 @@ impl Config {
 
         let network = match network_requirements {
             Some(Sourced { value, source }) => {
-                let network = NetworkProxySpec::from_constraints(&config_layer_stack, value)
-                    .map_err(|err| {
-                        std::io::Error::new(
-                            err.kind(),
-                            format!("failed to build managed network proxy from {source}: {err}"),
-                        )
-                    })?;
+                let network = NetworkProxySpec::from_config_and_constraints(
+                    configured_network_proxy_config.clone(),
+                    Some(value),
+                )
+                .map_err(|err| {
+                    std::io::Error::new(
+                        err.kind(),
+                        format!("failed to build managed network proxy from {source}: {err}"),
+                    )
+                })?;
                 Some(network)
             }
-            None => None,
+            None => {
+                let network = NetworkProxySpec::from_config_and_constraints(
+                    configured_network_proxy_config,
+                    None,
+                )?;
+                network.enabled().then_some(network)
+            }
         };
 
         let config = Self {
@@ -2205,6 +2312,95 @@ phase_2_model = "gpt-5"
                 phase_2_model: Some("gpt-5".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn config_toml_deserializes_permissions_network() {
+        let toml = r#"
+[permissions.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+enable_socks5 = false
+allow_upstream_proxy = false
+allowed_domains = ["openai.com"]
+"#;
+        let cfg: ConfigToml = toml::from_str(toml)
+            .expect("TOML deserialization should succeed for permissions.network");
+
+        assert_eq!(
+            cfg.permissions
+                .and_then(|permissions| permissions.network)
+                .expect("permissions.network should deserialize"),
+            NetworkToml {
+                enabled: Some(true),
+                proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                admin_url: None,
+                enable_socks5: Some(false),
+                socks_url: None,
+                enable_socks5_udp: None,
+                allow_upstream_proxy: Some(false),
+                dangerously_allow_non_loopback_proxy: None,
+                dangerously_allow_non_loopback_admin: None,
+                mode: None,
+                allowed_domains: Some(vec!["openai.com".to_string()]),
+                denied_domains: None,
+                allow_unix_sockets: None,
+                allow_local_binding: None,
+            }
+        );
+    }
+
+    #[test]
+    fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            permissions: Some(PermissionsToml {
+                network: Some(NetworkToml {
+                    enabled: Some(true),
+                    proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                    enable_socks5: Some(false),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        let network = config
+            .permissions
+            .network
+            .as_ref()
+            .expect("enabled permissions.network should produce a NetworkProxySpec");
+
+        assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
+        assert!(!network.socks_enabled());
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            permissions: Some(PermissionsToml {
+                network: Some(NetworkToml {
+                    allowed_domains: Some(vec!["openai.com".to_string()]),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert!(config.permissions.network.is_none());
+        Ok(())
     }
 
     #[test]
