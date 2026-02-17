@@ -16,6 +16,7 @@ const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
+const PHASE2_CLAIM_COOLDOWN_SECONDS: i64 = 2 * 7_200;
 
 impl StateRuntime {
     /// Deletes all persisted memory state in one transaction.
@@ -640,7 +641,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark
+SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark, started_at
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -667,6 +668,7 @@ WHERE kind = ? AND job_key = ?
         let existing_lease_until: Option<i64> = existing_job.try_get("lease_until")?;
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
         let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
+        let started_at: Option<i64> = existing_job.try_get("started_at")?;
 
         if retry_remaining <= 0 {
             tx.commit().await?;
@@ -680,6 +682,14 @@ WHERE kind = ? AND job_key = ?
         {
             tx.commit().await?;
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
+        }
+        if status != "running"
+            && started_at.is_some_and(|started_at| {
+                started_at > now.saturating_sub(PHASE2_CLAIM_COOLDOWN_SECONDS)
+            })
+        {
+            tx.commit().await?;
+            return Ok(Phase2JobClaimOutcome::SkippedNotDirty);
         }
 
         let rows_affected = sqlx::query(

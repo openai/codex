@@ -2020,6 +2020,14 @@ WHERE kind = 'memory_stage1'
             .await
             .expect("enqueue global consolidation again");
 
+        sqlx::query("UPDATE jobs SET started_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - (2 * 3_600) - 1)
+            .bind("memory_consolidate_global")
+            .bind("global")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("set phase2 started_at outside cooldown");
+
         let claim_rerun = runtime
             .try_claim_global_phase2_job(owner, 3600)
             .await
@@ -2027,6 +2035,70 @@ WHERE kind = 'memory_stage1'
         assert!(
             matches!(claim_rerun, Phase2JobClaimOutcome::Claimed { .. }),
             "advanced watermark should be claimable"
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn phase2_global_consolidation_claim_respects_cooldown() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+
+        runtime
+            .enqueue_global_consolidation(100)
+            .await
+            .expect("enqueue global consolidation");
+
+        let claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2");
+        let (ownership_token, input_watermark) = match claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(ownership_token.as_str(), input_watermark)
+                .await
+                .expect("mark phase2 succeeded"),
+            "phase2 success should finalize for current token"
+        );
+
+        runtime
+            .enqueue_global_consolidation(101)
+            .await
+            .expect("enqueue global consolidation again");
+
+        let cooldown_claim = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 during cooldown");
+        assert_eq!(cooldown_claim, Phase2JobClaimOutcome::SkippedNotDirty);
+
+        sqlx::query("UPDATE jobs SET started_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - (2 * 3_600) - 1)
+            .bind("memory_consolidate_global")
+            .bind("global")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("set phase2 started_at outside cooldown");
+
+        let claim_after_cooldown = runtime
+            .try_claim_global_phase2_job(owner, 3600)
+            .await
+            .expect("claim phase2 after cooldown");
+        assert!(
+            matches!(claim_after_cooldown, Phase2JobClaimOutcome::Claimed { .. }),
+            "phase2 should claim after cooldown expires"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2418,6 +2490,14 @@ VALUES (?, ?, ?, ?, ?)
             .enqueue_global_consolidation(400)
             .await
             .expect("enqueue backfilled consolidation");
+
+        sqlx::query("UPDATE jobs SET started_at = ? WHERE kind = ? AND job_key = ?")
+            .bind(Utc::now().timestamp() - (2 * 3_600) - 1)
+            .bind("memory_consolidate_global")
+            .bind("global")
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("set phase2 started_at outside cooldown");
 
         let owner_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner b");
         let claim_b = runtime
