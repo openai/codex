@@ -17,7 +17,6 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraintError;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
-use codex_network_proxy::PartialNetworkProxyConfig;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::validate_policy_against_constraints;
 use serde::Deserialize;
@@ -51,13 +50,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .context("failed to load Codex config")?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let permissions_network = permissions_network_from_toml(&merged_toml)?;
-    let mut config: NetworkProxyConfig = merged_toml
-        .try_into()
-        .context("failed to deserialize network proxy config")?;
-    if let Some(network) = permissions_network {
-        network.apply_to_network_proxy_config(&mut config);
-    }
+    let config = config_from_toml(&merged_toml)?;
 
     let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
@@ -107,60 +100,21 @@ fn network_constraints_from_trusted_layers(
             continue;
         }
 
-        let partial: PartialNetworkProxyConfig = layer
-            .config
-            .clone()
-            .try_into()
-            .context("failed to deserialize trusted config layer")?;
-        apply_top_level_constraints(partial, &mut constraints);
-
-        if let Some(network) = permissions_network_from_toml(&layer.config)? {
-            apply_permissions_constraints(network, &mut constraints);
+        let parsed = network_tables_from_toml(&layer.config)?;
+        if let Some(network) = parsed.network {
+            apply_network_constraints(network, &mut constraints);
+        }
+        if let Some(network) = parsed
+            .permissions
+            .and_then(|permissions| permissions.network)
+        {
+            apply_network_constraints(network, &mut constraints);
         }
     }
     Ok(constraints)
 }
 
-fn apply_top_level_constraints(
-    partial: PartialNetworkProxyConfig,
-    constraints: &mut NetworkProxyConstraints,
-) {
-    if let Some(enabled) = partial.network.enabled {
-        constraints.enabled = Some(enabled);
-    }
-    if let Some(mode) = partial.network.mode {
-        constraints.mode = Some(mode);
-    }
-    if let Some(allow_upstream_proxy) = partial.network.allow_upstream_proxy {
-        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
-    }
-    if let Some(dangerously_allow_non_loopback_proxy) =
-        partial.network.dangerously_allow_non_loopback_proxy
-    {
-        constraints.dangerously_allow_non_loopback_proxy =
-            Some(dangerously_allow_non_loopback_proxy);
-    }
-    if let Some(dangerously_allow_non_loopback_admin) =
-        partial.network.dangerously_allow_non_loopback_admin
-    {
-        constraints.dangerously_allow_non_loopback_admin =
-            Some(dangerously_allow_non_loopback_admin);
-    }
-    if let Some(allowed_domains) = partial.network.allowed_domains {
-        constraints.allowed_domains = Some(allowed_domains);
-    }
-    if let Some(denied_domains) = partial.network.denied_domains {
-        constraints.denied_domains = Some(denied_domains);
-    }
-    if let Some(allow_unix_sockets) = partial.network.allow_unix_sockets {
-        constraints.allow_unix_sockets = Some(allow_unix_sockets);
-    }
-    if let Some(allow_local_binding) = partial.network.allow_local_binding {
-        constraints.allow_local_binding = Some(allow_local_binding);
-    }
-}
-
-fn apply_permissions_constraints(network: NetworkToml, constraints: &mut NetworkProxyConstraints) {
+fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProxyConstraints) {
     if let Some(enabled) = network.enabled {
         constraints.enabled = Some(enabled);
     }
@@ -195,18 +149,31 @@ fn apply_permissions_constraints(network: NetworkToml, constraints: &mut Network
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-struct PermissionsRootToml {
+struct NetworkTablesToml {
+    network: Option<NetworkToml>,
     permissions: Option<PermissionsToml>,
 }
 
-fn permissions_network_from_toml(value: &toml::Value) -> Result<Option<NetworkToml>> {
-    let parsed: PermissionsRootToml = value
+fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
+    value
         .clone()
         .try_into()
-        .context("failed to deserialize [permissions.network]")?;
-    Ok(parsed
+        .context("failed to deserialize network tables from config")
+}
+
+fn config_from_toml(value: &toml::Value) -> Result<NetworkProxyConfig> {
+    let parsed = network_tables_from_toml(value)?;
+    let mut config = NetworkProxyConfig::default();
+    if let Some(network) = parsed.network {
+        network.apply_to_network_proxy_config(&mut config);
+    }
+    if let Some(network) = parsed
         .permissions
-        .and_then(|permissions| permissions.network))
+        .and_then(|permissions| permissions.network)
+    {
+        network.apply_to_network_proxy_config(&mut config);
+    }
+    Ok(config)
 }
 
 fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
