@@ -1145,6 +1145,29 @@ fn table_does_not_absorb_trailing_html_block_label_line() {
 }
 
 #[test]
+fn table_spillover_prose_wraps_in_narrow_width() {
+    let long_label = "This html spillover prose line should wrap on narrow widths to avoid clipping:";
+    let md = format!(
+        "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    |   b    |     c |\n{long_label}\n<div style=\"border:1px solid #ccc;padding:2px\">inline block</div>\n"
+    );
+    let text = crate::markdown_render::render_markdown_text_with_width(&md, Some(40));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines.iter().any(|line| line.contains("This html spillover prose")),
+        "expected spillover prose to be present: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains(long_label)),
+        "did not expect spillover prose to remain as one long clipped line: {lines:?}"
+    );
+}
+
+#[test]
 fn table_keeps_sparse_rows_with_empty_trailing_cells() {
     let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
     let text = render_markdown_text(md);

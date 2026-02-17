@@ -1,8 +1,34 @@
 //! Low-level markdown event renderer for the TUI transcript.
 //!
 //! This module consumes `pulldown-cmark` events and emits styled `ratatui`
-//! lines, including table layout and width-aware wrapping. It is the final
+//! lines, including table layout and width-aware wrapping.  It is the final
 //! rendering stage used by higher-level helpers in `markdown.rs`.
+//!
+//! ## Table rendering pipeline
+//!
+//! When the parser emits `Tag::Table` .. `TagEnd::Table`, the writer
+//! accumulates header and body rows into a `TableState`, then hands it to
+//! `render_table_lines` which runs this pipeline:
+//!
+//! 1. **Filter spillover rows** -- heuristic extraction of single-cell rows
+//!    that are artifacts of pulldown-cmark's lenient parsing.
+//! 2. **Normalize column counts** -- pad or truncate so every row matches the
+//!    alignment count.
+//! 3. **Compute column widths** -- allocate widths with Narrative/Structured
+//!    priority and iterative shrinking.
+//! 4. **Render box grid** -- Unicode borders (`+---+`) or fallback to pipe
+//!    format when the minimum cannot fit.
+//! 5. **Append spillover** -- extracted spillover rows rendered as plain text
+//!    after the table.
+//!
+//! ## Width allocation
+//!
+//! Columns are classified as Narrative (long prose, >= 4 avg words or >= 28
+//! avg char width) or Structured (short tokens).  The shrink loop removes
+//! one character at a time, preferring Narrative columns, until the total
+//! fits the available width.  A guard cost penalises shrinking below a
+//! column's header token width.  When even 3-char-wide columns cannot fit,
+//! the table falls back to pipe-delimited format.
 
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::push_owned_lines;
@@ -152,6 +178,16 @@ impl TableState {
     }
 }
 
+/// Rendered table output split by wrapping behavior.
+///
+/// `table_lines` are grid/fallback rows that are already width-laid-out and
+/// should bypass paragraph wrapping. `spillover_lines` are prose rows extracted
+/// from parser artifacts and should be routed through normal wrapping.
+struct RenderedTableLines {
+    table_lines: Vec<Line<'static>>,
+    spillover_lines: Vec<Line<'static>>,
+}
+
 /// Classification of a table column for width-allocation priority.
 ///
 /// Narrative columns (long prose, many words per cell) are shrunk first when the table exceeds
@@ -214,6 +250,12 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
     w.text
 }
 
+/// Stateful pulldown-cmark event consumer that builds styled `ratatui` output.
+///
+/// Tracks inline style nesting, indent/blockquote context, list numbering,
+/// and an optional `TableState` for accumulating table events.  The
+/// `wrap_width` field enables width-aware line wrapping and table column
+/// allocation; when `None`, lines keep their intrinsic width.
 struct Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
@@ -610,13 +652,20 @@ where
             return;
         };
 
-        let table_lines = self.render_table_lines(table_state);
+        let RenderedTableLines {
+            table_lines,
+            spillover_lines,
+        } = self.render_table_lines(table_state);
         let mut pending_marker_line = self.pending_marker_line;
         for line in table_lines {
             self.push_prewrapped_line(line, pending_marker_line);
             pending_marker_line = false;
         }
         self.pending_marker_line = false;
+        for spillover_line in spillover_lines {
+            self.push_line(spillover_line);
+            self.flush_current_line();
+        }
         self.needs_newline = true;
     }
 
@@ -735,10 +784,13 @@ where
     /// Falls back to `render_table_pipe_fallback` (raw `| A | B |` format)
     /// when `compute_column_widths` returns `None` (terminal too narrow for
     /// even 3-char-wide columns).
-    fn render_table_lines(&self, mut table_state: TableState) -> Vec<Line<'static>> {
+    fn render_table_lines(&self, mut table_state: TableState) -> RenderedTableLines {
         let column_count = table_state.alignments.len();
         if column_count == 0 {
-            return Vec::new();
+            return RenderedTableLines {
+                table_lines: Vec::new(),
+                spillover_lines: Vec::new(),
+            };
         }
 
         let mut spillover_rows: Vec<TableCell> = Vec::new();
@@ -769,14 +821,20 @@ where
         let available_width = self.available_table_width(column_count);
         let widths =
             self.compute_column_widths(&header, &rows, &table_state.alignments, available_width);
+        let spillover_lines: Vec<Line<'static>> = spillover_rows
+            .into_iter()
+            .flat_map(|spillover| spillover.lines)
+            .collect();
 
         let Some(column_widths) = widths else {
-            let mut fallback =
-                self.render_table_pipe_fallback(&header, &rows, &table_state.alignments);
-            for spillover in spillover_rows {
-                fallback.extend(spillover.lines);
-            }
-            return fallback;
+            return RenderedTableLines {
+                table_lines: self.render_table_pipe_fallback(
+                    &header,
+                    &rows,
+                    &table_state.alignments,
+                ),
+                spillover_lines,
+            };
         };
 
         let border_style = Style::new().dim();
@@ -798,10 +856,10 @@ where
             ));
         }
         out.push(self.render_border_line('└', '┴', '┘', &column_widths, border_style));
-        for spillover in spillover_rows {
-            out.extend(spillover.lines);
+        RenderedTableLines {
+            table_lines: out,
+            spillover_lines,
         }
-        out
     }
 
     fn normalize_row(row: &mut Vec<TableCell>, column_count: usize) {
@@ -1080,6 +1138,11 @@ where
         out
     }
 
+    /// Render the table as raw pipe-delimited lines (`| A | B |`).
+    ///
+    /// Used when `compute_column_widths` returns `None` (terminal too narrow
+    /// for even 3-char-wide columns).  Pipe characters inside cell content are
+    /// escaped as `\|` so downstream parsers keep cell boundaries intact.
     fn render_table_pipe_fallback(
         &self,
         header: &[TableCell],
@@ -1126,6 +1189,12 @@ where
         out
     }
 
+    /// Wrap a single table cell's content to `width`, preserving rich inline
+    /// styling (bold, code, links) across wrapped lines.
+    ///
+    /// Each logical line within the cell (separated by hard breaks) is wrapped
+    /// independently.  Empty cells produce a single blank line so the row grid
+    /// stays aligned.
     fn wrap_cell(&self, cell: &TableCell, width: usize) -> Vec<Line<'static>> {
         if cell.lines.is_empty() {
             return vec![Line::default()];

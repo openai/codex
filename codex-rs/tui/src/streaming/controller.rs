@@ -25,6 +25,14 @@
 //! `source_bytes_for_rendered_count`, then rebuilds the stable queue.  The
 //! caller (`App`) schedules a debounced full-transcript reflow so committed
 //! `AgentMarkdownCell`s re-render from source at the new width.
+//!
+//! ## Invariants
+//!
+//! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
+//! - `raw_source` is append-only until `reset()`; never modified mid-stream.
+//! - Tail starts exactly at `enqueued_stable_len`.
+//! - During confirmed table streaming: `enqueued_stable_len == emitted_stable_len == 0`
+//!   (everything is tail).
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
@@ -506,6 +514,9 @@ fn source_bytes_for_rendered_count(
 // ---------------------------------------------------------------------------
 
 /// Return fence marker character and run length for a potential fence line.
+///
+/// Recognises backtick and tilde fences with a minimum run of 3.
+/// Used by `parse_lines_with_fence_state` to track fence open/close transitions.
 fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
     let mut chars = line.chars();
     let first = chars.next()?;
@@ -600,6 +611,10 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
     lines
 }
 
+/// Peel all leading `>` blockquote markers from a line.
+///
+/// Tables can appear inside blockquotes (`> | A | B |`), so the holdback
+/// scanner must strip these markers before checking for table syntax.
 fn strip_blockquote_prefix(line: &str) -> &str {
     let mut rest = line.trim_start();
     loop {
@@ -610,6 +625,8 @@ fn strip_blockquote_prefix(line: &str) -> &str {
     }
 }
 
+/// Strip blockquote prefixes and return the trimmed text if it contains
+/// pipe-table segments, or `None` otherwise.
 fn table_candidate_text(line: &str) -> Option<&str> {
     let stripped = strip_blockquote_prefix(line).trim();
     parse_table_segments(stripped).map(|_| stripped)

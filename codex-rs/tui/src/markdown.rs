@@ -1,13 +1,24 @@
 //! Markdown-to-ratatui rendering entry points.
 //!
-//! This module provides the public API surface that the rest of the TUI uses to turn markdown
-//! source into `Vec<Line<'static>>`.  Three variants exist:
+//! This module provides the public API surface that the rest of the TUI uses
+//! to turn markdown source into `Vec<Line<'static>>`.  Two variants exist:
 //!
-//! - [`append_markdown`] -- general-purpose, used for plan blocks and history cells that already
-//!   hold pre-processed markdown.
-//! - [`append_markdown_agent`] -- for agent responses.  Runs [`unwrap_markdown_fences`] first so
-//!   that `` ```md ``/`` ```markdown `` fences containing tables are stripped and the table
-//!   parser sees raw markdown instead of fenced code.
+//! - [`append_markdown`] -- general-purpose, used for plan blocks and history
+//!   cells that already hold pre-processed markdown (no fence unwrapping).
+//! - [`append_markdown_agent`] -- for agent responses.  Runs
+//!   [`unwrap_markdown_fences`] first so that `` ```md ``/`` ```markdown ``
+//!   fences containing tables are stripped and `pulldown-cmark` sees raw
+//!   table syntax instead of fenced code.
+//!
+//! ## Why fence unwrapping exists
+//!
+//! LLM agents frequently wrap tables in `` ```markdown `` fences, treating
+//! them as code.  Without unwrapping, `pulldown-cmark` parses those lines
+//! as a fenced code block and renders them as monospace code rather than a
+//! structured table.  The unwrapper is intentionally conservative: it
+//! buffers the entire fence body before deciding, only unwraps fences whose
+//! info string is `md` or `markdown` AND whose body contains a
+//! header+delimiter pair, and degrades gracefully on unclosed fences.
 use ratatui::text::Line;
 
 use crate::table_detect;
