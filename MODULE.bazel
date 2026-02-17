@@ -138,6 +138,9 @@ crate.annotation(
         "OPENSSL_NO_VENDOR": "1",
         "OPENSSL_STATIC": "1",
     },
+    crate_features = [
+        "dep:openssl-src",
+    ],
     crate = "openssl-sys",
     data = ["@openssl//:gen_dir"],
 )
