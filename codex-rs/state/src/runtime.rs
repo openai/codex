@@ -32,6 +32,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,6 +42,15 @@ use uuid::Uuid;
 
 mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
+
+const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
+const LOG_ROW_ESTIMATED_BYTES_SQL: &str = r#"
+                LENGTH(CAST(COALESCE(message, '') AS BLOB))
+                + LENGTH(CAST(level AS BLOB))
+                + LENGTH(CAST(target AS BLOB))
+                + LENGTH(CAST(COALESCE(module_path, '') AS BLOB))
+                + LENGTH(CAST(COALESCE(file, '') AS BLOB))
+"#;
 
 #[derive(Clone)]
 pub struct StateRuntime {
@@ -375,6 +385,101 @@ FROM threads
                 .push_bind(entry.line);
         });
         builder.build().execute(self.pool.as_ref()).await?;
+
+        let thread_ids: BTreeSet<&str> = entries
+            .iter()
+            .filter_map(|entry| entry.thread_id.as_deref())
+            .collect();
+        if !thread_ids.is_empty() {
+            let mut prune_threads = QueryBuilder::<Sqlite>::new(
+                r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+            );
+            prune_threads.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            prune_threads.push(
+                r#"
+            ) OVER (
+                PARTITION BY thread_id
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IN (
+"#,
+            );
+            {
+                let mut separated = prune_threads.separated(", ");
+                for thread_id in &thread_ids {
+                    separated.push_bind(*thread_id);
+                }
+            }
+            prune_threads.push(
+                r#"
+        )
+    )
+    WHERE cumulative_bytes >
+"#,
+            );
+            prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            prune_threads.push("\n)");
+            prune_threads.build().execute(self.pool.as_ref()).await?;
+        }
+
+        let threadless_process_uuids: BTreeSet<&str> = entries
+            .iter()
+            .filter(|entry| entry.thread_id.is_none())
+            .filter_map(|entry| entry.process_uuid.as_deref())
+            .collect();
+        if !threadless_process_uuids.is_empty() {
+            let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
+                r#"
+DELETE FROM logs
+WHERE id IN (
+    SELECT id
+    FROM (
+        SELECT
+            id,
+            SUM(
+"#,
+            );
+            prune_threadless_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            prune_threadless_process_logs.push(
+                r#"
+            ) OVER (
+                PARTITION BY process_uuid
+                ORDER BY ts DESC, ts_nanos DESC, id DESC
+            ) AS cumulative_bytes
+        FROM logs
+        WHERE thread_id IS NULL
+          AND process_uuid IN (
+"#,
+            );
+            {
+                let mut separated = prune_threadless_process_logs.separated(", ");
+                for process_uuid in &threadless_process_uuids {
+                    separated.push_bind(*process_uuid);
+                }
+            }
+            prune_threadless_process_logs.push(
+                r#"
+          )
+    )
+    WHERE cumulative_bytes >
+"#,
+            );
+            prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            prune_threadless_process_logs.push("\n)");
+            prune_threadless_process_logs
+                .build()
+                .execute(self.pool.as_ref())
+                .await?;
+        }
         Ok(())
     }
 
@@ -2549,6 +2654,124 @@ VALUES (?, ?, ?, ?, ?)
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message.as_deref(), Some("alphabet"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_old_rows_when_thread_exceeds_size_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "a".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                ..Default::default()
+            })
+            .await
+            .expect("query thread logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ts, 2);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_logs_prunes_threadless_rows_per_process_uuid_only() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let six_mebibytes = "b".repeat(6 * 1024 * 1024);
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(1),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes.clone()),
+                    thread_id: None,
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(2),
+                    module_path: Some("mod".to_string()),
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some(six_mebibytes),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-1".to_string()),
+                    file: Some("main.rs".to_string()),
+                    line: Some(3),
+                    module_path: Some("mod".to_string()),
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                thread_ids: vec!["thread-1".to_string()],
+                include_threadless: true,
+                ..Default::default()
+            })
+            .await
+            .expect("query thread and threadless logs");
+
+        let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
+        timestamps.sort_unstable();
+        assert_eq!(timestamps, vec![2, 3]);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
