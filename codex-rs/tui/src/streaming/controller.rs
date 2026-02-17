@@ -21,14 +21,15 @@
 //! ## Resize handling
 //!
 //! On terminal width change, `StreamCore::set_width` remaps the
-//! already-emitted line count to the new width using
-//! `source_bytes_for_rendered_count`, then rebuilds the stable queue.  The
+//! already-emitted stable boundary to the new width from source-byte anchors
+//! and line-end source maps, then rebuilds the stable queue.  The
 //! caller (`App`) schedules a debounced full-transcript reflow so committed
 //! `AgentMarkdownCell`s re-render from source at the new width.
 //!
 //! ## Invariants
 //!
 //! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
+//! - `rendered_line_end_source_bytes.len() == rendered_lines.len()`.
 //! - `raw_source` is append-only until `reset()`; never modified mid-stream.
 //! - Tail starts exactly at `enqueued_stable_len`.
 //! - During confirmed table streaming, only lines from the table header onward
@@ -37,6 +38,7 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
 use crate::markdown::append_markdown_agent;
+use crate::markdown::render_markdown_agent_with_source_map;
 use crate::render::line_utils::prefix_lines;
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
@@ -71,10 +73,18 @@ struct StreamCore {
     raw_source: String,
     /// Full re-render of `raw_source` at `width`. Rebuilt on every committed delta.
     rendered_lines: Vec<Line<'static>>,
+    /// Per-rendered-line source byte offsets (raw source coordinates).
+    rendered_line_end_source_bytes: Vec<usize>,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
     /// Lines actually emitted to scrollback.
     emitted_stable_len: usize,
+    /// Raw source boundary reached by emitted stable lines.
+    emitted_stable_source_bytes: usize,
+    /// How many emitted stable lines end exactly at `emitted_stable_source_bytes`.
+    emitted_stable_lines_at_source_byte: usize,
+    /// Total rendered lines ending at `emitted_stable_source_bytes` in current render.
+    emitted_stable_lines_at_source_byte_total: usize,
 }
 
 impl StreamCore {
@@ -84,8 +94,12 @@ impl StreamCore {
             width,
             raw_source: String::new(),
             rendered_lines: Vec::new(),
+            rendered_line_end_source_bytes: Vec::new(),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
+            emitted_stable_source_bytes: 0,
+            emitted_stable_lines_at_source_byte: 0,
+            emitted_stable_lines_at_source_byte_total: 0,
         }
     }
 
@@ -127,14 +141,18 @@ impl StreamCore {
     /// Step animation: dequeue one line, update the emitted count.
     fn tick(&mut self) -> Vec<Line<'static>> {
         let step = self.state.step();
+        let emitted_start = self.emitted_stable_len;
         self.emitted_stable_len += step.len();
+        self.advance_emitted_source_boundary(emitted_start, self.emitted_stable_len);
         step
     }
 
     /// Batch drain: dequeue up to `max_lines`, update the emitted count.
     fn tick_batch(&mut self, max_lines: usize) -> Vec<Line<'static>> {
         let step = self.state.drain_n(max_lines.max(1));
+        let emitted_start = self.emitted_stable_len;
         self.emitted_stable_len += step.len();
+        self.advance_emitted_source_boundary(emitted_start, self.emitted_stable_len);
         step
     }
 
@@ -161,39 +179,22 @@ impl StreamCore {
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
     ///
-    /// When `emitted_stable_len > 0`, uses `source_bytes_for_rendered_count` to
-    /// find the byte offset in `raw_source` that corresponds to the old emitted
-    /// count, then re-renders that prefix at the new width to recalculate
-    /// `emitted_stable_len`. The stable queue is rebuilt from the new render.
+    /// Re-renders once at the new width and remaps already-emitted progress by
+    /// source boundary (`emitted_stable_source_bytes`) plus tie-break count for
+    /// wrapped lines that share the same line-end source offset.
     fn set_width(&mut self, width: Option<usize>) {
         if self.width == width {
             return;
         }
-        let old_width = self.width;
         self.width = width;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
             return;
         }
 
-        // Recalculate emitted_stabe_len for the new width so we don't re-queue lines that were
-        // already emitted at the old width.
-        if self.emitted_stable_len > 0 {
-            let emitted_bytes = source_bytes_for_rendered_count(
-                &self.raw_source,
-                old_width,
-                self.emitted_stable_len,
-            );
-            let mut emitted_at_new = Vec::new();
-            append_markdown_agent(
-                &self.raw_source[..emitted_bytes],
-                self.width,
-                &mut emitted_at_new,
-            );
-            self.emitted_stable_len = emitted_at_new.len();
-        }
-
         self.recompute_streaming_render();
+        self.emitted_stable_len = self.remap_emitted_len_from_source_boundary();
+        self.sync_emitted_source_counters_from_render();
         self.rebuild_stable_queue_from_render();
     }
 
@@ -202,15 +203,23 @@ impl StreamCore {
         self.state.clear();
         self.raw_source.clear();
         self.rendered_lines.clear();
+        self.rendered_line_end_source_bytes.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
+        self.emitted_stable_source_bytes = 0;
+        self.emitted_stable_lines_at_source_byte = 0;
+        self.emitted_stable_lines_at_source_byte_total = 0;
     }
 
     /// Re-render the full `raw_source` at current `width`.
     fn recompute_streaming_render(&mut self) {
-        let mut rendered = Vec::new();
-        append_markdown_agent(&self.raw_source, self.width, &mut rendered);
-        self.rendered_lines = rendered;
+        let rendered = render_markdown_agent_with_source_map(&self.raw_source, self.width);
+        self.rendered_lines = rendered.lines;
+        self.rendered_line_end_source_bytes = rendered.line_end_source_bytes;
+        debug_assert_eq!(
+            self.rendered_line_end_source_bytes.len(),
+            self.rendered_lines.len()
+        );
     }
 
     /// Advance `enqueued_stable_len` toward the target stable boundary and enqueue any
@@ -297,6 +306,87 @@ impl StreamCore {
         self.rendered_lines
             .len()
             .saturating_sub(stable_prefix_render.len())
+    }
+
+    fn advance_emitted_source_boundary(&mut self, emitted_start: usize, emitted_end: usize) {
+        if emitted_start >= emitted_end || self.rendered_line_end_source_bytes.is_empty() {
+            return;
+        }
+
+        let end = emitted_end.min(self.rendered_line_end_source_bytes.len());
+        for line_end_source in &self.rendered_line_end_source_bytes[emitted_start..end] {
+            if *line_end_source > self.emitted_stable_source_bytes {
+                self.emitted_stable_source_bytes = *line_end_source;
+                self.emitted_stable_lines_at_source_byte = 1;
+                self.emitted_stable_lines_at_source_byte_total = self
+                    .rendered_line_end_source_bytes
+                    .iter()
+                    .filter(|source| **source == *line_end_source)
+                    .count()
+                    .max(1);
+            } else if *line_end_source == self.emitted_stable_source_bytes {
+                self.emitted_stable_lines_at_source_byte += 1;
+            }
+        }
+    }
+
+    fn remap_emitted_len_from_source_boundary(&self) -> usize {
+        if self.emitted_stable_len == 0 {
+            return 0;
+        }
+        if self.emitted_stable_source_bytes >= self.raw_source.len() {
+            return self.rendered_lines.len();
+        }
+
+        let mut lines_before = 0usize;
+        let mut lines_at = 0usize;
+        for line_end_source in &self.rendered_line_end_source_bytes {
+            if *line_end_source < self.emitted_stable_source_bytes {
+                lines_before += 1;
+            } else if *line_end_source == self.emitted_stable_source_bytes {
+                lines_at += 1;
+            }
+        }
+        let emitted_at_boundary = if self.emitted_stable_lines_at_source_byte
+            >= self.emitted_stable_lines_at_source_byte_total
+        {
+            lines_at
+        } else if lines_at >= self.emitted_stable_lines_at_source_byte {
+            self.emitted_stable_lines_at_source_byte
+        } else {
+            0
+        };
+        lines_before
+            + emitted_at_boundary.min(self.rendered_lines.len().saturating_sub(lines_before))
+    }
+
+    fn sync_emitted_source_counters_from_render(&mut self) {
+        let emitted_len = self
+            .emitted_stable_len
+            .min(self.rendered_line_end_source_bytes.len());
+        if emitted_len == 0 {
+            self.emitted_stable_source_bytes = 0;
+            self.emitted_stable_lines_at_source_byte = 0;
+            self.emitted_stable_lines_at_source_byte_total = 0;
+            return;
+        }
+
+        let boundary = self.rendered_line_end_source_bytes[emitted_len - 1];
+        let emitted_at_boundary = self.rendered_line_end_source_bytes[..emitted_len]
+            .iter()
+            .rev()
+            .take_while(|line_end| **line_end == boundary)
+            .count();
+        let total_at_boundary = self
+            .rendered_line_end_source_bytes
+            .iter()
+            .filter(|line_end| **line_end == boundary)
+            .count()
+            .max(1);
+
+        self.emitted_stable_source_bytes = boundary;
+        self.emitted_stable_lines_at_source_byte = emitted_at_boundary;
+        self.emitted_stable_lines_at_source_byte_total = total_at_boundary;
     }
 }
 
@@ -483,52 +573,6 @@ impl PlanStreamController {
             is_stream_continuation,
         )))
     }
-}
-
-// ---------------------------------------------------------------------------
-// source_bytes_for_rendered_count — resize remapping helper
-// ---------------------------------------------------------------------------
-
-/// Map a rendered-line count back to a source-byte offset for resize remapping.
-///
-/// Iterates through each newline in `raw_source`, rendering the prefix up to
-/// that newline at `width`, and returns the largest byte offset whose rendering
-/// produces at most `target_count` lines.
-///
-/// When the target falls exactly on a source-line boundary, the returned offset
-/// covers that line. When it falls in the middle of a wrapped source line
-/// (partial drain), the offset stops at the *previous* newline to avoid
-/// overshooting -- this may re-queue a few already-emitted wrapped lines as
-/// duplicates, but never drops un-emitted content.
-///
-/// This function is only called during `set_width` when `emitted_stable_len > 0`
-/// (i.e. non-table content has already been committed to scrollback).  For
-/// non-table content, rendering a newline-terminated prefix produces a prefix of
-/// the full rendering, so this converges correctly.
-///
-/// Performance: O(n) in source lines, each incurring a full markdown render of
-/// the prefix. Acceptable for typical agent message lengths (hundreds of lines).
-fn source_bytes_for_rendered_count(
-    raw_source: &str,
-    width: Option<usize>,
-    target_count: usize,
-) -> usize {
-    if target_count == 0 {
-        return 0;
-    }
-    let mut best_offset = 0;
-    for (i, _) in raw_source.match_indices('\n') {
-        let prefix = &raw_source[..=i];
-        let mut lines = Vec::new();
-        crate::markdown::append_markdown_agent(prefix, width, &mut lines);
-        if lines.len() <= target_count {
-            best_offset = i + 1;
-        }
-        if lines.len() >= target_count {
-            break;
-        }
-    }
-    best_offset
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +785,7 @@ fn table_holdback_state(source: &str) -> TableHoldbackState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
@@ -1496,78 +1541,62 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // source_bytes_for_rendered_count — prefix-stability tests
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn source_bytes_plain_paragraphs() {
-        let src = "Alpha\n\nBravo\n\nCharlie\n";
-        let width = Some(80);
-
-        let mut full = Vec::new();
-        crate::markdown::append_markdown_agent(src, width, &mut full);
-        let total = full.len();
-        assert!(
-            total >= 3,
-            "expected at least 3 rendered lines, got {total}"
+    fn controller_set_width_after_first_line_emit_does_not_requeue_first_line() {
+        let mut ctrl = StreamController::new(Some(120));
+        ctrl.push(
+            "FIRSTTOKEN contains enough words to wrap once the width is reduced dramatically.\n",
         );
+        ctrl.push("second line remains pending\n");
 
-        assert_eq!(source_bytes_for_rendered_count(src, width, 0), 0);
-        assert_eq!(
-            source_bytes_for_rendered_count(src, width, total),
-            src.len()
-        );
+        let (first_emit, _) = ctrl.on_commit_tick();
+        assert!(first_emit.is_some(), "expected first line emission");
 
-        let off = source_bytes_for_rendered_count(src, width, 1);
-        assert!(off > 0 && off <= src.len());
-        let mut partial = Vec::new();
-        crate::markdown::append_markdown_agent(&src[..off], width, &mut partial);
+        ctrl.set_width(Some(20));
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| line.chars().skip(2).collect::<String>())
+            .collect::<Vec<_>>();
         assert!(
-            partial.len() <= 1,
-            "expected <=1 line, got {}",
-            partial.len()
+            !remaining.iter().any(|line| line.contains("FIRSTTOKEN")),
+            "first line should not be re-queued after resize: {remaining:?}",
+        );
+        assert!(
+            remaining.iter().any(|line| line.contains("second line")),
+            "expected pending second line after resize: {remaining:?}",
         );
     }
 
     #[test]
-    fn source_bytes_wrapped_lines() {
-        let src = "The quick brown fox jumps over the lazy dog near the riverbank.\n";
-        let width = Some(20);
+    fn controller_set_width_partial_wrapped_emit_preserves_remaining_content() {
+        let mut ctrl = StreamController::new(Some(20));
+        ctrl.push("The quick brown fox jumps over the lazy dog near the riverbank.\n");
+        ctrl.push("tail line\n");
 
-        let mut full = Vec::new();
-        crate::markdown::append_markdown_agent(src, width, &mut full);
-        let total = full.len();
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        assert!(first_emit.is_some(), "expected first wrapped line emission");
+        assert!(!idle, "expected remaining queued content after one tick");
         assert!(
-            total > 1,
-            "expected wrapping at width 20, got {total} lines"
+            ctrl.queued_lines() > 0,
+            "expected non-empty queue before resize"
         );
 
-        let off = source_bytes_for_rendered_count(src, width, 1);
-        assert_eq!(off, 0, "single wrapped source line should not be split");
-    }
+        ctrl.set_width(Some(120));
 
-    #[test]
-    fn source_bytes_list_items() {
-        let src = "- First item\n- Second item\n- Third item\n";
-        let width = Some(80);
-
-        let mut full = Vec::new();
-        crate::markdown::append_markdown_agent(src, width, &mut full);
-        let total = full.len();
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| line.chars().skip(2).collect::<String>())
+            .collect::<Vec<_>>();
         assert!(
-            total >= 3,
-            "expected at least 3 rendered lines, got {total}"
-        );
-
-        let off = source_bytes_for_rendered_count(src, width, 2);
-        assert!(off > 0);
-        let mut partial = Vec::new();
-        crate::markdown::append_markdown_agent(&src[..off], width, &mut partial);
-        assert!(
-            partial.len() <= 2,
-            "expected <=2 lines from prefix, got {}",
-            partial.len()
+            remaining.iter().any(|line| line.contains("tail line")),
+            "un-emitted content should remain after resize remap: {remaining:?}",
         );
     }
 }

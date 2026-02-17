@@ -20,8 +20,14 @@
 //! info string is `md` or `markdown` AND whose body contains a
 //! header+delimiter pair, and degrades gracefully on unclosed fences.
 use ratatui::text::Line;
+use std::ops::Range;
 
 use crate::table_detect;
+
+pub(crate) struct AgentRenderedWithSourceMap {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) line_end_source_bytes: Vec<usize>,
+}
 
 /// Render markdown source to styled ratatui lines and append them to `lines`.
 ///
@@ -47,8 +53,29 @@ pub(crate) fn append_markdown_agent(
     width: Option<usize>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let normalized = unwrap_markdown_fences(markdown_source);
-    append_markdown(&normalized, width, lines);
+    let rendered = render_markdown_agent_with_source_map(markdown_source, width);
+    lines.extend(rendered.lines);
+}
+
+pub(crate) fn render_markdown_agent_with_source_map(
+    markdown_source: &str,
+    width: Option<usize>,
+) -> AgentRenderedWithSourceMap {
+    let normalized = unwrap_markdown_fences_with_mapping(markdown_source);
+    let rendered = crate::markdown_render::render_markdown_text_with_width_and_source_map(
+        &normalized.text,
+        width,
+    );
+    let lines = rendered.text.lines;
+    let line_end_source_bytes = rendered
+        .line_end_input_bytes
+        .into_iter()
+        .map(|offset| normalized.raw_source_offset(offset))
+        .collect();
+    AgentRenderedWithSourceMap {
+        lines,
+        line_end_source_bytes,
+    }
 }
 
 /// Strip `` ```md ``/`` ```markdown `` fences that contain tables, emitting their content as bare
@@ -62,7 +89,64 @@ pub(crate) fn append_markdown_agent(
 /// The fence unwrapping is intentionally conservative: it buffers the entire fence body before
 /// deciding, and an unclosed fence at end-of-input is re-emitted with its opening line so partial
 /// streams degrade to code display.
+#[cfg(test)]
 fn unwrap_markdown_fences(markdown_source: &str) -> String {
+    unwrap_markdown_fences_with_mapping(markdown_source).text
+}
+
+#[derive(Clone, Debug)]
+struct NormalizedToRawSegment {
+    normalized_start: usize,
+    raw_start: usize,
+}
+
+struct NormalizedMarkdown {
+    text: String,
+    raw_source_len: usize,
+    segments: Vec<NormalizedToRawSegment>,
+}
+
+impl NormalizedMarkdown {
+    fn new(raw_source_len: usize, capacity: usize) -> Self {
+        Self {
+            text: String::with_capacity(capacity),
+            raw_source_len,
+            segments: Vec::new(),
+        }
+    }
+
+    fn push_source_range(&mut self, source: &str, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        let out_start = self.text.len();
+        let out_text = &source[range.clone()];
+        self.text.push_str(out_text);
+        self.segments.push(NormalizedToRawSegment {
+            normalized_start: out_start,
+            raw_start: range.start,
+        });
+    }
+
+    fn raw_source_offset(&self, normalized_offset: usize) -> usize {
+        if normalized_offset == 0 {
+            return 0;
+        }
+        if normalized_offset >= self.text.len() {
+            return self.raw_source_len;
+        }
+        let idx = self
+            .segments
+            .partition_point(|segment| segment.normalized_start < normalized_offset);
+        if idx == 0 {
+            return 0;
+        }
+        let segment = &self.segments[idx - 1];
+        segment.raw_start + normalized_offset.saturating_sub(segment.normalized_start)
+    }
+}
+
+fn unwrap_markdown_fences_with_mapping(markdown_source: &str) -> NormalizedMarkdown {
     #[derive(Clone, Copy)]
     struct Fence {
         marker: char,
@@ -142,46 +226,66 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
         false
     }
 
+    fn content_from_ranges(source: &str, ranges: &[Range<usize>]) -> String {
+        let mut content = String::new();
+        for range in ranges {
+            content.push_str(&source[range.clone()]);
+        }
+        content
+    }
+
     enum ActiveFence {
         Passthrough(Fence),
         MarkdownCandidate {
             fence: Fence,
-            opening_line: String,
-            content: String,
+            opening_range: Range<usize>,
+            content_ranges: Vec<Range<usize>>,
         },
     }
 
-    let mut out = String::with_capacity(markdown_source.len());
+    let mut out = NormalizedMarkdown::new(markdown_source.len(), markdown_source.len());
     let mut active_fence: Option<ActiveFence> = None;
+    let mut source_offset = 0usize;
 
     for line in markdown_source.split_inclusive('\n') {
+        let line_start = source_offset;
+        source_offset += line.len();
+        let line_range = line_start..source_offset;
+
         if let Some(active) = active_fence.take() {
             match active {
                 ActiveFence::Passthrough(fence) => {
-                    out.push_str(line);
+                    out.push_source_range(markdown_source, line_range);
                     if !is_close_fence(line, fence) {
                         active_fence = Some(ActiveFence::Passthrough(fence));
                     }
                 }
                 ActiveFence::MarkdownCandidate {
                     fence,
-                    opening_line,
-                    mut content,
+                    opening_range,
+                    mut content_ranges,
                 } => {
                     if is_close_fence(line, fence) {
-                        if markdown_fence_contains_table(&content) {
-                            out.push_str(&content);
+                        if markdown_fence_contains_table(&content_from_ranges(
+                            markdown_source,
+                            &content_ranges,
+                        )) {
+                            for range in content_ranges {
+                                out.push_source_range(markdown_source, range);
+                            }
                         } else {
-                            out.push_str(&opening_line);
-                            out.push_str(&content);
-                            out.push_str(line);
+                            out.push_source_range(markdown_source, opening_range);
+                            for range in content_ranges {
+                                out.push_source_range(markdown_source, range);
+                            }
+                            out.push_source_range(markdown_source, line_range);
                         }
                     } else {
-                        content.push_str(line);
+                        content_ranges.push(line_range);
                         active_fence = Some(ActiveFence::MarkdownCandidate {
                             fence,
-                            opening_line,
-                            content,
+                            opening_range,
+                            content_ranges,
                         });
                     }
                 }
@@ -193,29 +297,31 @@ fn unwrap_markdown_fences(markdown_source: &str) -> String {
             if fence.is_markdown {
                 active_fence = Some(ActiveFence::MarkdownCandidate {
                     fence,
-                    opening_line: line.to_string(),
-                    content: String::new(),
+                    opening_range: line_range,
+                    content_ranges: Vec::new(),
                 });
             } else {
-                out.push_str(line);
+                out.push_source_range(markdown_source, line_range);
                 active_fence = Some(ActiveFence::Passthrough(fence));
             }
             continue;
         }
 
-        out.push_str(line);
+        out.push_source_range(markdown_source, line_range);
     }
 
     if let Some(active) = active_fence {
         match active {
             ActiveFence::Passthrough(_) => {}
             ActiveFence::MarkdownCandidate {
-                opening_line,
-                content,
+                opening_range,
+                content_ranges,
                 ..
             } => {
-                out.push_str(&opening_line);
-                out.push_str(&content);
+                out.push_source_range(markdown_source, opening_range);
+                for range in content_ranges {
+                    out.push_source_range(markdown_source, range);
+                }
             }
         }
     }
@@ -398,5 +504,49 @@ mod tests {
         let src = "```markdown\n| A | B |\nnot a delimiter row\n| --- | --- |\n# Heading\n```\n";
         let normalized = unwrap_markdown_fences(src);
         assert_eq!(normalized, src);
+    }
+
+    #[test]
+    fn render_markdown_agent_with_source_map_offsets_align_with_line_count() {
+        let src = "alpha\n\n```md\n| A | B |\n|---|---|\n| 1 | 2 |\n```\nomega\n";
+        let rendered = render_markdown_agent_with_source_map(src, Some(80));
+        assert_eq!(rendered.lines.len(), rendered.line_end_source_bytes.len());
+
+        let mut prev = 0usize;
+        for offset in rendered.line_end_source_bytes {
+            assert!(
+                offset <= src.len(),
+                "line-end offset must stay within source bounds: {offset} > {}",
+                src.len()
+            );
+            assert!(
+                offset >= prev,
+                "line-end offsets must be non-decreasing: {offset} < {prev}"
+            );
+            prev = offset;
+        }
+    }
+
+    #[test]
+    fn unwrap_markdown_fences_mapping_preserves_raw_offsets_across_removed_fence_lines() {
+        let src = "before\n```md\n| A | B |\n|---|---|\n| 1 | 2 |\n```\nafter\n";
+        let normalized = unwrap_markdown_fences_with_mapping(src);
+        assert!(
+            !normalized.text.contains("```"),
+            "markdown table fence should be removed in normalized text"
+        );
+        let after_in_normalized = normalized
+            .text
+            .find("after")
+            .expect("expected 'after' in normalized text");
+        let after_in_raw = src.find("after").expect("expected 'after' in raw source");
+        assert_eq!(
+            normalized.raw_source_offset(after_in_normalized + 1),
+            after_in_raw + 1
+        );
+        assert_eq!(
+            normalized.raw_source_offset(normalized.text.len()),
+            src.len()
+        );
     }
 }
