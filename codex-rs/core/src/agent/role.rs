@@ -144,16 +144,6 @@ Available roles:
             format!("{name}: no description")
         }
     }
-
-    #[cfg(test)]
-    pub(super) fn build_for_test(
-        built_in_roles: &AgentsConfigToml,
-        user_defined_roles: &AgentsConfigToml,
-    ) -> String {
-        let built_in_roles = to_role_configs(&built_in_roles.agents);
-        let user_defined_roles = to_role_configs(&user_defined_roles.agents);
-        build_from_configs(&built_in_roles, &user_defined_roles)
-    }
 }
 
 mod built_in {
