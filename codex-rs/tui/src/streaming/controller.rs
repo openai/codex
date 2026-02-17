@@ -89,6 +89,14 @@ struct StreamCore {
     emitted_stable_lines_at_source_byte: usize,
     /// Total rendered lines ending at `emitted_stable_source_bytes` in current render.
     emitted_stable_lines_at_source_byte_total: usize,
+    /// Cached rendered line count for prefix-before-table keyed by source start and width.
+    stable_prefix_len_cache: Option<StablePrefixLenCache>,
+}
+
+struct StablePrefixLenCache {
+    source_start: usize,
+    width: Option<usize>,
+    stable_prefix_len: usize,
 }
 
 impl StreamCore {
@@ -105,6 +113,7 @@ impl StreamCore {
             emitted_stable_source_bytes: 0,
             emitted_stable_lines_at_source_byte: 0,
             emitted_stable_lines_at_source_byte_total: 0,
+            stable_prefix_len_cache: None,
         }
     }
 
@@ -218,6 +227,7 @@ impl StreamCore {
         self.emitted_stable_source_bytes = 0;
         self.emitted_stable_lines_at_source_byte = 0;
         self.emitted_stable_lines_at_source_byte_total = 0;
+        self.stable_prefix_len_cache = None;
     }
 
     /// Re-render the full `raw_source` at current `width`.
@@ -293,7 +303,7 @@ impl StreamCore {
     /// header line onward is kept mutable so earlier prose can continue
     /// streaming. When no table is detected, everything flows directly to
     /// stable. This is the core decision point for the holdback mechanism.
-    fn active_tail_budget_lines(&self) -> usize {
+    fn active_tail_budget_lines(&mut self) -> usize {
         match table_holdback_state(&self.raw_source) {
             TableHoldbackState::Confirmed { table_start } => {
                 self.tail_budget_from_source_start(table_start)
@@ -305,9 +315,21 @@ impl StreamCore {
         }
     }
 
-    fn tail_budget_from_source_start(&self, source_start: usize) -> usize {
+    fn tail_budget_from_source_start(&mut self, source_start: usize) -> usize {
         if source_start == 0 {
             return self.rendered_lines.len();
+        }
+        let source_start = source_start.min(self.raw_source.len());
+        let stable_prefix_len = self.stable_prefix_len_for_source_start(source_start);
+        self.rendered_lines.len().saturating_sub(stable_prefix_len)
+    }
+
+    fn stable_prefix_len_for_source_start(&mut self, source_start: usize) -> usize {
+        if let Some(cache) = &self.stable_prefix_len_cache
+            && cache.source_start == source_start
+            && cache.width == self.width
+        {
+            return cache.stable_prefix_len;
         }
 
         let mut stable_prefix_render = Vec::new();
@@ -317,9 +339,13 @@ impl StreamCore {
             Some(self.cwd.as_path()),
             &mut stable_prefix_render,
         );
-        self.rendered_lines
-            .len()
-            .saturating_sub(stable_prefix_render.len())
+        let stable_prefix_len = stable_prefix_render.len();
+        self.stable_prefix_len_cache = Some(StablePrefixLenCache {
+            source_start,
+            width: self.width,
+            stable_prefix_len,
+        });
+        stable_prefix_len
     }
 
     fn advance_emitted_source_boundary(&mut self, emitted_start: usize, emitted_end: usize) {
