@@ -17,6 +17,7 @@ members = [
     "cli",
     "config",
     "shell-command",
+    "zsh-sidecar",
     "core",
     "hooks",
     "secrets",
