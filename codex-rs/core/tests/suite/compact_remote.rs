@@ -1518,8 +1518,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     let compact_request = compact_mock.single_request();
     let compact_body = compact_request.body_json().to_string();
     assert!(
-        compact_body.contains("AFTER_SWITCH_USER"),
-        "pre-turn remote compaction request should include incoming user message"
+        !compact_body.contains("AFTER_SWITCH_USER"),
+        "current behavior excludes incoming user from the pre-turn remote compaction request"
     );
     assert!(
         !compact_body.contains("<model_switch>"),
@@ -1543,7 +1543,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     insta::assert_snapshot!(
         "remote_pre_turn_compaction_strips_incoming_model_switch_shapes",
         format_labeled_requests_snapshot(
-            "Remote pre-turn compaction during model switch strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.",
+            "Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.",
             &[
                 ("Initial Request (Previous Model)", &requests[0]),
                 ("Remote Compaction Request", &compact_request),
