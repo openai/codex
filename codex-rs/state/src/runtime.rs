@@ -44,6 +44,8 @@ mod memories;
 // Memory-specific CRUD and phase job lifecycle methods live in `runtime/memories.rs`.
 
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
+// Estimated payload bytes used for partition caps. This intentionally ignores
+// SQLite storage overhead and focuses on user-visible log content size.
 const LOG_ROW_ESTIMATED_BYTES_SQL: &str = r#"
                 LENGTH(CAST(COALESCE(message, '') AS BLOB))
                 + LENGTH(CAST(level AS BLOB))
@@ -391,6 +393,8 @@ FROM threads
             .filter_map(|entry| entry.thread_id.as_deref())
             .collect();
         if !thread_ids.is_empty() {
+            // Cheap precheck: only run the heavier window-function prune for
+            // threads that are currently above the cap.
             let mut over_limit_threads_query =
                 QueryBuilder::<Sqlite>::new("SELECT thread_id FROM logs WHERE thread_id IN (");
             {
@@ -411,6 +415,8 @@ FROM threads
                 .map(|row| row.try_get("thread_id"))
                 .collect::<Result<_, _>>()?;
             if !over_limit_thread_ids.is_empty() {
+                // Keep newest rows in each thread and delete older rows once
+                // cumulative bytes exceed the partition budget.
                 let mut prune_threads = QueryBuilder::<Sqlite>::new(
                     r#"
 DELETE FROM logs
@@ -458,6 +464,7 @@ WHERE id IN (
             .filter_map(|entry| entry.process_uuid.as_deref())
             .collect();
         if !threadless_process_uuids.is_empty() {
+            // Threadless logs are budgeted separately per process UUID.
             let mut over_limit_processes_query = QueryBuilder::<Sqlite>::new(
                 "SELECT process_uuid FROM logs WHERE thread_id IS NULL AND process_uuid IN (",
             );
@@ -479,6 +486,8 @@ WHERE id IN (
                 .map(|row| row.try_get("process_uuid"))
                 .collect::<Result<_, _>>()?;
             if !over_limit_process_uuids.is_empty() {
+                // Same newest-first trim policy as thread pruning, but only
+                // for threadless rows in the affected process UUIDs.
                 let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
                     r#"
 DELETE FROM logs
