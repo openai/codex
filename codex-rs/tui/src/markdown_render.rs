@@ -1,6 +1,6 @@
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
+use crate::wrapping::adaptive_wrap_line;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -446,7 +446,7 @@ where
                 let opts = RtOptions::new(width)
                     .initial_indent(self.current_initial_indent.clone().into())
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
-                for wrapped in word_wrap_line(&line, opts) {
+                for wrapped in adaptive_wrap_line(&line, opts) {
                     let owned = line_to_static(&wrapped).style(style);
                     self.text.lines.push(owned);
                 }
@@ -677,21 +677,16 @@ mod tests {
     }
 
     #[test]
-    fn wraps_long_url_like_token_without_exceeding_width() {
+    fn does_not_split_long_url_like_token_without_scheme() {
         let url_like =
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
         let rendered = render_markdown_text_with_width(url_like, Some(24));
         let lines = lines_to_strings(&rendered);
 
-        assert!(
-            lines.iter().all(|line| line.chars().count() <= 24),
-            "expected all wrapped lines to respect width bound, got: {lines:?}"
-        );
-        assert!(
-            lines
-                .join("")
-                .contains("example.test/api/v1/projects/alpha-team/releases"),
-            "expected wrapped output to retain URL-like content, got: {lines:?}"
+        assert_eq!(
+            lines.iter().filter(|line| line.contains(url_like)).count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {lines:?}"
         );
     }
 }
