@@ -28,7 +28,6 @@ fn build_permissions_update_item(
     previous: Option<&TurnContext>,
     next: &TurnContext,
     exec_policy: &Policy,
-    request_rule_enabled: bool,
 ) -> Option<ResponseItem> {
     let prev = previous?;
     if prev.sandbox_policy == next.sandbox_policy && prev.approval_policy == next.approval_policy {
@@ -40,7 +39,6 @@ fn build_permissions_update_item(
             &next.sandbox_policy,
             next.approval_policy,
             exec_policy,
-            request_rule_enabled,
             &next.cwd,
         )
         .into(),
@@ -122,7 +120,6 @@ pub(crate) fn build_settings_update_items(
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
-    request_rule_enabled: bool,
     personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
@@ -130,9 +127,7 @@ pub(crate) fn build_settings_update_items(
     if let Some(env_item) = build_environment_update_item(previous, next, shell) {
         update_items.push(env_item);
     }
-    if let Some(permissions_item) =
-        build_permissions_update_item(previous, next, exec_policy, request_rule_enabled)
-    {
+    if let Some(permissions_item) = build_permissions_update_item(previous, next, exec_policy) {
         update_items.push(permissions_item);
     }
     if let Some(collaboration_mode_item) = build_collaboration_mode_update_item(previous, next) {

@@ -1997,7 +1997,6 @@ impl Session {
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
-            self.features.enabled(Feature::RequestRule),
             self.features.enabled(Feature::Personality),
         )
     }
