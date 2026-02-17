@@ -2,7 +2,8 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-use crate::wrapping::word_wrap_lines_borrowed;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -38,10 +39,24 @@ where
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
 
-    // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
-    // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
-    let wrapped_lines = wrapped.len() as u16;
+    // Pre-wrap non-URL lines so terminal scrollback sees the same formatting as the TUI.
+    // URL lines are kept intact to avoid inserting hard newlines inside links.
+    let wrap_width = area.width.max(1) as usize;
+    let mut wrapped = Vec::new();
+    let mut wrapped_rows = 0usize;
+
+    for line in &lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        if text.contains("http://") || text.contains("https://") {
+            wrapped.push(line.clone());
+            wrapped_rows += line.width().max(1).div_ceil(wrap_width);
+        } else {
+            let line_wrapped = word_wrap_line(line, RtOptions::new(wrap_width));
+            wrapped_rows += line_wrapped.len();
+            wrapped.extend(line_wrapped);
+        }
+    }
+    let wrapped_lines = wrapped_rows as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
@@ -526,5 +541,31 @@ mod tests {
                 cell.fgcolor()
             );
         }
+    }
+
+    #[test]
+    fn vt100_prefixed_url_keeps_prefix_and_url_on_same_row() {
+        let width: u16 = 48;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let url = "http://a-long-url.com/this/that/blablablab/new.aspx/many_people_like_how";
+        let line: Line<'static> = Line::from(vec!["  │ ".into(), url.into()]);
+
+        insert_history_lines(&mut term, vec![line]).expect("insert history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+
+        assert!(
+            rows.iter().any(|r| r.contains("│ http://a-long-url.com")),
+            "expected prefix and URL on same row, rows: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|r| r.trim_end() == "│"),
+            "unexpected orphan prefix row, rows: {rows:?}"
+        );
     }
 }

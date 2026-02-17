@@ -644,4 +644,23 @@ the kindness of the woman who tended
 them."#
         );
     }
+
+    #[test]
+    fn ascii_space_separator_with_no_hyphenation_keeps_url_intact() {
+        let line = Line::from(
+            "http://example.com/long-url-with-dashes-wider-than-terminal-window/blah-blah-blah-text/more-gibberish-text",
+        );
+        let opts = RtOptions::new(24)
+            .word_separator(textwrap::WordSeparator::AsciiSpace)
+            .word_splitter(textwrap::WordSplitter::NoHyphenation)
+            .break_words(false);
+
+        let out = word_wrap_line(&line, opts);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            concat_line(&out[0]),
+            "http://example.com/long-url-with-dashes-wider-than-terminal-window/blah-blah-blah-text/more-gibberish-text"
+        );
+    }
 }

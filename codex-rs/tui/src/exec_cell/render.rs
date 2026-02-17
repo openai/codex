@@ -21,6 +21,7 @@ use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
+use textwrap::WordSeparator;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
@@ -391,9 +392,22 @@ impl ExecCell {
         };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
+        let contains_url = |line: &Line<'_>| {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            text.contains("http://") || text.contains("https://")
+        };
+
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
         let continuation_opts =
             RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+        let continuation_url_opts = RtOptions::new(continuation_wrap_width)
+            .word_separator(WordSeparator::AsciiSpace)
+            .word_splitter(WordSplitter::NoHyphenation)
+            .break_words(false);
 
         let mut continuation_lines: Vec<Line<'static>> = Vec::new();
 
@@ -401,8 +415,22 @@ impl ExecCell {
             let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
             let first_opts =
                 RtOptions::new(available_first_width).word_splitter(WordSplitter::NoHyphenation);
+            let first_url_opts = RtOptions::new(available_first_width)
+                .word_separator(WordSeparator::AsciiSpace)
+                .word_splitter(WordSplitter::NoHyphenation)
+                .break_words(false);
+
+            let selected_first_opts = if contains_url(first) {
+                first_url_opts
+            } else {
+                first_opts
+            };
+
             let mut first_wrapped: Vec<Line<'static>> = Vec::new();
-            push_owned_lines(&word_wrap_line(first, first_opts), &mut first_wrapped);
+            push_owned_lines(
+                &word_wrap_line(first, selected_first_opts),
+                &mut first_wrapped,
+            );
             let mut first_wrapped_iter = first_wrapped.into_iter();
             if let Some(first_segment) = first_wrapped_iter.next() {
                 header_line.extend(first_segment);
@@ -410,8 +438,14 @@ impl ExecCell {
             continuation_lines.extend(first_wrapped_iter);
 
             for line in rest {
+                let selected_opts = if contains_url(line) {
+                    continuation_url_opts.clone()
+                } else {
+                    continuation_opts.clone()
+                };
+
                 push_owned_lines(
-                    &word_wrap_line(line, continuation_opts.clone()),
+                    &word_wrap_line(line, selected_opts),
                     &mut continuation_lines,
                 );
             }
@@ -700,6 +734,40 @@ mod tests {
         assert!(
             output_screen_lines <= USER_SHELL_TOOL_CALL_MAX_LINES,
             "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines of user shell output, got {output_screen_lines}",
+        );
+    }
+
+    #[test]
+    fn command_display_does_not_split_long_url_token() {
+        let url = "http://example.com/long-url-with-dashes-wider-than-terminal-window/blah-blah-blah-text/more-gibberish-text";
+
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), format!("echo {url}")],
+            parsed: Vec::new(),
+            output: None,
+            source: ExecCommandSource::UserShell,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, false);
+        let rendered: Vec<String> = cell
+            .command_display_lines(36)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered.iter().filter(|line| line.contains(url)).count(),
+            1,
+            "expected full URL in one rendered line, got: {rendered:?}"
         );
     }
 }
