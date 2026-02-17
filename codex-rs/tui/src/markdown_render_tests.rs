@@ -1123,6 +1123,28 @@ fn table_link_keeps_url_suffix_inside_cell() {
 }
 
 #[test]
+fn table_does_not_absorb_trailing_html_block_label_line() {
+    let md = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a    |   b    |     c |\nInline HTML: <sup>sup</sup> and <sub>sub</sub>.\nHTML block:\n<div style=\"border:1px solid #ccc;padding:2px\">inline block</div>\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim() == "HTML block:"),
+        "expected 'HTML block:' as plain prose line: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("│ HTML block:")),
+        "did not expect 'HTML block:' inside table grid: {lines:?}"
+    );
+}
+
+#[test]
 fn table_keeps_sparse_rows_with_empty_trailing_cells() {
     let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
     let text = render_markdown_text(md);
@@ -1185,6 +1207,28 @@ fn table_keeps_label_only_sparse_row_inside_grid() {
     assert!(
         !lines.iter().any(|line| line.trim() == "Status:"),
         "did not expect label-only sparse row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
+fn table_keeps_single_word_label_row_at_end_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| Status: | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ Status:") && line.ends_with('│')),
+        "expected single-word trailing label row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "Status:"),
+        "did not expect single-word trailing label row to spill outside table: {lines:?}"
     );
 }
 

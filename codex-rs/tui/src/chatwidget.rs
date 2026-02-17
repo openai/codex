@@ -1592,6 +1592,9 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
+        // Drop preview-only stream tail content on any termination path before
+        // failed-cell finalization, so transient tail cells are never persisted.
+        self.clear_active_stream_tail();
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.

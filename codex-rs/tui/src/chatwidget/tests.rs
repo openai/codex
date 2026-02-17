@@ -1250,6 +1250,39 @@ async fn add_to_history_does_not_commit_transient_stream_tail_after_controller_c
 }
 
 #[tokio::test]
+async fn on_error_does_not_persist_transient_stream_tail_during_finalize_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.stream_controller = Some(StreamController::new(Some(80)));
+    chat.active_cell = Some(Box::new(history_cell::StreamingAgentTailCell::new(
+        vec![ratatui::text::Line::from("transient stream tail preview")],
+        true,
+    )));
+
+    chat.on_error("stream failed".to_string());
+
+    let mut saw_transient_tail = false;
+    let mut saw_error = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            if cell.as_any().is::<history_cell::StreamingAgentTailCell>() {
+                saw_transient_tail = true;
+            }
+            let rendered = lines_to_single_string(&cell.display_lines(80));
+            if rendered.contains("stream failed") {
+                saw_error = true;
+            }
+        }
+    }
+
+    assert!(saw_error, "expected error history cell to be emitted");
+    assert!(
+        !saw_transient_tail,
+        "did not expect transient stream-tail cell to be committed during finalize_turn",
+    );
+}
+
+#[tokio::test]
 async fn remap_placeholders_uses_attachment_labels() {
     let placeholder_one = "[Image #1]";
     let placeholder_two = "[Image #2]";

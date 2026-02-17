@@ -1154,7 +1154,7 @@ where
     ///
     /// Heuristic: a row is spillover if its only non-empty cell is the first one
     /// AND (the row has only one cell, or the content looks like HTML, or it's a
-    /// label line followed by HTML content).
+    /// label line followed by HTML content, or a trailing multi-word label line).
     fn is_spillover_row(row: &[TableCell], next_row: Option<&Vec<TableCell>>) -> bool {
         let Some(first_text) = Self::first_non_empty_only_text(row) else {
             return false;
@@ -1170,10 +1170,24 @@ where
 
         // Keep common intro + html-block spillover together:
         // "HTML block:" followed by "<div ...>".
-        first_text.trim_end().ends_with(':')
-            && next_row
+        if first_text.trim_end().ends_with(':') {
+            if next_row
                 .and_then(|row| Self::first_non_empty_only_text(row))
                 .is_some_and(|text| Self::looks_like_html_content(&text))
+            {
+                return true;
+            }
+
+            // pulldown can end the table before the corresponding HTML block line.
+            // In that case, treat multi-word label lines (e.g., "HTML block:") as
+            // spillover instead of keeping them inside the table grid.
+            let has_multiple_words = first_text.split_whitespace().nth(1).is_some();
+            if next_row.is_none() && has_multiple_words {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn first_non_empty_only_text(row: &[TableCell]) -> Option<String> {
