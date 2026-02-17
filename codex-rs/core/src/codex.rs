@@ -4809,14 +4809,14 @@ async fn run_pre_turn_auto_compaction_if_needed(
     .await;
 
     if let Err(err) = compact_result {
-        if matches!(err, CodexErr::Interrupted) {
-            return Err(());
-        }
         if !pre_turn_context_items.is_empty() {
             // Preserve model-visible settings updates even when pre-turn compaction fails
             // before we can persist turn input.
             sess.record_conversation_items(turn_context, pre_turn_context_items)
                 .await;
+        }
+        if matches!(err, CodexErr::Interrupted) {
+            return Err(());
         }
         let event = match err {
             CodexErr::ContextWindowExceeded => {
