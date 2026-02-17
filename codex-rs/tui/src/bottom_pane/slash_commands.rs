@@ -63,3 +63,15 @@ pub(crate) fn has_builtin_prefix(
     .into_iter()
     .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn debug_command_still_resolves_for_dispatch() {
+        let cmd = find_builtin_command("debug-config", true, true, true, false);
+        assert_eq!(cmd, Some(SlashCommand::DebugConfig));
+    }
+}

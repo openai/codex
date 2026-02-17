@@ -119,6 +119,7 @@ pub(crate) async fn execute_user_shell_command(
         &display_command,
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
+        &turn_context.shell_environment_policy.r#set,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -150,6 +151,7 @@ pub(crate) async fn execute_user_shell_command(
             Some(session.conversation_id),
         ),
         network: turn_context.network.clone(),
+        network_attempt_id: None,
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),

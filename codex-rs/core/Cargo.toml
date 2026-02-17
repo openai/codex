@@ -19,7 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = "1.8.0"
+arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 askama = { workspace = true }
@@ -152,6 +152,7 @@ codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
+insta = { workspace = true }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

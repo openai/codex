@@ -93,10 +93,10 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    /// Manage external MCP servers for Codex.
     Mcp(McpCli),
 
-    /// [experimental] Run the Codex MCP server (stdio transport).
+    /// Start Codex as an MCP server (stdio).
     McpServer,
 
     /// [experimental] Run the app server or related tooling.

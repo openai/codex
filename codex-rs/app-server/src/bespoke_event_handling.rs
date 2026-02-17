@@ -41,6 +41,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
@@ -121,6 +122,21 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnStarted(_) => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+        }
+        EventMsg::Warning(_warning_event) => {}
+        EventMsg::ModelReroute(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = ModelReroutedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    from_model: event.from_model,
+                    to_model: event.to_model,
+                    reason: event.reason.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ModelRerouted(notification))
+                    .await;
+            }
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
@@ -206,6 +222,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             reason,
             proposed_execpolicy_amendment,
             parsed_cmd,
+            ..
         }) => match api_version {
             ApiVersion::V1 => {
                 let params = ExecCommandApprovalParams {

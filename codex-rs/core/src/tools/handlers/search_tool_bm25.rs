@@ -11,7 +11,6 @@ use std::collections::HashSet;
 
 use crate::app_tool_policy;
 use crate::connectors;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
@@ -24,6 +23,7 @@ use crate::tools::registry::ToolKind;
 
 pub struct SearchToolBm25Handler;
 
+pub(crate) const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 pub(crate) const DEFAULT_LIMIT: usize = 8;
 
 fn default_limit() -> usize {
@@ -43,7 +43,6 @@ struct ToolEntry {
     server_name: String,
     title: Option<String>,
     description: Option<String>,
-    connector_id: Option<String>,
     connector_name: Option<String>,
     input_keys: Vec<String>,
     search_text: String,
@@ -67,7 +66,6 @@ impl ToolEntry {
                 .tool
                 .description
                 .map(|description| description.to_string()),
-            connector_id: info.connector_id,
             connector_name: info.connector_name,
             input_keys,
             search_text,
@@ -92,9 +90,9 @@ impl ToolHandler for SearchToolBm25Handler {
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
-                return Err(FunctionCallError::Fatal(
-                    "search_tool_bm25 handler received unsupported payload".to_string(),
-                ));
+                return Err(FunctionCallError::Fatal(format!(
+                    "{SEARCH_TOOL_BM25_TOOL_NAME} handler received unsupported payload"
+                )));
             }
         };
 
@@ -121,16 +119,13 @@ impl ToolHandler for SearchToolBm25Handler {
             .await
             .list_all_tools()
             .await;
-        let mcp_tools = if turn.config.features.enabled(Feature::Apps) {
-            let apps_config = app_tool_policy::read_apps_config(&turn.config);
-            let connectors = connectors::with_app_enabled_state(
-                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-                &turn.config,
-            );
-            filter_codex_apps_mcp_tools(mcp_tools, &connectors, apps_config.as_ref())
-        } else {
-            mcp_tools
-        };
+        let apps_config = app_tool_policy::read_apps_config(&turn.config);
+
+        let connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn.config,
+        );
+        let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors, apps_config.as_ref());
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
@@ -174,7 +169,6 @@ impl ToolHandler for SearchToolBm25Handler {
                 "server": entry.server_name.clone(),
                 "title": entry.title.clone(),
                 "description": entry.description.clone(),
-                "connector_id": entry.connector_id.clone(),
                 "connector_name": entry.connector_name.clone(),
                 "input_keys": entry.input_keys.clone(),
                 "score": result.score,
@@ -252,12 +246,6 @@ fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> Stri
         parts.push(connector_name.to_string());
     }
 
-    if let Some(connector_id) = info.connector_id.as_deref()
-        && !connector_id.trim().is_empty()
-    {
-        parts.push(connector_id.to_string());
-    }
-
     if !input_keys.is_empty() {
         parts.extend(input_keys.iter().cloned());
     }
@@ -283,6 +271,9 @@ mod tests {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: None,
             is_accessible: true,
             is_enabled: enabled,

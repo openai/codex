@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -112,6 +114,14 @@ impl ResponsesRequest {
         self.0.body.clone()
     }
 
+    pub fn body_contains_text(&self, text: &str) -> bool {
+        let json_fragment = serde_json::to_string(text)
+            .expect("serialize text to JSON")
+            .trim_matches('"')
+            .to_string();
+        self.body_json().to_string().contains(&json_fragment)
+    }
+
     pub fn instructions_text(&self) -> String {
         self.body_json()["instructions"]
             .as_str()
@@ -128,6 +138,22 @@ impl ResponsesRequest {
             .flatten()
             .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
             .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
+    /// Returns all `input_image` `image_url` spans from `message` inputs for the provided role.
+    pub fn message_input_image_urls(&self, role: &str) -> Vec<String> {
+        self.inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+            .filter_map(|item| item.get("content").and_then(Value::as_array).cloned())
+            .flatten()
+            .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
+            .filter_map(|span| {
+                span.get("image_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .collect()
     }
 
@@ -480,6 +506,18 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn user_message_item(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 pub fn ev_message_item_added(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.added",
@@ -818,15 +856,24 @@ where
 }
 
 pub async fn mount_compact_json_once(server: &MockServer, body: serde_json::Value) -> ResponseMock {
-    let (mock, response_mock) = compact_mock();
-    mock.respond_with(
+    mount_compact_response_once(
+        server,
         ResponseTemplate::new(200)
             .insert_header("content-type", "application/json")
-            .set_body_json(body.clone()),
+            .set_body_json(body),
     )
-    .up_to_n_times(1)
-    .mount(server)
-    .await;
+    .await
+}
+
+pub async fn mount_compact_response_once(
+    server: &MockServer,
+    response: ResponseTemplate,
+) -> ResponseMock {
+    let (mock, response_mock) = compact_mock();
+    mock.respond_with(response)
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
     response_mock
 }
 
