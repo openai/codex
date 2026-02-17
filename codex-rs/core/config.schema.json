@@ -214,6 +214,9 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "codex_git_commit": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
@@ -1308,6 +1311,10 @@
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
+    "commit_attribution": {
+      "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
+      "type": "string"
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -1345,6 +1352,9 @@
           "type": "boolean"
         },
         "child_agents_md": {
+          "type": "boolean"
+        },
+        "codex_git_commit": {
           "type": "boolean"
         },
         "collab": {
