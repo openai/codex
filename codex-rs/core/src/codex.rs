@@ -4695,6 +4695,7 @@ async fn maybe_run_previous_model_inline_compact(
     .await
     {
         Ok(()) => Ok(()),
+        Err(CodexErr::Interrupted) => Err(()),
         Err(err) => {
             if !pre_turn_context_items.is_empty() {
                 // Preserve model-visible settings updates even when pre-turn compaction fails
@@ -4806,6 +4807,9 @@ async fn run_pre_turn_auto_compaction_if_needed(
     .await;
 
     if let Err(err) = compact_result {
+        if matches!(err, CodexErr::Interrupted) {
+            return Err(());
+        }
         if !pre_turn_context_items.is_empty() {
             // Preserve model-visible settings updates even when pre-turn compaction fails
             // before we can persist turn input.
