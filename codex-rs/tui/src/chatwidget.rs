@@ -3299,21 +3299,17 @@ impl ChatWidget {
                     );
                     return;
                 }
-                if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
+                if self.active_mode_kind() == ModeKind::Plan {
+                    let Some(mask) = collaboration_modes::default_mask(self.models_manager.as_ref()) else {
+                        self.add_info_message("Default mode unavailable right now.".to_string(), None);
+                        return;
+                    };
+                    self.set_collaboration_mask(mask);
+                } else if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
                     self.set_collaboration_mask(mask);
                 } else {
                     self.add_info_message("Plan mode unavailable right now.".to_string(), None);
                 }
-            }
-            SlashCommand::Collab => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
-                    );
-                    return;
-                }
-                self.open_collaboration_modes_popup();
             }
             SlashCommand::Agent => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);

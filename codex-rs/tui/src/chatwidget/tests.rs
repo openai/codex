@@ -3578,35 +3578,32 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
-async fn collab_slash_command_opens_picker_and_updates_mode() {
+async fn plan_slash_command_toggles_plan_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let initial = chat.current_collaboration_mode().clone();
+    let default = initial.clone();
 
-    chat.dispatch_command(SlashCommand::Collab);
-    let popup = render_bottom_popup(&chat, 80);
-    assert!(
-        popup.contains("Select Collaboration Mode"),
-        "expected collaboration picker: {popup}"
-    );
+    chat.dispatch_command(SlashCommand::Plan);
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    let selected_mask = match rx.try_recv() {
-        Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
-        other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
-    };
-    chat.set_collaboration_mask(selected_mask);
+    assert!(rx.try_recv().is_err(), "plan should not emit an app event");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_collaboration_mode(), &default);
+
+    chat.dispatch_command(SlashCommand::Plan);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode:
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    ..
-                }),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                ..
+            }),
             personality: Some(Personality::Pragmatic),
             ..
         } => {}
@@ -3614,7 +3611,6 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
             panic!("expected Op::UserTurn with code collab mode, got {other:?}")
         }
     }
-
     chat.bottom_pane
         .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -3632,6 +3628,8 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
             panic!("expected Op::UserTurn with code collab mode, got {other:?}")
         }
     }
+    assert_eq!(chat.current_collaboration_mode(), &initial);
+    assert_eq!(chat.active_mode_kind(), ModeKind::Default);
 }
 
 #[tokio::test]
