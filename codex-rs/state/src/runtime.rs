@@ -387,7 +387,11 @@ FROM threads
                 .push_bind(entry.line);
         });
         builder.build().execute(self.pool.as_ref()).await?;
+        self.prune_logs_after_insert(entries).await?;
+        Ok(())
+    }
 
+    async fn prune_logs_after_insert(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
         let thread_ids: BTreeSet<&str> = entries
             .iter()
             .filter_map(|entry| entry.thread_id.as_deref())
