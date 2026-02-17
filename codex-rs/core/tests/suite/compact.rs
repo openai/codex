@@ -1844,7 +1844,9 @@ async fn pre_sampling_compact_context_window_failure_surfaces_compact_task_error
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
+            config
+                .features
+                .enable(codex_core::features::Feature::RemoteModels);
         });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -3211,7 +3213,9 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
+            config
+                .features
+                .enable(codex_core::features::Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
         })
         .build(&server)
