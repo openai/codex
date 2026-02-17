@@ -371,7 +371,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     mode: WindowsSandboxSetupMode,
     originator_tag: &str,
     duration: std::time::Duration,
-    err: &anyhow::Error,
+    _err: &anyhow::Error,
 ) {
     let Some(metrics) = codex_otel::metrics::global() else {
         return;
@@ -398,7 +398,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
             let mut failure_tags: Vec<(&str, &str)> = vec![("originator", originator_tag)];
             let mut code_tag: Option<String> = None;
             let mut message_tag: Option<String> = None;
-            if let Some((code, message)) = elevated_setup_failure_details(err) {
+            if let Some((code, message)) = elevated_setup_failure_details(_err) {
                 code_tag = Some(code);
                 message_tag = Some(message);
             }
@@ -408,7 +408,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
             if let Some(message) = message_tag.as_deref() {
                 failure_tags.push(("message", message));
             }
-            let _ = metrics.counter(elevated_setup_failure_metric_name(err), 1, &failure_tags);
+            let _ = metrics.counter(elevated_setup_failure_metric_name(_err), 1, &failure_tags);
         }
     } else {
         let _ = metrics.counter(
