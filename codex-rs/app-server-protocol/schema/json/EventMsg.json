@@ -474,6 +474,35 @@
           "type": "object"
         },
         {
+          "description": "Model routing changed from the requested model to a different model.",
+          "properties": {
+            "from_model": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/definitions/ModelRerouteReason"
+            },
+            "to_model": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_reroute"
+              ],
+              "title": "ModelRerouteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_model",
+            "reason",
+            "to_model",
+            "type"
+          ],
+          "title": "ModelRerouteEventMsg",
+          "type": "object"
+        },
+        {
           "description": "Conversation history was compacted (either automatically or manually).",
           "properties": {
             "type": {
@@ -3318,6 +3347,12 @@
       ],
       "type": "string"
     },
+    "ModelRerouteReason": {
+      "enum": [
+        "high_risk_cyber_activity"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
       "enum": [
@@ -5376,6 +5411,35 @@
         "type"
       ],
       "title": "WarningEventMsg",
+      "type": "object"
+    },
+    {
+      "description": "Model routing changed from the requested model to a different model.",
+      "properties": {
+        "from_model": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/definitions/ModelRerouteReason"
+        },
+        "to_model": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "model_reroute"
+          ],
+          "title": "ModelRerouteEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_model",
+        "reason",
+        "to_model",
+        "type"
+      ],
+      "title": "ModelRerouteEventMsg",
       "type": "object"
     },
     {

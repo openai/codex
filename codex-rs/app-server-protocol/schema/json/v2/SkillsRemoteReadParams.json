@@ -1,5 +1,47 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "HazelnutScope": {
+      "enum": [
+        "example",
+        "workspace-shared",
+        "all-shared",
+        "personal"
+      ],
+      "type": "string"
+    },
+    "ProductSurface": {
+      "enum": [
+        "chatgpt",
+        "codex",
+        "api",
+        "atlas"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "enabled": {
+      "default": false,
+      "type": "boolean"
+    },
+    "hazelnutScope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HazelnutScope"
+        }
+      ],
+      "default": "example"
+    },
+    "productSurface": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ProductSurface"
+        }
+      ],
+      "default": "codex"
+    }
+  },
   "title": "SkillsRemoteReadParams",
   "type": "object"
 }
