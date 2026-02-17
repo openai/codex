@@ -298,6 +298,9 @@ pub struct Config {
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
 
+    /// User-defined role declarations keyed by role name.
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
+
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
 
@@ -1151,6 +1154,35 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+
+    /// User-defined role declarations keyed by role name.
+    ///
+    /// Example:
+    /// ```toml
+    /// [agents.researcher]
+    /// description = "Research-focused role."
+    /// config_file = "./agents/researcher.toml"
+    /// ```
+    #[serde(default, flatten)]
+    pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentRoleConfig {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+    /// Path to a role-specific config layer.
+    pub config_file: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentRoleToml {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+
+    /// Path to a role-specific config layer.
+    pub config_file: Option<AbsolutePathBuf>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1624,6 +1656,28 @@ impl Config {
                 "agents.max_threads must be at least 1",
             ));
         }
+        let agent_roles = cfg
+            .agents
+            .as_ref()
+            .map(|agents| {
+                agents
+                    .roles
+                    .iter()
+                    .map(|(name, role)| {
+                        (
+                            name.clone(),
+                            AgentRoleConfig {
+                                description: role.description.clone(),
+                                config_file: role
+                                    .config_file
+                                    .as_ref()
+                                    .map(AbsolutePathBuf::to_path_buf),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1821,6 +1875,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
             log_dir,
@@ -4183,6 +4238,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
@@ -4294,6 +4350,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4403,6 +4460,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4498,6 +4556,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),

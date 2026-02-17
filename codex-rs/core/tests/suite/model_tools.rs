@@ -36,7 +36,6 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
