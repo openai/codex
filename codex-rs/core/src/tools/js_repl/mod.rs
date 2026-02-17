@@ -1470,7 +1470,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reset_waits_for_exec_lock_before_clearing_exec_tool_calls() {
-        let manager = JsReplManager::new(None, PathBuf::from("."))
+        let manager = JsReplManager::new(None, Vec::new())
             .await
             .expect("manager should initialize");
         let permit = manager
@@ -1510,7 +1510,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
-        let manager = JsReplManager::new(None, std::env::temp_dir())
+        let manager = JsReplManager::new(None, Vec::new())
             .await
             .expect("manager should initialize");
         let exec_id = Uuid::new_v4().to_string();
@@ -1543,7 +1543,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reset_aborts_inflight_exec_tool_tasks() {
-        let manager = JsReplManager::new(None, std::env::temp_dir())
+        let manager = JsReplManager::new(None, Vec::new())
             .await
             .expect("manager should initialize");
         let exec_id = Uuid::new_v4().to_string();
