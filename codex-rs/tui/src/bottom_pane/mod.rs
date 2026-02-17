@@ -427,6 +427,23 @@ impl BottomPane {
         }
     }
 
+    pub fn handle_verbatim_paste(&mut self, pasted: String) {
+        if let Some(view) = self.view_stack.last_mut() {
+            let needs_redraw = view.handle_paste(pasted);
+            if view.is_complete() {
+                self.on_active_view_complete();
+            }
+            if needs_redraw {
+                self.request_redraw();
+            }
+        } else {
+            let needs_redraw = self.composer.handle_verbatim_paste(pasted);
+            if needs_redraw {
+                self.request_redraw();
+            }
+        }
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
         self.request_redraw();

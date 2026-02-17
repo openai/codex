@@ -184,6 +184,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::clipboard_paste::paste_text;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -3085,6 +3086,27 @@ impl ChatWidget {
                         tracing::warn!("failed to paste image: {err}");
                         self.add_to_history(history_cell::new_error_event(format!(
                             "Failed to paste image: {err}",
+                        )));
+                    }
+                }
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::SUPER)
+                && modifiers.contains(KeyModifiers::SHIFT)
+                && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
+            {
+                match paste_text() {
+                    Ok(text) => self.bottom_pane.handle_verbatim_paste(text),
+                    Err(err) => {
+                        tracing::warn!("failed to paste text: {err}");
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to paste text: {err}",
                         )));
                     }
                 }

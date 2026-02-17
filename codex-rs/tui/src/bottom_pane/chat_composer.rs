@@ -641,6 +641,18 @@ impl ChatComposer {
         true
     }
 
+    /// Integrate pasted text as literal text, without creating large-paste placeholders.
+    ///
+    /// This powers the Cmd+Shift+V shortcut so users can intentionally paste large blocks while
+    /// keeping the full text visible/editable in the textarea.
+    pub(crate) fn handle_verbatim_paste(&mut self, pasted: String) -> bool {
+        let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        self.textarea.insert_str(&pasted);
+        self.paste_burst.clear_after_explicit_paste();
+        self.sync_popups();
+        true
+    }
+
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
@@ -5261,6 +5273,37 @@ mod tests {
             _ => panic!("expected Submitted"),
         }
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn handle_verbatim_paste_large_inserts_text_without_placeholder() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
+        let needs_redraw = composer.handle_verbatim_paste(large.clone());
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), large);
+        assert!(composer.pending_pastes.is_empty());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted { text, .. } => assert_eq!(text, large),
+            _ => panic!("expected Submitted"),
+        }
     }
 
     /// Behavior: editing that removes a paste placeholder should also clear the associated
