@@ -255,7 +255,7 @@ pub struct Config {
     /// Ordered list of status line item identifiers for the TUI.
     ///
     /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
-    /// `project-root`.
+    /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
     /// The directory that should be treated as the current working directory
