@@ -65,6 +65,11 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
+      - name: Check MODULE.bazel.lock is up to date
+        if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: ./scripts/check-module-bazel-lock.sh
+
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
       # uploading at the end of the build, which takes over a minute!

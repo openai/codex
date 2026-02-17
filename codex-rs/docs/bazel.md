@@ -23,7 +23,20 @@ As of 1/9/2026, this setup is still experimental as we stabilize it.
 ## Evolving the setup
 
 When you add or change Rust dependencies, update the Cargo.toml/Cargo.lock as normal.
-The Bazel build should automatically pick things up without any manual action needed.
+Then refresh the Bzlmod lockfile from the repo root:
+
+```bash
+just bazel-lock-update
+```
+
+This runs `bazel mod deps --lockfile_mode=update` and updates `MODULE.bazel.lock` if needed.
+Commit the lockfile changes along with your Cargo lockfile update.
+
+To verify lockfile alignment locally (the same check CI runs), use:
+
+```bash
+just bazel-lock-check
+```
 
 In some cases, an upstream crate may need a patch or a `crate.annotation` in `../MODULE.bzl`
 to have it build in Bazel's sandbox or make it cross-compilation-friendly. If you see issues,

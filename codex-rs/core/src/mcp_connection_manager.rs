@@ -89,6 +89,9 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 const CODEX_APPS_TOOLS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const MCP_TOOLS_LIST_DURATION_METRIC: &str = "codex.mcp.tools.list.duration_ms";
+const MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC: &str = "codex.mcp.tools.fetch_uncached.duration_ms";
+const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 
 /// The Responses API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// MCP server/tool names are user-controlled, so sanitize the fully-qualified
@@ -350,6 +353,10 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    pub(crate) fn has_servers(&self) -> bool {
+        !self.clients.is_empty()
+    }
+
     pub async fn initialize(
         &mut self,
         mcp_servers: &HashMap<String, McpServerConfig>,
@@ -882,7 +889,7 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: ToolFilter) -> Vec<ToolInfo> {
 }
 
 pub(crate) fn filter_codex_apps_mcp_tools_only(
-    mut mcp_tools: HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
     connectors: &[crate::connectors::AppInfo],
 ) -> HashMap<String, ToolInfo> {
     let allowed: HashSet<&str> = connectors
@@ -890,26 +897,42 @@ pub(crate) fn filter_codex_apps_mcp_tools_only(
         .map(|connector| connector.id.as_str())
         .collect();
 
-    mcp_tools.retain(|_, tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return false;
-        }
-        let Some(connector_id) = tool.connector_id.as_deref() else {
-            return false;
-        };
-        allowed.contains(connector_id)
-    });
-
     mcp_tools
+        .iter()
+        .filter(|(_, tool)| {
+            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+                return false;
+            }
+            let Some(connector_id) = tool.connector_id.as_deref() else {
+                return false;
+            };
+            allowed.contains(connector_id)
+        })
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
+}
+
+pub(crate) fn filter_non_codex_apps_mcp_tools_only(
+    mcp_tools: &HashMap<String, ToolInfo>,
+) -> HashMap<String, ToolInfo> {
+    mcp_tools
+        .iter()
+        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 pub(crate) fn filter_mcp_tools_by_name(
-    mut mcp_tools: HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<String, ToolInfo>,
     selected_tools: &[String],
 ) -> HashMap<String, ToolInfo> {
     let allowed: HashSet<&str> = selected_tools.iter().map(String::as_str).collect();
-    mcp_tools.retain(|name, _| allowed.contains(name.as_str()));
+
     mcp_tools
+        .iter()
+        .filter(|(name, _)| allowed.contains(name.as_str()))
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect()
 }
 
 fn normalize_codex_apps_tool_title(
@@ -1098,15 +1121,42 @@ async fn list_tools_for_client(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
+    let total_start = Instant::now();
     if server_name == CODEX_APPS_MCP_SERVER_NAME
         && let Some(cached_tools) = read_cached_codex_apps_tools()
     {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            total_start.elapsed(),
+            &[("cache", "hit")],
+        );
         return Ok(cached_tools);
     }
 
+    let fetch_start = Instant::now();
     let tools = list_tools_for_client_uncached(server_name, client, timeout).await?;
+    emit_duration(
+        MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
+        fetch_start.elapsed(),
+        &[],
+    );
+
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        let cache_write_start = Instant::now();
         write_cached_codex_apps_tools(&tools);
+        emit_duration(
+            MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
+            cache_write_start.elapsed(),
+            &[],
+        );
+    }
+
+    if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        emit_duration(
+            MCP_TOOLS_LIST_DURATION_METRIC,
+            total_start.elapsed(),
+            &[("cache", "miss")],
+        );
     }
     Ok(tools)
 }
@@ -1140,6 +1190,12 @@ fn write_cached_codex_apps_tools(tools: &[ToolInfo]) {
         expires_at: Instant::now() + CODEX_APPS_TOOLS_CACHE_TTL,
         tools: tools.to_vec(),
     });
+}
+
+fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let _ = metrics.record_duration(metric, duration, tags);
+    }
 }
 
 async fn list_tools_for_client_uncached(

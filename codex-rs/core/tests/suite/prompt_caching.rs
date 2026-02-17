@@ -144,9 +144,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         vec!["exec_command", "write_stdin"]
     };
     expected_tools_names.extend([
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
         "update_plan",
         "request_user_input",
         "apply_patch",
@@ -197,7 +194,6 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::RemoteModels);
             config.features.disable(Feature::ApplyPatchFreeform);
             config.features.enable(Feature::CollaborationModes);
             config.model = Some("gpt-5".to_string());

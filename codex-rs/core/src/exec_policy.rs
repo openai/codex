@@ -170,23 +170,26 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let (commands, used_heredoc_fallback) = commands_for_exec_policy(command);
+        let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_heredoc_fallback;
+        let auto_amendment_allowed = !used_complex_parsing;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
                 sandbox_policy,
                 cmd,
                 sandbox_permissions,
+                used_complex_parsing,
             )
         };
         let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
 
-        let requested_amendment =
-            derive_requested_execpolicy_amendment(prefix_rule.as_ref(), &evaluation.matched_rules);
+        let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
+            prefix_rule.as_ref(),
+            &evaluation.matched_rules,
+        );
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -265,6 +268,77 @@ pub async fn check_execpolicy_for_warnings(
     Ok(warning)
 }
 
+fn exec_policy_message_for_display(source: &codex_execpolicy::Error) -> String {
+    let message = source.to_string();
+    if let Some(line) = message
+        .lines()
+        .find(|line| line.trim_start().starts_with("error: "))
+    {
+        return line.to_owned();
+    }
+    if let Some(first_line) = message.lines().next()
+        && let Some((_, detail)) = first_line.rsplit_once(": starlark error: ")
+    {
+        return detail.trim().to_string();
+    }
+
+    message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn parse_starlark_line_from_message(message: &str) -> Option<(PathBuf, usize)> {
+    let first_line = message.lines().next()?.trim();
+    let (path_and_position, _) = first_line.rsplit_once(": starlark error:")?;
+
+    let mut parts = path_and_position.rsplitn(3, ':');
+    let _column = parts.next()?.parse::<usize>().ok()?;
+    let line = parts.next()?.parse::<usize>().ok()?;
+    let path = PathBuf::from(parts.next()?);
+
+    if line == 0 {
+        return None;
+    }
+
+    Some((path, line))
+}
+
+pub fn format_exec_policy_error_with_source(error: &ExecPolicyError) -> String {
+    match error {
+        ExecPolicyError::ParsePolicy { path, source } => {
+            let rendered_source = source.to_string();
+            let structured_location = source
+                .location()
+                .map(|location| (PathBuf::from(location.path), location.range.start.line));
+            let parsed_location = parse_starlark_line_from_message(&rendered_source);
+            let location = match (structured_location, parsed_location) {
+                (Some((_, 1)), Some((parsed_path, parsed_line))) if parsed_line > 1 => {
+                    Some((parsed_path, parsed_line))
+                }
+                (Some(structured), _) => Some(structured),
+                (None, parsed) => parsed,
+            };
+            let message = exec_policy_message_for_display(source);
+            match location {
+                Some((path, line)) => {
+                    format!(
+                        "{}:{}: {} (problem is on or around line {})",
+                        path.display(),
+                        line,
+                        message,
+                        line
+                    )
+                }
+                None => format!("{path}: {message}"),
+            }
+        }
+        _ => error.to_string(),
+    }
+}
+
 async fn load_exec_policy_with_warning(
     config_stack: &ConfigLayerStack,
 ) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError> {
@@ -335,8 +409,9 @@ pub fn render_decision_for_unmatched_command(
     sandbox_policy: &SandboxPolicy,
     command: &[String],
     sandbox_permissions: SandboxPermissions,
+    used_complex_parsing: bool,
 ) -> Decision {
-    if is_known_safe_command(command) {
+    if is_known_safe_command(command) && !used_complex_parsing {
         return Decision::Allow;
     }
 
@@ -463,7 +538,7 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
         })
 }
 
-fn derive_requested_execpolicy_amendment(
+fn derive_requested_execpolicy_amendment_from_prefix_rule(
     prefix_rule: Option<&Vec<String>>,
     matched_rules: &[RuleMatch],
 ) -> Option<ExecPolicyAmendment> {
@@ -481,10 +556,8 @@ fn derive_requested_execpolicy_amendment(
         return None;
     }
 
-    if matched_rules
-        .iter()
-        .any(|rule_match| is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt)
-    {
+    // if any policy rule already matches, don't suggest an additional rule that might conflict or not apply
+    if matched_rules.iter().any(is_policy_match) {
         return None;
     }
 
@@ -615,8 +688,6 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
-    use crate::features::Feature;
-    use crate::features::Features;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
@@ -677,6 +748,51 @@ mod tests {
             .expect("collect policy files");
 
         assert!(files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn format_exec_policy_error_with_source_renders_range() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+        let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+        fs::create_dir_all(&policy_dir).expect("create policy dir");
+        let broken_path = policy_dir.join("broken.rules");
+        fs::write(
+            &broken_path,
+            r#"prefix_rule(
+    pattern = ["tmux capture-pane"],
+    decision = "allow",
+    match = ["tmux capture-pane -p"],
+)"#,
+        )
+        .expect("write broken policy file");
+
+        let err = load_exec_policy(&config_stack)
+            .await
+            .expect_err("expected parse error");
+        let rendered = format_exec_policy_error_with_source(&err);
+
+        assert!(rendered.contains("broken.rules:1:"));
+        assert!(rendered.contains("on or around line 1"));
+    }
+
+    #[test]
+    fn parse_starlark_line_from_message_extracts_path_and_line() {
+        let parsed = parse_starlark_line_from_message(
+            "/tmp/default.rules:143:1: starlark error: error: Parse error: unexpected new line",
+        )
+        .expect("parse should succeed");
+
+        assert_eq!(parsed.0, PathBuf::from("/tmp/default.rules"));
+        assert_eq!(parsed.1, 143);
+    }
+
+    #[test]
+    fn parse_starlark_line_from_message_rejects_zero_line() {
+        let parsed = parse_starlark_line_from_message(
+            "/tmp/default.rules:0:1: starlark error: error: Parse error: unexpected new line",
+        );
+        assert_eq!(parsed, None);
     }
 
     #[tokio::test]
@@ -1165,8 +1281,6 @@ prefix_rule(
             "cargo-insta".to_string(),
         ];
         let manager = ExecPolicyManager::default();
-        let mut features = Features::with_defaults();
-        features.enable(Feature::RequestRule);
 
         let requirement = manager
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
@@ -1448,14 +1562,17 @@ prefix_rule(
 
     #[test]
     fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
-        assert_eq!(None, derive_requested_execpolicy_amendment(None, &[]));
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(None, &[])
+        );
     }
 
     #[test]
     fn derive_requested_execpolicy_amendment_returns_none_for_empty_prefix_rule() {
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(Some(&Vec::new()), &[])
+            derive_requested_execpolicy_amendment_from_prefix_rule(Some(&Vec::new()), &[])
         );
     }
 
@@ -1463,7 +1580,7 @@ prefix_rule(
     fn derive_requested_execpolicy_amendment_returns_none_for_exact_banned_prefix_rule() {
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(
+            derive_requested_execpolicy_amendment_from_prefix_rule(
                 Some(&vec!["python".to_string(), "-c".to_string()]),
                 &[],
             )
@@ -1482,7 +1599,7 @@ prefix_rule(
         ] {
             assert_eq!(
                 None,
-                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+                derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
             );
         }
     }
@@ -1508,7 +1625,7 @@ prefix_rule(
         ] {
             assert_eq!(
                 None,
-                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+                derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
             );
         }
     }
@@ -1523,22 +1640,52 @@ prefix_rule(
 
         assert_eq!(
             Some(ExecPolicyAmendment::new(prefix_rule.clone())),
-            derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+            derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
         );
     }
 
     #[test]
-    fn derive_requested_execpolicy_amendment_returns_none_when_policy_prompt_matches() {
+    fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
         let prefix_rule = vec!["cargo".to_string(), "build".to_string()];
-        let matched_rules = vec![RuleMatch::PrefixRuleMatch {
+
+        let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Prompt,
             justification: None,
         }];
-
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(Some(&prefix_rule), &matched_rules)
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_prompt
+            ),
+            "should return none when prompt policy matches"
+        );
+        let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
+            matched_prefix: vec!["cargo".to_string()],
+            decision: Decision::Allow,
+            justification: None,
+        }];
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_allow
+            ),
+            "should return none when prompt policy matches"
+        );
+        let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
+            matched_prefix: vec!["cargo".to_string()],
+            decision: Decision::Forbidden,
+            justification: None,
+        }];
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_forbidden
+            ),
+            "should return none when prompt policy matches"
         );
     }
 

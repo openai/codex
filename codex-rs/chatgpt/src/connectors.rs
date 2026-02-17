@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
@@ -13,7 +14,9 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
+use codex_core::connectors::AppBranding;
 pub use codex_core::connectors::AppInfo;
+use codex_core::connectors::AppMetadata;
 use codex_core::connectors::CONNECTORS_CACHE_TTL;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
@@ -35,6 +38,10 @@ struct DirectoryApp {
     id: String,
     name: String,
     description: Option<String>,
+    #[serde(alias = "appMetadata")]
+    app_metadata: Option<AppMetadata>,
+    branding: Option<AppBranding>,
+    labels: Option<HashMap<String, String>>,
     #[serde(alias = "logoUrl")]
     logo_url: Option<String>,
     #[serde(alias = "logoUrlDark")]
@@ -75,7 +82,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(connectors, accessible),
+        merge_connectors_with_accessible(connectors, accessible, true),
         config,
     ))
 }
@@ -185,7 +192,20 @@ fn write_cached_all_connectors(cache_key: AllConnectorsCacheKey, connectors: &[A
 pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
+    all_connectors_loaded: bool,
 ) -> Vec<AppInfo> {
+    let accessible_connectors = if all_connectors_loaded {
+        let connector_ids: HashSet<&str> = connectors
+            .iter()
+            .map(|connector| connector.id.as_str())
+            .collect();
+        accessible_connectors
+            .into_iter()
+            .filter(|connector| connector_ids.contains(connector.id.as_str()))
+            .collect()
+    } else {
+        accessible_connectors
+    };
     let merged = merge_connectors(connectors, accessible_connectors);
     filter_disallowed_connectors(merged)
 }
@@ -255,6 +275,9 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
         id: _,
         name,
         description,
+        app_metadata,
+        branding,
+        labels,
         logo_url,
         logo_url_dark,
         distribution_channel,
@@ -288,6 +311,108 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
     if existing.distribution_channel.is_none() && distribution_channel.is_some() {
         existing.distribution_channel = distribution_channel;
     }
+
+    if let Some(incoming_branding) = branding {
+        if let Some(existing_branding) = existing.branding.as_mut() {
+            if existing_branding.category.is_none() && incoming_branding.category.is_some() {
+                existing_branding.category = incoming_branding.category;
+            }
+            if existing_branding.developer.is_none() && incoming_branding.developer.is_some() {
+                existing_branding.developer = incoming_branding.developer;
+            }
+            if existing_branding.website.is_none() && incoming_branding.website.is_some() {
+                existing_branding.website = incoming_branding.website;
+            }
+            if existing_branding.privacy_policy.is_none()
+                && incoming_branding.privacy_policy.is_some()
+            {
+                existing_branding.privacy_policy = incoming_branding.privacy_policy;
+            }
+            if existing_branding.terms_of_service.is_none()
+                && incoming_branding.terms_of_service.is_some()
+            {
+                existing_branding.terms_of_service = incoming_branding.terms_of_service;
+            }
+            if !existing_branding.is_discoverable_app && incoming_branding.is_discoverable_app {
+                existing_branding.is_discoverable_app = true;
+            }
+        } else {
+            existing.branding = Some(incoming_branding);
+        }
+    }
+
+    if let Some(incoming_app_metadata) = app_metadata {
+        if let Some(existing_app_metadata) = existing.app_metadata.as_mut() {
+            if existing_app_metadata.review.is_none() && incoming_app_metadata.review.is_some() {
+                existing_app_metadata.review = incoming_app_metadata.review;
+            }
+            if existing_app_metadata.categories.is_none()
+                && incoming_app_metadata.categories.is_some()
+            {
+                existing_app_metadata.categories = incoming_app_metadata.categories;
+            }
+            if existing_app_metadata.sub_categories.is_none()
+                && incoming_app_metadata.sub_categories.is_some()
+            {
+                existing_app_metadata.sub_categories = incoming_app_metadata.sub_categories;
+            }
+            if existing_app_metadata.seo_description.is_none()
+                && incoming_app_metadata.seo_description.is_some()
+            {
+                existing_app_metadata.seo_description = incoming_app_metadata.seo_description;
+            }
+            if existing_app_metadata.screenshots.is_none()
+                && incoming_app_metadata.screenshots.is_some()
+            {
+                existing_app_metadata.screenshots = incoming_app_metadata.screenshots;
+            }
+            if existing_app_metadata.developer.is_none()
+                && incoming_app_metadata.developer.is_some()
+            {
+                existing_app_metadata.developer = incoming_app_metadata.developer;
+            }
+            if existing_app_metadata.version.is_none() && incoming_app_metadata.version.is_some() {
+                existing_app_metadata.version = incoming_app_metadata.version;
+            }
+            if existing_app_metadata.version_id.is_none()
+                && incoming_app_metadata.version_id.is_some()
+            {
+                existing_app_metadata.version_id = incoming_app_metadata.version_id;
+            }
+            if existing_app_metadata.version_notes.is_none()
+                && incoming_app_metadata.version_notes.is_some()
+            {
+                existing_app_metadata.version_notes = incoming_app_metadata.version_notes;
+            }
+            if existing_app_metadata.first_party_type.is_none()
+                && incoming_app_metadata.first_party_type.is_some()
+            {
+                existing_app_metadata.first_party_type = incoming_app_metadata.first_party_type;
+            }
+            if existing_app_metadata.first_party_requires_install.is_none()
+                && incoming_app_metadata.first_party_requires_install.is_some()
+            {
+                existing_app_metadata.first_party_requires_install =
+                    incoming_app_metadata.first_party_requires_install;
+            }
+            if existing_app_metadata
+                .show_in_composer_when_unlinked
+                .is_none()
+                && incoming_app_metadata
+                    .show_in_composer_when_unlinked
+                    .is_some()
+            {
+                existing_app_metadata.show_in_composer_when_unlinked =
+                    incoming_app_metadata.show_in_composer_when_unlinked;
+            }
+        } else {
+            existing.app_metadata = Some(incoming_app_metadata);
+        }
+    }
+
+    if existing.labels.is_none() && labels.is_some() {
+        existing.labels = labels;
+    }
 }
 
 fn is_hidden_directory_app(app: &DirectoryApp) -> bool {
@@ -302,6 +427,9 @@ fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
         logo_url: app.logo_url,
         logo_url_dark: app.logo_url_dark,
         distribution_channel: app.distribution_channel,
+        branding: app.branding,
+        app_metadata: app.app_metadata,
+        labels: app.labels,
         install_url: None,
         is_accessible: false,
         is_enabled: true,
@@ -328,6 +456,8 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
     "connector_68de829bf7648191acd70a907364c67c",
+    "connector_68e004f14af881919eb50893d3d9f523",
+    "connector_69272cb413a081919685ec3c88d1744e",
 ];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
@@ -361,6 +491,9 @@ mod tests {
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: None,
             is_accessible: false,
             is_enabled: true,
@@ -405,5 +538,45 @@ mod tests {
             app("delta"),
         ]);
         assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    fn merged_app(id: &str, is_accessible: bool) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some(connector_install_url(id, id)),
+            is_accessible,
+            is_enabled: true,
+        }
+    }
+
+    #[test]
+    fn excludes_accessible_connectors_not_in_all_when_all_loaded() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            true,
+        );
+        assert_eq!(merged, vec![merged_app("alpha", true)]);
+    }
+
+    #[test]
+    fn keeps_accessible_connectors_not_in_all_while_all_loading() {
+        let merged = merge_connectors_with_accessible(
+            vec![app("alpha")],
+            vec![app("alpha"), app("beta")],
+            false,
+        );
+        assert_eq!(
+            merged,
+            vec![merged_app("alpha", true), merged_app("beta", true)]
+        );
     }
 }

@@ -9,7 +9,7 @@
     };
   };
 
-  outputs = { nixpkgs, rust-overlay, ... }:
+  outputs = { self, nixpkgs, rust-overlay, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -18,6 +18,19 @@
         "aarch64-darwin"
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems f;
+
+      # Read the version from the workspace Cargo.toml (the single source of
+      # truth used by the release workflow).
+      cargoToml = builtins.fromTOML (builtins.readFile ./codex-rs/Cargo.toml);
+      cargoVersion = cargoToml.workspace.package.version;
+
+      # When building from a release commit the Cargo.toml already carries the
+      # real version (e.g. "0.101.0").  On the main branch it is the placeholder
+      # "0.0.0", so we fall back to a dev version derived from the flake source.
+      version =
+        if cargoVersion != "0.0.0"
+        then cargoVersion
+        else "0.0.0-dev+${self.shortRev or "dirty"}";
     in
     {
       packages = forAllSystems (system:
@@ -27,6 +40,7 @@
             overlays = [ rust-overlay.overlays.default ];
           };
           codex-rs = pkgs.callPackage ./codex-rs {
+            inherit version;
             rustPlatform = pkgs.makeRustPlatform {
               cargo = pkgs.rust-bin.stable.latest.minimal;
               rustc = pkgs.rust-bin.stable.latest.minimal;

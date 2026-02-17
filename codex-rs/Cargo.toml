@@ -54,6 +54,7 @@ members = [
     "utils/elapsed",
     "utils/sandbox-summary",
     "utils/sanitizer",
+    "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
     "utils/fuzzy-match",
@@ -131,6 +132,7 @@ codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sanitizer = { path = "utils/sanitizer" }
+codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -168,7 +170,7 @@ dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
-env_logger = "0.11.5"
+env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
 globset = "0.4"
