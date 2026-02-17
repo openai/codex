@@ -1656,4 +1656,187 @@ mod tests {
             vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
         );
     }
+
+    // ---------------------------------------------------------------
+    // Type alias for calling private associated functions on Writer.
+    // ---------------------------------------------------------------
+    type W<'a> = Writer<'a, std::iter::Empty<(Event<'a>, std::ops::Range<usize>)>>;
+
+    /// Build a single-line `TableCell` from plain text.
+    fn make_cell(text: &str) -> TableCell {
+        let mut cell = TableCell::default();
+        cell.push_span(Span::raw(text.to_string()));
+        cell
+    }
+
+    // ===== Column-metrics unit tests =====
+
+    #[test]
+    fn column_classification_narrative_by_word_count() {
+        // Col 0: short tokens (1-2 words each) → Structured
+        // Col 1: prose (≥4 words per cell) → Narrative
+        let header = vec![make_cell("ID"), make_cell("Description")];
+        let rows = vec![
+            vec![make_cell("1"), make_cell("a long description of the item")],
+            vec![make_cell("2"), make_cell("another verbose body cell here")],
+        ];
+        let metrics = W::collect_table_column_metrics(&header, &rows, 2);
+        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[1].kind, TableColumnKind::Narrative);
+    }
+
+    #[test]
+    fn column_classification_narrative_by_char_width() {
+        // Col with short word count but ≥28 avg char width → Narrative
+        let header = vec![make_cell("URL")];
+        let rows = vec![
+            vec![make_cell("https://example.com/very/long/path")],
+            vec![make_cell("https://another.example.org/deep")],
+        ];
+        let metrics = W::collect_table_column_metrics(&header, &rows, 1);
+        assert!(metrics[0].avg_cell_width >= 28.0);
+        assert_eq!(metrics[0].kind, TableColumnKind::Narrative);
+    }
+
+    #[test]
+    fn column_classification_structured_all_short() {
+        // Both columns short tokens → both Structured
+        let header = vec![make_cell("Status"), make_cell("Count")];
+        let rows = vec![
+            vec![make_cell("ok"), make_cell("42")],
+            vec![make_cell("err"), make_cell("7")],
+        ];
+        let metrics = W::collect_table_column_metrics(&header, &rows, 2);
+        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[1].kind, TableColumnKind::Structured);
+    }
+
+    #[test]
+    fn preferred_floor_narrative_caps_header_at_10() {
+        // Narrative col: header_token_width 15 → floors at 10
+        let m = TableColumnMetrics {
+            max_width: 40,
+            header_token_width: 15,
+            body_token_width: 8,
+            avg_words_per_cell: 5.0,
+            avg_cell_width: 30.0,
+            kind: TableColumnKind::Narrative,
+        };
+        assert_eq!(W::preferred_column_floor(&m, 3), 10);
+
+        // Narrative col: header_token_width 6 → floors at 6 (below cap)
+        let m2 = TableColumnMetrics {
+            max_width: 40,
+            header_token_width: 6,
+            body_token_width: 8,
+            avg_words_per_cell: 5.0,
+            avg_cell_width: 30.0,
+            kind: TableColumnKind::Narrative,
+        };
+        assert_eq!(W::preferred_column_floor(&m2, 3), 6);
+    }
+
+    #[test]
+    fn preferred_floor_structured_uses_body_token() {
+        // Structured: max(header_token_width, body_token_width.min(16))
+        let m = TableColumnMetrics {
+            max_width: 30,
+            header_token_width: 5,
+            body_token_width: 12,
+            avg_words_per_cell: 1.0,
+            avg_cell_width: 10.0,
+            kind: TableColumnKind::Structured,
+        };
+        // max(5, min(12, 16)) = max(5, 12) = 12
+        assert_eq!(W::preferred_column_floor(&m, 3), 12);
+
+        // Body token exceeds 16 cap → capped at 16, then max with header
+        let m2 = TableColumnMetrics {
+            max_width: 30,
+            header_token_width: 5,
+            body_token_width: 20,
+            avg_words_per_cell: 1.0,
+            avg_cell_width: 10.0,
+            kind: TableColumnKind::Structured,
+        };
+        // max(5, min(20, 16)) = max(5, 16) = 16
+        assert_eq!(W::preferred_column_floor(&m2, 3), 16);
+    }
+
+    #[test]
+    fn next_column_to_shrink_prefers_narrative() {
+        // Two columns: Narrative (col 0) and Structured (col 1), both with slack.
+        // Narrative should be shrunk first.
+        let widths = [20usize, 20];
+        let floors = [8usize, 8];
+        let metrics = [
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 8,
+                body_token_width: 6,
+                avg_words_per_cell: 5.0,
+                avg_cell_width: 30.0,
+                kind: TableColumnKind::Narrative,
+            },
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 8,
+                body_token_width: 6,
+                avg_words_per_cell: 1.0,
+                avg_cell_width: 10.0,
+                kind: TableColumnKind::Structured,
+            },
+        ];
+        let idx = W::next_column_to_shrink(&widths, &floors, &metrics);
+        assert_eq!(idx, Some(0), "Narrative column should be shrunk first");
+    }
+
+    // ===== Spillover-detection unit tests =====
+
+    #[test]
+    fn spillover_detects_single_cell_row() {
+        let row = vec![make_cell("some trailing text")];
+        assert!(W::is_spillover_row(&row, None));
+    }
+
+    #[test]
+    fn spillover_detects_html_content() {
+        // 3-cell row where only cell 0 has HTML content
+        let row = vec![
+            make_cell("<div>content</div>"),
+            make_cell(""),
+            make_cell(""),
+        ];
+        assert!(W::is_spillover_row(&row, None));
+    }
+
+    #[test]
+    fn spillover_detects_label_followed_by_html() {
+        // cell 0 = "HTML block:" and next_row cell 0 = "<div>x</div>"
+        let row = vec![make_cell("HTML block:"), make_cell(""), make_cell("")];
+        let next = vec![make_cell("<div>x</div>"), make_cell(""), make_cell("")];
+        assert!(W::is_spillover_row(&row, Some(&next)));
+    }
+
+    #[test]
+    fn spillover_detects_trailing_html_label() {
+        // "HTML block:" with no next_row → trailing HTML label spillover
+        let row = vec![make_cell("HTML block:"), make_cell(""), make_cell("")];
+        assert!(W::is_spillover_row(&row, None));
+    }
+
+    #[test]
+    fn spillover_keeps_normal_multi_cell_row() {
+        // 3 cells all non-empty → not spillover
+        let row = vec![make_cell("one"), make_cell("two"), make_cell("three")];
+        assert!(!W::is_spillover_row(&row, None));
+    }
+
+    #[test]
+    fn spillover_keeps_label_when_next_is_not_html() {
+        // cell 0 = "Status:" and next_row cell 0 = "ok" → not spillover (not HTML)
+        let row = vec![make_cell("Status:"), make_cell(""), make_cell("")];
+        let next = vec![make_cell("ok"), make_cell(""), make_cell("")];
+        assert!(!W::is_spillover_row(&row, Some(&next)));
+    }
 }
