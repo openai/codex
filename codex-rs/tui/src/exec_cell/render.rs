@@ -22,6 +22,8 @@ use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
@@ -477,15 +479,23 @@ impl ExecCell {
                     );
                 }
 
-                let trimmed_output =
-                    Self::truncate_lines_middle(&wrapped_output, display_limit, raw_output.omitted);
+                let prefixed_output = prefix_lines(
+                    wrapped_output,
+                    Span::from(layout.output_block.initial_prefix).dim(),
+                    Span::from(layout.output_block.subsequent_prefix),
+                );
+                let trimmed_output = Self::truncate_lines_middle(
+                    &prefixed_output,
+                    display_limit,
+                    width,
+                    raw_output.omitted,
+                    Some(Line::from(
+                        Span::from(layout.output_block.subsequent_prefix).dim(),
+                    )),
+                );
 
                 if !trimmed_output.is_empty() {
-                    lines.extend(prefix_lines(
-                        trimmed_output,
-                        Span::from(layout.output_block.initial_prefix).dim(),
-                        Span::from(layout.output_block.subsequent_prefix),
-                    ));
+                    lines.extend(trimmed_output);
                 }
             }
         }
@@ -508,53 +518,95 @@ impl ExecCell {
 
     fn truncate_lines_middle(
         lines: &[Line<'static>],
-        max: usize,
+        max_rows: usize,
+        width: u16,
         omitted_hint: Option<usize>,
+        ellipsis_prefix: Option<Line<'static>>,
     ) -> Vec<Line<'static>> {
-        if max == 0 {
+        let width = width.max(1);
+        if max_rows == 0 {
             return Vec::new();
         }
-        if lines.len() <= max {
+        let line_rows: Vec<usize> = lines
+            .iter()
+            .map(|line| {
+                Paragraph::new(Text::from(vec![line.clone()]))
+                    .wrap(Wrap { trim: false })
+                    .line_count(width)
+                    .max(1)
+            })
+            .collect();
+        let total_rows: usize = line_rows.iter().sum();
+        if total_rows <= max_rows {
             return lines.to_vec();
         }
-        if max == 1 {
+        if max_rows == 1 {
             // Carry forward any previously omitted count and add any
             // additionally hidden content lines from this truncation.
             let base = omitted_hint.unwrap_or(0);
             // When an existing ellipsis is present, `lines` already includes
             // that single representation line; exclude it from the count of
             // additionally omitted content lines.
-            let extra = lines
-                .len()
-                .saturating_sub(usize::from(omitted_hint.is_some()));
+            let extra = total_rows.saturating_sub(usize::from(omitted_hint.is_some()));
             let omitted = base + extra;
-            return vec![Self::ellipsis_line(omitted)];
+            return vec![Self::ellipsis_line_with_prefix(
+                omitted,
+                ellipsis_prefix.as_ref(),
+            )];
         }
 
-        let head = (max - 1) / 2;
-        let tail = max - head - 1;
-        let mut out: Vec<Line<'static>> = Vec::new();
-
-        if head > 0 {
-            out.extend(lines[..head].iter().cloned());
+        let head_budget = (max_rows - 1) / 2;
+        let tail_budget = max_rows - head_budget - 1;
+        let mut head_lines: Vec<Line<'static>> = Vec::new();
+        let mut head_rows = 0usize;
+        let mut head_end = 0usize;
+        while head_end < lines.len() {
+            let line_row_count = line_rows[head_end];
+            if head_rows + line_row_count > head_budget {
+                break;
+            }
+            head_rows += line_row_count;
+            head_lines.push(lines[head_end].clone());
+            head_end += 1;
         }
 
+        let mut tail_lines_reversed: Vec<Line<'static>> = Vec::new();
+        let mut tail_rows = 0usize;
+        let mut tail_start = lines.len();
+        while tail_start > head_end {
+            let idx = tail_start - 1;
+            let line_row_count = line_rows[idx];
+            if tail_rows + line_row_count > tail_budget {
+                break;
+            }
+            tail_rows += line_row_count;
+            tail_lines_reversed.push(lines[idx].clone());
+            tail_start -= 1;
+        }
+
+        let mut out = head_lines;
         let base = omitted_hint.unwrap_or(0);
-        let additional = lines
-            .len()
-            .saturating_sub(head + tail)
+        let additional = total_rows
+            .saturating_sub(head_rows + tail_rows)
             .saturating_sub(usize::from(omitted_hint.is_some()));
-        out.push(Self::ellipsis_line(base + additional));
+        out.push(Self::ellipsis_line_with_prefix(
+            base + additional,
+            ellipsis_prefix.as_ref(),
+        ));
 
-        if tail > 0 {
-            out.extend(lines[lines.len() - tail..].iter().cloned());
-        }
+        out.extend(tail_lines_reversed.into_iter().rev());
 
         out
     }
 
     fn ellipsis_line(omitted: usize) -> Line<'static> {
         Line::from(vec![format!("… +{omitted} lines").dim()])
+    }
+
+    fn ellipsis_line_with_prefix(omitted: usize, prefix: Option<&Line<'static>>) -> Line<'static> {
+        let mut line = prefix.cloned().unwrap_or_default();
+        line.push_span(format!("… +{omitted} lines").dim());
+        line
     }
 }
 
@@ -617,17 +669,11 @@ mod tests {
 
     #[test]
     fn user_shell_output_is_limited_by_screen_lines() {
-        // Construct a user shell exec cell whose aggregated output consists of a
-        // small number of very long logical lines. These will wrap into many
-        // on-screen lines at narrow widths.
-        //
-        // Use a short marker so it survives wrapping intact inside each
-        // rendered screen line; the previous test used a marker longer than
-        // the wrap width, so it was split across lines and the assertion
-        // never actually saw it.
-        let marker = "Z";
-        let long_chunk = marker.repeat(800);
-        let aggregated_output = format!("{long_chunk}\n{long_chunk}\n");
+        let long_url_like = format!(
+            "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/{}",
+            "very-long-segment-".repeat(120),
+        );
+        let aggregated_output = format!("{long_url_like}\n{long_url_like}\n");
 
         // Baseline: how many screen lines would we get if we simply wrapped
         // all logical lines without any truncation?
@@ -659,10 +705,14 @@ mod tests {
                 &mut full_wrapped_output,
             );
         }
-        let full_screen_lines = full_wrapped_output
-            .iter()
-            .filter(|line| line.spans.iter().any(|span| span.content.contains(marker)))
-            .count();
+        let full_prefixed_output = prefix_lines(
+            full_wrapped_output,
+            Span::from(layout.output_block.initial_prefix).dim(),
+            Span::from(layout.output_block.subsequent_prefix),
+        );
+        let full_screen_lines = Paragraph::new(Text::from(full_prefixed_output))
+            .wrap(Wrap { trim: false })
+            .line_count(width);
 
         // Sanity check: this scenario should produce more screen lines than
         // the user shell per-call limit when no truncation is applied. If
@@ -687,21 +737,28 @@ mod tests {
 
         // Use a narrow width so each logical line wraps into many on-screen lines.
         let lines = cell.command_display_lines(width);
+        let rendered_rows = Paragraph::new(Text::from(lines.clone()))
+            .wrap(Wrap { trim: false })
+            .line_count(width);
+        let header_rows = Paragraph::new(Text::from(vec![lines[0].clone()]))
+            .wrap(Wrap { trim: false })
+            .line_count(width);
+        let output_screen_rows = rendered_rows.saturating_sub(header_rows);
 
-        // Count how many rendered lines contain our marker text. This approximates
-        // the number of visible output "screen lines" for this command.
-        let output_screen_lines = lines
+        let contains_ellipsis = lines
             .iter()
-            .filter(|line| line.spans.iter().any(|span| span.content.contains(marker)))
-            .count();
+            .any(|line| line.spans.iter().any(|span| span.content.contains("… +")));
 
         // Regression guard: previously this scenario could render hundreds of
-        // wrapped lines because truncation happened before wrapping. Now the
-        // truncation is applied after wrapping, so the number of visible
-        // screen lines is bounded by USER_SHELL_TOOL_CALL_MAX_LINES.
+        // wrapped rows because truncation happened before final viewport
+        // wrapping. The row-aware truncation now caps visible output rows.
         assert!(
-            output_screen_lines <= USER_SHELL_TOOL_CALL_MAX_LINES,
-            "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} screen lines of user shell output, got {output_screen_lines}",
+            output_screen_rows <= USER_SHELL_TOOL_CALL_MAX_LINES,
+            "expected at most {USER_SHELL_TOOL_CALL_MAX_LINES} output rows, got {output_screen_rows} (total rows: {rendered_rows})",
+        );
+        assert!(
+            contains_ellipsis,
+            "expected truncated output to include an ellipsis line"
         );
     }
 

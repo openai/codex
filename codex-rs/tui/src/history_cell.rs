@@ -408,20 +408,8 @@ impl HistoryCell for ReasoningSummaryCell {
         }
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        if self.transcript_only {
-            0
-        } else {
-            self.lines(width).len() as u16
-        }
-    }
-
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.lines(width)
-    }
-
-    fn desired_transcript_height(&self, width: u16) -> u16 {
-        self.lines(width).len() as u16
     }
 }
 
@@ -3788,6 +3776,46 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• Detailed reasoning goes here."]);
+    }
+
+    #[test]
+    fn reasoning_summary_height_matches_wrapped_rendering_for_url_like_content() {
+        let summary = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going";
+        let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
+            "High level reasoning".to_string(),
+            summary.to_string(),
+            false,
+        ));
+        let width: u16 = 24;
+
+        let logical_height = cell.display_lines(width).len() as u16;
+        let wrapped_height = cell.desired_height(width);
+        assert!(
+            wrapped_height > logical_height,
+            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+        );
+
+        let wrapped_transcript_height = cell.desired_transcript_height(width);
+        assert_eq!(wrapped_transcript_height, wrapped_height);
+
+        let area = Rect::new(0, 0, width, wrapped_height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        cell.render(area, &mut buf);
+
+        let first_row = (0..area.width)
+            .map(|x| {
+                let symbol = buf[(x, 0)].symbol();
+                if symbol.is_empty() {
+                    ' '
+                } else {
+                    symbol.chars().next().unwrap_or(' ')
+                }
+            })
+            .collect::<String>();
+        assert!(
+            first_row.contains("•"),
+            "expected first rendered row to keep summary bullet visible, got: {first_row:?}"
+        );
     }
 
     #[test]
