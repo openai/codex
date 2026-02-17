@@ -10232,7 +10232,6 @@
             ]
           },
           "isDiscoverableApp": {
-            "default": false,
             "type": "boolean"
           },
           "privacyPolicy": {
@@ -10254,6 +10253,9 @@
             ]
           }
         },
+        "required": [
+          "isDiscoverableApp"
+        ],
         "type": "object"
       },
       "AppConfig": {
