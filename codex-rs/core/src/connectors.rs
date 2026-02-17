@@ -7,7 +7,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::unbounded;
+pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
+pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -332,6 +334,8 @@ const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
     "connector_68de829bf7648191acd70a907364c67c",
+    "connector_68e004f14af881919eb50893d3d9f523",
+    "connector_69272cb413a081919685ec3c88d1744e",
 ];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
@@ -385,6 +389,9 @@ where
             logo_url: None,
             logo_url_dark: None,
             distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
             install_url: Some(connector_install_url(&connector_name, &connector_id)),
             is_accessible: true,
             is_enabled: true,

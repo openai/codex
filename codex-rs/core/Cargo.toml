@@ -19,7 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-arc-swap = "1.8.0"
+arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 askama = { workspace = true }

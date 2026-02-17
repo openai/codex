@@ -488,6 +488,10 @@ pub(crate) struct McpConnectionManagerInitializeParams {
 }
 
 impl McpConnectionManager {
+    pub(crate) fn has_servers(&self) -> bool {
+        !self.clients.is_empty()
+    }
+
     pub async fn initialize(
         &mut self,
         mcp_servers: &HashMap<String, McpServerConfig>,

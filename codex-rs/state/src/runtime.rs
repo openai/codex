@@ -711,6 +711,11 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     if let Some(after_id) = query.after_id {
         builder.push(" AND id > ").push_bind(after_id);
     }
+    if let Some(search) = query.search.as_ref() {
+        builder.push(" AND INSTR(message, ");
+        builder.push_bind(search.as_str());
+        builder.push(") > 0");
+    }
 }
 
 fn push_like_filters<'a>(
@@ -906,6 +911,8 @@ mod tests {
     use super::StateRuntime;
     use super::ThreadMetadata;
     use super::state_db_filename;
+    use crate::LogEntry;
+    use crate::LogQuery;
     use crate::STATE_DB_FILENAME;
     use crate::STATE_DB_VERSION;
     use crate::model::Phase2JobClaimOutcome;
@@ -2491,6 +2498,57 @@ VALUES (?, ?, ?, ?, ?)
             .await
             .expect("claim after fallback failure");
         assert_eq!(claim, Phase2JobClaimOutcome::SkippedNotDirty);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_logs_with_search_matches_substring() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1_700_000_001,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alpha".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(42),
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 1_700_000_002,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("alphabet".to_string()),
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: None,
+                    file: Some("main.rs".to_string()),
+                    line: Some(43),
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let rows = runtime
+            .query_logs(&LogQuery {
+                search: Some("alphab".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("query matching logs");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message.as_deref(), Some("alphabet"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

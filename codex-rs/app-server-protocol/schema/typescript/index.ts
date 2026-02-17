@@ -125,6 +125,8 @@ export type { McpToolCallBeginEvent } from "./McpToolCallBeginEvent";
 export type { McpToolCallEndEvent } from "./McpToolCallEndEvent";
 export type { MessagePhase } from "./MessagePhase";
 export type { ModeKind } from "./ModeKind";
+export type { ModelRerouteEvent } from "./ModelRerouteEvent";
+export type { ModelRerouteReason } from "./ModelRerouteReason";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
