@@ -1971,13 +1971,21 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
     pub cwd: PathBuf,
+    #[serde(default)]
+    pub shell: String,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
+    #[serde(default)]
+    pub permissions_instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     pub model: String,
+    #[serde(default)]
+    pub model_instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
+    #[serde(default)]
+    pub personality_spec: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3041,6 +3049,10 @@ mod tests {
             "summary": "auto",
         }))?;
 
+        assert_eq!(item.shell, String::new());
+        assert_eq!(item.permissions_instructions, String::new());
+        assert_eq!(item.model_instructions, String::new());
+        assert_eq!(item.personality_spec, String::new());
         assert_eq!(item.network, None);
         Ok(())
     }
@@ -3050,14 +3062,19 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             cwd: PathBuf::from("/tmp"),
+            shell: "zsh".to_string(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permissions_instructions: "<permissions instructions>test</permissions instructions>"
+                .to_string(),
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
             }),
             model: "gpt-5".to_string(),
+            model_instructions: "base model instructions".to_string(),
             personality: None,
+            personality_spec: String::new(),
             collaboration_mode: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,

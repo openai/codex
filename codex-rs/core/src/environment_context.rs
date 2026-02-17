@@ -31,35 +31,6 @@ impl EnvironmentContext {
         }
     }
 
-    /// Compares two environment contexts, ignoring the shell. Useful when
-    /// comparing turn to turn, since the initial environment_context will
-    /// include the shell, and then it is not configurable from turn to turn.
-    pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
-        let EnvironmentContext {
-            cwd,
-            network,
-            // should compare all fields except shell
-            shell: _,
-        } = other;
-        self.cwd == *cwd && self.network == *network
-    }
-
-    pub fn diff(before: &TurnContext, after: &TurnContext, shell: &Shell) -> Self {
-        let before_network = Self::network_from_turn_context(before);
-        let after_network = Self::network_from_turn_context(after);
-        let cwd = if before.cwd != after.cwd {
-            Some(after.cwd.clone())
-        } else {
-            None
-        };
-        let network = if before_network != after_network {
-            after_network
-        } else {
-            before_network
-        };
-        EnvironmentContext::new(cwd, shell.clone(), network)
-    }
-
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
         Self::new(
             Some(turn_context.cwd.clone()),
@@ -236,52 +207,5 @@ mod tests {
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
-    }
-
-    #[test]
-    fn equals_except_shell_compares_cwd() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        assert!(context1.equals_except_shell(&context2));
-    }
-
-    #[test]
-    fn equals_except_shell_ignores_sandbox_policy() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
-
-        assert!(context1.equals_except_shell(&context2));
-    }
-
-    #[test]
-    fn equals_except_shell_compares_cwd_differences() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None);
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None);
-
-        assert!(!context1.equals_except_shell(&context2));
-    }
-
-    #[test]
-    fn equals_except_shell_ignores_shell() {
-        let context1 = EnvironmentContext::new(
-            Some(PathBuf::from("/repo")),
-            Shell {
-                shell_type: ShellType::Bash,
-                shell_path: "/bin/bash".into(),
-                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-            },
-            None,
-        );
-        let context2 = EnvironmentContext::new(
-            Some(PathBuf::from("/repo")),
-            Shell {
-                shell_type: ShellType::Zsh,
-                shell_path: "/bin/zsh".into(),
-                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
-            },
-            None,
-        );
-
-        assert!(context1.equals_except_shell(&context2));
     }
 }
