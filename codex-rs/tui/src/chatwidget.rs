@@ -2696,6 +2696,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -2863,6 +2866,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -3019,6 +3025,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_voice_transcription_enabled(
+            widget.config.features.enabled(Feature::VoiceTranscription),
+        );
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -6031,6 +6040,9 @@ impl ChatWidget {
         }
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
+        }
+        if feature == Feature::VoiceTranscription {
+            self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
         if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);

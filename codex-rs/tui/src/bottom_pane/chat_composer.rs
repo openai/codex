@@ -362,6 +362,7 @@ pub(crate) struct ChatComposer {
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
     personality_command_enabled: bool,
+    voice_transcription_enabled: bool,
     windows_degraded_sandbox_active: bool,
     #[cfg(not(target_os = "linux"))]
     voice: Option<crate::voice::VoiceCapture>,
@@ -478,6 +479,7 @@ impl ChatComposer {
             collaboration_mode_indicator: None,
             connectors_enabled: false,
             personality_command_enabled: false,
+            voice_transcription_enabled: false,
             windows_degraded_sandbox_active: false,
             #[cfg(not(target_os = "linux"))]
             voice: None,
@@ -567,6 +569,22 @@ impl ChatComposer {
 
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
+    }
+
+    pub fn set_voice_transcription_enabled(&mut self, enabled: bool) {
+        self.voice_transcription_enabled = enabled;
+        if !enabled {
+            self.space_hold_started_at = None;
+            if let Some(id) = self.space_hold_element_id.take() {
+                let _ = self.textarea.replace_element_by_id(&id, " ");
+            }
+            self.space_hold_trigger = None;
+            self.space_hold_repeat_seen = false;
+        }
+    }
+
+    fn voice_transcription_enabled(&self) -> bool {
+        self.voice_transcription_enabled && cfg!(not(target_os = "linux"))
     }
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
@@ -2729,7 +2747,7 @@ impl ChatComposer {
                 code: KeyCode::Char(' '),
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if self.voice_transcription_enabled() => {
                 if self.paste_burst.is_active() {
                     return self.handle_input_basic(key_event);
                 }
@@ -2774,7 +2792,7 @@ impl ChatComposer {
                 code: KeyCode::Char(' '),
                 kind: KeyEventKind::Repeat,
                 ..
-            } => {
+            } if self.voice_transcription_enabled() => {
                 // Swallow repeats while a hold is pending to avoid extra spaces.
                 if self.space_hold_started_at.is_some() {
                     if !self.key_release_supported {
@@ -2790,7 +2808,7 @@ impl ChatComposer {
                 code: KeyCode::Char(' '),
                 kind: KeyEventKind::Release,
                 ..
-            } => {
+            } if self.voice_transcription_enabled() => {
                 // If a hold is pending, convert the element to a plain space and clear state.
                 self.space_hold_started_at = None;
                 if let Some(id) = self.space_hold_element_id.take() {
@@ -3613,7 +3631,8 @@ impl ChatComposer {
 #[cfg(not(target_os = "linux"))]
 impl ChatComposer {
     pub(crate) fn process_space_hold_trigger(&mut self) {
-        if let Some(flag) = self.space_hold_trigger.as_ref()
+        if self.voice_transcription_enabled()
+            && let Some(flag) = self.space_hold_trigger.as_ref()
             && flag.load(Ordering::Relaxed)
             && self.space_hold_started_at.is_some()
             && self.voice.is_none()
@@ -3649,6 +3668,9 @@ impl ChatComposer {
     /// observed repeated Space events while pending; otherwise the keypress is treated as a typed
     /// space.
     pub(crate) fn on_space_hold_timeout(&mut self) -> bool {
+        if !self.voice_transcription_enabled() {
+            return false;
+        }
         if self.voice.is_some() {
             return false;
         }
@@ -6191,6 +6213,39 @@ mod tests {
         assert!(found_error, "expected error history cell to be sent");
     }
 
+    #[test]
+    fn voice_transcription_disabled_treats_space_as_normal_input() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyEventKind;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            true,
+        );
+        composer.set_text_content("x".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new_with_kind(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+
+        assert_eq!("x ", composer.textarea.text());
+        assert!(composer.space_hold_started_at.is_none());
+        assert!(composer.space_hold_element_id.is_none());
+        assert!(composer.space_hold_trigger.is_none());
+        assert!(!composer.space_hold_repeat_seen);
+    }
+
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn space_hold_timeout_without_release_or_repeat_keeps_typed_space() {
@@ -6203,6 +6258,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_voice_transcription_enabled(true);
 
         composer.set_text_content("x".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
@@ -6234,6 +6290,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             false,
         );
+        composer.set_voice_transcription_enabled(true);
 
         composer.set_text_content("x".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
