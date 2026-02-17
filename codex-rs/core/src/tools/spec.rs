@@ -40,7 +40,6 @@ pub(crate) struct ToolsConfig {
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
-    pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -62,7 +61,6 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let include_search_tool = features.enabled(Feature::Apps);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
@@ -98,7 +96,6 @@ impl ToolsConfig {
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
-            collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -1484,10 +1481,8 @@ pub(crate) fn build_specs(
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
-    if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
-        builder.register_handler("request_user_input", request_user_input_handler);
-    }
+    builder.push_spec(create_request_user_input_tool());
+    builder.register_handler("request_user_input", request_user_input_handler);
 
     if config.search_tool
         && let Some(app_tools) = app_tools
@@ -1874,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn request_user_input_requires_collaboration_modes_feature() {
+    fn request_user_input_is_available_even_if_collaboration_modes_disabled() {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
@@ -1887,8 +1882,8 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert!(
-            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
-            "request_user_input should be disabled when collaboration_modes feature is off"
+            tools.iter().any(|t| t.spec.name() == "request_user_input"),
+            "request_user_input should remain enabled even when collaboration_modes is disabled"
         );
 
         features.enable(Feature::CollaborationModes);
