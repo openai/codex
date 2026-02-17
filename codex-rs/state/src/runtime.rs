@@ -391,6 +391,16 @@ FROM threads
         Ok(())
     }
 
+    /// Enforce per-partition log size caps after a successful batch insert.
+    ///
+    /// We maintain two independent budgets:
+    /// - Thread logs: rows with `thread_id IS NOT NULL`, capped per `thread_id`.
+    /// - Threadless process logs: rows with `thread_id IS NULL` ("threadless"),
+    ///   capped per `process_uuid` (including `process_uuid IS NULL` as its own
+    ///   threadless partition).
+    ///
+    /// "Threadless" means the log row is not associated with any conversation
+    /// thread, so retention is keyed by process identity instead.
     async fn prune_logs_after_insert(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
         let thread_ids: BTreeSet<&str> = entries
             .iter()
