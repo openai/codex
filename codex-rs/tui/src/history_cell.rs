@@ -372,7 +372,7 @@ impl ReasoningSummaryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
             &self.content,
-            Some((width as usize).saturating_sub(2)),
+            crate::width::usable_content_width_u16(width, 2),
             &mut lines,
         );
         let summary_style = Style::default().dim().italic();
@@ -481,10 +481,13 @@ impl AgentMarkdownCell {
 
 impl HistoryCell for AgentMarkdownCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let Some(wrap_width) = crate::width::usable_content_width_u16(width, 2) else {
+            return prefix_lines(vec![Line::default()], "• ".dim(), "  ".into());
+        };
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
-        let wrap_width = (width as usize).saturating_sub(2);
         crate::markdown::append_markdown_agent(&self.markdown_source, Some(wrap_width), &mut lines);
         // Use prefix_lines (not word_wrap_lines) so table rows with box-drawing characters are not
         // broken by word-wrapping. The markdown renderer already output to wrap_width.
@@ -3816,6 +3819,51 @@ mod tests {
                     "table row should have matching right border: {line:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn agent_markdown_cell_narrow_width_shows_prefix_only() {
+        let source = "| Name | Role |\n|------|------|\n| Alice | Engineer |\n";
+        let cell = AgentMarkdownCell::new(source.to_string());
+
+        let lines = render_lines(&cell.display_lines(2));
+        assert_eq!(lines, vec!["• ".to_string()]);
+    }
+
+    #[test]
+    fn wrapped_and_prefixed_cells_handle_tiny_widths() {
+        let user_cell = UserHistoryCell {
+            message: "tiny width coverage for wrapped user history".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+        };
+        let agent_message_cell = AgentMessageCell::new(vec!["tiny width agent line".into()], true);
+        let reasoning_cell = ReasoningSummaryCell::new(
+            "Plan".to_string(),
+            "Reasoning summary content for tiny widths.".to_string(),
+            false,
+        );
+        let agent_markdown_cell =
+            AgentMarkdownCell::new("| A | B |\n|---|---|\n| x | y |\n".to_string());
+
+        for width in 1..=4 {
+            assert!(
+                !user_cell.display_lines(width).is_empty(),
+                "user cell should render at width {width}",
+            );
+            assert!(
+                !agent_message_cell.display_lines(width).is_empty(),
+                "agent message cell should render at width {width}",
+            );
+            assert!(
+                !reasoning_cell.display_lines(width).is_empty(),
+                "reasoning cell should render at width {width}",
+            );
+            assert!(
+                !agent_markdown_cell.display_lines(width).is_empty(),
+                "agent markdown cell should render at width {width}",
+            );
         }
     }
 

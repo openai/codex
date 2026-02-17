@@ -2317,7 +2317,7 @@ impl ChatWidget {
         self.last_rendered_width
             .get()
             .or_else(|| terminal::size().ok().map(|(w, _)| usize::from(w)))
-            .map(|w| w.saturating_sub(reserved_cols))
+            .and_then(|w| crate::width::usable_content_width(w, reserved_cols))
     }
 
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {

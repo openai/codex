@@ -1669,6 +1669,20 @@ async fn make_chatwidget_manual(
     (widget, rx, op_rx)
 }
 
+#[tokio::test]
+async fn current_stream_width_returns_none_when_reserved_columns_exhaust_width() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.last_rendered_width.set(Some(2));
+    assert_eq!(chat.current_stream_width(2), None);
+
+    chat.last_rendered_width.set(Some(4));
+    assert_eq!(chat.current_stream_width(4), None);
+
+    chat.last_rendered_width.set(Some(5));
+    assert_eq!(chat.current_stream_width(4), Some(1));
+}
+
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
 fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
