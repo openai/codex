@@ -39,12 +39,14 @@ js_repl_node_path = "/absolute/path/to/node"
 
 ## Module resolution
 
-`js_repl` resolves bare specifiers (for example `await import("atlas")`) using an ordered
-search path:
+`js_repl` resolves **bare** specifiers (for example `await import("atlas")`) using an ordered
+search path. Path-style specifiers (`./`, `../`, absolute paths, `file:` URLs) are rejected.
 
 1. `CODEX_JS_REPL_NODE_MODULE_DIRS` (PATH-delimited list)
 2. `js_repl_node_module_dirs` in config/profile (array of absolute paths)
-3. Thread working directory (cwd)
+3. Thread working directory (cwd, always included as the last fallback)
+
+If `CODEX_JS_REPL_NODE_MODULE_DIRS` is set, it takes precedence over config values.
 
 If an entry ends in `node_modules`, the parent directory is treated as the base
 for module resolution. This allows both of these forms:

@@ -566,11 +566,12 @@ impl JsReplManager {
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
         );
-        if !self.node_module_dirs.is_empty() {
+        let node_module_dirs_key = "CODEX_JS_REPL_NODE_MODULE_DIRS";
+        if !self.node_module_dirs.is_empty() && !env.contains_key(node_module_dirs_key) {
             let joined = std::env::join_paths(&self.node_module_dirs)
                 .map_err(|err| format!("failed to join js_repl_node_module_dirs: {err}"))?;
             env.insert(
-                "CODEX_JS_REPL_NODE_MODULE_DIRS".to_string(),
+                node_module_dirs_key.to_string(),
                 joined.to_string_lossy().to_string(),
             );
         }
@@ -1279,6 +1280,8 @@ mod tests {
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn node_version_parses_v_prefix_and_suffix() {
@@ -1907,6 +1910,95 @@ console.log(out.output?.body?.text ?? "");
             err.to_string()
                 .contains("Importing module \"node:process\" is not allowed in js_repl")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_prefers_env_node_module_dirs_over_config() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let env_base = tempdir()?;
+        let env_pkg_dir = env_base.path().join("node_modules").join("repl_probe");
+        fs::create_dir_all(&env_pkg_dir)?;
+        fs::write(
+            env_pkg_dir.join("package.json"),
+            r#"{
+  "name": "repl_probe",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "import": "./index.js"
+  }
+}
+"#,
+        )?;
+        fs::write(
+            env_pkg_dir.join("index.js"),
+            "export const value = \"env\";\n",
+        )?;
+
+        let config_base = tempdir()?;
+        let cwd_dir = tempdir()?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy.r#set.insert(
+            "CODEX_JS_REPL_NODE_MODULE_DIRS".to_string(),
+            env_base.path().to_string_lossy().to_string(),
+        );
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            vec![config_base.path().to_path_buf()],
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const mod = await import(\"repl_probe\"); console.log(mod.value);"
+                        .to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("env"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_rejects_path_specifiers() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./local.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected path specifier to be rejected");
+        assert!(err.to_string().contains("Unsupported import specifier"));
         Ok(())
     }
 }

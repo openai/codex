@@ -4,7 +4,7 @@
 
 const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
-const { builtinModules } = require("node:module");
+const { builtinModules, createRequire } = require("node:module");
 const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const path = require("node:path");
@@ -137,6 +137,78 @@ const moduleSearchBases = (() => {
   return bases;
 })();
 
+const importResolveConditions = new Set(["node", "import"]);
+const requireByBase = new Map();
+
+function getRequireForBase(base) {
+  let req = requireByBase.get(base);
+  if (!req) {
+    req = createRequire(path.join(base, "__codex_js_repl__.cjs"));
+    requireByBase.set(base, req);
+  }
+  return req;
+}
+
+function isModuleNotFoundError(err) {
+  return err?.code === "MODULE_NOT_FOUND" || err?.code === "ERR_MODULE_NOT_FOUND";
+}
+
+function isWithinBaseNodeModules(base, resolvedPath) {
+  const nodeModulesRoot = path.resolve(base, "node_modules");
+  const relative = path.relative(nodeModulesRoot, resolvedPath);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function isBarePackageSpecifier(specifier) {
+  if (typeof specifier !== "string" || !specifier || specifier.trim() !== specifier) {
+    return false;
+  }
+  if (specifier.startsWith("./") || specifier.startsWith("../")) {
+    return false;
+  }
+  if (specifier.startsWith("/") || specifier.startsWith("\\")) {
+    return false;
+  }
+  if (path.isAbsolute(specifier)) {
+    return false;
+  }
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(specifier)) {
+    return false;
+  }
+  if (specifier.includes("\\")) {
+    return false;
+  }
+  return true;
+}
+
+function resolveBareSpecifier(specifier) {
+  let firstResolutionError = null;
+
+  for (const base of moduleSearchBases) {
+    try {
+      const resolved = getRequireForBase(base).resolve(specifier, {
+        conditions: importResolveConditions,
+      });
+      if (isWithinBaseNodeModules(base, resolved)) {
+        return resolved;
+      }
+      // Ignore resolutions that escape this base via parent node_modules lookup.
+    } catch (err) {
+      if (isModuleNotFoundError(err)) {
+        continue;
+      }
+      if (!firstResolutionError) {
+        firstResolutionError = err;
+      }
+    }
+  }
+
+  if (firstResolutionError) {
+    throw firstResolutionError;
+  }
+  return null;
+}
+
 function resolveSpecifier(specifier) {
   if (specifier.startsWith("node:") || builtinModuleSet.has(specifier)) {
     if (isDeniedBuiltin(specifier)) {
@@ -145,37 +217,26 @@ function resolveSpecifier(specifier) {
     return { kind: "builtin", specifier: toNodeBuiltinSpecifier(specifier) };
   }
 
-  if (specifier.startsWith("file:")) {
-    return { kind: "url", url: specifier };
+  if (!isBarePackageSpecifier(specifier)) {
+    throw new Error(
+      `Unsupported import specifier "${specifier}" in js_repl. Use a package name like "lodash" or "@scope/pkg".`,
+    );
   }
 
-  if (specifier.startsWith("./") || specifier.startsWith("../") || path.isAbsolute(specifier)) {
-    return { kind: "path", path: path.resolve(process.cwd(), specifier) };
+  const resolvedBare = resolveBareSpecifier(specifier);
+  if (!resolvedBare) {
+    throw new Error(`Module not found: ${specifier}`);
   }
 
-  for (const base of moduleSearchBases) {
-    try {
-      const resolvedBare = require.resolve(specifier, { paths: [base] });
-      return { kind: "path", path: resolvedBare };
-    } catch {
-      // Try next search base.
-    }
-  }
-  return { kind: "bare", specifier };
+  return { kind: "path", path: resolvedBare };
 }
 
 function importResolved(resolved) {
   if (resolved.kind === "builtin") {
     return import(resolved.specifier);
   }
-  if (resolved.kind === "url") {
-    return import(resolved.url);
-  }
   if (resolved.kind === "path") {
     return import(pathToFileURL(resolved.path).href);
-  }
-  if (resolved.kind === "bare") {
-    return import(resolved.specifier);
   }
   throw new Error(`Unsupported module resolution kind: ${resolved.kind}`);
 }
