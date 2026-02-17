@@ -1,7 +1,6 @@
 use crate::endpoint::realtime_websocket::protocol::ConversationItem;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
-use crate::endpoint::realtime_websocket::protocol::RealtimeConnectionState;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
@@ -318,9 +317,7 @@ impl RealtimeWebsocketWriter {
 impl RealtimeWebsocketEvents {
     pub async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
-            return Ok(Some(RealtimeEvent::State(
-                RealtimeConnectionState::Disconnected,
-            )));
+            return Ok(None);
         }
 
         let msg = match self.rx_message.lock().await.recv().await {
@@ -333,9 +330,7 @@ impl RealtimeWebsocketEvents {
             }
             None => {
                 self.is_closed.store(true, Ordering::SeqCst);
-                return Ok(Some(RealtimeEvent::State(
-                    RealtimeConnectionState::Disconnected,
-                )));
+                return Ok(None);
             }
         };
 
@@ -343,9 +338,7 @@ impl RealtimeWebsocketEvents {
             Message::Text(text) => Ok(parse_realtime_event(&text)),
             Message::Close(_) => {
                 self.is_closed.store(true, Ordering::SeqCst);
-                Ok(Some(RealtimeEvent::State(
-                    RealtimeConnectionState::Disconnected,
-                )))
+                Ok(None)
             }
             Message::Binary(_) => Ok(Some(RealtimeEvent::Error(
                 "unexpected binary realtime websocket event".to_string(),
