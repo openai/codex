@@ -135,8 +135,8 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `skills/remote/read` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/write` — download a public remote skill by `hazelnutId`; `isPreload=true` writes to `.codex/vendor_imports/skills` under `codex_home` (**under development; do not call from production clients yet**).
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
@@ -550,6 +550,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -557,7 +558,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
@@ -771,7 +772,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -789,6 +790,9 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrl": "https://example.com/demo-app.png",
             "logoUrlDark": null,
             "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
             "isAccessible": true,
             "isEnabled": true
@@ -816,6 +820,9 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrl": "https://example.com/demo-app.png",
         "logoUrlDark": null,
         "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
         "isAccessible": true,
         "isEnabled": true

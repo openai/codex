@@ -5,7 +5,6 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ItemCompletedEvent;
@@ -1708,7 +1707,6 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let test = builder.build(&server).await.expect("build test codex");
 
@@ -1831,7 +1829,6 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let initial = initial_builder
         .build(&server)
@@ -1885,7 +1882,6 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config.features.enable(Feature::RemoteModels);
         });
     let resumed = resumed_builder
         .resume(&server, home, rollout_path)

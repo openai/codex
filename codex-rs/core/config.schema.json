@@ -6,8 +6,28 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AgentsToml": {
+    "AgentRoleToml": {
       "additionalProperties": false,
+      "properties": {
+        "config_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Path to a role-specific config layer."
+        },
+        "description": {
+          "description": "Human-facing role documentation used in spawn tool guidance.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AgentsToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AgentRoleToml"
+      },
       "properties": {
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",

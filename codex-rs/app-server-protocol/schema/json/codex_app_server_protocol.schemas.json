@@ -755,9 +755,9 @@
             },
             "method": {
               "enum": [
-                "skills/remote/read"
+                "skills/remote/list"
               ],
-              "title": "Skills/remote/readRequestMethod",
+              "title": "Skills/remote/listRequestMethod",
               "type": "string"
             },
             "params": {
@@ -769,7 +769,7 @@
             "method",
             "params"
           ],
-          "title": "Skills/remote/readRequest",
+          "title": "Skills/remote/listRequest",
           "type": "object"
         },
         {
@@ -779,9 +779,9 @@
             },
             "method": {
               "enum": [
-                "skills/remote/write"
+                "skills/remote/export"
               ],
-              "title": "Skills/remote/writeRequestMethod",
+              "title": "Skills/remote/exportRequestMethod",
               "type": "string"
             },
             "params": {
@@ -793,7 +793,7 @@
             "method",
             "params"
           ],
-          "title": "Skills/remote/writeRequest",
+          "title": "Skills/remote/exportRequest",
           "type": "object"
         },
         {
@@ -2484,6 +2484,35 @@
             "type"
           ],
           "title": "WarningEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Model routing changed from the requested model to a different model.",
+          "properties": {
+            "from_model": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/definitions/v2/ModelRerouteReason"
+            },
+            "to_model": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_reroute"
+              ],
+              "title": "ModelRerouteEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from_model",
+            "reason",
+            "to_model",
+            "type"
+          ],
+          "title": "ModelRerouteEventMsg",
           "type": "object"
         },
         {
@@ -6266,6 +6295,12 @@
       ],
       "type": "string"
     },
+    "ModelRerouteReason": {
+      "enum": [
+        "high_risk_cyber_activity"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
       "enum": [
@@ -8495,6 +8530,26 @@
           "properties": {
             "method": {
               "enum": [
+                "model/rerouted"
+              ],
+              "title": "Model/reroutedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelReroutedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/reroutedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "deprecationNotice"
               ],
               "title": "DeprecationNoticeNotificationMethod",
@@ -10216,6 +10271,48 @@
         },
         "type": "object"
       },
+      "AppBranding": {
+        "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "developer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isDiscoverableApp": {
+            "type": "boolean"
+          },
+          "privacyPolicy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "termsOfService": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "isDiscoverableApp"
+        ],
+        "type": "object"
+      },
       "AppConfig": {
         "properties": {
           "disabled_reason": {
@@ -10245,6 +10342,26 @@
       "AppInfo": {
         "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
         "properties": {
+          "appMetadata": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branding": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppBranding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -10274,6 +10391,15 @@
             "default": true,
             "description": "Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
             "type": "boolean"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "logoUrl": {
             "type": [
@@ -10312,6 +10438,130 @@
           "data"
         ],
         "title": "AppListUpdatedNotification",
+        "type": "object"
+      },
+      "AppMetadata": {
+        "properties": {
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "developer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstPartyRequiresInstall": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "firstPartyType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screenshots": {
+            "items": {
+              "$ref": "#/definitions/v2/AppScreenshot"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "seoDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "showInComposerWhenUnlinked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "subCategories": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versionNotes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AppReview": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "AppScreenshot": {
+        "properties": {
+          "fileId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userPrompt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "userPrompt"
+        ],
         "type": "object"
       },
       "AppsConfig": {
@@ -12114,6 +12364,15 @@
         },
         "type": "object"
       },
+      "HazelnutScope": {
+        "enum": [
+          "example",
+          "workspace-shared",
+          "all-shared",
+          "personal"
+        ],
+        "type": "string"
+      },
       "InputModality": {
         "description": "Canonical user-input modality tags advertised by a model.",
         "oneOf": [
@@ -12750,6 +13009,41 @@
         "title": "ModelListResponse",
         "type": "object"
       },
+      "ModelRerouteReason": {
+        "enum": [
+          "highRiskCyberActivity"
+        ],
+        "type": "string"
+      },
+      "ModelReroutedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "fromModel": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/definitions/v2/ModelRerouteReason"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "toModel": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromModel",
+          "reason",
+          "threadId",
+          "toModel",
+          "turnId"
+        ],
+        "title": "ModelReroutedNotification",
+        "type": "object"
+      },
       "NetworkAccess": {
         "enum": [
           "restricted",
@@ -12964,6 +13258,15 @@
           "enterprise",
           "edu",
           "unknown"
+        ],
+        "type": "string"
+      },
+      "ProductSurface": {
+        "enum": [
+          "chatgpt",
+          "codex",
+          "api",
+          "atlas"
         ],
         "type": "string"
       },
@@ -14498,6 +14801,28 @@
       },
       "SkillsRemoteReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "hazelnutScope": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HazelnutScope"
+              }
+            ],
+            "default": "example"
+          },
+          "productSurface": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ProductSurface"
+              }
+            ],
+            "default": "codex"
+          }
+        },
         "title": "SkillsRemoteReadParams",
         "type": "object"
       },
@@ -14522,14 +14847,10 @@
         "properties": {
           "hazelnutId": {
             "type": "string"
-          },
-          "isPreload": {
-            "type": "boolean"
           }
         },
         "required": [
-          "hazelnutId",
-          "isPreload"
+          "hazelnutId"
         ],
         "title": "SkillsRemoteWriteParams",
         "type": "object"
@@ -14540,16 +14861,12 @@
           "id": {
             "type": "string"
           },
-          "name": {
-            "type": "string"
-          },
           "path": {
             "type": "string"
           }
         },
         "required": [
           "id",
-          "name",
           "path"
         ],
         "title": "SkillsRemoteWriteResponse",
