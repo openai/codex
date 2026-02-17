@@ -1934,7 +1934,7 @@ impl Config {
                     ));
                 }
             };
-        Ok(resolved?)
+        resolved
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
