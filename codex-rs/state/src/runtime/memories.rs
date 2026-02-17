@@ -641,7 +641,7 @@ WHERE kind = ? AND job_key = ?
 
         let existing_job = sqlx::query(
             r#"
-SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark, started_at
+SELECT status, lease_until, retry_at, retry_remaining, input_watermark, last_success_watermark, started_at, last_error
 FROM jobs
 WHERE kind = ? AND job_key = ?
             "#,
@@ -669,6 +669,7 @@ WHERE kind = ? AND job_key = ?
         let retry_at: Option<i64> = existing_job.try_get("retry_at")?;
         let retry_remaining: i64 = existing_job.try_get("retry_remaining")?;
         let started_at: Option<i64> = existing_job.try_get("started_at")?;
+        let last_error: Option<String> = existing_job.try_get("last_error")?;
 
         if retry_remaining <= 0 {
             tx.commit().await?;
@@ -684,6 +685,7 @@ WHERE kind = ? AND job_key = ?
             return Ok(Phase2JobClaimOutcome::SkippedRunning);
         }
         if status != "running"
+            && last_error.is_none()
             && started_at.is_some_and(|started_at| {
                 started_at > now.saturating_sub(PHASE2_CLAIM_COOLDOWN_SECONDS)
             })
