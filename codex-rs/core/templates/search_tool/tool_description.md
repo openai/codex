@@ -24,5 +24,5 @@ Notes:
   - `description`
   - `connector_name`
   - input schema property keys (`input_keys`)
-- If the needed app is already explicit in the prompt (for example an `apps://...` mention) or already present in the current `tools` list, you can call that tool directly.
+- If the needed app is already explicit in the prompt (for example `[$app-name](app://{connector_id})`) or already present in the current `tools` list, you can call that tool directly.
 - Do not use `search_tool_bm25` for non-apps/local tasks (filesystem, repo search, or shell-only workflows) or anything not related to {{app_names}}.

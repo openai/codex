@@ -233,6 +233,9 @@
             "memory_tool": {
               "type": "boolean"
             },
+            "multi_agent": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -1361,6 +1364,9 @@
           "type": "boolean"
         },
         "memory_tool": {
+          "type": "boolean"
+        },
+        "multi_agent": {
           "type": "boolean"
         },
         "personality": {
