@@ -186,13 +186,8 @@ impl ResponsesStreamEvent {
 
 fn extract_server_model(value: &Value) -> Option<String> {
     value
-        .get("model")
-        .and_then(json_value_as_string)
-        .or_else(|| {
-            value
-                .get("headers")
-                .and_then(header_openai_model_value_from_json)
-        })
+        .get("headers")
+        .and_then(header_openai_model_value_from_json)
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -982,14 +977,10 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 2);
+        assert_matches!(&events[0], ResponseEvent::Created);
         assert_matches!(
-            &events[0],
-            ResponseEvent::ServerModel(model) if model == CYBER_RESTRICTED_MODEL_FOR_TESTS
-        );
-        assert_matches!(&events[1], ResponseEvent::Created);
-        assert_matches!(
-            &events[2],
+            &events[1],
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
@@ -1055,18 +1046,10 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 2);
+        assert_matches!(&events[0], ResponseEvent::Created);
         assert_matches!(
-            &events[0],
-            ResponseEvent::ServerModel(model) if model == "gpt-5.2-codex"
-        );
-        assert_matches!(&events[1], ResponseEvent::Created);
-        assert_matches!(
-            &events[2],
-            ResponseEvent::ServerModel(model) if model == "gpt-5.3-codex"
-        );
-        assert_matches!(
-            &events[3],
+            &events[1],
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
