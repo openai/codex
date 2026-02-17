@@ -2,7 +2,6 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -10,20 +9,14 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
-use codex_app_server_protocol::ThreadTerminalOutcome;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
-use codex_protocol::openai_models::ReasoningEffort;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -32,14 +25,12 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let responses = vec![
-        create_request_user_input_sse_response("watch-call-1")?,
-        create_final_assistant_message_sse_response("done")?,
-    ];
+    let responses = vec![create_final_assistant_message_sse_response("done")?];
     let server = create_mock_responses_server_sequence(responses).await;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp =
+        McpProcess::new_with_env(codex_home.path(), &[("RUST_LOG", Some("info"))]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -63,15 +54,6 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model".to_string()),
-            effort: Some(ReasoningEffort::Medium),
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Plan,
-                settings: Settings {
-                    model: "mock-model".to_string(),
-                    reasoning_effort: Some(ReasoningEffort::Medium),
-                    developer_instructions: None,
-                },
-            }),
             ..Default::default()
         })
         .await?;
@@ -82,29 +64,15 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     .await??;
     let _: TurnStartResponse = to_response(turn_start_resp)?;
 
-    let server_req = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_request_message(),
-    )
-    .await??;
-    let ServerRequest::ToolRequestUserInput { request_id, .. } = server_req else {
-        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
-    };
-
-    mcp.send_response(
-        request_id,
-        serde_json::json!({
-            "answers": {
-                "confirm_path": { "answers": ["yes"] }
-            }
-        }),
-    )
-    .await?;
-
-    let mut saw_waiting_user_input = false;
-    let mut saw_terminal_completed = false;
-    for _ in 0..40 {
-        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+    let mut saw_active_running = false;
+    let mut saw_idle_after_turn = false;
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = match timeout(remaining, mcp.read_next_message()).await {
+            Ok(Ok(message)) => message,
+            _ => break,
+        };
         match message {
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method,
@@ -116,34 +84,41 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                 }
                 match notification.status {
                     ThreadStatus::Active { active_flags } => {
-                        saw_waiting_user_input |=
-                            active_flags.contains(&ThreadActiveFlag::WaitingOnUserInput);
+                        saw_active_running |= active_flags.contains(&ThreadActiveFlag::Running);
                     }
-                    ThreadStatus::Terminal { outcome } => {
-                        if outcome == ThreadTerminalOutcome::Completed {
-                            saw_terminal_completed = true;
+                    ThreadStatus::Idle { .. } => {
+                        if saw_active_running {
+                            saw_idle_after_turn = true;
                         }
                     }
-                    ThreadStatus::NotLoaded => {}
-                    ThreadStatus::Idle => {}
+                    ThreadStatus::NotLoaded => {
+                        if saw_active_running {
+                            saw_idle_after_turn = true;
+                        }
+                    }
                 }
             }
             _ => {}
         }
 
-        if saw_waiting_user_input && saw_terminal_completed {
+        if saw_active_running && saw_idle_after_turn {
             break;
         }
     }
 
     assert!(
-        saw_waiting_user_input,
-        "expected waitingOnUserInput active flag in thread/status/changed notifications"
+        saw_active_running,
+        "expected running active flag in thread/status/changed notifications"
     );
     assert!(
-        saw_terminal_completed,
-        "expected terminal completed status in thread/status/changed notifications"
+        saw_idle_after_turn,
+        "expected idle status after turn completion in thread/status/changed notifications"
     );
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }

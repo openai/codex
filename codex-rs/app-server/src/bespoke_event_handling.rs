@@ -760,6 +760,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::Error(ev) => {
+            thread_watch_manager
+                .note_system_error(&conversation_id.to_string())
+                .await;
+
             let message = ev.message.clone();
             let codex_error_info = ev.codex_error_info.clone();
 

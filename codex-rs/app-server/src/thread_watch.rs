@@ -6,9 +6,9 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
+use codex_app_server_protocol::ThreadIdleFlag;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
-use codex_app_server_protocol::ThreadTerminalOutcome;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -116,40 +116,46 @@ impl ThreadWatchManager {
 
     pub(crate) async fn note_turn_started(&self, thread_id: &str) {
         self.update_runtime_for_thread(thread_id, |runtime| {
+            runtime.is_loaded = true;
             runtime.running = true;
-            runtime.last_terminal_outcome = None;
+            runtime.has_system_error = false;
         })
         .await;
     }
 
-    pub(crate) async fn note_turn_completed(&self, thread_id: &str, failed: bool) {
-        self.finalize_thread_outcome(
-            thread_id,
-            if failed {
-                ThreadTerminalOutcome::Failed
-            } else {
-                ThreadTerminalOutcome::Completed
-            },
-        )
-        .await;
+    pub(crate) async fn note_turn_completed(&self, thread_id: &str, _failed: bool) {
+        self.clear_active_state(thread_id).await;
     }
 
     pub(crate) async fn note_turn_interrupted(&self, thread_id: &str) {
-        self.finalize_thread_outcome(thread_id, ThreadTerminalOutcome::Interrupted)
-            .await;
+        self.clear_active_state(thread_id).await;
     }
 
     pub(crate) async fn note_thread_shutdown(&self, thread_id: &str) {
-        self.finalize_thread_outcome(thread_id, ThreadTerminalOutcome::Shutdown)
-            .await;
+        self.update_runtime_for_thread(thread_id, |runtime| {
+            runtime.running = false;
+            runtime.pending_permission_requests = 0;
+            runtime.pending_user_input_requests = 0;
+            runtime.is_loaded = false;
+        })
+        .await;
     }
 
-    async fn finalize_thread_outcome(&self, thread_id: &str, outcome: ThreadTerminalOutcome) {
+    pub(crate) async fn note_system_error(&self, thread_id: &str) {
+        self.update_runtime_for_thread(thread_id, |runtime| {
+            runtime.running = false;
+            runtime.pending_permission_requests = 0;
+            runtime.pending_user_input_requests = 0;
+            runtime.has_system_error = true;
+        })
+        .await;
+    }
+
+    async fn clear_active_state(&self, thread_id: &str) {
         self.update_runtime_for_thread(thread_id, move |runtime| {
             runtime.running = false;
             runtime.pending_permission_requests = 0;
             runtime.pending_user_input_requests = 0;
-            runtime.last_terminal_outcome = Some(outcome);
         })
         .await;
     }
@@ -176,9 +182,9 @@ impl ThreadWatchManager {
         guard_type: ThreadWatchActiveGuardType,
     ) -> ThreadWatchActiveGuard {
         self.update_runtime_for_thread(thread_id, move |runtime| {
+            runtime.is_loaded = true;
             let counter = Self::pending_counter(runtime, guard_type);
             *counter = counter.saturating_add(1);
-            runtime.last_terminal_outcome = None;
         })
         .await;
         ThreadWatchActiveGuard::new(self.clone(), thread_id.to_string(), guard_type)
@@ -242,9 +248,11 @@ struct ThreadWatchState {
 impl ThreadWatchState {
     fn upsert_thread(&mut self, thread_id: String) -> Option<ThreadStatusChangedNotification> {
         let previous_status = self.status_for(&thread_id);
-        self.runtime_by_thread_id
+        let runtime = self
+            .runtime_by_thread_id
             .entry(thread_id.clone())
             .or_default();
+        runtime.is_loaded = true;
         self.status_changed_notification(thread_id, previous_status)
     }
 
@@ -266,6 +274,7 @@ impl ThreadWatchState {
             .runtime_by_thread_id
             .entry(thread_id.to_string())
             .or_default();
+        runtime.is_loaded = true;
         mutate(runtime);
         self.status_changed_notification(thread_id.to_string(), previous_status)
     }
@@ -298,13 +307,18 @@ impl ThreadWatchState {
 
 #[derive(Clone, Default)]
 struct RuntimeFacts {
+    is_loaded: bool,
     running: bool,
     pending_permission_requests: u32,
     pending_user_input_requests: u32,
-    last_terminal_outcome: Option<ThreadTerminalOutcome>,
+    has_system_error: bool,
 }
 
 fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
+    if !runtime.is_loaded {
+        return ThreadStatus::NotLoaded;
+    }
+
     let mut active_flags = Vec::new();
     if runtime.running {
         active_flags.push(ThreadActiveFlag::Running);
@@ -320,11 +334,12 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
         return ThreadStatus::Active { active_flags };
     }
 
-    match runtime.last_terminal_outcome {
-        Some(ThreadTerminalOutcome::Shutdown) => ThreadStatus::NotLoaded,
-        Some(outcome) => ThreadStatus::Terminal { outcome },
-        None => ThreadStatus::Idle,
+    let mut idle_flags = Vec::new();
+    if runtime.has_system_error {
+        idle_flags.push(ThreadIdleFlag::SystemError);
     }
+
+    ThreadStatus::Idle { idle_flags }
 }
 
 #[cfg(test)]
@@ -452,8 +467,39 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            ThreadStatus::Terminal {
-                outcome: ThreadTerminalOutcome::Completed,
+            ThreadStatus::Idle { idle_flags: vec![] },
+        );
+    }
+
+    #[tokio::test]
+    async fn system_error_sets_idle_flag_until_next_turn() {
+        let manager = ThreadWatchManager::new();
+        manager
+            .upsert_thread(test_thread(
+                INTERACTIVE_THREAD_ID,
+                codex_app_server_protocol::SessionSource::Cli,
+            ))
+            .await;
+
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        manager.note_system_error(INTERACTIVE_THREAD_ID).await;
+
+        assert_eq!(
+            manager
+                .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
+                .await,
+            ThreadStatus::Idle {
+                idle_flags: vec![ThreadIdleFlag::SystemError],
+            },
+        );
+
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        assert_eq!(
+            manager
+                .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
+                .await,
+            ThreadStatus::Active {
+                active_flags: vec![ThreadActiveFlag::Running],
             },
         );
     }
@@ -526,7 +572,7 @@ mod tests {
             recv_status_changed_notification(&mut outgoing_rx).await,
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
-                status: ThreadStatus::Idle,
+                status: ThreadStatus::Idle { idle_flags: vec![] },
             },
         );
 
@@ -586,7 +632,7 @@ mod tests {
             model_provider: "mock-provider".to_string(),
             created_at: 0,
             updated_at: 0,
-            status: ThreadStatus::Idle,
+            status: ThreadStatus::NotLoaded,
             path: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "test".to_string(),

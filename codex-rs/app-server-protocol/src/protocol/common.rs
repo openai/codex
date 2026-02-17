@@ -1330,7 +1330,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
                 thread_id: "thr_123".to_string(),
-                status: v2::ThreadStatus::Idle,
+                status: v2::ThreadStatus::Idle { idle_flags: vec![] },
             });
         assert_eq!(
             json!({
@@ -1338,7 +1338,8 @@ mod tests {
                 "params": {
                     "threadId": "thr_123",
                     "status": {
-                        "type": "idle"
+                        "type": "idle",
+                        "idleFlags": []
                     },
                 }
             }),

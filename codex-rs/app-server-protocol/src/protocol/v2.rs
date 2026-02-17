@@ -1842,16 +1842,15 @@ pub struct ThreadLoadedListResponse {
 #[ts(export_to = "v2/")]
 pub enum ThreadStatus {
     NotLoaded,
-    Idle,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Idle {
+        idle_flags: Vec<ThreadIdleFlag>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Active {
         active_flags: Vec<ThreadActiveFlag>,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Terminal {
-        outcome: ThreadTerminalOutcome,
     },
 }
 
@@ -1867,11 +1866,8 @@ pub enum ThreadActiveFlag {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum ThreadTerminalOutcome {
-    Completed,
-    Failed,
-    Interrupted,
-    Shutdown,
+pub enum ThreadIdleFlag {
+    SystemError,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

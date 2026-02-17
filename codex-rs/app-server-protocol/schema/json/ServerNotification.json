@@ -6559,6 +6559,12 @@
     "ThreadId": {
       "type": "string"
     },
+    "ThreadIdleFlag": {
+      "enum": [
+        "systemError"
+      ],
+      "type": "string"
+    },
     "ThreadItem": {
       "oneOf": [
         {
@@ -7079,6 +7085,12 @@
         },
         {
           "properties": {
+            "idleFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadIdleFlag"
+              },
+              "type": "array"
+            },
             "type": {
               "enum": [
                 "idle"
@@ -7088,6 +7100,7 @@
             }
           },
           "required": [
+            "idleFlags",
             "type"
           ],
           "title": "IdleThreadStatus",
@@ -7115,26 +7128,6 @@
           ],
           "title": "ActiveThreadStatus",
           "type": "object"
-        },
-        {
-          "properties": {
-            "outcome": {
-              "$ref": "#/definitions/ThreadTerminalOutcome"
-            },
-            "type": {
-              "enum": [
-                "terminal"
-              ],
-              "title": "TerminalThreadStatusType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "outcome",
-            "type"
-          ],
-          "title": "TerminalThreadStatus",
-          "type": "object"
         }
       ]
     },
@@ -7152,15 +7145,6 @@
         "threadId"
       ],
       "type": "object"
-    },
-    "ThreadTerminalOutcome": {
-      "enum": [
-        "completed",
-        "failed",
-        "interrupted",
-        "shutdown"
-      ],
-      "type": "string"
     },
     "ThreadTokenUsage": {
       "properties": {

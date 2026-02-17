@@ -184,7 +184,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     assert_eq!(read.path, Some(thread_path));
     assert!(read.preview.is_empty());
     assert_eq!(read.turns.len(), 0);
-    assert_eq!(read.status, ThreadStatus::Idle);
+    assert_eq!(read.status, ThreadStatus::Idle { idle_flags: vec![] });
 
     Ok(())
 }
