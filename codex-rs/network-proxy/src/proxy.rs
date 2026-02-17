@@ -444,12 +444,6 @@ impl NetworkProxy {
         self.dangerously_allow_all_unix_sockets
     }
 
-    pub async fn latest_blocked_request_for_attempt(
-        &self,
-        attempt_id: &str,
-    ) -> Result<Option<BlockedRequest>> {
-        self.state.latest_blocked_for_attempt(attempt_id).await
-    }
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         self.apply_to_env_for_attempt(env, None);
     }
