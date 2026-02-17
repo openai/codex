@@ -59,6 +59,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use regex_lite::Regex;
+use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -251,6 +252,11 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, /*width*/ None)
 }
 
+pub(crate) struct RenderedMarkdownWithSourceMap {
+    pub(crate) text: Text<'static>,
+    pub(crate) line_end_input_bytes: Vec<usize>,
+}
+
 /// Render markdown constrained to a known terminal width.
 ///
 /// The renderer preserves table structure when possible and falls back to
@@ -273,13 +279,33 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Text<'static> {
+    render_markdown_text_with_width_and_cwd_and_source_map(input, width, cwd).text
+}
+
+#[cfg(test)]
+pub(crate) fn render_markdown_text_with_width_and_source_map(
+    input: &str,
+    width: Option<usize>,
+) -> RenderedMarkdownWithSourceMap {
+    let cwd = std::env::current_dir().ok();
+    render_markdown_text_with_width_and_cwd_and_source_map(input, width, cwd.as_deref())
+}
+
+pub(crate) fn render_markdown_text_with_width_and_cwd_and_source_map(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> RenderedMarkdownWithSourceMap {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width, cwd);
+    let parser = Parser::new_ext(input, options).into_offset_iter();
+    let mut w = Writer::new(parser, width, input.len(), cwd);
     w.run();
-    w.text
+    RenderedMarkdownWithSourceMap {
+        text: w.text,
+        line_end_input_bytes: w.line_end_input_bytes,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -320,10 +346,13 @@ static HASH_LOCATION_SUFFIX_RE: LazyLock<Regex> =
 /// allocation; when `None`, lines keep their intrinsic width.
 struct Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
     iter: I,
+    source_len: usize,
     text: Text<'static>,
+    line_end_input_bytes: Vec<usize>,
+    current_event_end: usize,
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
@@ -349,12 +378,20 @@ where
 
 impl<'a, I> Writer<'a, I>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, Range<usize>)>,
 {
-    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
+    fn new(
+        iter: I,
+        wrap_width: Option<usize>,
+        source_len: usize,
+        cwd: Option<&Path>,
+    ) -> Self {
         Self {
             iter,
+            source_len,
             text: Text::default(),
+            line_end_input_bytes: Vec::new(),
+            current_event_end: 0,
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
@@ -380,9 +417,11 @@ where
     }
 
     fn run(&mut self) {
-        while let Some(ev) = self.iter.next() {
+        while let Some((ev, range)) = self.iter.next() {
+            self.current_event_end = range.end;
             self.handle_event(ev);
         }
+        self.current_event_end = self.source_len;
         self.flush_current_line();
     }
 
@@ -1569,13 +1608,13 @@ where
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
                 for wrapped in adaptive_wrap_line(&line, opts) {
                     let owned = line_to_static(&wrapped).style(style);
-                    self.text.lines.push(owned);
+                    self.push_output_line(owned);
                 }
             } else {
                 let mut spans = self.current_initial_indent.clone();
                 let mut line = line;
                 spans.append(&mut line.spans);
-                self.text.lines.push(Line::from_iter(spans).style(style));
+                self.push_output_line(Line::from_iter(spans).style(style));
             }
             self.current_initial_indent.clear();
             self.current_subsequent_indent.clear();
@@ -1605,7 +1644,7 @@ where
 
         let mut spans = self.prefix_spans(pending_marker_line);
         spans.extend(line.spans);
-        self.text.lines.push(Line::from(spans).style(style));
+        self.push_output_line(Line::from(spans).style(style));
     }
 
     fn push_line(&mut self, line: Line<'static>) {
@@ -1642,11 +1681,16 @@ where
     fn push_blank_line(&mut self) {
         self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
-            self.text.lines.push(Line::default());
+            self.push_output_line(Line::default());
         } else {
             self.push_line(Line::default());
             self.flush_current_line();
         }
+    }
+
+    fn push_output_line(&mut self, line: Line<'static>) {
+        self.text.lines.push(line);
+        self.line_end_input_bytes.push(self.current_event_end);
     }
 
     fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
