@@ -6,7 +6,10 @@ use codex_core::ThreadManager;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 
-pub async fn supported_models(thread_manager: Arc<ThreadManager>, include_hidden: bool) -> Vec<Model> {
+pub async fn supported_models(
+    thread_manager: Arc<ThreadManager>,
+    include_hidden: bool,
+) -> Vec<Model> {
     thread_manager
         .list_models(codex_core::models_manager::manager::RefreshStrategy::OnlineIfUncached)
         .await
