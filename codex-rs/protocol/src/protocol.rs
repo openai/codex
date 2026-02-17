@@ -285,13 +285,14 @@ pub enum Op {
     },
 
     /// Request the list of remote skills available via ChatGPT sharing.
-    ListRemoteSkills,
+    ListRemoteSkills {
+        hazelnut_scope: RemoteSkillHazelnutScope,
+        product_surface: RemoteSkillProductSurface,
+        enabled: Option<bool>,
+    },
 
     /// Download a remote skill by id into the local skills cache.
-    DownloadRemoteSkill {
-        hazelnut_id: String,
-        is_preload: bool,
-    },
+    DownloadRemoteSkill { hazelnut_id: String },
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -883,6 +884,9 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
+    /// Model routing changed from the requested model to a different model.
+    ModelReroute(ModelRerouteEvent),
+
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
@@ -1340,6 +1344,20 @@ impl ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct WarningEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ModelRerouteReason {
+    HighRiskCyberActivity,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ModelRerouteEvent {
+    pub from_model: String,
+    pub to_model: String,
+    pub reason: ModelRerouteReason,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2403,6 +2421,26 @@ pub struct RemoteSkillSummary {
     pub id: String,
     pub name: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case")]
+pub enum RemoteSkillHazelnutScope {
+    WorkspaceShared,
+    AllShared,
+    Personal,
+    Example,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum RemoteSkillProductSurface {
+    Chatgpt,
+    Codex,
+    Api,
+    Atlas,
 }
 
 /// Response payload for `Op::ListRemoteSkills`.

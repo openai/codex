@@ -437,7 +437,6 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
 shell_snapshot = false
 
 [model_providers.mock_provider]

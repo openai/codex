@@ -37,6 +37,7 @@ pub struct ShellRequest {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub env: std::collections::HashMap<String, String>,
+    pub explicit_env_overrides: std::collections::HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
@@ -166,8 +167,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command =
-            maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref(), &req.cwd);
+        let command = maybe_wrap_shell_lc_with_snapshot(
+            base_command,
+            session_shell.as_ref(),
+            &req.cwd,
+            &req.explicit_env_overrides,
+        );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {
