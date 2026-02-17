@@ -733,6 +733,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update Specify (spec-kit) commands available for the slash popup.
+    pub(crate) fn set_specify_commands(
+        &mut self,
+        commands: Vec<codex_core::specify::SpecifyCommand>,
+        initialized: bool,
+    ) {
+        self.composer.set_specify_commands(commands, initialized);
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }

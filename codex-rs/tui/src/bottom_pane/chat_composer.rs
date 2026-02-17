@@ -174,8 +174,10 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use codex_core::specify::SpecifyCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::custom_prompts::SPECIFY_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -312,6 +314,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    specify_commands: Vec<SpecifyCommand>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
@@ -415,6 +418,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            specify_commands: Vec::new(),
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             remote_image_urls: Vec::new(),
@@ -1240,6 +1244,13 @@ impl ChatComposer {
                                 }
                             }
                         }
+                        CommandItem::SpecifyCommand(idx) => {
+                            if let Some(sc) = popup.specify_command(idx) {
+                                let text = format!("/{SPECIFY_CMD_PREFIX}.{} ", sc.name);
+                                self.textarea.set_text_clearing_elements(&text);
+                                cursor_target = Some(text.len());
+                            }
+                        }
                     }
                     if let Some(pos) = cursor_target {
                         self.textarea.set_cursor(pos);
@@ -1324,6 +1335,31 @@ impl ChatComposer {
                                         return (InputResult::None, true);
                                     }
                                 }
+                            }
+                            return (InputResult::None, true);
+                        }
+                        CommandItem::SpecifyCommand(idx) => {
+                            if let Some(sc) = popup.specify_command(idx) {
+                                // Extract args after "/specify.<name> "
+                                let prefix = format!("/{SPECIFY_CMD_PREFIX}.{}", sc.name);
+                                let user_args = if first_line.len() > prefix.len() {
+                                    first_line[prefix.len()..].trim().to_string()
+                                } else {
+                                    String::new()
+                                };
+                                // Replace both TOML and MD arg placeholders with user input
+                                let expanded = sc
+                                    .prompt
+                                    .replace("{{args}}", &user_args)
+                                    .replace("$ARGUMENTS", &user_args);
+                                self.textarea.set_text_clearing_elements("");
+                                return (
+                                    InputResult::Submitted {
+                                        text: expanded,
+                                        text_elements: Vec::new(),
+                                    },
+                                    true,
+                                );
                             }
                             return (InputResult::None, true);
                         }
@@ -3044,6 +3080,15 @@ impl ChatComposer {
                 .iter()
                 .any(|prompt| prompt.name == prompt_name);
         }
+        // Check specify commands: "specify.constitution", "specify.plan", etc.
+        if let Some(rest) = name.strip_prefix(SPECIFY_CMD_PREFIX)
+            && let Some(cmd_name) = rest.strip_prefix('.')
+        {
+            return self
+                .specify_commands
+                .iter()
+                .any(|sc| sc.name == cmd_name);
+        }
         false
     }
 
@@ -3098,6 +3143,8 @@ impl ChatComposer {
 
         self.custom_prompts.iter().any(|prompt| {
             fuzzy_match(&format!("{PROMPTS_CMD_PREFIX}:{}", prompt.name), name).is_some()
+        }) || self.specify_commands.iter().any(|sc| {
+            fuzzy_match(&format!("{SPECIFY_CMD_PREFIX}.{}", sc.name), name).is_some()
         })
     }
 
@@ -3163,6 +3210,17 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_specify_commands(
+        &mut self,
+        commands: Vec<SpecifyCommand>,
+        initialized: bool,
+    ) {
+        self.specify_commands = commands.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_specify_commands(commands, initialized);
         }
     }
 

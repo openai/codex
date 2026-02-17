@@ -10,6 +10,10 @@ use ts_rs::TS;
 /// - Full slash prefix: `"/{PROMPTS_CMD_PREFIX}:"`
 pub const PROMPTS_CMD_PREFIX: &str = "prompts";
 
+/// Base namespace for Specify (spec-kit) slash commands.
+/// Commands use the form `/specify.<command_name>`.
+pub const SPECIFY_CMD_PREFIX: &str = "specify";
+
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 pub struct CustomPrompt {
     pub name: String,

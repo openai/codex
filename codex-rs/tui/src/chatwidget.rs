@@ -1057,6 +1057,14 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+
+        // Discover Specify (spec-kit) commands from the project directory.
+        if let Some(cwd) = &self.current_cwd {
+            use codex_core::specify;
+            let initialized = specify::is_specify_initialized(cwd);
+            let commands = specify::discover_specify_commands(cwd);
+            self.bottom_pane.set_specify_commands(commands, initialized);
+        }
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
             force_reload: true,

@@ -10,8 +10,10 @@ use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
+use codex_core::specify::SpecifyCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
+use codex_protocol::custom_prompts::SPECIFY_CMD_PREFIX;
 use std::collections::HashSet;
 
 // Hide alias commands in the default popup list so each unique action appears once.
@@ -19,18 +21,23 @@ use std::collections::HashSet;
 // `approvals` is an alias of `permissions`.
 const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
 
-/// A selectable item in the popup: either a built-in command or a user prompt.
+/// A selectable item in the popup: either a built-in command, a user prompt,
+/// or a Specify (spec-kit) command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
-    // Index into `prompts`
+    /// Index into `prompts`.
     UserPrompt(usize),
+    /// Index into `specify_commands`.
+    SpecifyCommand(usize),
 }
 
 pub(crate) struct CommandPopup {
     command_filter: String,
     builtins: Vec<(&'static str, SlashCommand)>,
     prompts: Vec<CustomPrompt>,
+    specify_commands: Vec<SpecifyCommand>,
+    specify_initialized: bool,
     state: ScrollState,
 }
 
@@ -62,6 +69,8 @@ impl CommandPopup {
             command_filter: String::new(),
             builtins,
             prompts,
+            specify_commands: Vec::new(),
+            specify_initialized: false,
             state: ScrollState::new(),
         }
     }
@@ -77,8 +86,23 @@ impl CommandPopup {
         self.prompts = prompts;
     }
 
+    /// Update the list of available Specify commands.
+    pub(crate) fn set_specify_commands(
+        &mut self,
+        commands: Vec<SpecifyCommand>,
+        initialized: bool,
+    ) {
+        self.specify_commands = commands;
+        self.specify_initialized = initialized;
+    }
+
     pub(crate) fn prompt(&self, idx: usize) -> Option<&CustomPrompt> {
         self.prompts.get(idx)
+    }
+
+    /// Return the specify command at the given index.
+    pub(crate) fn specify_command(&self, idx: usize) -> Option<&SpecifyCommand> {
+        self.specify_commands.get(idx)
     }
 
     /// Update the filter string based on the current composer text. The text
@@ -139,6 +163,10 @@ impl CommandPopup {
             for idx in 0..self.prompts.len() {
                 out.push((CommandItem::UserPrompt(idx), None));
             }
+            // Then specify commands.
+            for idx in 0..self.specify_commands.len() {
+                out.push((CommandItem::SpecifyCommand(idx), None));
+            }
             return out;
         }
 
@@ -147,6 +175,7 @@ impl CommandPopup {
         let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
+        let specify_prefix_len = SPECIFY_CMD_PREFIX.chars().count() + 1; // "specify."
         let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
         let mut push_match =
@@ -185,6 +214,16 @@ impl CommandPopup {
                 prompt_prefix_len,
             );
         }
+        // Specify commands: "/specify.constitution", "/specify.plan", etc.
+        for (idx, sc) in self.specify_commands.iter().enumerate() {
+            let display = format!("{SPECIFY_CMD_PREFIX}.{}", sc.name);
+            push_match(
+                CommandItem::SpecifyCommand(idx),
+                &display,
+                Some(&sc.name),
+                specify_prefix_len,
+            );
+        }
 
         out.extend(exact);
         out.extend(prefix);
@@ -202,9 +241,9 @@ impl CommandPopup {
         matches
             .into_iter()
             .map(|(item, indices)| {
-                let (name, description) = match item {
+                let (name, description, is_disabled, disabled_reason) = match item {
                     CommandItem::Builtin(cmd) => {
-                        (format!("/{}", cmd.command()), cmd.description().to_string())
+                        (format!("/{}", cmd.command()), cmd.description().to_string(), false, None)
                     }
                     CommandItem::UserPrompt(i) => {
                         let prompt = &self.prompts[i];
@@ -215,6 +254,22 @@ impl CommandPopup {
                         (
                             format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name),
                             description,
+                            false,
+                            None,
+                        )
+                    }
+                    CommandItem::SpecifyCommand(i) => {
+                        let sc = &self.specify_commands[i];
+                        let description = if sc.description.is_empty() {
+                            "specify command".to_string()
+                        } else {
+                            sc.description.clone()
+                        };
+                        (
+                            format!("/{SPECIFY_CMD_PREFIX}.{}", sc.name),
+                            description,
+                            false,
+                            None,
                         )
                     }
                 };
@@ -225,8 +280,8 @@ impl CommandPopup {
                     description: Some(description),
                     category_tag: None,
                     wrap_indent: None,
-                    is_disabled: false,
-                    disabled_reason: None,
+                    is_disabled,
+                    disabled_reason,
                 }
             })
             .collect()
