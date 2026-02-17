@@ -170,23 +170,26 @@ impl ExecPolicyManager {
             prefix_rule,
         } = req;
         let exec_policy = self.current();
-        let (commands, used_heredoc_fallback) = commands_for_exec_policy(command);
+        let (commands, used_complex_parsing) = commands_for_exec_policy(command);
         // Keep heredoc prefix parsing for rule evaluation so existing
         // allow/prompt/forbidden rules still apply, but avoid auto-derived
         // amendments when only the heredoc fallback parser matched.
-        let auto_amendment_allowed = !used_heredoc_fallback;
+        let auto_amendment_allowed = !used_complex_parsing;
         let exec_policy_fallback = |cmd: &[String]| {
             render_decision_for_unmatched_command(
                 approval_policy,
                 sandbox_policy,
                 cmd,
                 sandbox_permissions,
+                used_complex_parsing,
             )
         };
         let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
 
-        let requested_amendment =
-            derive_requested_execpolicy_amendment(prefix_rule.as_ref(), &evaluation.matched_rules);
+        let requested_amendment = derive_requested_execpolicy_amendment_from_prefix_rule(
+            prefix_rule.as_ref(),
+            &evaluation.matched_rules,
+        );
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -406,8 +409,9 @@ pub fn render_decision_for_unmatched_command(
     sandbox_policy: &SandboxPolicy,
     command: &[String],
     sandbox_permissions: SandboxPermissions,
+    used_complex_parsing: bool,
 ) -> Decision {
-    if is_known_safe_command(command) {
+    if is_known_safe_command(command) && !used_complex_parsing {
         return Decision::Allow;
     }
 
@@ -534,7 +538,7 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
         })
 }
 
-fn derive_requested_execpolicy_amendment(
+fn derive_requested_execpolicy_amendment_from_prefix_rule(
     prefix_rule: Option<&Vec<String>>,
     matched_rules: &[RuleMatch],
 ) -> Option<ExecPolicyAmendment> {
@@ -552,10 +556,8 @@ fn derive_requested_execpolicy_amendment(
         return None;
     }
 
-    if matched_rules
-        .iter()
-        .any(|rule_match| is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt)
-    {
+    // if any policy rule already matches, don't suggest an additional rule that might conflict or not apply
+    if matched_rules.iter().any(is_policy_match) {
         return None;
     }
 
@@ -686,8 +688,6 @@ mod tests {
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
-    use crate::features::Feature;
-    use crate::features::Features;
     use codex_app_server_protocol::ConfigLayerSource;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SandboxPolicy;
@@ -1281,8 +1281,6 @@ prefix_rule(
             "cargo-insta".to_string(),
         ];
         let manager = ExecPolicyManager::default();
-        let mut features = Features::with_defaults();
-        features.enable(Feature::RequestRule);
 
         let requirement = manager
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
@@ -1564,14 +1562,17 @@ prefix_rule(
 
     #[test]
     fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
-        assert_eq!(None, derive_requested_execpolicy_amendment(None, &[]));
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(None, &[])
+        );
     }
 
     #[test]
     fn derive_requested_execpolicy_amendment_returns_none_for_empty_prefix_rule() {
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(Some(&Vec::new()), &[])
+            derive_requested_execpolicy_amendment_from_prefix_rule(Some(&Vec::new()), &[])
         );
     }
 
@@ -1579,7 +1580,7 @@ prefix_rule(
     fn derive_requested_execpolicy_amendment_returns_none_for_exact_banned_prefix_rule() {
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(
+            derive_requested_execpolicy_amendment_from_prefix_rule(
                 Some(&vec!["python".to_string(), "-c".to_string()]),
                 &[],
             )
@@ -1598,7 +1599,7 @@ prefix_rule(
         ] {
             assert_eq!(
                 None,
-                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+                derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
             );
         }
     }
@@ -1624,7 +1625,7 @@ prefix_rule(
         ] {
             assert_eq!(
                 None,
-                derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+                derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
             );
         }
     }
@@ -1639,22 +1640,52 @@ prefix_rule(
 
         assert_eq!(
             Some(ExecPolicyAmendment::new(prefix_rule.clone())),
-            derive_requested_execpolicy_amendment(Some(&prefix_rule), &[])
+            derive_requested_execpolicy_amendment_from_prefix_rule(Some(&prefix_rule), &[])
         );
     }
 
     #[test]
-    fn derive_requested_execpolicy_amendment_returns_none_when_policy_prompt_matches() {
+    fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
         let prefix_rule = vec!["cargo".to_string(), "build".to_string()];
-        let matched_rules = vec![RuleMatch::PrefixRuleMatch {
+
+        let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
             matched_prefix: vec!["cargo".to_string()],
             decision: Decision::Prompt,
             justification: None,
         }];
-
         assert_eq!(
             None,
-            derive_requested_execpolicy_amendment(Some(&prefix_rule), &matched_rules)
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_prompt
+            ),
+            "should return none when prompt policy matches"
+        );
+        let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
+            matched_prefix: vec!["cargo".to_string()],
+            decision: Decision::Allow,
+            justification: None,
+        }];
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_allow
+            ),
+            "should return none when prompt policy matches"
+        );
+        let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
+            matched_prefix: vec!["cargo".to_string()],
+            decision: Decision::Forbidden,
+            justification: None,
+        }];
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_from_prefix_rule(
+                Some(&prefix_rule),
+                &matched_rules_forbidden
+            ),
+            "should return none when prompt policy matches"
         );
     }
 

@@ -184,7 +184,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::collab;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -201,6 +200,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -4021,6 +4021,7 @@ impl ChatWidget {
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
+            EventMsg::ModelReroute(_) => {}
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
@@ -4113,17 +4114,19 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::CollabAgentSpawnBegin(_) => {}
-            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(multi_agents::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
             EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(collab::interaction_end(ev))
+                self.on_collab_event(multi_agents::interaction_end(ev))
             }
-            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabWaitingBegin(ev) => {
+                self.on_collab_event(multi_agents::waiting_begin(ev))
+            }
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
@@ -4696,7 +4699,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models(&self.config).ok()?;
+        let models = self.models_manager.try_list_models().ok()?;
         models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
@@ -4813,7 +4816,7 @@ impl ChatWidget {
             return;
         }
 
-        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models() {
             Ok(models) => models,
             Err(_) => {
                 self.add_info_message(
@@ -6135,7 +6138,7 @@ impl ChatWidget {
     fn current_model_supports_personality(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models
@@ -6153,7 +6156,7 @@ impl ChatWidget {
     fn current_model_supports_images(&self) -> bool {
         let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
+            .try_list_models()
             .ok()
             .and_then(|models| {
                 models

@@ -37,6 +37,7 @@ pub struct LogQuery {
     pub module_like: Vec<String>,
     pub file_like: Vec<String>,
     pub thread_ids: Vec<String>,
+    pub search: Option<String>,
     pub include_threadless: bool,
     pub after_id: Option<i64>,
     pub limit: Option<usize>,
