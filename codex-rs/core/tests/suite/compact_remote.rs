@@ -1909,7 +1909,6 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once manual remote /compact with no prior user turn becomes a no-op.
 async fn snapshot_request_shape_remote_manual_compact_without_previous_user_messages() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
