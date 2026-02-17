@@ -543,7 +543,9 @@ impl ExecCell {
             // When an existing ellipsis is present, `lines` already includes
             // that single representation line; exclude it from the count of
             // additionally omitted content lines.
-            let extra = total_rows.saturating_sub(usize::from(omitted_hint.is_some()));
+            let extra = lines
+                .len()
+                .saturating_sub(usize::from(omitted_hint.is_some()));
             let omitted = base + extra;
             return vec![Self::ellipsis_line_with_prefix(
                 omitted,
@@ -582,8 +584,9 @@ impl ExecCell {
 
         let mut out = head_lines;
         let base = omitted_hint.unwrap_or(0);
-        let additional = total_rows
-            .saturating_sub(head_rows + tail_rows)
+        let additional = lines
+            .len()
+            .saturating_sub(out.len() + tail_lines_reversed.len())
             .saturating_sub(usize::from(omitted_hint.is_some()));
         out.push(Self::ellipsis_line_with_prefix(
             base + additional,
@@ -755,6 +758,33 @@ mod tests {
         assert!(
             contains_ellipsis,
             "expected truncated output to include an ellipsis line"
+        );
+    }
+
+    #[test]
+    fn truncate_lines_middle_keeps_omitted_count_in_line_units() {
+        let lines = vec![
+            Line::from("  └ short"),
+            Line::from("    this-is-a-very-long-token-that-wraps-many-rows"),
+            Line::from("    … +4 lines"),
+            Line::from("    tail"),
+        ];
+
+        let truncated =
+            ExecCell::truncate_lines_middle(&lines, 2, 12, Some(4), Some(Line::from("    ".dim())));
+        let rendered: Vec<String> = truncated
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert!(
+            rendered.iter().any(|line| line.contains("… +6 lines")),
+            "expected omitted hint to count hidden lines (not wrapped rows), got: {rendered:?}"
         );
     }
 
