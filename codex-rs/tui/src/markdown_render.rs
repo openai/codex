@@ -1151,10 +1151,9 @@ where
         // Keep common intro + html-block spillover together:
         // "HTML block:" followed by "<div ...>".
         first_text.trim_end().ends_with(':')
-            && (next_row
+            && next_row
                 .and_then(|row| Self::first_non_empty_only_text(row))
                 .is_some_and(|text| Self::looks_like_html_content(&text))
-                || Self::looks_like_label_line(&first_text))
     }
 
     fn first_non_empty_only_text(row: &[TableCell]) -> Option<String> {
@@ -1170,10 +1169,6 @@ where
 
     fn looks_like_html_content(text: &str) -> bool {
         text.contains('<') && text.contains('>')
-    }
-
-    fn looks_like_label_line(text: &str) -> bool {
-        text.trim_end().ends_with(':') && text.split_whitespace().count() <= 3
     }
 
     fn spans_display_width(spans: &[Span<'_>]) -> usize {

@@ -558,6 +558,7 @@ fn is_markdown_fence(trimmed_line: &str, marker_len: usize) -> bool {
 fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
     let mut in_fence = false;
     let mut fence_char = '\0';
+    let mut fence_len = 0usize;
     let mut fence_context = FenceContext::Other;
     let mut lines = Vec::new();
 
@@ -576,13 +577,15 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
             if !in_fence {
                 in_fence = true;
                 fence_char = marker;
+                fence_len = len;
                 fence_context = if is_markdown_fence(trimmed, len) {
                     FenceContext::Markdown
                 } else {
                     FenceContext::Other
                 };
-            } else if marker == fence_char && len >= 3 {
+            } else if marker == fence_char && len >= fence_len && trimmed[len..].trim().is_empty() {
                 in_fence = false;
+                fence_len = 0;
                 fence_context = FenceContext::Other;
             }
         }
@@ -1301,6 +1304,15 @@ mod tests {
             table_holdback_state(source),
             TableHoldbackState::Confirmed
         ));
+    }
+
+    #[test]
+    fn table_holdback_state_ignores_table_like_lines_inside_unclosed_long_fence() {
+        let source = "````sh\n```cmd\n| Key | Description |\n| --- | --- |\n````\n";
+        assert!(
+            matches!(table_holdback_state(source), TableHoldbackState::None),
+            "table holdback should ignore pipe lines inside an open non-markdown fence",
+        );
     }
 
     // -----------------------------------------------------------------------

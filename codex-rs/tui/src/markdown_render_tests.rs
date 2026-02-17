@@ -1131,6 +1131,28 @@ fn table_keeps_sparse_sentence_row_inside_grid() {
 }
 
 #[test]
+fn table_keeps_label_only_sparse_row_inside_grid() {
+    let md = "| A | B | C |\n|---|---|---|\n| Status: | | |\n| ok | | |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("│ Status:") && line.ends_with('│')),
+        "expected label-only sparse row to remain inside table grid: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "Status:"),
+        "did not expect label-only sparse row to spill outside table: {lines:?}"
+    );
+}
+
+#[test]
 fn table_preserves_structured_leading_columns_when_last_column_is_long() {
     let md = "| Milestone | Planned Date | Outcome | Retrospective Summary |\n|---|---|---|---|\n| Canary rollout | 2026-01-10 | Completed | Canary
   traffic was held at 5% longer than planned due to latency regressions tied to cold cache behavior; after pre-warming and query plan hints, p95
