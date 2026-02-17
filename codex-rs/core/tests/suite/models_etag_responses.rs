@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
@@ -48,7 +47,6 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         .with_auth(auth)
         .with_model("gpt-5")
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             // Keep this test deterministic: no request retries, and a small stream retry budget.
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(1);

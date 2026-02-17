@@ -1036,6 +1036,7 @@ mod tests {
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
+        assert_eq!(snapshot.model, "gpt-5.1-codex-mini");
         assert_eq!(snapshot.approval_policy, AskForApproval::Never);
     }
 
