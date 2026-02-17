@@ -445,6 +445,11 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    /// Drop any queued history lines that have not yet been flushed to the terminal.
+    pub fn clear_pending_history_lines(&mut self) {
+        self.pending_history_lines.clear();
+    }
+
     pub fn draw(
         &mut self,
         height: u16,

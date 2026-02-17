@@ -6095,6 +6095,94 @@ async fn interrupt_drops_stream_deltas_until_turn_aborted() {
 }
 
 #[tokio::test]
+async fn interrupt_remains_responsive_during_resized_table_stream() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.last_rendered_width.set(Some(120));
+    chat.handle_codex_event(Event {
+        id: "turn-resize".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-resize".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "table-head".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta:
+                "| Row | Initiative Summary | Extended Notes | URL |\n| --- | --- | --- | --- |\n"
+                    .to_string(),
+        }),
+    });
+
+    for idx in 0..40 {
+        chat.handle_codex_event(Event {
+            id: format!("table-row-{idx}"),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: format!(
+                    "| {idx:03} | Workstream {idx:03} provides a long narrative about scope boundaries, sequencing assumptions, contingency paths, stakeholder dependencies, and quality criteria to keep complex coordination readable under pressure. | Record {idx:03} stores extended execution commentary including risk signals, approvals, rollback conditions, evidence links, and checkpoint outcomes so auditors and new contributors can understand context without reopening old threads. | https://example.com/program/workstream-{idx:03}-detailed-governance-and-delivery-context |\n",
+                ),
+            }),
+        });
+        chat.on_terminal_resize(if idx % 2 == 0 { 72 } else { 116 });
+        chat.on_commit_tick();
+        let _ = drain_insert_history(&mut rx);
+    }
+
+    assert!(
+        chat.stream_controller.is_some(),
+        "expected active stream during table tail stress",
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    let mut saw_interrupt = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if matches!(op, Op::Interrupt) {
+            saw_interrupt = true;
+            break;
+        }
+    }
+    assert!(saw_interrupt, "expected Ctrl+C to submit Op::Interrupt");
+
+    chat.on_terminal_resize(64);
+    let resized_tail = {
+        let controller = chat
+            .stream_controller
+            .as_ref()
+            .expect("expected stream controller after resize");
+        lines_to_single_string(&controller.current_tail_lines())
+    };
+
+    chat.handle_codex_event(Event {
+        id: "table-row-stale-after-interrupt".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "| 999 | INTERRUPT_STALE_SENTINEL | INTERRUPT_STALE_SENTINEL | https://example.com/stale |\n"
+                .to_string(),
+        }),
+    });
+
+    let tail_after_stale_delta = {
+        let controller = chat
+            .stream_controller
+            .as_ref()
+            .expect("expected stream controller after stale delta");
+        lines_to_single_string(&controller.current_tail_lines())
+    };
+    assert_eq!(
+        tail_after_stale_delta, resized_tail,
+        "expected stale table delta to be dropped while interrupt is pending",
+    );
+    assert!(
+        !tail_after_stale_delta.contains("INTERRUPT_STALE_SENTINEL"),
+        "stale sentinel should never reach the active stream tail",
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

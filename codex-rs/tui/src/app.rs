@@ -937,6 +937,7 @@ impl App {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
+        tui.clear_pending_history_lines();
         self.has_emitted_history_lines = false;
         self.last_transcript_render_width = None;
         self.resize_reflow_pending_until = None;
@@ -990,9 +991,10 @@ impl App {
         size: ratatui::layout::Size,
         last_known_screen_size: ratatui::layout::Size,
         frame_requester: &tui::FrameRequester,
-    ) {
+    ) -> bool {
         let previous_width = self.last_transcript_render_width.replace(size.width);
-        if previous_width.is_some_and(|width| width != size.width) {
+        let width_changed = previous_width.is_some_and(|width| width != size.width);
+        if width_changed {
             self.chat_widget.on_terminal_resize(size.width);
             self.schedule_resize_reflow();
             frame_requester.schedule_frame_in(RESIZE_REFLOW_DEBOUNCE);
@@ -1003,6 +1005,7 @@ impl App {
             self.refresh_status_line();
         }
         self.maybe_clear_resize_reflow_without_terminal();
+        width_changed
     }
 
     fn maybe_clear_resize_reflow_without_terminal(&mut self) {
@@ -1021,11 +1024,16 @@ impl App {
 
     fn handle_draw_pre_render(&mut self, tui: &mut tui::Tui) -> Result<()> {
         let size = tui.terminal.size()?;
-        self.handle_draw_size_change(
+        let width_changed = self.handle_draw_size_change(
             size,
             tui.terminal.last_known_screen_size,
             &tui.frame_requester(),
         );
+        if width_changed {
+            // Width-sensitive history inserts queued before this frame may be wrapped for the old
+            // viewport. Drop them and let resize reflow rebuild from transcript cells.
+            tui.clear_pending_history_lines();
+        }
         self.maybe_run_resize_reflow(tui)?;
         Ok(())
     }
@@ -1039,6 +1047,8 @@ impl App {
         }
 
         self.resize_reflow_pending_until = None;
+        // Drop any queued pre-resize inserts before rebuilding at the new width.
+        tui.clear_pending_history_lines();
         if self.transcript_cells.is_empty() {
             self.has_emitted_history_lines = false;
             self.deferred_history_lines.clear();

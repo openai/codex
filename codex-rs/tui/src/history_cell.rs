@@ -66,6 +66,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::any::Any;
@@ -144,6 +145,9 @@ impl Renderable for Box<dyn HistoryCell> {
             let overflow = lines.len().saturating_sub(usize::from(area.height));
             u16::try_from(overflow).unwrap_or(u16::MAX)
         };
+        // Active-cell content can reflow dramatically during resize/stream updates. Clear the
+        // entire draw area first so stale glyphs from previous frames never linger.
+        Clear.render(area, buf);
         Paragraph::new(Text::from(lines))
             .scroll((y, 0))
             .render(area, buf);
@@ -2465,6 +2469,8 @@ mod tests {
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -3865,6 +3871,44 @@ mod tests {
                 "agent markdown cell should render at width {width}",
             );
         }
+    }
+
+    #[test]
+    fn render_clears_area_when_cell_content_shrinks() {
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+
+        let first: Box<dyn HistoryCell> = Box::new(PlainHistoryCell::new(vec![
+            Line::from("STALE ROW 1"),
+            Line::from("STALE ROW 2"),
+            Line::from("STALE ROW 3"),
+            Line::from("STALE ROW 4"),
+        ]));
+        first.render(area, &mut buf);
+
+        let second: Box<dyn HistoryCell> =
+            Box::new(PlainHistoryCell::new(vec![Line::from("fresh")]));
+        second.render(area, &mut buf);
+
+        let mut rendered_rows: Vec<String> = Vec::new();
+        for y in 0..area.height {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push_str(buf.cell((x, y)).expect("cell should exist").symbol());
+            }
+            rendered_rows.push(row);
+        }
+
+        assert!(
+            rendered_rows.iter().all(|row| !row.contains("STALE")),
+            "rendered buffer should not retain stale glyphs: {rendered_rows:?}",
+        );
+        assert!(
+            rendered_rows
+                .first()
+                .is_some_and(|row| row.contains("fresh")),
+            "expected fresh content in first row: {rendered_rows:?}",
+        );
     }
 
     #[test]
