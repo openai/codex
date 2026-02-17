@@ -64,12 +64,8 @@ pub(crate) fn visible_permissions_options(config: &Config) -> Vec<SelectionItem>
 
 impl PermissionsPreset {
     fn is_visible(&self) -> bool {
-        match self.id {
-            "read-only" => cfg!(target_os = "windows"),
-            "auto" => true,
-            "full-access" => true,
-            _ => false,
-        }
+        matches!(self.id, "auto" | "full-access")
+            || (cfg!(target_os = "windows") && matches!(self.id, "read-only"))
     }
 
     pub(crate) fn to_selection_item(&self, config: &Config) -> SelectionItem {
