@@ -4,9 +4,10 @@ use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::SecondsFormat;
+use chrono::Utc;
 use std::future::Future;
 use std::sync::Arc;
-use time::OffsetDateTime;
 
 const AUDIT_TARGET: &str = "codex_otel.network_proxy";
 const DOMAIN_POLICY_DECISION_EVENT_NAME: &str = "codex.network_proxy.domain_policy_decision";
@@ -246,19 +247,7 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
 }
 
 fn audit_timestamp() -> String {
-    let now = OffsetDateTime::now_utc();
-    let month = u8::from(now.month());
-    let millis = now.nanosecond() / 1_000_000;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        now.year(),
-        month,
-        now.day(),
-        now.hour(),
-        now.minute(),
-        now.second(),
-        millis
-    )
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Decide whether a network request should be allowed.

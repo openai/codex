@@ -16,6 +16,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 globset = { workspace = true }

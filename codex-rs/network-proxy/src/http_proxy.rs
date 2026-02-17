@@ -245,13 +245,15 @@ async fn http_connect_accept(
     if mode == NetworkMode::Limited {
         emit_http_block_decision_audit_event(
             &app_state,
-            NetworkDecisionSource::ModeGuard,
-            REASON_METHOD_NOT_ALLOWED,
-            NetworkProtocol::HttpsConnect,
-            host.as_str(),
-            authority.port,
-            Some("CONNECT"),
-            client.as_deref(),
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::HttpsConnect,
+                server_address: host.as_str(),
+                server_port: authority.port,
+                method: Some("CONNECT"),
+                client_addr: client.as_deref(),
+            },
         );
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
@@ -438,13 +440,15 @@ async fn http_plain_proxy(
         if !method_allowed {
             emit_http_block_decision_audit_event(
                 &app_state,
-                NetworkDecisionSource::ModeGuard,
-                REASON_METHOD_NOT_ALLOWED,
-                NetworkProtocol::Http,
-                "unix-socket",
-                0,
-                Some(req.method().as_str()),
-                client.as_deref(),
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ModeGuard,
+                    reason: REASON_METHOD_NOT_ALLOWED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: "unix-socket",
+                    server_port: 0,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                },
             );
             let client = client.as_deref().unwrap_or_default();
             let method = req.method();
@@ -457,13 +461,15 @@ async fn http_plain_proxy(
         if !unix_socket_permissions_supported() {
             emit_http_block_decision_audit_event(
                 &app_state,
-                NetworkDecisionSource::ProxyState,
-                REASON_UNIX_SOCKET_UNSUPPORTED,
-                NetworkProtocol::Http,
-                "unix-socket",
-                0,
-                Some(req.method().as_str()),
-                client.as_deref(),
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ProxyState,
+                    reason: REASON_UNIX_SOCKET_UNSUPPORTED,
+                    protocol: NetworkProtocol::Http,
+                    server_address: "unix-socket",
+                    server_port: 0,
+                    method: Some(req.method().as_str()),
+                    client_addr: client.as_deref(),
+                },
             );
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
             return Ok(text_response(
@@ -490,13 +496,15 @@ async fn http_plain_proxy(
             Ok(false) => {
                 emit_http_block_decision_audit_event(
                     &app_state,
-                    NetworkDecisionSource::ProxyState,
-                    REASON_NOT_ALLOWED,
-                    NetworkProtocol::Http,
-                    "unix-socket",
-                    0,
-                    Some(req.method().as_str()),
-                    client.as_deref(),
+                    BlockDecisionAuditEventArgs {
+                        source: NetworkDecisionSource::ProxyState,
+                        reason: REASON_NOT_ALLOWED,
+                        protocol: NetworkProtocol::Http,
+                        server_address: "unix-socket",
+                        server_port: 0,
+                        method: Some(req.method().as_str()),
+                        client_addr: client.as_deref(),
+                    },
                 );
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
@@ -595,13 +603,15 @@ async fn http_plain_proxy(
     if !method_allowed {
         emit_http_block_decision_audit_event(
             &app_state,
-            NetworkDecisionSource::ModeGuard,
-            REASON_METHOD_NOT_ALLOWED,
-            NetworkProtocol::Http,
-            host.as_str(),
-            port,
-            Some(req.method().as_str()),
-            client.as_deref(),
+            BlockDecisionAuditEventArgs {
+                source: NetworkDecisionSource::ModeGuard,
+                reason: REASON_METHOD_NOT_ALLOWED,
+                protocol: NetworkProtocol::Http,
+                server_address: host.as_str(),
+                server_port: port,
+                method: Some(req.method().as_str()),
+                client_addr: client.as_deref(),
+            },
         );
         let details = PolicyDecisionDetails {
             decision: NetworkPolicyDecision::Deny,
@@ -790,13 +800,15 @@ async fn proxy_disabled_response(
         audit_endpoint_override.unwrap_or((host.as_str(), port));
     emit_http_block_decision_audit_event(
         app_state,
-        NetworkDecisionSource::ProxyState,
-        REASON_PROXY_DISABLED,
-        protocol,
-        audit_server_address,
-        audit_server_port,
-        method.as_deref(),
-        client.as_deref(),
+        BlockDecisionAuditEventArgs {
+            source: NetworkDecisionSource::ProxyState,
+            reason: REASON_PROXY_DISABLED,
+            protocol,
+            server_address: audit_server_address,
+            server_port: audit_server_port,
+            method: method.as_deref(),
+            client_addr: client.as_deref(),
+        },
     );
 
     let blocked_host = host.clone();
@@ -844,26 +856,9 @@ fn text_response(status: StatusCode, body: &str) -> Response {
 
 fn emit_http_block_decision_audit_event(
     app_state: &NetworkProxyState,
-    source: NetworkDecisionSource,
-    reason: &str,
-    protocol: NetworkProtocol,
-    server_address: &str,
-    server_port: u16,
-    method: Option<&str>,
-    client_addr: Option<&str>,
+    args: BlockDecisionAuditEventArgs<'_>,
 ) {
-    emit_block_decision_audit_event(
-        app_state,
-        BlockDecisionAuditEventArgs {
-            source,
-            reason,
-            protocol,
-            server_address,
-            server_port,
-            method,
-            client_addr,
-        },
-    );
+    emit_block_decision_audit_event(app_state, args);
 }
 
 #[derive(Serialize)]
