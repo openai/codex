@@ -16,7 +16,7 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
-use crate::skills::permissions::extend_sandbox_policy;
+use crate::sandboxing::extend_sandbox_policy;
 use crate::skills::resolve_skill_sandbox_extension_for_command;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;

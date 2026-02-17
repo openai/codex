@@ -13,7 +13,6 @@ use crate::config::Constrained;
 use crate::config::Permissions;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::protocol::AskForApproval;
-use crate::protocol::NetworkAccess;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
@@ -117,150 +116,6 @@ pub(crate) fn compile_permission_profile(
         windows_sandbox_mode: None,
         macos_seatbelt_profile_extensions,
     })
-}
-
-pub(crate) fn extend_sandbox_policy(
-    base: &SandboxPolicy,
-    extension: &SandboxPolicy,
-) -> SandboxPolicy {
-    match (base, extension) {
-        (SandboxPolicy::DangerFullAccess, _) | (_, SandboxPolicy::DangerFullAccess) => {
-            SandboxPolicy::DangerFullAccess
-        }
-        (
-            SandboxPolicy::ExternalSandbox {
-                network_access: base_network,
-            },
-            SandboxPolicy::ExternalSandbox {
-                network_access: extension_network,
-            },
-        ) => SandboxPolicy::ExternalSandbox {
-            network_access: if base_network.is_enabled() || extension_network.is_enabled() {
-                NetworkAccess::Enabled
-            } else {
-                NetworkAccess::Restricted
-            },
-        },
-        (SandboxPolicy::ExternalSandbox { .. }, _) | (_, SandboxPolicy::ExternalSandbox { .. }) => {
-            SandboxPolicy::ExternalSandbox {
-                network_access: if base.has_full_network_access()
-                    || extension.has_full_network_access()
-                {
-                    NetworkAccess::Enabled
-                } else {
-                    NetworkAccess::Restricted
-                },
-            }
-        }
-        (
-            SandboxPolicy::ReadOnly {
-                access: base_access,
-            },
-            SandboxPolicy::ReadOnly {
-                access: extension_access,
-            },
-        ) => SandboxPolicy::ReadOnly {
-            access: extend_read_only_access(base_access, extension_access),
-        },
-        (
-            SandboxPolicy::ReadOnly {
-                access: base_access,
-            },
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                read_only_access,
-                network_access,
-                exclude_tmpdir_env_var,
-                exclude_slash_tmp,
-            },
-        ) => SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.clone(),
-            read_only_access: extend_read_only_access(base_access, read_only_access),
-            network_access: *network_access,
-            exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-            exclude_slash_tmp: *exclude_slash_tmp,
-        },
-        (
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                read_only_access,
-                network_access,
-                exclude_tmpdir_env_var,
-                exclude_slash_tmp,
-            },
-            SandboxPolicy::ReadOnly {
-                access: extension_access,
-            },
-        ) => SandboxPolicy::WorkspaceWrite {
-            writable_roots: writable_roots.clone(),
-            read_only_access: extend_read_only_access(read_only_access, extension_access),
-            network_access: *network_access,
-            exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-            exclude_slash_tmp: *exclude_slash_tmp,
-        },
-        (
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: base_writable_roots,
-                read_only_access: base_read_only_access,
-                network_access: base_network_access,
-                exclude_tmpdir_env_var: base_exclude_tmpdir_env_var,
-                exclude_slash_tmp: base_exclude_slash_tmp,
-            },
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: extension_writable_roots,
-                read_only_access: extension_read_only_access,
-                network_access: extension_network_access,
-                exclude_tmpdir_env_var: extension_exclude_tmpdir_env_var,
-                exclude_slash_tmp: extension_exclude_slash_tmp,
-            },
-        ) => SandboxPolicy::WorkspaceWrite {
-            writable_roots: extend_absolute_roots(base_writable_roots, extension_writable_roots),
-            read_only_access: extend_read_only_access(
-                base_read_only_access,
-                extension_read_only_access,
-            ),
-            network_access: *base_network_access || *extension_network_access,
-            exclude_tmpdir_env_var: *base_exclude_tmpdir_env_var
-                && *extension_exclude_tmpdir_env_var,
-            exclude_slash_tmp: *base_exclude_slash_tmp && *extension_exclude_slash_tmp,
-        },
-    }
-}
-
-fn extend_read_only_access(base: &ReadOnlyAccess, extension: &ReadOnlyAccess) -> ReadOnlyAccess {
-    match (base, extension) {
-        (ReadOnlyAccess::FullAccess, _) | (_, ReadOnlyAccess::FullAccess) => {
-            ReadOnlyAccess::FullAccess
-        }
-        (
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults: base_include_platform_defaults,
-                readable_roots: base_readable_roots,
-            },
-            ReadOnlyAccess::Restricted {
-                include_platform_defaults: extension_include_platform_defaults,
-                readable_roots: extension_readable_roots,
-            },
-        ) => ReadOnlyAccess::Restricted {
-            include_platform_defaults: *base_include_platform_defaults
-                || *extension_include_platform_defaults,
-            readable_roots: extend_absolute_roots(base_readable_roots, extension_readable_roots),
-        },
-    }
-}
-
-fn extend_absolute_roots(
-    base_roots: &[AbsolutePathBuf],
-    extension_roots: &[AbsolutePathBuf],
-) -> Vec<AbsolutePathBuf> {
-    let mut roots = Vec::new();
-    let mut seen = HashSet::new();
-    for root in base_roots.iter().chain(extension_roots) {
-        if seen.insert(root.to_path_buf()) {
-            roots.push(root.clone());
-        }
-    }
-    roots
 }
 
 fn normalize_permission_paths(
@@ -434,7 +289,6 @@ mod tests {
     use super::SkillManifestMacOsPermissions;
     use super::SkillManifestPermissions;
     use super::compile_permission_profile;
-    use super::extend_sandbox_policy;
     use crate::config::Constrained;
     use crate::config::Permissions;
     use crate::config::types::ShellEnvironmentPolicy;
@@ -593,91 +447,6 @@ mod tests {
                 ),
                 #[cfg(not(target_os = "macos"))]
                 macos_seatbelt_profile_extensions: None,
-            }
-        );
-    }
-
-    #[test]
-    fn extend_sandbox_policy_merges_read_only_into_workspace_write() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let base_read_root =
-            AbsolutePathBuf::try_from(tempdir.path().join("base-read")).expect("absolute path");
-        let extension_write_root =
-            AbsolutePathBuf::try_from(tempdir.path().join("extension-write"))
-                .expect("absolute path");
-
-        let merged = extend_sandbox_policy(
-            &SandboxPolicy::ReadOnly {
-                access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: vec![base_read_root.clone()],
-                },
-            },
-            &SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![extension_write_root.clone()],
-                read_only_access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: true,
-                    readable_roots: Vec::new(),
-                },
-                network_access: true,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-        );
-
-        assert_eq!(
-            merged,
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![extension_write_root],
-                read_only_access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: true,
-                    readable_roots: vec![base_read_root],
-                },
-                network_access: true,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        );
-    }
-
-    #[test]
-    fn extend_sandbox_policy_unions_workspace_roots_and_network_access() {
-        let tempdir = tempfile::tempdir().expect("tempdir");
-        let shared_root =
-            AbsolutePathBuf::try_from(tempdir.path().join("shared")).expect("absolute path");
-        let base_root =
-            AbsolutePathBuf::try_from(tempdir.path().join("base")).expect("absolute path");
-        let extension_root =
-            AbsolutePathBuf::try_from(tempdir.path().join("extension")).expect("absolute path");
-
-        let merged = extend_sandbox_policy(
-            &SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![shared_root.clone(), base_root.clone()],
-                read_only_access: ReadOnlyAccess::FullAccess,
-                network_access: false,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            },
-            &SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![shared_root.clone(), extension_root.clone()],
-                read_only_access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: Vec::new(),
-                },
-                network_access: true,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            },
-        );
-
-        assert_eq!(
-            merged,
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![shared_root, base_root, extension_root],
-                read_only_access: ReadOnlyAccess::FullAccess,
-                network_access: true,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
             }
         );
     }

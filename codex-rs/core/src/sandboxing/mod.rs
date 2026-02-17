@@ -5,6 +5,8 @@ Build platform wrappers and produce ExecRequest for execution. Owns low-level
 sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
+mod policy_merge;
+pub(crate) use policy_merge::extend_sandbox_policy;
 
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
