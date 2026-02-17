@@ -531,7 +531,7 @@ impl JsReplManager {
             }
             Err(_) => {
                 self.reset_kernel().await;
-                self.wait_for_all_exec_tool_calls().await;
+                self.wait_for_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
@@ -1500,7 +1500,7 @@ mod tests {
             "reset should clear tool-call contexts after lock acquisition"
         );
     }
-  
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reset_clears_inflight_exec_tool_calls_without_waiting() {
         let manager = JsReplManager::new(None, std::env::temp_dir())
