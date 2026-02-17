@@ -194,7 +194,6 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.features.enable(Feature::RemoteModels);
             config.features.disable(Feature::ApplyPatchFreeform);
             config.features.enable(Feature::CollaborationModes);
             config.model = Some("gpt-5".to_string());

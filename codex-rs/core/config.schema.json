@@ -6,8 +6,28 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AgentsToml": {
+    "AgentRoleToml": {
       "additionalProperties": false,
+      "properties": {
+        "config_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Path to a role-specific config layer."
+        },
+        "description": {
+          "description": "Human-facing role documentation used in spawn tool guidance.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AgentsToml": {
+      "additionalProperties": {
+        "$ref": "#/definitions/AgentRoleToml"
+      },
       "properties": {
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
@@ -192,6 +212,9 @@
               "type": "boolean"
             },
             "child_agents_md": {
+              "type": "boolean"
+            },
+            "codex_git_commit": {
               "type": "boolean"
             },
             "collab": {
@@ -1295,6 +1318,10 @@
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
+    "commit_attribution": {
+      "description": "Optional commit attribution text for commit message co-author trailers.\n\nSet to an empty string to disable automatic commit attribution.",
+      "type": "string"
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -1332,6 +1359,9 @@
           "type": "boolean"
         },
         "child_agents_md": {
+          "type": "boolean"
+        },
+        "codex_git_commit": {
           "type": "boolean"
         },
         "collab": {

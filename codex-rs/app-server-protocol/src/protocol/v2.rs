@@ -30,6 +30,7 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
@@ -226,6 +227,12 @@ v2_enum_from_core!(
         NotLoggedIn,
         BearerToken,
         OAuth
+    }
+);
+
+v2_enum_from_core!(
+    pub enum ModelRerouteReason from CoreModelRerouteReason {
+        HighRiskCyberActivity
     }
 );
 
@@ -1284,6 +1291,55 @@ pub struct AppsListParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL - app metadata returned by app-list APIs.
+pub struct AppBranding {
+    pub category: Option<String>,
+    pub developer: Option<String>,
+    pub website: Option<String>,
+    pub privacy_policy: Option<String>,
+    pub terms_of_service: Option<String>,
+    pub is_discoverable_app: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppReview {
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppScreenshot {
+    pub url: Option<String>,
+    #[serde(alias = "file_id")]
+    pub file_id: Option<String>,
+    #[serde(alias = "user_prompt")]
+    pub user_prompt: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppMetadata {
+    pub review: Option<AppReview>,
+    pub categories: Option<Vec<String>>,
+    pub sub_categories: Option<Vec<String>>,
+    pub seo_description: Option<String>,
+    pub screenshots: Option<Vec<AppScreenshot>>,
+    pub developer: Option<String>,
+    pub version: Option<String>,
+    pub version_id: Option<String>,
+    pub version_notes: Option<String>,
+    pub first_party_type: Option<String>,
+    pub first_party_requires_install: Option<bool>,
+    pub show_in_composer_when_unlinked: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL - app metadata returned by app-list APIs.
 pub struct AppInfo {
     pub id: String,
     pub name: String,
@@ -1291,6 +1347,9 @@ pub struct AppInfo {
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
     pub distribution_channel: Option<String>,
+    pub branding: Option<AppBranding>,
+    pub app_metadata: Option<AppMetadata>,
+    pub labels: Option<HashMap<String, String>>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
@@ -1830,7 +1889,38 @@ pub struct SkillsListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct SkillsRemoteReadParams {}
+pub struct SkillsRemoteReadParams {
+    #[serde(default)]
+    pub hazelnut_scope: HazelnutScope,
+    #[serde(default)]
+    pub product_surface: ProductSurface,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case")]
+#[ts(export_to = "v2/")]
+pub enum HazelnutScope {
+    #[default]
+    Example,
+    WorkspaceShared,
+    AllShared,
+    Personal,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum ProductSurface {
+    Chatgpt,
+    #[default]
+    Codex,
+    Api,
+    Atlas,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1853,7 +1943,6 @@ pub struct SkillsRemoteReadResponse {
 #[ts(export_to = "v2/")]
 pub struct SkillsRemoteWriteParams {
     pub hazelnut_id: String,
-    pub is_preload: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1861,7 +1950,6 @@ pub struct SkillsRemoteWriteParams {
 #[ts(export_to = "v2/")]
 pub struct SkillsRemoteWriteResponse {
     pub id: String,
-    pub name: String,
     pub path: PathBuf,
 }
 
@@ -3303,6 +3391,17 @@ pub struct AccountLoginCompletedNotification {
     pub login_id: Option<String>,
     pub success: bool,
     pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelReroutedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub from_model: String,
+    pub to_model: String,
+    pub reason: ModelRerouteReason,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
