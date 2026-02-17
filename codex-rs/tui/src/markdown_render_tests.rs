@@ -1101,6 +1101,28 @@ fn table_pipe_fallback_escapes_literal_pipes_in_cell_content() {
 }
 
 #[test]
+fn table_link_keeps_url_suffix_inside_cell() {
+    let md = "| Site |\n|---|\n| [OpenAI](https://openai.com) |\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("OpenAI (https://openai.com)")),
+        "expected link suffix inside table cell: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.trim() == "(https://openai.com)"),
+        "did not expect stray url suffix line outside table: {lines:?}"
+    );
+}
+
+#[test]
 fn table_keeps_sparse_rows_with_empty_trailing_cells() {
     let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
     let text = render_markdown_text(md);

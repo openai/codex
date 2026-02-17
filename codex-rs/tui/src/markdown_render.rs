@@ -1207,9 +1207,15 @@ where
 
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
-            self.push_span(" (".into());
-            self.push_span(Span::styled(link, self.styles.link));
-            self.push_span(")".into());
+            if self.in_table_cell() {
+                self.push_span_to_table_cell(" (".into());
+                self.push_span_to_table_cell(Span::styled(link, self.styles.link));
+                self.push_span_to_table_cell(")".into());
+            } else {
+                self.push_span(" (".into());
+                self.push_span(Span::styled(link, self.styles.link));
+                self.push_span(")".into());
+            }
         }
     }
 
