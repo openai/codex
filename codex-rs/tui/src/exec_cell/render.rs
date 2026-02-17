@@ -512,6 +512,22 @@ impl ExecCell {
         out
     }
 
+    /// Truncates a list of lines to fit within `max_rows` viewport rows,
+    /// keeping a head portion and a tail portion with an ellipsis line
+    /// in between.
+    ///
+    /// `max_rows` is measured in viewport rows (the actual space a line
+    /// occupies after `Paragraph::wrap`), not logical lines. Each line's
+    /// row cost is computed via `Paragraph::line_count` at the given
+    /// `width`. This ensures that a single logical line containing a
+    /// long URL (which wraps to several viewport rows) is properly
+    /// accounted for.
+    ///
+    /// The ellipsis message reports the number of omitted *lines*
+    /// (logical, not rows) to keep the count stable across terminal
+    /// widths. `omitted_hint` carries forward any previously reported
+    /// omitted count (from upstream truncation); `ellipsis_prefix`
+    /// prepends the output gutter prefix to the ellipsis line.
     fn truncate_lines_middle(
         lines: &[Line<'static>],
         max_rows: usize,
@@ -602,6 +618,8 @@ impl ExecCell {
         Line::from(vec![format!("… +{omitted} lines").dim()])
     }
 
+    /// Builds an ellipsis line (`… +N lines`) with an optional leading
+    /// prefix so the ellipsis aligns with the output gutter.
     fn ellipsis_line_with_prefix(omitted: usize, prefix: Option<&Line<'static>>) -> Line<'static> {
         let mut line = prefix.cloned().unwrap_or_default();
         line.push_span(format!("… +{omitted} lines").dim());

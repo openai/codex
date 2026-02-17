@@ -83,9 +83,26 @@ use unicode_width::UnicodeWidthStr;
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
+/// A single renderable unit of conversation history.
+///
+/// Each cell produces logical `Line`s and reports how many viewport
+/// rows those lines occupy at a given terminal width. The default
+/// height implementations use `Paragraph::wrap` to account for lines
+/// that overflow the viewport width (e.g. long URLs that are kept
+/// intact by adaptive wrapping). Concrete types only need to override
+/// heights when they apply additional layout logic beyond what
+/// `Paragraph::line_count` captures.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
+    /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns the number of viewport rows needed to render this cell.
+    ///
+    /// The default delegates to `Paragraph::line_count` with
+    /// `Wrap { trim: false }`, which measures the actual row count after
+    /// ratatui's viewport-level character wrapping. This is critical
+    /// for lines containing URL-like tokens that are wider than the
+    /// terminal — the logical line count would undercount.
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
@@ -94,13 +111,24 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
             .unwrap_or(0)
     }
 
+    /// Returns lines for the transcript overlay (`Ctrl+T`).
+    ///
+    /// Defaults to `display_lines`. Override when the transcript
+    /// representation differs (e.g. `ExecCell` shows all calls with
+    /// `$`-prefixed commands and exit status).
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
     }
 
+    /// Returns the number of viewport rows for the transcript overlay.
+    ///
+    /// Uses the same `Paragraph::line_count` measurement as
+    /// `desired_height`. Contains a workaround for a ratatui bug where
+    /// a single whitespace-only line reports 2 rows instead of 1.
     fn desired_transcript_height(&self, width: u16) -> u16 {
         let lines = self.transcript_lines(width);
-        // Workaround for ratatui bug: if there's only one line and it's whitespace-only, ratatui gives 2 lines.
+        // Workaround: ratatui's line_count returns 2 for a single
+        // whitespace-only line. Clamp to 1 in that case.
         if let [line] = &lines[..]
             && line
                 .spans

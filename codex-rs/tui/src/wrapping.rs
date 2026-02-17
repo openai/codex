@@ -1,3 +1,31 @@
+//! Word-wrapping with URL-aware heuristics.
+//!
+//! The TUI renders text that frequently contains URLs — command output,
+//! markdown, agent messages, tool-call results. Standard `textwrap`
+//! hyphenation treats `/` and `-` as split points, which breaks URLs
+//! across lines and makes them unclickable in terminal emulators.
+//!
+//! This module provides two wrapping paths:
+//!
+//! - **Standard** (`word_wrap_line`, `word_wrap_lines`): delegates to
+//!   `textwrap` with the caller's options unchanged. Used when the
+//!   content is known to be plain prose.
+//! - **Adaptive** (`adaptive_wrap_line`, `adaptive_wrap_lines`):
+//!   inspects the line for URL-like tokens; if any are found, the
+//!   wrapping switches to `AsciiSpace` word separation and a custom
+//!   `WordSplitter` that refuses to split URL tokens. Non-URL tokens
+//!   on the same line still break at every character boundary (the
+//!   custom splitter returns all char indices for non-URL words).
+//!
+//! Callers that *might* encounter URLs should use the `adaptive_*`
+//! functions. Callers that definitely will not (code blocks, pure
+//! numeric output) can use the standard path for speed.
+//!
+//! URL detection is heuristic — see [`text_contains_url_like`] for the
+//! rules. False positives suppress hyphenation for that line; false
+//! negatives let a URL get split. The heuristic is intentionally
+//! conservative: file paths like `src/main.rs` are not matched.
+
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
@@ -6,6 +34,9 @@ use textwrap::Options;
 
 use crate::render::line_utils::push_owned_lines;
 
+/// Returns byte-ranges into `text` for each wrapped line, including
+/// trailing whitespace and a +1 sentinel byte. Used by the textarea
+/// cursor-position logic.
 pub(crate) fn wrap_ranges<'a, O>(text: &str, width_or_options: O) -> Vec<Range<usize>>
 where
     O: Into<Options<'a>>,
@@ -61,6 +92,13 @@ where
     lines
 }
 
+/// Maps an owned (materialized) wrapped line back to a byte range in `text`.
+///
+/// `textwrap` returns `Cow::Owned` when it inserts a hyphenation penalty
+/// character (typically `-`) that does not exist in the source. This
+/// function walks the owned string character-by-character against the
+/// source, skipping trailing penalty chars, and returns the
+/// corresponding source byte range starting from `cursor`.
 fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> Range<usize> {
     let mut start = cursor;
     while start < text.len() && !wrapped.starts_with(' ') {
@@ -99,6 +137,9 @@ fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> 
     start..end
 }
 
+/// Returns `true` if any whitespace-delimited token in `line` looks like a URL.
+///
+/// Concatenates all span contents and delegates to [`text_contains_url_like`].
 pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
     let text: String = line
         .spans
@@ -108,10 +149,25 @@ pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
     text_contains_url_like(&text)
 }
 
+/// Returns `true` if any whitespace-delimited token in `text` looks like a URL.
+///
+/// Recognized patterns:
+/// - Absolute URLs with a scheme (`https://…`, `ftp://…`, custom `myapp://…`).
+/// - Bare domain URLs (`example.com/path`, `www.example.com`, `localhost:3000/api`).
+/// - IPv4 hosts with a path (`192.168.1.1:8080/health`).
+///
+/// Surrounding punctuation (`()[]{}< >,.;:!'"`) is stripped before
+/// checking. Tokens that look like file paths (`src/main.rs`, `foo/bar`)
+/// are intentionally rejected — the host portion must be a valid domain
+/// name (with a recognized TLD), an IPv4 address, or `localhost`.
 pub(crate) fn text_contains_url_like(text: &str) -> bool {
     text.split_ascii_whitespace().any(is_url_like_token)
 }
 
+/// Decides whether a single whitespace-delimited token is URL-like.
+///
+/// Strips surrounding punctuation, then checks for an absolute URL
+/// (with `://`) or a bare domain URL (recognized host + path/query/fragment).
 fn is_url_like_token(raw_token: &str) -> bool {
     let token = trim_url_token(raw_token);
     !token.is_empty() && (is_absolute_url_like(token) || is_bare_url_like(token))
@@ -139,6 +195,9 @@ fn trim_url_token(token: &str) -> &str {
     })
 }
 
+/// Checks for `scheme://host` patterns. Uses `url::Url::parse` for
+/// well-known schemes; falls back to `has_valid_scheme_prefix` for
+/// custom schemes that the `url` crate rejects.
 fn is_absolute_url_like(token: &str) -> bool {
     if !token.contains("://") {
         return false;
@@ -174,6 +233,14 @@ fn has_valid_scheme_prefix(token: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
 }
 
+/// Checks for bare-domain URLs without a scheme: `host[:port]/path`,
+/// `host[:port]?query`, or `host[:port]#fragment`.
+///
+/// Requires that the host is `localhost`, an IPv4 address, or a valid
+/// domain name. Bare `host.tld` without a path/query/fragment is only
+/// accepted when the host starts with `www.`.
+///
+/// IPv6 bracket notation (`[::1]:8080`) is intentionally not handled.
 fn is_bare_url_like(token: &str) -> bool {
     let (host_port, has_trailer) = split_host_port_and_trailer(token);
     if host_port.is_empty() {
@@ -281,12 +348,22 @@ fn is_domain_label(label: &str) -> bool {
         && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// Reconfigures wrapping options so that URL-like tokens are never split.
+///
+/// Sets `AsciiSpace` word separation (so `/` and `-` inside URLs are
+/// not treated as break points), disables `break_words`, and installs a
+/// custom `WordSplitter` that returns no split points for URL tokens
+/// while still allowing character-level splitting for non-URL words.
 pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<'a> {
     opts.word_separator(textwrap::WordSeparator::AsciiSpace)
         .word_splitter(textwrap::WordSplitter::Custom(split_non_url_word))
         .break_words(false)
 }
 
+/// Custom `textwrap::WordSplitter` callback. Returns empty (no split
+/// points) for URL-like tokens so they are kept intact; returns every
+/// char-boundary index for everything else so non-URL words can still
+/// break at any position.
 fn split_non_url_word(word: &str) -> Vec<usize> {
     if is_url_like_token(word) {
         return Vec::new();
@@ -295,6 +372,13 @@ fn split_non_url_word(word: &str) -> Vec<usize> {
     word.char_indices().skip(1).map(|(idx, _)| idx).collect()
 }
 
+/// Wraps a single ratatui `Line`, automatically switching to
+/// URL-preserving options when the line contains a URL-like token.
+///
+/// When no URL is detected, wrapping behavior is identical to
+/// [`word_wrap_line`]. When a URL is detected, the line is wrapped with
+/// [`url_preserving_wrap_options`] — URLs stay intact while non-URL
+/// words on the same line still break normally.
 #[must_use]
 pub(crate) fn adaptive_wrap_line<'a>(line: &'a Line<'a>, base: RtOptions<'a>) -> Vec<Line<'a>> {
     let selected = if line_contains_url_like(line) {
@@ -305,6 +389,13 @@ pub(crate) fn adaptive_wrap_line<'a>(line: &'a Line<'a>, base: RtOptions<'a>) ->
     word_wrap_line(line, selected)
 }
 
+/// Wraps multiple input lines with URL-aware heuristics, applying
+/// `initial_indent` to the first line and `subsequent_indent` to the
+/// rest. Each line is independently checked for URLs; URL detection on
+/// one line does not affect wrapping of the others.
+///
+/// This is the multi-line counterpart to [`adaptive_wrap_line`] and is
+/// the primary wrapping entry point for most history-cell rendering.
 #[allow(private_bounds)]
 pub(crate) fn adaptive_wrap_lines<'a, I, L>(
     lines: I,

@@ -44,8 +44,16 @@ where
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
 
-    // Pre-wrap non-URL lines so terminal scrollback sees the same formatting as the TUI.
-    // URL lines are kept intact to avoid inserting hard newlines inside links.
+    // Pre-wrap lines for terminal scrollback. Two paths:
+    //
+    // - Non-URL lines are word-wrapped so scrollback sees the same
+    //   formatting as the TUI (avoids terminal-level hard wrapping at
+    //   arbitrary character boundaries).
+    // - URL lines are kept intact (no hard newlines inserted) so that
+    //   terminal emulators can match them as clickable links. The
+    //   terminal will character-wrap these lines at the viewport
+    //   boundary; `wrapped_rows` accounts for the resulting physical
+    //   row count via `div_ceil`.
     let wrap_width = area.width.max(1) as usize;
     let mut wrapped = Vec::new();
     let mut wrapped_rows = 0usize;
@@ -113,6 +121,9 @@ where
 
     for line in wrapped {
         queue!(writer, Print("\r\n"))?;
+        // URL lines can be wider than the terminal and will
+        // character-wrap onto continuation rows. Pre-clear those rows
+        // so stale content from a previously longer line is erased.
         let physical_rows = line.width().max(1).div_ceil(wrap_width);
         if physical_rows > 1 {
             queue!(writer, SavePosition)?;
