@@ -68,6 +68,7 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_core::CodexThread;
 use codex_core::parse_command::shlex_join;
@@ -95,6 +96,8 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -121,6 +124,35 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnStarted(_) => {}
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+        }
+        EventMsg::Warning(warning_event) => {
+            if matches!(api_version, ApiVersion::V2)
+                && is_safety_check_downgrade_warning(&warning_event.message)
+            {
+                let item = ThreadItem::UserMessage {
+                    id: warning_item_id(&event_turn_id, &warning_event.message),
+                    content: vec![V2UserInput::Text {
+                        text: format!("Warning: {}", warning_event.message),
+                        text_elements: Vec::new(),
+                    }],
+                };
+                let started = ItemStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item: item.clone(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemStarted(started))
+                    .await;
+                let completed = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(completed))
+                    .await;
+            }
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,
@@ -1286,6 +1318,18 @@ async fn complete_command_execution_item(
         .await;
 }
 
+fn is_safety_check_downgrade_warning(message: &str) -> bool {
+    message.contains("Your account was flagged for potentially high-risk cyber activity")
+        && message.contains("apply for trusted access: https://chatgpt.com/cyber")
+}
+
+fn warning_item_id(turn_id: &str, message: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    message.hash(&mut hasher);
+    let digest = hasher.finish();
+    format!("{turn_id}-warning-{digest:x}")
+}
+
 async fn maybe_emit_raw_response_item_completed(
     api_version: ApiVersion,
     conversation_id: ThreadId,
@@ -2014,6 +2058,18 @@ mod tests {
             .collect(),
         };
         assert_eq!(item, expected);
+    }
+
+    #[test]
+    fn safety_check_downgrade_warning_detection_matches_expected_message() {
+        let warning = "Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: https://chatgpt.com/cyber\nLearn more: https://developers.openai.com/codex/concepts/cyber-safety";
+        assert!(is_safety_check_downgrade_warning(warning));
+    }
+
+    #[test]
+    fn safety_check_downgrade_warning_detection_ignores_other_warnings() {
+        let warning = "Model metadata for `mock-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+        assert!(!is_safety_check_downgrade_warning(warning));
     }
 
     #[tokio::test]
