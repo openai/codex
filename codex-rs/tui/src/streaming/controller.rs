@@ -9,9 +9,22 @@
 //! resize handling.  `StreamController` and `PlanStreamController` are thin
 //! wrappers that add only their `emit()` styling and finalize return types.
 //!
-//! Table-aware holdback (`table_holdback_state`) keeps the entire buffer as
-//! tail while a table is being streamed, because each new row can change column
-//! widths and reshape every prior line.
+//! ## Table holdback
+//!
+//! Table rendering is inherently non-incremental: adding a new row can change
+//! every column's width and reshape all prior rows.  The holdback mechanism
+//! (`table_holdback_state`) detects pipe-table patterns (header + delimiter
+//! pair) in the accumulated source and keeps the entire rendered buffer as
+//! mutable tail until the stream finalizes.  Lines in `Outside` and `Markdown`
+//! fence contexts are scanned; lines inside non-markdown fences are skipped.
+//!
+//! ## Resize handling
+//!
+//! On terminal width change, `StreamCore::set_width` remaps the
+//! already-emitted line count to the new width using
+//! `source_bytes_for_rendered_count`, then rebuilds the stable queue.  The
+//! caller (`App`) schedules a debounced full-transcript reflow so committed
+//! `AgentMarkdownCell`s re-render from source at the new width.
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
@@ -129,13 +142,21 @@ impl StreamCore {
         self.state.oldest_queued_age(now)
     }
 
-    /// Mutable tail lines not yet queued into the stable region.
+    /// Lines that belong to the mutable tail, not yet queued for stable commit.
+    ///
+    /// The tail starts at `enqueued_stable_len` -- everything from that offset to
+    /// the end of `rendered_lines` is displayed live in the active-cell slot.
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
         self.rendered_lines[start..].to_vec()
     }
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
+    ///
+    /// When `emitted_stable_len > 0`, uses `source_bytes_for_rendered_count` to
+    /// find the byte offset in `raw_source` that corresponds to the old emitted
+    /// count, then re-renders that prefix at the new width to recalculate
+    /// `emitted_stable_len`. The stable queue is rebuilt from the new render.
     fn set_width(&mut self, width: Option<usize>) {
         if self.width == width {
             return;
@@ -234,8 +255,12 @@ impl StreamCore {
         self.enqueued_stable_len = target_stable_len;
     }
 
-    /// How many rendered lines to withhold as mutable tail. When a table is detected, the entire
-    /// buffer is tail; otherwise zero.
+    /// How many rendered lines to withhold as mutable tail.
+    ///
+    /// When a table is detected (`Confirmed` or `PendingHeader`), the entire
+    /// rendered buffer is held as tail because adding a row can reshape the
+    /// whole table. When no table is detected, everything flows directly to
+    /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&self) -> usize {
         match table_holdback_state(&self.raw_source) {
             TableHoldbackState::Confirmed => self.rendered_lines.len(),
@@ -434,18 +459,25 @@ impl PlanStreamController {
 // source_bytes_for_rendered_count — resize remapping helper
 // ---------------------------------------------------------------------------
 
-/// Find the largest newline-terminated prefix of `raw_source` whose
-/// rendering at `width` produces at most `target_count` lines.
+/// Map a rendered-line count back to a source-byte offset for resize remapping.
 ///
-/// When the target falls exactly on a source-line boundary, the returned
-/// offset covers that line. When it falls in the middle of a wrapped
-/// source line (partial drain), the offset stops at the *previous*
-/// newline to avoid overshooting — this may re-queue a few already-emitted
-/// wrapped lines as duplicates, but never drops un-emitted content.
+/// Iterates through each newline in `raw_source`, rendering the prefix up to
+/// that newline at `width`, and returns the largest byte offset whose rendering
+/// produces at most `target_count` lines.
 ///
-/// For non-table content (the only case where `emitted_stable_len > 0`),
-/// rendering a newline-terminated prefix produces a prefix of the full
-/// rendering, so this converges correctly.
+/// When the target falls exactly on a source-line boundary, the returned offset
+/// covers that line. When it falls in the middle of a wrapped source line
+/// (partial drain), the offset stops at the *previous* newline to avoid
+/// overshooting -- this may re-queue a few already-emitted wrapped lines as
+/// duplicates, but never drops un-emitted content.
+///
+/// This function is only called during `set_width` when `emitted_stable_len > 0`
+/// (i.e. non-table content has already been committed to scrollback).  For
+/// non-table content, rendering a newline-terminated prefix produces a prefix of
+/// the full rendering, so this converges correctly.
+///
+/// Performance: O(n) in source lines, each incurring a full markdown render of
+/// the prefix. Acceptable for typical agent message lengths (hundreds of lines).
 fn source_bytes_for_rendered_count(
     raw_source: &str,
     width: Option<usize>,
@@ -574,8 +606,12 @@ fn table_candidate_text(line: &str) -> Option<&str> {
     parse_table_segments(stripped).map(|_| stripped)
 }
 
-/// Whether the accumulated raw source contains a markdown table that requires
-/// holdback of the mutable tail to prevent partial-table commits.
+/// Result of scanning accumulated raw source for pipe-table patterns.
+///
+/// `StreamCore::active_tail_budget_lines` uses this to decide whether to
+/// commit rendered lines to the stable queue or withhold them as mutable tail.
+/// The scan is stateless: `table_holdback_state` re-evaluates the full source
+/// on every delta rather than maintaining incremental state.
 enum TableHoldbackState {
     /// No table detected -- all rendered lines can flow into the stable queue.
     None,
@@ -587,9 +623,17 @@ enum TableHoldbackState {
     Confirmed,
 }
 
-/// Scan `source` for pipe-table patterns (header row followed by delimiter row)
-/// outside of non-markdown fenced code blocks. Used by the stream controllers
-/// to decide the tail budget.
+/// Scan `source` for pipe-table patterns outside of non-markdown fenced code
+/// blocks.
+///
+/// Walks consecutive line pairs looking for a header + delimiter match. Lines
+/// inside `FenceContext::Other` fences are skipped. The scan also peels
+/// blockquote prefixes (`>`) before checking for table syntax, so tables nested
+/// inside blockquotes are detected.
+///
+/// If no confirmed table is found, checks whether the last non-blank line looks
+/// like a table header (speculative `PendingHeader`) to avoid premature commit
+/// of a potential table header before the delimiter arrives.
 fn table_holdback_state(source: &str) -> TableHoldbackState {
     let lines = parse_lines_with_fence_state(source);
     for pair in lines.windows(2) {
