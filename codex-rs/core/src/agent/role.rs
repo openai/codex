@@ -386,7 +386,7 @@ writable_roots = ["./sandbox-root"]
             .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
             .into_iter()
             .filter(|layer| layer.name == ConfigLayerSource::SessionFlags)
-            .last()
+            .next_back()
             .expect("expected a session flags layer");
         let sandbox_workspace_write = role_layer
             .config
