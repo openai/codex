@@ -155,7 +155,7 @@ fn unwrap_markdown_fences_with_mapping(markdown_source: &str) -> NormalizedMarkd
 
     #[derive(Clone, Copy)]
     struct Fence {
-        marker: char,
+        marker: u8,
         len: usize,
         is_markdown: bool,
     }
@@ -171,11 +171,15 @@ fn unwrap_markdown_fences_with_mapping(markdown_source: &str) -> NormalizedMarkd
             return None;
         }
         let trimmed = &without_newline[leading_ws..];
-        let marker = trimmed.chars().next()?;
-        if marker != '`' && marker != '~' {
+        let marker = *trimmed.as_bytes().first()?;
+        if marker != b'`' && marker != b'~' {
             return None;
         }
-        let len = trimmed.chars().take_while(|ch| *ch == marker).count();
+        let len = trimmed
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == marker)
+            .count();
         if len < 3 {
             return None;
         }
@@ -200,10 +204,14 @@ fn unwrap_markdown_fences_with_mapping(markdown_source: &str) -> NormalizedMarkd
             return false;
         }
         let trimmed = &without_newline[leading_ws..];
-        if !trimmed.starts_with(fence.marker) {
+        if !trimmed.as_bytes().starts_with(&[fence.marker]) {
             return false;
         }
-        let len = trimmed.chars().take_while(|ch| *ch == fence.marker).count();
+        let len = trimmed
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == fence.marker)
+            .count();
         if len < fence.len {
             return false;
         }

@@ -72,8 +72,6 @@ struct MarkdownStyles {
 
 impl Default for MarkdownStyles {
     fn default() -> Self {
-        use ratatui::style::Stylize;
-
         Self {
             h1: Style::new().bold().underlined(),
             h2: Style::new().bold(),
@@ -1359,9 +1357,12 @@ where
                 tag_start += 1;
             }
 
-            if tag_start < bytes.len()
-                && bytes[tag_start].is_ascii_alphabetic()
-                && bytes[tag_start + 1..].contains(&b'>')
+            if bytes
+                .get(tag_start)
+                .is_some_and(u8::is_ascii_alphabetic)
+                && bytes
+                    .get(tag_start + 1..)
+                    .is_some_and(|suffix| suffix.contains(&b'>'))
             {
                 return true;
             }
