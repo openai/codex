@@ -1485,9 +1485,7 @@ where
                 tag_start += 1;
             }
 
-            if bytes
-                .get(tag_start)
-                .is_some_and(u8::is_ascii_alphabetic)
+            if bytes.get(tag_start).is_some_and(u8::is_ascii_alphabetic)
                 && bytes
                     .get(tag_start + 1..)
                     .is_some_and(|suffix| suffix.contains(&b'>'))
