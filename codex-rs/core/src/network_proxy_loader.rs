@@ -51,10 +51,11 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     .context("failed to load Codex config")?;
 
     let merged_toml = config_layer_stack.effective_config();
+    let permissions_network = permissions_network_from_toml(&merged_toml)?;
     let mut config: NetworkProxyConfig = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
-    if let Some(network) = permissions_network_from_toml(&merged_toml)? {
+    if let Some(network) = permissions_network {
         network.apply_to_network_proxy_config(&mut config);
     }
 

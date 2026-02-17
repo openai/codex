@@ -1136,15 +1136,13 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionsToml {
     /// Network proxy settings used by managed network mode.
     pub network: Option<NetworkToml>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkToml {
     pub enabled: Option<bool>,
     pub proxy_url: Option<String>,
@@ -1606,6 +1604,7 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
+        let configured_network_proxy_config = cfg.network_proxy_config();
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
@@ -1792,8 +1791,6 @@ impl Config {
             });
 
         let forced_login_method = cfg.forced_login_method;
-
-        let configured_network_proxy_config = cfg.network_proxy_config();
 
         let model = model.or(config_profile.model).or(cfg.model);
 
