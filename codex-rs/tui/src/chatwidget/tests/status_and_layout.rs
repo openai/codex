@@ -127,6 +127,21 @@ async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_wi
 }
 
 #[tokio::test]
+async fn on_terminal_resize_initial_width_requests_redraw() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (draw_tx, mut draw_rx) = tokio::sync::broadcast::channel(8);
+    chat.frame_requester = FrameRequester::new(draw_tx);
+    chat.last_rendered_width.set(None);
+
+    chat.on_terminal_resize(120);
+
+    let draw = tokio::time::timeout(std::time::Duration::from_millis(200), draw_rx.recv())
+        .await
+        .expect("timed out waiting for redraw request");
+    assert!(draw.is_ok(), "expected redraw notification to be sent");
+}
+
+#[tokio::test]
 async fn add_to_history_does_not_commit_transient_stream_tail_after_controller_clear() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
