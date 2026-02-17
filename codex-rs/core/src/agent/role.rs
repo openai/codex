@@ -5,6 +5,7 @@ use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::resolve_relative_paths_in_config_toml;
 use codex_app_server_protocol::ConfigLayerSource;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -56,10 +57,10 @@ pub(crate) async fn apply_role_to_config(
 
     let role_config_toml: TomlValue = toml::from_str(&role_config_contents)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-    let role_config = deserialize_config_toml_with_base(role_config_toml, role_config_base)
+    deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-    let role_layer_toml =
-        TomlValue::try_from(role_config).map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
+        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
 
     let mut layers: Vec<ConfigLayerEntry> = config
         .config_layer_stack
@@ -207,6 +208,7 @@ mod tests {
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -344,6 +346,72 @@ mod tests {
 
         assert_eq!(config.model.as_deref(), Some("base-model"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    #[tokio::test]
+    async fn apply_role_does_not_materialize_default_sandbox_workspace_write_fields() {
+        let (home, mut config) = test_config_with_cli_overrides(vec![
+            (
+                "sandbox_mode".to_string(),
+                TomlValue::String("workspace-write".to_string()),
+            ),
+            (
+                "sandbox_workspace_write.network_access".to_string(),
+                TomlValue::Boolean(true),
+            ),
+        ])
+        .await;
+        let role_path = write_role_config(
+            &home,
+            "sandbox-role.toml",
+            r#"[sandbox_workspace_write]
+writable_roots = ["./sandbox-root"]
+"#,
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        let role_layer = config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .into_iter()
+            .filter(|layer| layer.name == ConfigLayerSource::SessionFlags)
+            .last()
+            .expect("expected a session flags layer");
+        let sandbox_workspace_write = role_layer
+            .config
+            .get("sandbox_workspace_write")
+            .and_then(TomlValue::as_table)
+            .expect("role layer should include sandbox_workspace_write");
+        assert_eq!(
+            sandbox_workspace_write.contains_key("network_access"),
+            false
+        );
+        assert_eq!(
+            sandbox_workspace_write.contains_key("exclude_tmpdir_env_var"),
+            false
+        );
+        assert_eq!(
+            sandbox_workspace_write.contains_key("exclude_slash_tmp"),
+            false
+        );
+
+        match &*config.permissions.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+                assert_eq!(*network_access, true);
+            }
+            other => panic!("expected workspace-write sandbox policy, got {other:?}"),
+        }
     }
 
     #[tokio::test]
