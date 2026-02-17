@@ -267,12 +267,37 @@ impl StreamCore {
     ///
     /// When a table is detected (`Confirmed` or `PendingHeader`), the entire
     /// rendered buffer is held as tail because adding a row can reshape the
-    /// whole table. When no table is detected, everything flows directly to
+    /// whole table. For `PendingHeader`, only content from the last speculative
+    /// header line onward is kept mutable so earlier prose can continue
+    /// streaming. When no table is detected, everything flows directly to
     /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&self) -> usize {
         match table_holdback_state(&self.raw_source) {
             TableHoldbackState::Confirmed => self.rendered_lines.len(),
-            TableHoldbackState::PendingHeader => self.rendered_lines.len(),
+            TableHoldbackState::PendingHeader => {
+                let mut last_nonblank_start = None;
+                let mut line_start = 0usize;
+                for line in self.raw_source.split('\n') {
+                    if !line.trim().is_empty() {
+                        last_nonblank_start = Some(line_start);
+                    }
+                    line_start = line_start.saturating_add(line.len()).saturating_add(1);
+                }
+
+                let Some(last_nonblank_start) = last_nonblank_start else {
+                    return 0;
+                };
+
+                let mut stable_prefix_render = Vec::new();
+                append_markdown_agent(
+                    &self.raw_source[..last_nonblank_start],
+                    self.width,
+                    &mut stable_prefix_render,
+                );
+                self.rendered_lines
+                    .len()
+                    .saturating_sub(stable_prefix_render.len())
+            }
             TableHoldbackState::None => 0,
         }
     }
@@ -598,17 +623,21 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
             continue;
         }
         let trimmed = &raw_line[leading_spaces..];
-        if let Some((marker, len)) = parse_fence_marker(trimmed) {
+        let fence_scan_text = strip_blockquote_prefix(trimmed);
+        if let Some((marker, len)) = parse_fence_marker(fence_scan_text) {
             if !in_fence {
                 in_fence = true;
                 fence_char = marker;
                 fence_len = len;
-                fence_context = if is_markdown_fence(trimmed, len) {
+                fence_context = if is_markdown_fence(fence_scan_text, len) {
                     FenceContext::Markdown
                 } else {
                     FenceContext::Other
                 };
-            } else if marker == fence_char && len >= fence_len && trimmed[len..].trim().is_empty() {
+            } else if marker == fence_char
+                && len >= fence_len
+                && fence_scan_text[len..].trim().is_empty()
+            {
                 in_fence = false;
                 fence_len = 0;
                 fence_context = FenceContext::Other;
@@ -1036,6 +1065,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn controller_does_not_stall_repeated_pipe_prose_paragraphs() {
+        let mut ctrl = StreamController::new(Some(80));
+
+        ctrl.push("alpha | beta\n\n");
+        let (_first_commit, first_idle) = ctrl.on_commit_tick();
+        assert!(first_idle);
+
+        ctrl.push("gamma | delta\n\n");
+        let (second_commit, _second_idle) = ctrl.on_commit_tick();
+        let second_lines = second_commit
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+
+        assert!(
+            second_lines
+                .iter()
+                .any(|line| line.contains("alpha | beta")),
+            "expected the first pipe-prose paragraph to stream before finalize; got {second_lines:?}",
+        );
+    }
+
     #[tokio::test]
     async fn controller_handles_table_immediately_after_heading() {
         let deltas = vec![
@@ -1361,6 +1412,15 @@ mod tests {
         assert!(
             matches!(table_holdback_state(source), TableHoldbackState::Confirmed),
             "indented fence-like text should not open a fence and should not block table detection",
+        );
+    }
+
+    #[test]
+    fn table_holdback_state_ignores_table_like_lines_inside_blockquoted_other_fence() {
+        let source = "> ```sh\n> | Key | Value |\n> | --- | --- |\n> ```\n";
+        assert!(
+            matches!(table_holdback_state(source), TableHoldbackState::None),
+            "table holdback should ignore pipe lines inside non-markdown blockquoted fences",
         );
     }
 
