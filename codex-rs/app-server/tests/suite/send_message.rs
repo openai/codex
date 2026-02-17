@@ -477,7 +477,6 @@ fn assert_permissions_message(item: &ResponseItem) {
                 &SandboxPolicy::DangerFullAccess,
                 AskForApproval::Never,
                 &Policy::empty(),
-                false,
                 &PathBuf::from("/tmp"),
             )
             .into_text();
@@ -560,9 +559,11 @@ fn append_rollout_turn_context(path: &Path, timestamp: &str, model: &str) -> std
     let line = RolloutLine {
         timestamp: timestamp.to_string(),
         item: RolloutItem::TurnContext(TurnContextItem {
+            turn_id: None,
             cwd: PathBuf::from("/"),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: None,
             model: model.to_string(),
             personality: None,
             collaboration_mode: None,

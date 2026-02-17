@@ -104,7 +104,7 @@
           "type": "string"
         },
         {
-          "description": "*All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox.",
+          "description": "DEPRECATED: *All* commands are auto‑approved, but they are expected to run inside a sandbox where network access is disabled and writes are confined to a specific set of paths. If the command fails, it will be escalated to the user to approve execution without a sandbox. Prefer `OnRequest` for interactive runs or `Never` for non-interactive runs.",
           "enum": [
             "on-failure"
           ],
@@ -175,6 +175,7 @@
           "enum": [
             "context_window_exceeded",
             "usage_limit_exceeded",
+            "server_overloaded",
             "internal_server_error",
             "unauthorized",
             "bad_request",
@@ -183,35 +184,6 @@
             "other"
           ],
           "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "model_cap": {
-              "properties": {
-                "model": {
-                  "type": "string"
-                },
-                "reset_after_seconds": {
-                  "format": "uint64",
-                  "minimum": 0.0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "model"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "model_cap"
-          ],
-          "title": "ModelCapCodexErrorInfo",
-          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -560,6 +532,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_started"
@@ -569,6 +544,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskStartedEventMsg",
@@ -583,6 +559,9 @@
                 "null"
               ]
             },
+            "turn_id": {
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "task_complete"
@@ -592,6 +571,7 @@
             }
           },
           "required": [
+            "turn_id",
             "type"
           ],
           "title": "TaskCompleteEventMsg",
@@ -886,6 +866,17 @@
             },
             "model_provider_id": {
               "type": "string"
+            },
+            "network_proxy": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
             },
             "reasoning_effort": {
               "anyOf": [
@@ -1358,6 +1349,14 @@
               "default": "agent",
               "description": "Where the command originated. Defaults to Agent for backward compatibility."
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ExecCommandStatus"
+                }
+              ],
+              "description": "Completion status for this command execution."
+            },
             "stderr": {
               "description": "Captured stderr",
               "type": "string"
@@ -1386,6 +1385,7 @@
             "exit_code",
             "formatted_output",
             "parsed_cmd",
+            "status",
             "stderr",
             "stdout",
             "turn_id",
@@ -1437,6 +1437,17 @@
             "cwd": {
               "description": "The command's working directory.",
               "type": "string"
+            },
+            "network_approval_context": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NetworkApprovalContext"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional network context for a blocked request that can be approved."
             },
             "parsed_cmd": {
               "items": {
@@ -1814,6 +1825,14 @@
               "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
               "type": "object"
             },
+            "status": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PatchApplyStatus"
+                }
+              ],
+              "description": "Completion status for this patch application."
+            },
             "stderr": {
               "description": "Captured stderr (parser errors, IO failures, etc.).",
               "type": "string"
@@ -1841,6 +1860,7 @@
           },
           "required": [
             "call_id",
+            "status",
             "stderr",
             "stdout",
             "success",
@@ -2117,6 +2137,12 @@
           "properties": {
             "reason": {
               "$ref": "#/definitions/TurnAbortReason"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -2876,6 +2902,14 @@
       ],
       "type": "string"
     },
+    "ExecCommandStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "ExecOutputStream": {
       "enum": [
         "stdout",
@@ -3292,6 +3326,30 @@
       ],
       "type": "string"
     },
+    "NetworkApprovalContext": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/NetworkApprovalProtocol"
+        }
+      },
+      "required": [
+        "host",
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "NetworkApprovalProtocol": {
+      "enum": [
+        "http",
+        "https",
+        "socks5_tcp",
+        "socks5_udp"
+      ],
+      "type": "string"
+    },
     "ParsedCommand": {
       "oneOf": [
         {
@@ -3403,6 +3461,14 @@
         }
       ]
     },
+    "PatchApplyStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "declined"
+      ],
+      "type": "string"
+    },
     "PlanItemArg": {
       "additionalProperties": false,
       "properties": {
@@ -3443,6 +3509,18 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "limit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "plan_type": {
@@ -3506,6 +3584,57 @@
         "used_percent"
       ],
       "type": "object"
+    },
+    "ReadOnlyAccess": {
+      "description": "Determines how read-only file access is granted inside a restricted sandbox.",
+      "oneOf": [
+        {
+          "description": "Restrict reads to an explicit set of roots.\n\nWhen `include_platform_defaults` is `true`, platform defaults required for basic execution are included in addition to `readable_roots`.",
+          "properties": {
+            "include_platform_defaults": {
+              "default": true,
+              "description": "Include built-in platform read roots required for basic process execution.",
+              "type": "boolean"
+            },
+            "readable_roots": {
+              "description": "Additional absolute roots that should be readable.",
+              "items": {
+                "$ref": "#/definitions/AbsolutePathBuf"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "restricted"
+              ],
+              "title": "RestrictedReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "RestrictedReadOnlyAccess",
+          "type": "object"
+        },
+        {
+          "description": "Allow unrestricted file reads.",
+          "properties": {
+            "type": {
+              "enum": [
+                "full-access"
+              ],
+              "title": "FullAccessReadOnlyAccessType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FullAccessReadOnlyAccess",
+          "type": "object"
+        }
+      ]
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -4344,8 +4473,16 @@
           "type": "object"
         },
         {
-          "description": "Read-only access to the entire file-system.",
+          "description": "Read-only access configuration.",
           "properties": {
+            "access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "read-only"
@@ -4404,6 +4541,14 @@
               "description": "When set to `true`, outbound network access is allowed. `false` by default.",
               "type": "boolean"
             },
+            "read_only_access": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReadOnlyAccess"
+                }
+              ],
+              "description": "Read access granted while running under this policy."
+            },
             "type": {
               "enum": [
                 "workspace-write"
@@ -4426,6 +4571,25 @@
           "type": "object"
         }
       ]
+    },
+    "SessionNetworkProxyRuntime": {
+      "properties": {
+        "admin_addr": {
+          "type": "string"
+        },
+        "http_addr": {
+          "type": "string"
+        },
+        "socks_addr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "admin_addr",
+        "http_addr",
+        "socks_addr"
+      ],
+      "type": "object"
     },
     "SkillDependencies": {
       "properties": {
@@ -5273,6 +5437,9 @@
             "null"
           ]
         },
+        "turn_id": {
+          "type": "string"
+        },
         "type": {
           "enum": [
             "task_started"
@@ -5282,6 +5449,7 @@
         }
       },
       "required": [
+        "turn_id",
         "type"
       ],
       "title": "TaskStartedEventMsg",
@@ -5296,6 +5464,9 @@
             "null"
           ]
         },
+        "turn_id": {
+          "type": "string"
+        },
         "type": {
           "enum": [
             "task_complete"
@@ -5305,6 +5476,7 @@
         }
       },
       "required": [
+        "turn_id",
         "type"
       ],
       "title": "TaskCompleteEventMsg",
@@ -5599,6 +5771,17 @@
         },
         "model_provider_id": {
           "type": "string"
+        },
+        "network_proxy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SessionNetworkProxyRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
         },
         "reasoning_effort": {
           "anyOf": [
@@ -6071,6 +6254,14 @@
           "default": "agent",
           "description": "Where the command originated. Defaults to Agent for backward compatibility."
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ExecCommandStatus"
+            }
+          ],
+          "description": "Completion status for this command execution."
+        },
         "stderr": {
           "description": "Captured stderr",
           "type": "string"
@@ -6099,6 +6290,7 @@
         "exit_code",
         "formatted_output",
         "parsed_cmd",
+        "status",
         "stderr",
         "stdout",
         "turn_id",
@@ -6150,6 +6342,17 @@
         "cwd": {
           "description": "The command's working directory.",
           "type": "string"
+        },
+        "network_approval_context": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkApprovalContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional network context for a blocked request that can be approved."
         },
         "parsed_cmd": {
           "items": {
@@ -6527,6 +6730,14 @@
           "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
           "type": "object"
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PatchApplyStatus"
+            }
+          ],
+          "description": "Completion status for this patch application."
+        },
         "stderr": {
           "description": "Captured stderr (parser errors, IO failures, etc.).",
           "type": "string"
@@ -6554,6 +6765,7 @@
       },
       "required": [
         "call_id",
+        "status",
         "stderr",
         "stdout",
         "success",
@@ -6830,6 +7042,12 @@
       "properties": {
         "reason": {
           "$ref": "#/definitions/TurnAbortReason"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "enum": [

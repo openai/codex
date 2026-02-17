@@ -168,6 +168,10 @@ async fn handle_socks5_tcp(
                     method: None,
                     mode: None,
                     protocol: "socks5".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -198,6 +202,10 @@ async fn handle_socks5_tcp(
                     method: None,
                     mode: Some(NetworkMode::Limited),
                     protocol: "socks5".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -221,6 +229,7 @@ async fn handle_socks5_tcp(
         method: None,
         command: None,
         exec_policy_hint: None,
+        attempt_id: None,
     });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
@@ -245,6 +254,10 @@ async fn handle_socks5_tcp(
                     method: None,
                     mode: None,
                     protocol: "socks5".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -305,6 +318,10 @@ async fn inspect_socks5_udp(
                     method: None,
                     mode: None,
                     protocol: "socks5-udp".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
@@ -335,6 +352,10 @@ async fn inspect_socks5_udp(
                     method: None,
                     mode: Some(NetworkMode::Limited),
                     protocol: "socks5-udp".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             return Err(policy_denied_error(REASON_METHOD_NOT_ALLOWED, &details));
@@ -354,6 +375,7 @@ async fn inspect_socks5_udp(
         method: None,
         command: None,
         exec_policy_hint: None,
+        attempt_id: None,
     });
 
     match evaluate_host_policy(&state, policy_decider.as_ref(), &request).await {
@@ -378,6 +400,10 @@ async fn inspect_socks5_udp(
                     method: None,
                     mode: None,
                     protocol: "socks5-udp".to_string(),
+                    attempt_id: None,
+                    decision: Some(details.decision.as_str().to_string()),
+                    source: Some(details.source.as_str().to_string()),
+                    port: Some(port),
                 }))
                 .await;
             let client = client.as_deref().unwrap_or_default();

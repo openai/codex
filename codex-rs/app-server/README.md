@@ -28,6 +28,12 @@ Supported transports:
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Backpressure behavior:
+
+- The server uses bounded queues between transport ingress, request processing, and outbound writes.
+- When request ingress is saturated, new requests are rejected with a JSON-RPC error code `-32001` and message `"Server overloaded; retry later."`.
+- Clients should treat this as retryable and use exponential backoff with jitter.
+
 ## Message Schema
 
 Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
@@ -59,6 +65,8 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
 
+`initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
+
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
@@ -81,12 +89,35 @@ Example (from OpenAI's official VSCode extension):
 }
 ```
 
+Example with notification opt-out:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true,
+      "optOutNotificationMethods": [
+        "codex/event/session_configured",
+        "item/agentMessage/delta"
+      ]
+    }
+  }
+}
+```
+
 ## API Overview
 
 - `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, and `cwd` filters.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
@@ -100,7 +131,7 @@ Example (from OpenAI's official VSCode extension):
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `model/list` — list available models (with reasoning effort options and optional `upgrade` model ids).
+- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
@@ -178,6 +209,8 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
+Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
+
 ### Example: List threads (with pagination & filters)
 
 `thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending. Pass any combination of:
@@ -188,6 +221,7 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
 - `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
+- `cwd` — restrict results to threads whose session cwd exactly matches this path.
 
 Example:
 
@@ -487,6 +521,27 @@ Notes:
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
 
+### Notification opt-out
+
+Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.
+
+- Exact-match only: `item/agentMessage/delta` suppresses only that method.
+- Unknown method names are ignored.
+- Applies to both legacy (`codex/event/*`) and v2 (`thread/*`, `turn/*`, `item/*`, etc.) notifications.
+- Does not apply to requests/responses/errors.
+
+Examples:
+
+- Opt out of legacy session setup event: `codex/event/session_configured`
+- Opt out of streamed agent text deltas: `item/agentMessage/delta`
+
+### Fuzzy file search events (experimental)
+
+The fuzzy file search session API emits per-query notifications:
+
+- `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
+- `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -502,7 +557,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
@@ -716,7 +771,7 @@ To enable or disable a skill by path:
 
 ## Apps
 
-Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, and whether it is currently accessible.
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, whether it is currently accessible, and whether it is enabled in config.
 
 ```json
 { "method": "app/list", "id": 50, "params": {
@@ -735,7 +790,8 @@ Use `app/list` to fetch available apps (connectors). Each entry includes metadat
             "logoUrlDark": null,
             "distributionChannel": null,
             "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-            "isAccessible": true
+            "isAccessible": true,
+            "isEnabled": true
         }
     ],
     "nextCursor": null
@@ -761,7 +817,8 @@ The server also emits `app/list/updated` notifications whenever either source (a
         "logoUrlDark": null,
         "distributionChannel": null,
         "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
-        "isAccessible": true
+        "isAccessible": true,
+        "isEnabled": true
       }
     ]
   }

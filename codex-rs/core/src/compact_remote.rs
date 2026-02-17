@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -34,6 +35,7 @@ pub(crate) async fn run_remote_compact_task(
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
         model_context_window: turn_context.model_context_window(),
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
@@ -64,6 +66,10 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
     let mut history = sess.clone_history().await;
+    // Keep compaction prompts in-distribution: if a model-switch update was injected at the
+    // tail of history (between turns), exclude it from the compaction request payload.
+    let stripped_model_switch_item =
+        extract_trailing_model_switch_update_for_compaction_request(&mut history);
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -87,7 +93,7 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt = Prompt {
-        input: history.for_prompt(),
+        input: history.for_prompt(&turn_context.model_info.input_modalities),
         tools: vec![],
         parallel_tool_calls: false,
         base_instructions,
@@ -119,6 +125,11 @@ async fn run_remote_compact_task_inner_impl(
     new_history = sess
         .process_compacted_history(turn_context, new_history)
         .await;
+    // Reattach the stripped model-switch update only after successful compaction so the model
+    // still sees the switch instructions on the next real sampling request.
+    if let Some(model_switch_item) = stripped_model_switch_item {
+        new_history.push(model_switch_item);
+    }
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);

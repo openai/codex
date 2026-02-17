@@ -102,6 +102,7 @@ impl AppServerClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
+                    opt_out_notification_methods: None,
                 }),
             },
         };
@@ -179,6 +180,7 @@ impl AppServerClient {
                 model_providers: None,
                 source_kinds: None,
                 archived: None,
+                cwd: None,
             },
         };
         self.send(&request)?;

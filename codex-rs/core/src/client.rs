@@ -38,14 +38,14 @@ use crate::auth::UnauthorizedRecovery;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
-use codex_api::MemoryTrace as ApiMemoryTrace;
-use codex_api::MemoryTraceSummarizeInput as ApiMemoryTraceSummarizeInput;
-use codex_api::MemoryTraceSummaryOutput as ApiMemoryTraceSummaryOutput;
-use codex_api::Prompt as ApiPrompt;
+use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
+use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
+use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseAppendWsRequest;
 use codex_api::ResponseCreateWsRequest;
+use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
@@ -75,13 +75,13 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::trace;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -156,8 +156,8 @@ pub struct ModelClient {
 /// The session establishes a Responses WebSocket connection lazily and reuses it across multiple
 /// requests within the turn. It also caches per-turn state:
 ///
-/// - The last request's input items, so subsequent calls can use `response.append` when the input
-///   is an incremental extension of the previous request.
+/// - The last full request, so subsequent calls can use `response.append` only when the current
+///   request is an incremental extension of the previous one.
 /// - The `x-codex-turn-state` sticky-routing token, which must be replayed for all requests within
 ///   the same turn.
 ///
@@ -167,9 +167,8 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     connection: Option<ApiWebSocketConnection>,
-    websocket_last_items: Vec<ResponseItem>,
-    websocket_last_response_id: Option<String>,
-    websocket_last_response_id_rx: Option<oneshot::Receiver<String>>,
+    websocket_last_request: Option<ResponsesApiRequest>,
+    websocket_last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -181,6 +180,13 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct LastResponse {
+    response_id: String,
+    items_added: Vec<ResponseItem>,
+    can_append: bool,
 }
 
 enum WebsocketStreamOutcome {
@@ -231,9 +237,8 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             connection: None,
-            websocket_last_items: Vec::new(),
-            websocket_last_response_id: None,
-            websocket_last_response_id_rx: None,
+            websocket_last_request: None,
+            websocket_last_response_rx: None,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -275,20 +280,20 @@ impl ModelClient {
             .map_err(map_api_error)
     }
 
-    /// Builds memory summaries for each provided normalized trace.
+    /// Builds memory summaries for each provided normalized raw memory.
     ///
     /// This is a unary call (no streaming) to `/v1/memories/trace_summarize`.
     ///
     /// The model selection, reasoning effort, and telemetry context are passed explicitly to keep
     /// `ModelClient` session-scoped.
-    pub async fn summarize_memory_traces(
+    pub async fn summarize_memories(
         &self,
-        traces: Vec<ApiMemoryTrace>,
+        raw_memories: Vec<ApiRawMemory>,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         otel_manager: &OtelManager,
-    ) -> Result<Vec<ApiMemoryTraceSummaryOutput>> {
-        if traces.is_empty() {
+    ) -> Result<Vec<ApiMemorySummarizeOutput>> {
+        if raw_memories.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -299,9 +304,9 @@ impl ModelClient {
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .with_telemetry(Some(request_telemetry));
 
-        let payload = ApiMemoryTraceSummarizeInput {
+        let payload = ApiMemorySummarizeInput {
             model: model_info.slug.clone(),
-            traces,
+            raw_memories,
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
@@ -309,7 +314,7 @@ impl ModelClient {
         };
 
         client
-            .trace_summarize_input(&payload, self.build_subagent_headers())
+            .summarize_input(&payload, self.build_subagent_headers())
             .await
             .map_err(map_api_error)
     }
@@ -320,6 +325,9 @@ impl ModelClient {
             let subagent = match sub {
                 crate::protocol::SubAgentSource::Review => "review".to_string(),
                 crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::MemoryConsolidation => {
+                    "memory_consolidation".to_string()
+                }
                 crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
                 crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
@@ -341,8 +349,9 @@ impl ModelClient {
     ///
     /// This combines provider capability and feature gating; both must be true for websocket paths
     /// to be eligible.
-    fn responses_websocket_enabled(&self) -> bool {
-        self.state.provider.supports_websockets && self.state.enable_responses_websockets
+    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+        self.state.provider.supports_websockets
+            && (self.state.enable_responses_websockets || model_info.prefer_websockets)
     }
 
     fn responses_websockets_v2_enabled(&self) -> bool {
@@ -352,7 +361,7 @@ impl ModelClient {
     /// Returns whether websocket transport has been permanently disabled for this session.
     ///
     /// Once set by fallback activation, subsequent turns must stay on HTTP transport.
-    fn disable_websockets(&self) -> bool {
+    fn websockets_disabled(&self) -> bool {
         self.state.disable_websockets.load(Ordering::Relaxed)
     }
 
@@ -392,7 +401,12 @@ impl ModelClient {
         let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(otel_manager);
         ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(headers, turn_state, Some(websocket_telemetry))
+            .connect(
+                headers,
+                crate::default_client::default_headers(),
+                turn_state,
+                Some(websocket_telemetry),
+            )
             .await
     }
 
@@ -443,28 +457,17 @@ impl ModelClientSession {
                 .swap(true, Ordering::Relaxed)
     }
 
-    fn build_responses_request(prompt: &Prompt) -> Result<ApiPrompt> {
-        let instructions = prompt.base_instructions.text.clone();
-        let tools_json: Vec<Value> = create_tools_json_for_responses_api(&prompt.tools)?;
-        Ok(build_api_prompt(prompt, instructions, tools_json))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Builds shared Responses API request options for both HTTP and WebSocket streaming.
-    ///
-    /// Keeping option construction in one place ensures request-scoped headers are consistent
-    /// regardless of transport choice.
-    fn build_responses_options(
+    fn build_responses_request(
         &self,
+        provider: &codex_api::Provider,
         prompt: &Prompt,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        turn_metadata_header: Option<&str>,
-        compression: Compression,
-    ) -> ApiResponsesOptions {
-        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
-
+    ) -> Result<ResponsesApiRequest> {
+        let instructions = &prompt.base_instructions.text;
+        let input = prompt.get_formatted_input();
+        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {
@@ -478,13 +481,11 @@ impl ModelClientSession {
         } else {
             None
         };
-
         let include = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             Vec::new()
         };
-
         let verbosity = if model_info.support_verbosity {
             self.client
                 .state
@@ -499,16 +500,39 @@ impl ModelClientSession {
             }
             None
         };
-
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let request = ResponsesApiRequest {
+            model: model_info.slug.clone(),
+            instructions: instructions.clone(),
+            input,
+            tools,
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            reasoning,
+            store: provider.is_azure_responses_endpoint(),
+            stream: true,
+            include,
+            prompt_cache_key,
+            text,
+        };
+        Ok(request)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Builds shared Responses API transport options and request-body options.
+    ///
+    /// Keeping option construction in one place ensures request-scoped headers are consistent
+    /// regardless of transport choice.
+    fn build_responses_options(
+        &self,
+        turn_metadata_header: Option<&str>,
+        compression: Compression,
+    ) -> ApiResponsesOptions {
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.client.state.conversation_id.to_string();
 
         ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key: Some(conversation_id.clone()),
-            text,
-            store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: build_responses_headers(
@@ -521,100 +545,75 @@ impl ModelClientSession {
         }
     }
 
-    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build
-        // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
-        if can_append {
-            Some(input_items[previous_len..].to_vec())
+    fn get_incremental_items(
+        &self,
+        request: &ResponsesApiRequest,
+        last_response: Option<&LastResponse>,
+    ) -> Option<Vec<ResponseItem>> {
+        // Checks whether the current request is an incremental append to the previous request.
+        // We only append when non-input request fields are unchanged and `input` is a strict
+        // extension of the previous known input. Server-returned output items are treated as part
+        // of the baseline so we do not resend them.
+        let previous_request = self.websocket_last_request.as_ref()?;
+        let mut previous_without_input = previous_request.clone();
+        previous_without_input.input.clear();
+        let mut request_without_input = request.clone();
+        request_without_input.input.clear();
+        if previous_without_input != request_without_input {
+            trace!(
+                "incremental request failed, properties didn't match {previous_without_input:?} != {request_without_input:?}"
+            );
+            return None;
+        }
+
+        let mut baseline = previous_request.input.clone();
+        if let Some(last_response) = last_response {
+            baseline.extend(last_response.items_added.clone());
+        }
+
+        let baseline_len = baseline.len();
+        if baseline_len > 0
+            && request.input.starts_with(&baseline)
+            && baseline_len < request.input.len()
+        {
+            Some(request.input[baseline_len..].to_vec())
         } else {
+            trace!("incremental request failed, items didn't match");
             None
         }
     }
 
-    fn refresh_websocket_last_response_id(&mut self) {
-        if let Some(mut receiver) = self.websocket_last_response_id_rx.take() {
-            match receiver.try_recv() {
-                Ok(response_id) if !response_id.is_empty() => {
-                    self.websocket_last_response_id = Some(response_id);
-                }
-                Ok(_) | Err(TryRecvError::Closed) => {
-                    self.websocket_last_response_id = None;
-                }
-                Err(TryRecvError::Empty) => {
-                    self.websocket_last_response_id_rx = Some(receiver);
-                }
-            }
-        }
-    }
-
-    fn websocket_previous_response_id(&mut self) -> Option<String> {
-        self.refresh_websocket_last_response_id();
-        self.websocket_last_response_id
-            .clone()
-            .filter(|id| !id.is_empty())
-    }
-
-    fn prepare_websocket_create_request(
-        &self,
-        model_slug: &str,
-        api_prompt: &ApiPrompt,
-        options: &ApiResponsesOptions,
-        input: Vec<ResponseItem>,
-        previous_response_id: Option<String>,
-    ) -> ResponsesWsRequest {
-        let ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key,
-            text,
-            store_override,
-            ..
-        } = options;
-
-        let store = store_override.unwrap_or(false);
-        let payload = ResponseCreateWsRequest {
-            model: model_slug.to_string(),
-            instructions: api_prompt.instructions.clone(),
-            previous_response_id,
-            input,
-            tools: api_prompt.tools.clone(),
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: api_prompt.parallel_tool_calls,
-            reasoning: reasoning.clone(),
-            store,
-            stream: true,
-            include: include.clone(),
-            prompt_cache_key: prompt_cache_key.clone(),
-            text: text.clone(),
-        };
-
-        ResponsesWsRequest::ResponseCreate(payload)
+    fn get_last_response(&mut self) -> Option<LastResponse> {
+        self.websocket_last_response_rx
+            .take()
+            .and_then(|mut receiver| match receiver.try_recv() {
+                Ok(last_response) => Some(last_response),
+                Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
+            })
     }
 
     fn prepare_websocket_request(
         &mut self,
-        model_slug: &str,
-        api_prompt: &ApiPrompt,
-        options: &ApiResponsesOptions,
+        payload: ResponseCreateWsRequest,
+        request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
+        let Some(last_response) = self.get_last_response() else {
+            return ResponsesWsRequest::ResponseCreate(payload);
+        };
         let responses_websockets_v2_enabled = self.client.responses_websockets_v2_enabled();
-        let incremental_items = self.get_incremental_items(&api_prompt.input);
+        if !responses_websockets_v2_enabled && !last_response.can_append {
+            trace!("incremental request failed, can't append");
+            return ResponsesWsRequest::ResponseCreate(payload);
+        }
+        let incremental_items = self.get_incremental_items(request, Some(&last_response));
         if let Some(append_items) = incremental_items {
-            if responses_websockets_v2_enabled
-                && let Some(previous_response_id) = self.websocket_previous_response_id()
-            {
-                return self.prepare_websocket_create_request(
-                    model_slug,
-                    api_prompt,
-                    options,
-                    append_items,
-                    Some(previous_response_id),
-                );
+            if responses_websockets_v2_enabled && !last_response.response_id.is_empty() {
+                let payload = ResponseCreateWsRequest {
+                    previous_response_id: Some(last_response.response_id),
+                    input: append_items,
+                    ..payload
+                };
+                return ResponsesWsRequest::ResponseCreate(payload);
             }
 
             if !responses_websockets_v2_enabled {
@@ -624,13 +623,7 @@ impl ModelClientSession {
             }
         }
 
-        self.prepare_websocket_create_request(
-            model_slug,
-            api_prompt,
-            options,
-            api_prompt.input.clone(),
-            None,
-        )
+        ResponsesWsRequest::ResponseCreate(payload)
     }
 
     /// Opportunistically warms a websocket for this turn-scoped client session.
@@ -639,9 +632,10 @@ impl ModelClientSession {
     pub async fn prewarm_websocket(
         &mut self,
         otel_manager: &OtelManager,
-        turn_metadata_header: Option<&str>,
+        model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled() || self.client.disable_websockets() {
+        if !self.client.responses_websocket_enabled(model_info) || self.client.websockets_disabled()
+        {
             return Ok(());
         }
         if self.connection.is_some() {
@@ -661,7 +655,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                turn_metadata_header,
+                None,
             )
             .await?;
         self.connection = Some(connection);
@@ -683,9 +677,8 @@ impl ModelClientSession {
         };
 
         if needs_new {
-            self.websocket_last_items.clear();
-            self.websocket_last_response_id = None;
-            self.websocket_last_response_id_rx = None;
+            self.websocket_last_request = None;
+            self.websocket_last_response_rx = None;
             let turn_state = options
                 .turn_state
                 .clone()
@@ -740,12 +733,11 @@ impl ModelClientSession {
                 self.client.state.provider.stream_idle_timeout(),
             )
             .map_err(map_api_error)?;
-            return Ok(map_response_stream(stream, otel_manager.clone()));
+            let (stream, _last_request_rx) = map_response_stream(stream, otel_manager.clone());
+            return Ok(stream);
         }
 
         let auth_manager = self.client.state.auth_manager.clone();
-        let api_prompt = Self::build_responses_request(prompt)?;
-
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(super::auth::AuthManager::unauthorized_recovery);
@@ -754,30 +746,27 @@ impl ModelClientSession {
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(otel_manager);
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
+            let options = self.build_responses_options(turn_metadata_header, compression);
 
+            let request = self.build_responses_request(
+                &client_setup.api_provider,
+                prompt,
+                model_info,
+                effort,
+                summary,
+            )?;
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-
-            let options = self.build_responses_options(
-                prompt,
-                model_info,
-                effort,
-                summary,
-                turn_metadata_header,
-                compression,
-            );
-
-            let stream_result = client
-                .stream_prompt(&model_info.slug, &api_prompt, options)
-                .await;
+            let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
                 Ok(stream) => {
-                    return Ok(map_response_stream(stream, otel_manager.clone()));
+                    let (stream, _) = map_response_stream(stream, otel_manager.clone());
+                    return Ok(stream);
                 }
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
@@ -802,7 +791,6 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
-        let api_prompt = Self::build_responses_request(prompt)?;
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -811,14 +799,15 @@ impl ModelClientSession {
             let client_setup = self.client.current_client_setup().await?;
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
-            let options = self.build_responses_options(
+            let options = self.build_responses_options(turn_metadata_header, compression);
+            let request = self.build_responses_request(
+                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort,
                 summary,
-                turn_metadata_header,
-                compression,
-            );
+            )?;
+            let ws_payload = ResponseCreateWsRequest::from(&request);
 
             match self
                 .websocket_connection(
@@ -845,7 +834,7 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let request = self.prepare_websocket_request(&model_info.slug, &api_prompt, &options);
+            let ws_request = self.prepare_websocket_request(ws_payload, &request);
 
             let stream_result = self
                 .connection
@@ -855,26 +844,15 @@ impl ModelClientSession {
                         "websocket connection is unavailable".to_string(),
                     ))
                 })?
-                .stream_request(request)
+                .stream_request(ws_request)
                 .await
                 .map_err(map_api_error)?;
-            self.websocket_last_items = api_prompt.input.clone();
-            let (last_response_id_sender, last_response_id_receiver) = oneshot::channel();
-            self.websocket_last_response_id_rx = Some(last_response_id_receiver);
-            let mut last_response_id_sender = Some(last_response_id_sender);
-            let stream_result = stream_result.inspect(move |event| {
-                if let Ok(ResponseEvent::Completed { response_id, .. }) = event
-                    && !response_id.is_empty()
-                    && let Some(sender) = last_response_id_sender.take()
-                {
-                    let _ = sender.send(response_id.clone());
-                }
-            });
+            self.websocket_last_request = Some(request);
+            let (stream, last_request_rx) =
+                map_response_stream(stream_result, otel_manager.clone());
+            self.websocket_last_response_rx = Some(last_request_rx);
 
-            return Ok(WebsocketStreamOutcome::Stream(map_response_stream(
-                stream_result,
-                otel_manager.clone(),
-            )));
+            return Ok(WebsocketStreamOutcome::Stream(stream));
         }
     }
 
@@ -914,8 +892,8 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                let websocket_enabled =
-                    self.client.responses_websocket_enabled() && !self.client.disable_websockets();
+                let websocket_enabled = self.client.responses_websocket_enabled(model_info)
+                    && !self.client.websockets_disabled();
 
                 if websocket_enabled {
                     match self
@@ -931,7 +909,7 @@ impl ModelClientSession {
                     {
                         WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
                         WebsocketStreamOutcome::FallbackToHttp => {
-                            self.try_switch_fallback_transport(otel_manager);
+                            self.try_switch_fallback_transport(otel_manager, model_info);
                         }
                     }
                 }
@@ -955,8 +933,12 @@ impl ModelClientSession {
     /// the HTTP transport.
     ///
     /// Returns `true` if this call activated fallback, or `false` if fallback was already active.
-    pub(crate) fn try_switch_fallback_transport(&mut self, otel_manager: &OtelManager) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled();
+    pub(crate) fn try_switch_fallback_transport(
+        &mut self,
+        otel_manager: &OtelManager,
+        model_info: &ModelInfo,
+    ) -> bool {
+        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
         let activated = self.activate_http_fallback(websocket_enabled);
         if activated {
             warn!("falling back to HTTP");
@@ -967,20 +949,10 @@ impl ModelClientSession {
             );
 
             self.connection = None;
-            self.websocket_last_items.clear();
+            self.websocket_last_request = None;
+            self.websocket_last_response_rx = None;
         }
         activated
-    }
-}
-
-/// Adapts the core `Prompt` type into the `codex-api` payload shape.
-fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value>) -> ApiPrompt {
-    ApiPrompt {
-        instructions,
-        input: prompt.get_formatted_input(),
-        tools: tools_json,
-        parallel_tool_calls: prompt.parallel_tool_calls,
-        output_schema: prompt.output_schema.clone(),
     }
 }
 
@@ -1023,7 +995,10 @@ fn build_responses_headers(
     headers
 }
 
-fn map_response_stream<S>(api_stream: S, otel_manager: OtelManager) -> ResponseStream
+fn map_response_stream<S>(
+    api_stream: S,
+    otel_manager: OtelManager,
+) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
         + Unpin
@@ -1031,15 +1006,29 @@ where
         + 'static,
 {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+    let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
 
     tokio::spawn(async move {
         let mut logged_error = false;
+        let mut tx_last_response = Some(tx_last_response);
+        let mut items_added: Vec<ResponseItem> = Vec::new();
         let mut api_stream = api_stream;
         while let Some(event) = api_stream.next().await {
             match event {
+                Ok(ResponseEvent::OutputItemDone(item)) => {
+                    items_added.push(item.clone());
+                    if tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(item)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    can_append,
                 }) => {
                     if let Some(usage) = &token_usage {
                         otel_manager.sse_event_completed(
@@ -1050,10 +1039,18 @@ where
                             usage.total_tokens,
                         );
                     }
+                    if let Some(sender) = tx_last_response.take() {
+                        let _ = sender.send(LastResponse {
+                            response_id: response_id.clone(),
+                            items_added: std::mem::take(&mut items_added),
+                            can_append,
+                        });
+                    }
                     if tx_event
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            can_append,
                         }))
                         .await
                         .is_err()
@@ -1080,7 +1077,7 @@ where
         }
     });
 
-    ResponseStream { rx_event }
+    (ResponseStream { rx_event }, rx_last_response)
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.
@@ -1158,5 +1155,105 @@ impl WebsocketTelemetry for ApiTelemetry {
         duration: Duration,
     ) {
         self.otel_manager.record_websocket_event(result, duration);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelClient;
+    use codex_otel::OtelManager;
+    use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ModelInfo;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn test_model_client(session_source: SessionSource) -> ModelClient {
+        let provider = crate::model_provider_info::create_oss_provider_with_base_url(
+            "https://example.com/v1",
+            crate::model_provider_info::WireApi::Responses,
+        );
+        ModelClient::new(
+            None,
+            ThreadId::new(),
+            provider,
+            session_source,
+            None,
+            false,
+            false,
+            false,
+            false,
+            None,
+        )
+    }
+
+    fn test_model_info() -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": "gpt-test",
+            "display_name": "gpt-test",
+            "description": "desc",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "medium", "description": "medium"}
+            ],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 1,
+            "upgrade": null,
+            "base_instructions": "base instructions",
+            "model_messages": null,
+            "supports_reasoning_summaries": false,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "bytes", "limit": 10000},
+            "supports_parallel_tool_calls": false,
+            "context_window": 272000,
+            "auto_compact_token_limit": null,
+            "experimental_supported_tools": []
+        }))
+        .expect("deserialize test model info")
+    }
+
+    fn test_otel_manager() -> OtelManager {
+        OtelManager::new(
+            ThreadId::new(),
+            "gpt-test",
+            "gpt-test",
+            None,
+            None,
+            None,
+            "test-originator".to_string(),
+            false,
+            "test-terminal".to_string(),
+            SessionSource::Cli,
+        )
+    }
+
+    #[test]
+    fn build_subagent_headers_sets_other_subagent_label() {
+        let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
+            "memory_consolidation".to_string(),
+        )));
+        let headers = client.build_subagent_headers();
+        let value = headers
+            .get("x-openai-subagent")
+            .and_then(|value| value.to_str().ok());
+        assert_eq!(value, Some("memory_consolidation"));
+    }
+
+    #[tokio::test]
+    async fn summarize_memories_returns_empty_for_empty_input() {
+        let client = test_model_client(SessionSource::Cli);
+        let model_info = test_model_info();
+        let otel_manager = test_otel_manager();
+
+        let output = client
+            .summarize_memories(Vec::new(), &model_info, None, &otel_manager)
+            .await
+            .expect("empty summarize request should succeed");
+        assert_eq!(output.len(), 0);
     }
 }

@@ -2540,7 +2540,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             // Important!
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
@@ -2644,7 +2644,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,

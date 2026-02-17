@@ -3,6 +3,8 @@ use std::time::Instant;
 
 use tracing::error;
 
+use crate::analytics_client::AppInvocation;
+use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -14,6 +16,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -75,10 +78,17 @@ pub(crate) async fn handle_mcp_tool_call(
                     .await;
 
                 let start = Instant::now();
-                let result: Result<CallToolResult, String> = sess
+                let result = sess
                     .call_tool(&server, &tool_name, arguments_value.clone())
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
+                let result = sanitize_mcp_tool_result_for_model(
+                    turn_context
+                        .model_info
+                        .input_modalities
+                        .contains(&InputModality::Image),
+                    result,
+                );
                 if let Err(e) = &result {
                     tracing::warn!("MCP tool call error: {e:?}");
                 }
@@ -94,6 +104,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     tool_call_end_event.clone(),
                 )
                 .await;
+                maybe_track_codex_app_used(sess.as_ref(), turn_context, &server, &tool_name).await;
                 result
             }
             McpToolApprovalDecision::Decline => {
@@ -136,10 +147,17 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result: Result<CallToolResult, String> = sess
+    let result = sess
         .call_tool(&server, &tool_name, arguments_value.clone())
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
+    let result = sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        result,
+    );
     if let Err(e) = &result {
         tracing::warn!("MCP tool call error: {e:?}");
     }
@@ -151,6 +169,7 @@ pub(crate) async fn handle_mcp_tool_call(
     });
 
     notify_mcp_tool_call_event(sess.as_ref(), turn_context, tool_call_end_event.clone()).await;
+    maybe_track_codex_app_used(sess.as_ref(), turn_context, &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
@@ -160,8 +179,83 @@ pub(crate) async fn handle_mcp_tool_call(
     ResponseInputItem::McpToolCallOutput { call_id, result }
 }
 
+fn sanitize_mcp_tool_result_for_model(
+    supports_image_input: bool,
+    result: Result<CallToolResult, String>,
+) -> Result<CallToolResult, String> {
+    if supports_image_input {
+        return result;
+    }
+
+    result.map(|call_tool_result| CallToolResult {
+        content: call_tool_result
+            .content
+            .iter()
+            .map(|block| {
+                if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
+                    && content_type == "image"
+                {
+                    return serde_json::json!({
+                        "type": "text",
+                        "text": "<image content omitted because you do not support image input>",
+                    });
+                }
+
+                block.clone()
+            })
+            .collect::<Vec<_>>(),
+        structured_content: call_tool_result.structured_content,
+        is_error: call_tool_result.is_error,
+        meta: call_tool_result.meta,
+    })
+}
+
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
     sess.send_event(turn_context, event).await;
+}
+
+struct McpAppUsageMetadata {
+    connector_id: Option<String>,
+    app_name: Option<String>,
+}
+
+async fn maybe_track_codex_app_used(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    tool_name: &str,
+) {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return;
+    }
+    let metadata = lookup_mcp_app_usage_metadata(sess, server, tool_name).await;
+    let (connector_id, app_name) = metadata
+        .map(|metadata| (metadata.connector_id, metadata.app_name))
+        .unwrap_or((None, None));
+    let invoke_type = if let Some(connector_id) = connector_id.as_deref() {
+        let mentioned_connector_ids = sess.get_connector_selection().await;
+        if mentioned_connector_ids.contains(connector_id) {
+            "explicit"
+        } else {
+            "implicit"
+        }
+    } else {
+        "implicit"
+    };
+
+    let tracking = build_track_events_context(
+        turn_context.model_info.slug.clone(),
+        sess.conversation_id.to_string(),
+        turn_context.sub_id.clone(),
+    );
+    sess.services.analytics_events_client.track_app_used(
+        tracking,
+        AppInvocation {
+            connector_id,
+            app_name,
+            invoke_type: Some(invoke_type.to_string()),
+        },
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +374,31 @@ async fn lookup_mcp_tool_metadata(
                     connector_name: tool_info.connector_name,
                     tool_title: tool_info.tool.title,
                 })
+        } else {
+            None
+        }
+    })
+}
+
+async fn lookup_mcp_app_usage_metadata(
+    sess: &Session,
+    server: &str,
+    tool_name: &str,
+) -> Option<McpAppUsageMetadata> {
+    let tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await;
+
+    tools.into_values().find_map(|tool_info| {
+        if tool_info.server_name == server && tool_info.tool_name == tool_name {
+            Some(McpAppUsageMetadata {
+                connector_id: tool_info.connector_id,
+                app_name: tool_info.connector_name,
+            })
         } else {
             None
         }
@@ -449,5 +568,60 @@ mod tests {
     fn approval_not_required_when_read_only_true() {
         let annotations = annotations(Some(true), Some(true), Some(true));
         assert_eq!(requires_mcp_tool_approval(&annotations), false);
+    }
+
+    #[test]
+    fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
+        let result = Ok(CallToolResult {
+            content: vec![
+                serde_json::json!({
+                    "type": "image",
+                    "data": "Zm9v",
+                    "mimeType": "image/png",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "hello",
+                }),
+            ],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        });
+
+        let got = sanitize_mcp_tool_result_for_model(false, result).expect("sanitized result");
+
+        assert_eq!(
+            got.content,
+            vec![
+                serde_json::json!({
+                    "type": "text",
+                    "text": "<image content omitted because you do not support image input>",
+                }),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "hello",
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
+        let original = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "Zm9v",
+                "mimeType": "image/png",
+            })],
+            structured_content: Some(serde_json::json!({"x": 1})),
+            is_error: Some(false),
+            meta: Some(serde_json::json!({"k": "v"})),
+        };
+
+        let got = sanitize_mcp_tool_result_for_model(true, Ok(original.clone()))
+            .expect("unsanitized result");
+
+        assert_eq!(got, original);
     }
 }

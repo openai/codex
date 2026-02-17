@@ -78,6 +78,10 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable JavaScript REPL tools backed by a persistent Node kernel.
+    JsRepl,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Include the freeform apply_patch tool.
@@ -87,7 +91,7 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Allow the model to search MCP tools via BM25 before exposing them.
+    /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
     /// Use the bubblewrap-based Linux sandbox pipeline.
     UseLinuxSandboxBwrap,
@@ -105,7 +109,7 @@ pub enum Feature {
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
-    /// Enable the get_memory tool backed by SQLite thread memories.
+    /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
@@ -117,6 +121,8 @@ pub enum Feature {
     Collab,
     /// Enable apps.
     Apps,
+    /// Route apps MCP calls through the configured gateway.
+    AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -127,6 +133,8 @@ pub enum Feature {
     CollaborationModes,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Prevent idle system sleep while a turn is actively running.
+    PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
@@ -320,6 +328,10 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            features.disable(Feature::JsReplToolsOnly);
+        }
 
         features
     }
@@ -423,6 +435,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Deprecated,
@@ -437,7 +461,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SearchTool,
         key: "search_tool",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
@@ -474,25 +498,32 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
+        #[cfg(target_os = "linux")]
+        stage: Stage::Experimental {
+            name: "Bubblewrap sandbox",
+            menu_description: "Try the new linux sandbox based on bubblewrap.",
+            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .codex read-only inside writable workspaces. Enable it in /experimental and restart Codex to try it.",
+        },
+        #[cfg(not(target_os = "linux"))]
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -521,11 +552,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::Collab,
-        key: "collab",
+        key: "multi_agent",
         stage: Stage::Experimental {
-            name: "Sub-agents",
+            name: "Multi-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
         },
         default_enabled: false,
     },
@@ -537,6 +568,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
             announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsMcpGateway,
+        key: "apps_mcp_gateway",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -568,6 +605,20 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(target_os = "macos") {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Codex is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
@@ -651,5 +702,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn default_enabled_features_are_stable() {
+        for spec in FEATURES {
+            if spec.default_enabled {
+                assert_eq!(
+                    spec.stage,
+                    Stage::Stable,
+                    "feature `{}` is enabled by default but is not stable ({:?})",
+                    spec.key,
+                    spec.stage
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
+        assert!(matches!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::Experimental { .. }
+        ));
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn use_linux_sandbox_bwrap_is_under_development_off_linux() {
+        assert_eq!(
+            Feature::UseLinuxSandboxBwrap.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[test]
+    fn collab_is_legacy_alias_for_multi_agent() {
+        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
+        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
     }
 }

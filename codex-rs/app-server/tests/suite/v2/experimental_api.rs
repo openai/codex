@@ -30,6 +30,7 @@ async fn mock_experimental_method_requires_experimental_api_capability() -> Resu
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                opt_out_notification_methods: None,
             }),
         )
         .await?;
@@ -61,6 +62,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                opt_out_notification_methods: None,
             }),
         )
         .await?;
@@ -97,6 +99,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
             default_client_info(),
             Some(InitializeCapabilities {
                 experimental_api: false,
+                opt_out_notification_methods: None,
             }),
         )
         .await?;

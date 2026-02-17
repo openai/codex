@@ -31,6 +31,9 @@
         "displayName": {
           "type": "string"
         },
+        "hidden": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -71,6 +74,7 @@
         "defaultReasoningEffort",
         "description",
         "displayName",
+        "hidden",
         "id",
         "isDefault",
         "model",

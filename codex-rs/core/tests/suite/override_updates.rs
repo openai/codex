@@ -108,7 +108,7 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let test = builder.build(&server).await?;
 

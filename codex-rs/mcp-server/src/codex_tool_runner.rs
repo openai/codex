@@ -221,6 +221,7 @@ async fn run_codex_tool_session_inner(
                         reason: _,
                         proposed_execpolicy_amendment: _,
                         parsed_cmd,
+                        network_approval_context: _,
                     }) => {
                         handle_exec_approval_request(
                             command,
@@ -279,7 +280,9 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
-                    EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+                    EventMsg::TurnComplete(TurnCompleteEvent {
+                        last_agent_message, ..
+                    }) => {
                         let text = match last_agent_message {
                             Some(msg) => msg,
                             None => "".to_string(),

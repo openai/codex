@@ -862,6 +862,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         match msg {
             protocol::EventMsg::TurnComplete(protocol::TurnCompleteEvent {
                 last_agent_message,
+                ..
             }) => {
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     let last_message = last_agent_message
