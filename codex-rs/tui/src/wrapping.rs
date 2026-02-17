@@ -12,6 +12,7 @@ where
 {
     let opts = width_or_options.into();
     let mut lines: Vec<Range<usize>> = Vec::new();
+    let mut cursor = 0usize;
     for line in textwrap::wrap(text, opts).iter() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
@@ -19,8 +20,14 @@ where
                 let end = start + slice.len();
                 let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
                 lines.push(start..end + trailing_spaces + 1);
+                cursor = end + trailing_spaces;
             }
-            std::borrow::Cow::Owned(_) => panic!("wrap_ranges: unexpected owned string"),
+            std::borrow::Cow::Owned(slice) => {
+                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice);
+                let trailing_spaces = text[mapped.end..].chars().take_while(|c| *c == ' ').count();
+                lines.push(mapped.start..mapped.end + trailing_spaces + 1);
+                cursor = mapped.end + trailing_spaces;
+            }
         }
     }
     lines
@@ -35,17 +42,63 @@ where
 {
     let opts = width_or_options.into();
     let mut lines: Vec<Range<usize>> = Vec::new();
+    let mut cursor = 0usize;
     for line in textwrap::wrap(text, opts).iter() {
         match line {
             std::borrow::Cow::Borrowed(slice) => {
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
                 let end = start + slice.len();
                 lines.push(start..end);
+                cursor = end;
             }
-            std::borrow::Cow::Owned(_) => panic!("wrap_ranges_trim: unexpected owned string"),
+            std::borrow::Cow::Owned(slice) => {
+                let mapped = map_owned_wrapped_line_to_range(text, cursor, slice);
+                lines.push(mapped.clone());
+                cursor = mapped.end;
+            }
         }
     }
     lines
+}
+
+fn map_owned_wrapped_line_to_range(text: &str, cursor: usize, wrapped: &str) -> Range<usize> {
+    let mut start = cursor;
+    while start < text.len() && !wrapped.starts_with(' ') {
+        let Some(ch) = text[start..].chars().next() else {
+            break;
+        };
+        if ch != ' ' {
+            break;
+        }
+        start += ch.len_utf8();
+    }
+
+    let mut end = start;
+    let mut chars = wrapped.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if end < text.len() {
+            let Some(src) = text[end..].chars().next() else {
+                unreachable!("checked end < text.len()");
+            };
+            if ch == src {
+                end += src.len_utf8();
+                continue;
+            }
+        }
+
+        // textwrap can materialize owned lines when penalties are inserted.
+        // The default penalty is a trailing '-'; it does not correspond to
+        // source bytes, so we skip it while keeping byte ranges in source text.
+        if ch == '-' && chars.peek().is_none() {
+            continue;
+        }
+
+        panic!(
+            "wrap_ranges: could not map owned line {wrapped:?} to source near byte {cursor}"
+        );
+    }
+
+    start..end
 }
 
 pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
@@ -232,8 +285,16 @@ fn is_domain_label(label: &str) -> bool {
 
 pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<'a> {
     opts.word_separator(textwrap::WordSeparator::AsciiSpace)
-        .word_splitter(textwrap::WordSplitter::NoHyphenation)
+        .word_splitter(textwrap::WordSplitter::Custom(split_non_url_word))
         .break_words(false)
+}
+
+fn split_non_url_word(word: &str) -> Vec<usize> {
+    if is_url_like_token(word) {
+        return Vec::new();
+    }
+
+    word.char_indices().skip(1).map(|(idx, _)| idx).collect()
 }
 
 #[must_use]
@@ -970,5 +1031,45 @@ them."#
             out.len() > 1,
             "expected non-url token to wrap with default options"
         );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_mixed_line_wraps_long_non_url_token() {
+        let long_non_url = "a_very_long_token_without_spaces_to_force_wrapping";
+        let line = Line::from(format!("see https://ex.com {long_non_url}"));
+        let out = adaptive_wrap_line(&line, RtOptions::new(24));
+
+        assert!(
+            out.iter()
+                .any(|line| concat_line(line).contains("https://ex.com")),
+            "expected URL token to remain present, got: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|line| concat_line(line).contains(long_non_url)),
+            "expected long non-url token to wrap on mixed lines, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_ranges_trim_handles_owned_lines_with_penalty_char() {
+        fn split_every_char(word: &str) -> Vec<usize> {
+            word.char_indices().skip(1).map(|(idx, _)| idx).collect()
+        }
+
+        let text = "a_very_long_token_without_spaces";
+        let opts = Options::new(8)
+            .word_separator(textwrap::WordSeparator::AsciiSpace)
+            .word_splitter(textwrap::WordSplitter::Custom(split_every_char))
+            .break_words(false);
+
+        let ranges = wrap_ranges_trim(text, opts);
+        let rebuilt = ranges
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect::<String>();
+
+        assert_eq!(rebuilt, text);
+        assert!(ranges.len() > 1, "expected wrapped ranges, got: {ranges:?}");
     }
 }
