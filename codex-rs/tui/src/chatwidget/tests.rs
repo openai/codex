@@ -3145,6 +3145,36 @@ async fn steer_enter_submits_when_plan_stream_is_not_active() {
 }
 
 #[tokio::test]
+async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let mut plan_controller = PlanStreamController::new(Some(80));
+    assert!(plan_controller.push("- Step 1\n"));
+    assert!(
+        plan_controller.queued_lines() > 0,
+        "expected plan stream to have queued lines for this repro",
+    );
+    chat.plan_stream_controller = Some(plan_controller);
+    chat.stream_controller = Some(StreamController::new(Some(80)));
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_stop = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::StopCommitAnimation) {
+            saw_stop = true;
+        }
+    }
+
+    assert!(
+        !saw_stop,
+        "did not expect StopCommitAnimation while plan stream still has queued lines",
+    );
+}
+
+#[tokio::test]
 async fn ctrl_c_shutdown_works_with_caps_lock() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

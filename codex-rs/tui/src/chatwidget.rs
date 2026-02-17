@@ -837,7 +837,7 @@ impl ChatWidget {
             }
         }
         self.adaptive_chunking.reset();
-        if had_stream_controller {
+        if had_stream_controller && self.stream_controllers_idle() {
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
     }
