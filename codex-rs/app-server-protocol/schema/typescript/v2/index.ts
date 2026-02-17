@@ -91,6 +91,8 @@ export type { MergeStrategy } from "./MergeStrategy";
 export type { Model } from "./Model";
 export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";
+export type { ModelRerouteReason } from "./ModelRerouteReason";
+export type { ModelReroutedNotification } from "./ModelReroutedNotification";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkRequirements } from "./NetworkRequirements";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
