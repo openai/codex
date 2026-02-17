@@ -1110,6 +1110,9 @@ pub struct ModelListParams {
     /// Optional page size; defaults to a reasonable server-side value.
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
+    /// When true, include models that are hidden from the default picker list.
+    #[ts(optional = nullable)]
+    pub include_hidden: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1121,6 +1124,7 @@ pub struct Model {
     pub upgrade: Option<String>,
     pub display_name: String,
     pub description: String,
+    pub hidden: bool,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
     #[serde(default = "default_input_modalities")]

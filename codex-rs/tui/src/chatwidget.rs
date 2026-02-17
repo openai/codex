@@ -184,7 +184,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
-use crate::collab;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -201,6 +200,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -650,6 +650,12 @@ pub(crate) struct ActiveCellTranscriptKey {
 pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
+    /// Remote image attachments represented as URLs (for example data URLs)
+    /// provided by app-server clients.
+    ///
+    /// Unlike `local_images`, these are not created by TUI image attach/paste
+    /// flows. The TUI can restore and remove them while editing/backtracking.
+    remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
 }
@@ -659,6 +665,7 @@ impl From<String> for UserMessage {
         Self {
             text,
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
@@ -671,6 +678,7 @@ impl From<&str> for UserMessage {
         Self {
             text: text.to_string(),
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
@@ -698,6 +706,7 @@ pub(crate) fn create_initial_user_message(
         Some(UserMessage {
             text,
             local_images,
+            remote_image_urls: Vec::new(),
             text_elements,
             mention_bindings: Vec::new(),
         })
@@ -713,6 +722,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text,
         text_elements,
         local_images,
+        remote_image_urls,
         mention_bindings,
     } = message;
     if local_images.is_empty() {
@@ -720,6 +730,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             text,
             text_elements,
             local_images,
+            remote_image_urls,
             mention_bindings,
         };
     }
@@ -774,6 +785,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
     UserMessage {
         text: rebuilt,
         local_images: remapped_images,
+        remote_image_urls,
         text_elements: rebuilt_elements,
         mention_bindings,
     }
@@ -1722,11 +1734,15 @@ impl ChatWidget {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
-        if !existing_message.text.is_empty() || !existing_message.local_images.is_empty() {
+        if !existing_message.text.is_empty()
+            || !existing_message.local_images.is_empty()
+            || !existing_message.remote_image_urls.is_empty()
+        {
             to_merge.push(existing_message);
         }
 
@@ -1734,10 +1750,15 @@ impl ChatWidget {
             text: String::new(),
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
         };
         let mut combined_offset = 0usize;
-        let mut next_image_label = 1usize;
+        let total_remote_images = to_merge
+            .iter()
+            .map(|message| message.remote_image_urls.len())
+            .sum::<usize>();
+        let mut next_image_label = total_remote_images + 1;
 
         for (idx, message) in to_merge.into_iter().enumerate() {
             if idx > 0 {
@@ -1756,6 +1777,7 @@ impl ChatWidget {
                     elem
                 }));
             combined.local_images.extend(message.local_images);
+            combined.remote_image_urls.extend(message.remote_image_urls);
             combined.mention_bindings.extend(message.mention_bindings);
         }
 
@@ -1766,10 +1788,12 @@ impl ChatWidget {
         let UserMessage {
             text,
             local_images,
+            remote_image_urls,
             text_elements,
             mention_bindings,
         } = user_message;
         let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
@@ -2370,6 +2394,7 @@ impl ChatWidget {
             id: ev.call_id,
             command: ev.command,
             reason: ev.reason,
+            network_approval_context: ev.network_approval_context,
             proposed_execpolicy_amendment: ev.proposed_execpolicy_amendment,
         };
         self.bottom_pane
@@ -3102,11 +3127,14 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
+                    let local_images = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let remote_image_urls = self.take_remote_image_urls();
                     let user_message = UserMessage {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
+                        local_images,
+                        remote_image_urls,
                         text_elements,
                         mention_bindings: self
                             .bottom_pane
@@ -3127,11 +3155,14 @@ impl ChatWidget {
                     text,
                     text_elements,
                 } => {
+                    let local_images = self
+                        .bottom_pane
+                        .take_recent_submission_images_with_placeholders();
+                    let remote_image_urls = self.take_remote_image_urls();
                     let user_message = UserMessage {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
+                        local_images,
+                        remote_image_urls,
                         text_elements,
                         mention_bindings: self
                             .bottom_pane
@@ -3517,11 +3548,14 @@ impl ChatWidget {
                 else {
                     return;
                 };
+                let local_images = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let remote_image_urls = self.take_remote_image_urls();
                 let user_message = UserMessage {
                     text: prepared_args,
-                    local_images: self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders(),
+                    local_images,
+                    remote_image_urls,
                     text_elements: prepared_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
@@ -3671,18 +3705,22 @@ impl ChatWidget {
         let UserMessage {
             text,
             local_images,
+            remote_image_urls,
             text_elements,
             mention_bindings,
         } = user_message;
-        if text.is_empty() && local_images.is_empty() {
+        if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
             return;
         }
-        if !local_images.is_empty() && !self.current_model_supports_images() {
+        if (!local_images.is_empty() || !remote_image_urls.is_empty())
+            && !self.current_model_supports_images()
+        {
             self.restore_blocked_image_submission(
                 text,
                 text_elements,
                 local_images,
                 mention_bindings,
+                remote_image_urls,
             );
             return;
         }
@@ -3705,6 +3743,12 @@ impl ChatWidget {
                 command: cmd.to_string(),
             });
             return;
+        }
+
+        for image_url in &remote_image_urls {
+            items.push(UserInput::Image {
+                image_url: image_url.clone(),
+            });
         }
 
         for image in &local_images {
@@ -3846,13 +3890,21 @@ impl ChatWidget {
                 });
         }
 
-        // Only show the text portion in conversation history.
+        // Show replayable user content in conversation history.
         if !text.is_empty() {
             let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
             self.add_to_history(history_cell::new_user_prompt(
                 text,
                 text_elements,
                 local_image_paths,
+                remote_image_urls,
+            ));
+        } else if !remote_image_urls.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                remote_image_urls,
             ));
         }
 
@@ -3872,9 +3924,11 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
         local_images: Vec<LocalImageAttachment>,
         mention_bindings: Vec<MentionBinding>,
+        remote_image_urls: Vec<String>,
     ) {
         // Preserve the user's composed payload so they can retry after changing models.
         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+        self.set_remote_image_urls(remote_image_urls);
         self.bottom_pane.set_composer_text_with_mention_bindings(
             text,
             text_elements,
@@ -4059,17 +4113,19 @@ impl ChatWidget {
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
             EventMsg::CollabAgentSpawnBegin(_) => {}
-            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(multi_agents::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
             EventMsg::CollabAgentInteractionEnd(ev) => {
-                self.on_collab_event(collab::interaction_end(ev))
+                self.on_collab_event(multi_agents::interaction_end(ev))
             }
-            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
-            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabWaitingBegin(ev) => {
+                self.on_collab_event(multi_agents::waiting_begin(ev))
+            }
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(multi_agents::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
-            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(collab::resume_begin(ev)),
-            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(collab::resume_end(ev)),
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
+            EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
+            EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
             EventMsg::ThreadRolledBack(rollback) => {
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
@@ -4153,11 +4209,16 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        if !event.message.trim().is_empty() {
+        let remote_image_urls = event.images.unwrap_or_default();
+        if !event.message.trim().is_empty()
+            || !event.text_elements.is_empty()
+            || !remote_image_urls.is_empty()
+        {
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,
                 event.local_images,
+                remote_image_urls,
             ));
         }
 
@@ -5364,15 +5425,23 @@ impl ChatWidget {
                             });
                         })]
                     } else {
-                        Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                        Self::approval_preset_actions(
+                            preset.approval,
+                            preset.sandbox.clone(),
+                            name.clone(),
+                        )
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                    Self::approval_preset_actions(
+                        preset.approval,
+                        preset.sandbox.clone(),
+                        name.clone(),
+                    )
                 }
             } else {
-                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                Self::approval_preset_actions(preset.approval, preset.sandbox.clone(), name.clone())
             };
             items.push(SelectionItem {
                 name,
@@ -5426,6 +5495,7 @@ impl ChatWidget {
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
+        label: String,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
@@ -5442,6 +5512,9 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
+            )));
         })]
     }
 
@@ -5488,6 +5561,7 @@ impl ChatWidget {
         preset: ApprovalPreset,
         return_to_permissions: bool,
     ) {
+        let selected_name = preset.label.to_string();
         let approval = preset.approval;
         let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
@@ -5504,12 +5578,14 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        let mut accept_actions =
+            Self::approval_preset_actions(approval, sandbox.clone(), selected_name.clone());
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
         }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
+        let mut accept_and_remember_actions =
+            Self::approval_preset_actions(approval, sandbox, selected_name);
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
             tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
@@ -5619,7 +5695,11 @@ impl ChatWidget {
             }));
         }
         if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
-            accept_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                mode_label.to_string(),
+            ));
         }
 
         let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
@@ -5628,7 +5708,11 @@ impl ChatWidget {
             tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
         }));
         if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
-            accept_and_remember_actions.extend(Self::approval_preset_actions(approval, sandbox));
+            accept_and_remember_actions.extend(Self::approval_preset_actions(
+                approval,
+                sandbox,
+                mode_label.to_string(),
+            ));
         }
 
         let items = vec![
@@ -6650,6 +6734,7 @@ impl ChatWidget {
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
             text_elements: Vec::new(),
             mention_bindings: Vec::new(),
         };
@@ -6680,6 +6765,19 @@ impl ChatWidget {
     ) {
         self.bottom_pane
             .set_composer_text(text, text_elements, local_image_paths);
+    }
+
+    pub(crate) fn set_remote_image_urls(&mut self, remote_image_urls: Vec<String>) {
+        self.bottom_pane.set_remote_image_urls(remote_image_urls);
+    }
+
+    fn take_remote_image_urls(&mut self) -> Vec<String> {
+        self.bottom_pane.take_remote_image_urls()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_image_urls(&self) -> Vec<String> {
+        self.bottom_pane.remote_image_urls()
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {

@@ -978,6 +978,27 @@ impl App {
         self.refresh_status_line();
     }
 
+    fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
+        matches!(
+            session_selection,
+            SessionSelection::StartFresh | SessionSelection::Exit
+        )
+    }
+
+    fn should_handle_active_thread_events(
+        waiting_for_initial_session_configured: bool,
+        has_active_thread_receiver: bool,
+    ) -> bool {
+        has_active_thread_receiver && !waiting_for_initial_session_configured
+    }
+
+    fn should_stop_waiting_for_initial_session(
+        waiting_for_initial_session_configured: bool,
+        primary_thread_id: Option<ThreadId>,
+    ) -> bool {
+        waiting_for_initial_session_configured && primary_thread_id.is_some()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
@@ -1068,6 +1089,8 @@ impl App {
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let wait_for_initial_session_configured =
+            Self::should_wait_for_initial_session(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -1252,6 +1275,7 @@ impl App {
 
         let mut thread_created_rx = thread_manager.subscribe_thread_created();
         let mut listen_for_threads = true;
+        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
             let control = select! {
@@ -1264,7 +1288,10 @@ impl App {
                     } else {
                         None
                     }
-                }, if app.active_thread_rx.is_some() => {
+                }, if App::should_handle_active_thread_events(
+                    waiting_for_initial_session_configured,
+                    app.active_thread_rx.is_some()
+                ) => {
                     if let Some(event) = active {
                         app.handle_active_thread_event(tui, event).await?;
                     } else {
@@ -1291,6 +1318,12 @@ impl App {
                     AppRunControl::Continue
                 }
             };
+            if App::should_stop_waiting_for_initial_session(
+                waiting_for_initial_session_configured,
+                app.primary_thread_id,
+            ) {
+                waiting_for_initial_session_configured = false;
+            }
             match control {
                 AppRunControl::Continue => {}
                 AppRunControl::Exit(reason) => break reason,
@@ -2862,6 +2895,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -2884,6 +2918,8 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
+    use codex_protocol::user_input::UserInput;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2910,6 +2946,76 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn startup_waiting_gate_is_only_for_fresh_or_exit_session_selection() {
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Exit),
+            true
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Resume(PathBuf::from(
+                "/tmp/restore"
+            ))),
+            false
+        );
+        assert_eq!(
+            App::should_wait_for_initial_session(&SessionSelection::Fork(PathBuf::from(
+                "/tmp/fork"
+            ))),
+            false
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_holds_active_thread_events_until_primary_thread_configured() {
+        let mut wait_for_initial_session =
+            App::should_wait_for_initial_session(&SessionSelection::StartFresh);
+        assert_eq!(wait_for_initial_session, true);
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            false
+        );
+
+        assert_eq!(
+            App::should_stop_waiting_for_initial_session(wait_for_initial_session, None),
+            false
+        );
+        if App::should_stop_waiting_for_initial_session(
+            wait_for_initial_session,
+            Some(ThreadId::new()),
+        ) {
+            wait_for_initial_session = false;
+        }
+        assert_eq!(wait_for_initial_session, false);
+
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            true
+        );
+    }
+
+    #[test]
+    fn startup_waiting_gate_not_applied_for_resume_or_fork_session_selection() {
+        let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
+            PathBuf::from("/tmp/restore"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_resume, true),
+            true
+        );
+        let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
+            PathBuf::from("/tmp/fork"),
+        ));
+        assert_eq!(
+            App::should_handle_active_thread_events(wait_for_fork, true),
+            true
+        );
     }
 
     #[tokio::test]
@@ -3427,12 +3533,14 @@ mod tests {
 
         let user_cell = |text: &str,
                          text_elements: Vec<TextElement>,
-                         local_image_paths: Vec<PathBuf>|
+                         local_image_paths: Vec<PathBuf>,
+                         remote_image_urls: Vec<String>|
          -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
                 text_elements,
                 local_image_paths,
+                remote_image_urls,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -3478,17 +3586,18 @@ mod tests {
         // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up", Vec::new(), Vec::new()),
+            user_cell("follow-up", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer follow-up"),
             make_header(false),
-            user_cell("first question", Vec::new(), Vec::new()),
+            user_cell("first question", Vec::new(), Vec::new(), Vec::new()),
             agent_cell("answer first"),
             user_cell(
                 &edited_text,
                 edited_text_elements.clone(),
                 edited_local_image_paths.clone(),
+                vec!["https://example.com/backtrack.png".to_string()],
             ),
             agent_cell("answer edited"),
         ];
@@ -3527,8 +3636,16 @@ mod tests {
         assert_eq!(selection.prefill, edited_text);
         assert_eq!(selection.text_elements, edited_text_elements);
         assert_eq!(selection.local_image_paths, edited_local_image_paths);
+        assert_eq!(
+            selection.remote_image_urls,
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         app.apply_backtrack_rollback(selection);
+        assert_eq!(
+            app.chat_widget.remote_image_urls(),
+            vec!["https://example.com/backtrack.png".to_string()]
+        );
 
         let mut rollback_turns = None;
         while let Ok(op) = op_rx.try_recv() {
@@ -3538,6 +3655,104 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_remote_image_only_selection_clears_existing_composer_draft() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "original".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        }) as Arc<dyn HistoryCell>];
+        app.chat_widget
+            .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+
+        let remote_image_url = "https://example.com/remote-only.png".to_string();
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: String::new(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![remote_image_url.clone()],
+        });
+
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+        assert_eq!(app.chat_widget.remote_image_urls(), vec![remote_image_url]);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_resubmit_preserves_data_image_urls_in_user_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let thread_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        let data_image_url = "data:image/png;base64,abc123".to_string();
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        }) as Arc<dyn HistoryCell>];
+
+        app.apply_backtrack_rollback(BacktrackSelection {
+            nth_user_message: 0,
+            prefill: "please inspect this".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: vec![data_image_url.clone()],
+        });
+
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let mut saw_rollback = false;
+        let mut submitted_items: Option<Vec<UserInput>> = None;
+        while let Ok(op) = op_rx.try_recv() {
+            match op {
+                Op::ThreadRollback { .. } => saw_rollback = true,
+                Op::UserTurn { items, .. } => submitted_items = Some(items),
+                _ => {}
+            }
+        }
+
+        assert!(saw_rollback);
+        let items = submitted_items.expect("expected user turn after backtrack resubmit");
+        assert!(items.iter().any(|item| {
+            matches!(
+                item,
+                UserInput::Image { image_url } if image_url == &data_image_url
+            )
+        }));
     }
 
     #[tokio::test]
@@ -3702,6 +3917,7 @@ mod tests {
                 message: "first".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after first")],
@@ -3711,6 +3927,7 @@ mod tests {
                 message: "second".to_string(),
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after second")],

@@ -29,7 +29,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use wiremock::MockServer;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -229,6 +228,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
+        used_fallback_model_metadata: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
@@ -324,32 +324,14 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let first_request = requests.first().expect("expected first request");
-    let first_has_input_image = first_request.inputs_of_type("message").iter().any(|item| {
-        item.get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|content| {
-                content
-                    .iter()
-                    .any(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
-            })
-    });
     assert!(
-        first_has_input_image,
+        !first_request.message_input_image_urls("user").is_empty(),
         "first request should include the uploaded image"
     );
 
     let second_request = requests.last().expect("expected second request");
-    let second_has_input_image = second_request.inputs_of_type("message").iter().any(|item| {
-        item.get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|content| {
-                content
-                    .iter()
-                    .any(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
-            })
-    });
     assert!(
-        !second_has_input_image,
+        second_request.message_input_image_urls("user").is_empty(),
         "second request should strip unsupported image content"
     );
     let second_user_texts = second_request.message_input_texts("user");
@@ -404,6 +386,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
+        used_fallback_model_metadata: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),

@@ -1128,6 +1128,13 @@
             "null"
           ]
         },
+        "includeHidden": {
+          "description": "When true, include models that are hidden from the default picker list.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "limit": {
           "description": "Optional page size; defaults to a reasonable server-side value.",
           "format": "uint32",

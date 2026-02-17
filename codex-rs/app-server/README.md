@@ -131,7 +131,7 @@ Example with notification opt-out:
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `model/list` — list available models (with reasoning effort options and optional `upgrade` model ids).
+- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options and optional `upgrade` model ids.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
@@ -535,6 +535,13 @@ Examples:
 - Opt out of legacy session setup event: `codex/event/session_configured`
 - Opt out of streamed agent text deltas: `item/agentMessage/delta`
 
+### Fuzzy file search events (experimental)
+
+The fuzzy file search session API emits per-query notifications:
+
+- `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
+- `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -550,7 +557,7 @@ Today both notifications carry an empty `items` array even when item events were
 
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Currently we support events for the following items:
 
-- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`). Cyber model-routing warnings are surfaced as synthetic `userMessage` items with `text` prefixed by `Warning:`.
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
