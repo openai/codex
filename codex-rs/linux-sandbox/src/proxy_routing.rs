@@ -549,7 +549,7 @@ fn ensure_loopback_interface_up() -> io::Result<()> {
         sin_family: libc::AF_INET as libc::sa_family_t,
         sin_port: 0,
         sin_addr: libc::in_addr {
-            s_addr: unsafe { libc::htonl(libc::INADDR_LOOPBACK) },
+            s_addr: libc::htonl(libc::INADDR_LOOPBACK),
         },
         sin_zero: [0; 8],
     };
