@@ -1,3 +1,4 @@
+mod command_policy;
 mod env_var_dependencies;
 pub mod injection;
 pub mod loader;
@@ -8,6 +9,7 @@ pub mod remote;
 pub mod render;
 pub mod system;
 
+pub(crate) use command_policy::resolve_skill_sandbox_extension_for_command;
 pub(crate) use env_var_dependencies::collect_env_var_dependencies;
 pub(crate) use env_var_dependencies::resolve_skill_dependencies_for_turn;
 pub(crate) use injection::SkillInjections;

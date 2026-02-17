@@ -110,6 +110,29 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
+        self.run_with_sandbox_policy(
+            tool,
+            req,
+            tool_ctx,
+            turn_ctx,
+            approval_policy,
+            &turn_ctx.sandbox_policy,
+        )
+        .await
+    }
+
+    pub async fn run_with_sandbox_policy<Rq, Out, T>(
+        &mut self,
+        tool: &mut T,
+        req: &Rq,
+        tool_ctx: &ToolCtx<'_>,
+        turn_ctx: &crate::codex::TurnContext,
+        approval_policy: AskForApproval,
+        sandbox_policy: &crate::protocol::SandboxPolicy,
+    ) -> Result<OrchestratorRunResult<Out>, ToolError>
+    where
+        T: ToolRuntime<Rq, Out>,
+    {
         let otel = turn_ctx.otel_manager.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
@@ -119,9 +142,9 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
-        });
+        let requirement = tool
+            .exec_approval_requirement(req)
+            .unwrap_or_else(|| default_exec_approval_requirement(approval_policy, sandbox_policy));
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
@@ -163,7 +186,7 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
+                sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 has_managed_network_requirements,
@@ -175,7 +198,7 @@ impl ToolOrchestrator {
         let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
-            policy: &turn_ctx.sandbox_policy,
+            policy: sandbox_policy,
             enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
@@ -230,10 +253,7 @@ impl ToolOrchestrator {
                         matches!(approval_policy, AskForApproval::OnRequest)
                             && network_approval_context.is_some()
                             && matches!(
-                                default_exec_approval_requirement(
-                                    approval_policy,
-                                    &turn_ctx.sandbox_policy
-                                ),
+                                default_exec_approval_requirement(approval_policy, sandbox_policy),
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );
                     if !allow_on_request_network_prompt {
@@ -281,7 +301,7 @@ impl ToolOrchestrator {
 
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
-                    policy: &turn_ctx.sandbox_policy,
+                    policy: sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,

@@ -13,6 +13,8 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::skills::permissions::extend_sandbox_policy;
+use crate::skills::resolve_skill_sandbox_extension_for_command;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -297,13 +299,30 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
+        let skills_outcome = session
+            .services
+            .skills_manager
+            .skills_for_cwd(&turn.cwd, false)
+            .await;
+        let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
+            &skills_outcome,
+            &exec_params.command,
+            &exec_params.cwd,
+        )
+        .map_or_else(
+            || turn.sandbox_policy.clone(),
+            |skill_sandbox_policy| {
+                extend_sandbox_policy(&turn.sandbox_policy, &skill_sandbox_policy)
+            },
+        );
+
         let exec_approval_requirement = session
             .services
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy,
-                sandbox_policy: &turn.sandbox_policy,
+                sandbox_policy: &effective_sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
             })
@@ -330,7 +349,14 @@ impl ShellHandler {
             network_attempt_id: None,
         };
         let out = orchestrator
-            .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
+            .run_with_sandbox_policy(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn,
+                turn.approval_policy,
+                &effective_sandbox_policy,
+            )
             .await
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
