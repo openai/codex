@@ -2320,7 +2320,13 @@ impl ChatWidget {
         self.last_rendered_width
             .get()
             .or_else(|| terminal::size().ok().map(|(w, _)| usize::from(w)))
-            .and_then(|w| crate::width::usable_content_width(w, reserved_cols))
+            .and_then(|w| {
+                if w == 0 {
+                    None
+                } else {
+                    Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
+                }
+            })
     }
 
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {

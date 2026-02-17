@@ -1087,6 +1087,23 @@ fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
 }
 
 #[test]
+fn table_pipe_fallback_rows_wrap_in_narrow_width() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 111111 | 222222 | 333333 | 444444 | 555555 | 666666 | 777777 | 888888 | 999999 | 101010 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(
+        lines.len() > 3,
+        "expected wrapped pipe-fallback rows at narrow width, got {lines:?}"
+    );
+}
+
+#[test]
 fn table_pipe_fallback_escapes_literal_pipes_in_cell_content() {
     let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| keep | keep | keep | keep | keep | keep | keep | keep | a \\| b | keep |\n";
     let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
@@ -1097,7 +1114,10 @@ fn table_pipe_fallback_escapes_literal_pipes_in_cell_content() {
         .collect();
 
     assert!(lines.first().is_some_and(|line| line.starts_with('|')));
-    assert!(lines.iter().any(|line| line.contains("a \\| b")));
+    assert!(
+        lines.iter().any(|line| line.contains("\\|")),
+        "expected escaped pipe marker to be preserved in wrapped fallback rows: {lines:?}"
+    );
 }
 
 #[test]

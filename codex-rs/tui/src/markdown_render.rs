@@ -180,11 +180,13 @@ impl TableState {
 
 /// Rendered table output split by wrapping behavior.
 ///
-/// `table_lines` are grid/fallback rows that are already width-laid-out and
-/// should bypass paragraph wrapping. `spillover_lines` are prose rows extracted
-/// from parser artifacts and should be routed through normal wrapping.
+/// `table_lines` are either prewrapped grid rows (box rendering) or pipe
+/// fallback rows that should still pass through normal wrapping.
+/// `spillover_lines` are prose rows extracted from parser artifacts and should
+/// be routed through normal wrapping.
 struct RenderedTableLines {
     table_lines: Vec<Line<'static>>,
+    table_lines_prewrapped: bool,
     spillover_lines: Vec<Line<'static>>,
 }
 
@@ -654,11 +656,17 @@ where
 
         let RenderedTableLines {
             table_lines,
+            table_lines_prewrapped,
             spillover_lines,
         } = self.render_table_lines(table_state);
         let mut pending_marker_line = self.pending_marker_line;
         for line in table_lines {
-            self.push_prewrapped_line(line, pending_marker_line);
+            if table_lines_prewrapped {
+                self.push_prewrapped_line(line, pending_marker_line);
+            } else {
+                self.push_line(line);
+                self.flush_current_line();
+            }
             pending_marker_line = false;
         }
         self.pending_marker_line = false;
@@ -789,6 +797,7 @@ where
         if column_count == 0 {
             return RenderedTableLines {
                 table_lines: Vec::new(),
+                table_lines_prewrapped: true,
                 spillover_lines: Vec::new(),
             };
         }
@@ -833,6 +842,7 @@ where
                     &rows,
                     &table_state.alignments,
                 ),
+                table_lines_prewrapped: false,
                 spillover_lines,
             };
         };
@@ -858,6 +868,7 @@ where
         out.push(self.render_border_line('└', '┴', '┘', &column_widths, border_style));
         RenderedTableLines {
             table_lines: out,
+            table_lines_prewrapped: true,
             spillover_lines,
         }
     }
