@@ -3,12 +3,10 @@ use crate::outgoing_message::OutgoingEnvelope;
 #[cfg(test)]
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
-#[cfg(test)]
-use codex_app_server_protocol::LoadedThreadEntry;
-use codex_app_server_protocol::LoadedThreadStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadActiveFlag;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::ThreadTerminalOutcome;
 use std::collections::HashMap;
@@ -98,29 +96,14 @@ impl ThreadWatchManager {
             .await;
     }
 
-    pub(crate) async fn loaded_status_for_thread(&self, thread_id: &str) -> LoadedThreadStatus {
+    pub(crate) async fn loaded_status_for_thread(&self, thread_id: &str) -> ThreadStatus {
         self.state.lock().await.loaded_status_for_thread(thread_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn loaded_entries_for_threads(
-        &self,
-        threads: Vec<Thread>,
-    ) -> Vec<LoadedThreadEntry> {
-        let state = self.state.lock().await;
-        threads
-            .into_iter()
-            .map(|thread| LoadedThreadEntry {
-                status: state.loaded_status_for_thread(&thread.id),
-                thread,
-            })
-            .collect()
     }
 
     pub(crate) async fn loaded_statuses_for_threads(
         &self,
         thread_ids: Vec<String>,
-    ) -> HashMap<String, LoadedThreadStatus> {
+    ) -> HashMap<String, ThreadStatus> {
         let state = self.state.lock().await;
         thread_ids
             .into_iter()
@@ -287,21 +270,20 @@ impl ThreadWatchState {
         self.status_changed_notification(thread_id.to_string(), previous_status)
     }
 
-    fn status_for(&self, thread_id: &str) -> Option<LoadedThreadStatus> {
+    fn status_for(&self, thread_id: &str) -> Option<ThreadStatus> {
         self.runtime_by_thread_id
             .get(thread_id)
             .map(loaded_thread_status)
     }
 
-    fn loaded_status_for_thread(&self, thread_id: &str) -> LoadedThreadStatus {
-        self.status_for(thread_id)
-            .unwrap_or(LoadedThreadStatus::Idle)
+    fn loaded_status_for_thread(&self, thread_id: &str) -> ThreadStatus {
+        self.status_for(thread_id).unwrap_or(ThreadStatus::Idle)
     }
 
     fn status_changed_notification(
         &self,
         thread_id: String,
-        previous_status: Option<LoadedThreadStatus>,
+        previous_status: Option<ThreadStatus>,
     ) -> Option<ThreadStatusChangedNotification> {
         let status = self.status_for(&thread_id)?;
 
@@ -321,7 +303,7 @@ struct RuntimeFacts {
     last_terminal_outcome: Option<ThreadTerminalOutcome>,
 }
 
-fn loaded_thread_status(runtime: &RuntimeFacts) -> LoadedThreadStatus {
+fn loaded_thread_status(runtime: &RuntimeFacts) -> ThreadStatus {
     let mut active_flags = Vec::new();
     if runtime.running {
         active_flags.push(ThreadActiveFlag::Running);
@@ -334,12 +316,12 @@ fn loaded_thread_status(runtime: &RuntimeFacts) -> LoadedThreadStatus {
     }
 
     if !active_flags.is_empty() {
-        return LoadedThreadStatus::Active { active_flags };
+        return ThreadStatus::Active { active_flags };
     }
 
     match runtime.last_terminal_outcome {
-        Some(outcome) => LoadedThreadStatus::Terminal { outcome },
-        None => LoadedThreadStatus::Idle,
+        Some(outcome) => ThreadStatus::Terminal { outcome },
+        None => ThreadStatus::Idle,
     }
 }
 
@@ -361,7 +343,7 @@ mod tests {
             manager
                 .loaded_status_for_thread("00000000-0000-0000-0000-000000000003")
                 .await,
-            LoadedThreadStatus::Idle,
+            ThreadStatus::Idle,
         );
     }
 
@@ -381,7 +363,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(NON_INTERACTIVE_THREAD_ID)
                 .await,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![ThreadActiveFlag::Running],
             },
         );
@@ -402,7 +384,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![ThreadActiveFlag::Running],
             },
         );
@@ -414,7 +396,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
                     ThreadActiveFlag::WaitingPermission,
@@ -429,7 +411,7 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
                     ThreadActiveFlag::WaitingPermission,
@@ -442,7 +424,7 @@ mod tests {
         wait_for_status(
             &manager,
             INTERACTIVE_THREAD_ID,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![
                     ThreadActiveFlag::Running,
                     ThreadActiveFlag::WaitingUserInput,
@@ -455,7 +437,7 @@ mod tests {
         wait_for_status(
             &manager,
             INTERACTIVE_THREAD_ID,
-            LoadedThreadStatus::Active {
+            ThreadStatus::Active {
                 active_flags: vec![ThreadActiveFlag::Running],
             },
         )
@@ -468,14 +450,14 @@ mod tests {
             manager
                 .loaded_status_for_thread(INTERACTIVE_THREAD_ID)
                 .await,
-            LoadedThreadStatus::Terminal {
+            ThreadStatus::Terminal {
                 outcome: ThreadTerminalOutcome::Completed,
             },
         );
     }
 
     #[tokio::test]
-    async fn loaded_entries_default_to_idle_for_untracked_threads() {
+    async fn loaded_statuses_default_to_idle_for_untracked_threads() {
         let manager = ThreadWatchManager::new();
         manager
             .upsert_thread(test_thread(
@@ -485,39 +467,22 @@ mod tests {
             .await;
         manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
 
-        let entries = manager
-            .loaded_entries_for_threads(vec![
-                test_thread(
-                    INTERACTIVE_THREAD_ID,
-                    codex_app_server_protocol::SessionSource::Cli,
-                ),
-                test_thread(
-                    NON_INTERACTIVE_THREAD_ID,
-                    codex_app_server_protocol::SessionSource::AppServer,
-                ),
+        let statuses = manager
+            .loaded_statuses_for_threads(vec![
+                INTERACTIVE_THREAD_ID.to_string(),
+                NON_INTERACTIVE_THREAD_ID.to_string(),
             ])
             .await;
 
         assert_eq!(
-            entries,
-            vec![
-                LoadedThreadEntry {
-                    thread: test_thread(
-                        INTERACTIVE_THREAD_ID,
-                        codex_app_server_protocol::SessionSource::Cli,
-                    ),
-                    status: LoadedThreadStatus::Active {
-                        active_flags: vec![ThreadActiveFlag::Running],
-                    },
-                },
-                LoadedThreadEntry {
-                    thread: test_thread(
-                        NON_INTERACTIVE_THREAD_ID,
-                        codex_app_server_protocol::SessionSource::AppServer,
-                    ),
-                    status: LoadedThreadStatus::Idle,
-                },
-            ],
+            statuses.get(INTERACTIVE_THREAD_ID),
+            Some(&ThreadStatus::Active {
+                active_flags: vec![ThreadActiveFlag::Running],
+            }),
+        );
+        assert_eq!(
+            statuses.get(NON_INTERACTIVE_THREAD_ID),
+            Some(&ThreadStatus::Idle),
         );
     }
 
@@ -538,7 +503,7 @@ mod tests {
             recv_status_changed_notification(&mut outgoing_rx).await,
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
-                status: LoadedThreadStatus::Idle,
+                status: ThreadStatus::Idle,
             },
         );
 
@@ -547,7 +512,7 @@ mod tests {
             recv_status_changed_notification(&mut outgoing_rx).await,
             ThreadStatusChangedNotification {
                 thread_id: INTERACTIVE_THREAD_ID.to_string(),
-                status: LoadedThreadStatus::Active {
+                status: ThreadStatus::Active {
                     active_flags: vec![ThreadActiveFlag::Running],
                 },
             },
@@ -557,7 +522,7 @@ mod tests {
     async fn wait_for_status(
         manager: &ThreadWatchManager,
         thread_id: &str,
-        expected_status: LoadedThreadStatus,
+        expected_status: ThreadStatus,
     ) {
         timeout(Duration::from_secs(1), async {
             loop {
@@ -598,6 +563,7 @@ mod tests {
             model_provider: "mock-provider".to_string(),
             created_at: 0,
             updated_at: 0,
+            status: ThreadStatus::Idle,
             path: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "test".to_string(),

@@ -146,6 +146,7 @@ use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::Turn;
@@ -2007,21 +2008,11 @@ impl CodexMessageProcessor {
                     ..
                 } = new_conv;
                 let config_snapshot = thread.config_snapshot().await;
-                let thread = build_thread_from_snapshot(
+                let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
                     session_configured.rollout_path.clone(),
                 );
-
-                let response = ThreadStartResponse {
-                    thread: thread.clone(),
-                    model: config_snapshot.model,
-                    model_provider: config_snapshot.model_provider_id,
-                    cwd: config_snapshot.cwd,
-                    approval_policy: config_snapshot.approval_policy.into(),
-                    sandbox: config_snapshot.sandbox_policy.into(),
-                    reasoning_effort: config_snapshot.reasoning_effort,
-                };
 
                 // Auto-attach a thread listener when starting a thread.
                 // Use the same behavior as the v1 API, with opt-in support for raw item events.
@@ -2044,6 +2035,21 @@ impl CodexMessageProcessor {
                 self.thread_watch_manager
                     .upsert_thread(thread.clone())
                     .await;
+
+                thread.status = self
+                    .thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await;
+
+                let response = ThreadStartResponse {
+                    thread: thread.clone(),
+                    model: config_snapshot.model,
+                    model_provider: config_snapshot.model_provider_id,
+                    cwd: config_snapshot.cwd,
+                    approval_policy: config_snapshot.approval_policy.into(),
+                    sandbox: config_snapshot.sandbox_policy.into(),
+                    reasoning_effort: config_snapshot.reasoning_effort,
+                };
 
                 self.outgoing.send_response(request_id, response).await;
 
@@ -2341,7 +2347,11 @@ impl CodexMessageProcessor {
         .await;
 
         match result {
-            Ok(thread) => {
+            Ok(mut thread) => {
+                thread.status = self
+                    .thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await;
                 let response = ThreadUnarchiveResponse { thread };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -2516,11 +2526,16 @@ impl CodexMessageProcessor {
             .thread_watch_manager
             .loaded_statuses_for_threads(data.iter().map(|thread| thread.id.clone()).collect())
             .await;
-        let response = ThreadListResponse {
-            data,
-            statuses,
-            next_cursor,
-        };
+        let data = data
+            .into_iter()
+            .map(|mut thread| {
+                if let Some(status) = statuses.get(&thread.id) {
+                    thread.status = status.clone();
+                }
+                thread
+            })
+            .collect();
+        let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -2705,11 +2720,11 @@ impl CodexMessageProcessor {
             }
         }
 
-        let status = self
+        thread.status = self
             .thread_watch_manager
             .loaded_status_for_thread(&thread.id)
             .await;
-        let response = ThreadReadResponse { thread, status };
+        let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -2869,7 +2884,7 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let Some(thread) = self
+                let Some(mut thread) = self
                     .load_thread_from_rollout_or_send_internal(
                         request_id.clone(),
                         thread_id,
@@ -2881,6 +2896,15 @@ impl CodexMessageProcessor {
                     return;
                 };
 
+                self.thread_watch_manager
+                    .upsert_thread(thread.clone())
+                    .await;
+
+                thread.status = self
+                    .thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await;
+
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
@@ -2890,10 +2914,6 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
-
-                self.thread_watch_manager
-                    .upsert_thread(response.thread.clone())
-                    .await;
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -3024,7 +3044,7 @@ impl CodexMessageProcessor {
                 );
             }
 
-            let Some(thread) = self
+            let Some(mut thread) = self
                 .load_thread_from_rollout_or_send_internal(
                     request_id.clone(),
                     existing_thread_id,
@@ -3045,6 +3065,10 @@ impl CodexMessageProcessor {
                 reasoning_effort,
                 ..
             } = config_snapshot;
+            thread.status = self
+                .thread_watch_manager
+                .loaded_status_for_thread(&thread.id)
+                .await;
             let response = ThreadResumeResponse {
                 thread,
                 model,
@@ -3394,6 +3418,15 @@ impl CodexMessageProcessor {
             }
         }
 
+        self.thread_watch_manager
+            .upsert_thread(thread.clone())
+            .await;
+
+        thread.status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread.id)
+            .await;
+
         let response = ThreadForkResponse {
             thread: thread.clone(),
             model: session_configured.model,
@@ -3403,10 +3436,6 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
-
-        self.thread_watch_manager
-            .upsert_thread(thread.clone())
-            .await;
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -5529,9 +5558,13 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let thread = summary_to_thread(summary);
+                    let mut thread = summary_to_thread(summary);
                     self.thread_watch_manager
                         .upsert_thread(thread.clone())
+                        .await;
+                    thread.status = self
+                        .thread_watch_manager
+                        .loaded_status_for_thread(&thread.id)
                         .await;
                     let notif = ThreadStartedNotification { thread };
                     self.outgoing
@@ -6707,6 +6740,7 @@ fn build_thread_from_snapshot(
         model_provider: config_snapshot.model_provider_id.clone(),
         created_at: now,
         updated_at: now,
+        status: ThreadStatus::Idle,
         path,
         cwd: config_snapshot.cwd.clone(),
         cli_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -6744,6 +6778,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
         updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
+        status: ThreadStatus::Idle,
         path: Some(path),
         cwd,
         cli_version,

@@ -1155,6 +1155,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
+                                thread.status = thread_watch_manager
+                                    .loaded_status_for_thread(&thread.id)
+                                    .await;
                                 ThreadRollbackResponse { thread }
                             }
                             Err(err) => {

@@ -1330,7 +1330,7 @@ mod tests {
         let notification =
             ServerNotification::ThreadStatusChanged(v2::ThreadStatusChangedNotification {
                 thread_id: "thr_123".to_string(),
-                status: v2::LoadedThreadStatus::Idle,
+                status: v2::ThreadStatus::Idle,
             });
         assert_eq!(
             json!({

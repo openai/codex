@@ -12500,69 +12500,6 @@
         "title": "ListMcpServerStatusResponse",
         "type": "object"
       },
-      "LoadedThreadStatus": {
-        "oneOf": [
-          {
-            "properties": {
-              "type": {
-                "enum": [
-                  "idle"
-                ],
-                "title": "IdleLoadedThreadStatusType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "IdleLoadedThreadStatus",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "activeFlags": {
-                "items": {
-                  "$ref": "#/definitions/v2/ThreadActiveFlag"
-                },
-                "type": "array"
-              },
-              "type": {
-                "enum": [
-                  "active"
-                ],
-                "title": "ActiveLoadedThreadStatusType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "activeFlags",
-              "type"
-            ],
-            "title": "ActiveLoadedThreadStatus",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "outcome": {
-                "$ref": "#/definitions/v2/ThreadTerminalOutcome"
-              },
-              "type": {
-                "enum": [
-                  "terminal"
-                ],
-                "title": "TerminalLoadedThreadStatusType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "outcome",
-              "type"
-            ],
-            "title": "TerminalLoadedThreadStatus",
-            "type": "object"
-          }
-        ]
-      },
       "LocalShellAction": {
         "oneOf": [
           {
@@ -15146,6 +15083,14 @@
             ],
             "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
           },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadStatus"
+              }
+            ],
+            "description": "Current runtime status for the thread."
+          },
           "turns": {
             "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
             "items": {
@@ -15167,6 +15112,7 @@
           "modelProvider",
           "preview",
           "source",
+          "status",
           "turns",
           "updatedAt"
         ],
@@ -15889,17 +15835,10 @@
               "string",
               "null"
             ]
-          },
-          "statuses": {
-            "additionalProperties": {
-              "$ref": "#/definitions/v2/LoadedThreadStatus"
-            },
-            "type": "object"
           }
         },
         "required": [
-          "data",
-          "statuses"
+          "data"
         ],
         "title": "ThreadListResponse",
         "type": "object"
@@ -15991,15 +15930,11 @@
       "ThreadReadResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "status": {
-            "$ref": "#/definitions/v2/LoadedThreadStatus"
-          },
           "thread": {
             "$ref": "#/definitions/v2/Thread"
           }
         },
         "required": [
-          "status",
           "thread"
         ],
         "title": "ThreadReadResponse",
@@ -16348,11 +16283,74 @@
         "title": "ThreadStartedNotification",
         "type": "object"
       },
+      "ThreadStatus": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "idle"
+                ],
+                "title": "IdleThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IdleThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "activeFlags": {
+                "items": {
+                  "$ref": "#/definitions/v2/ThreadActiveFlag"
+                },
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "active"
+                ],
+                "title": "ActiveThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "activeFlags",
+              "type"
+            ],
+            "title": "ActiveThreadStatus",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "outcome": {
+                "$ref": "#/definitions/v2/ThreadTerminalOutcome"
+              },
+              "type": {
+                "enum": [
+                  "terminal"
+                ],
+                "title": "TerminalThreadStatusType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "type"
+            ],
+            "title": "TerminalThreadStatus",
+            "type": "object"
+          }
+        ]
+      },
       "ThreadStatusChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "status": {
-            "$ref": "#/definitions/v2/LoadedThreadStatus"
+            "$ref": "#/definitions/v2/ThreadStatus"
           },
           "threadId": {
             "type": "string"

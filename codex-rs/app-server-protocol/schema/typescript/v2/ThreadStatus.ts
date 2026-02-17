@@ -4,4 +4,4 @@
 import type { ThreadActiveFlag } from "./ThreadActiveFlag";
 import type { ThreadTerminalOutcome } from "./ThreadTerminalOutcome";
 
-export type LoadedThreadStatus = { "type": "idle" } | { "type": "active", activeFlags: Array<ThreadActiveFlag>, } | { "type": "terminal", outcome: ThreadTerminalOutcome, };
+export type ThreadStatus = { "type": "idle" } | { "type": "active", activeFlags: Array<ThreadActiveFlag>, } | { "type": "terminal", outcome: ThreadTerminalOutcome, };

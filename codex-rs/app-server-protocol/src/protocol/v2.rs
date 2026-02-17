@@ -1808,7 +1808,6 @@ pub enum ThreadSortKey {
 #[ts(export_to = "v2/")]
 pub struct ThreadListResponse {
     pub data: Vec<Thread>,
-    pub statuses: HashMap<String, LoadedThreadStatus>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
@@ -1838,18 +1837,10 @@ pub struct ThreadLoadedListResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct LoadedThreadEntry {
-    pub thread: Thread,
-    pub status: LoadedThreadStatus,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
-pub enum LoadedThreadStatus {
+pub enum ThreadStatus {
     Idle,
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1897,7 +1888,6 @@ pub struct ThreadReadParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
-    pub status: LoadedThreadStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2199,6 +2189,8 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was last updated.
     #[ts(type = "number")]
     pub updated_at: i64,
+    /// Current runtime status for the thread.
+    pub status: ThreadStatus,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
@@ -2965,7 +2957,7 @@ pub struct ThreadStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
-    pub status: LoadedThreadStatus,
+    pub status: ThreadStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

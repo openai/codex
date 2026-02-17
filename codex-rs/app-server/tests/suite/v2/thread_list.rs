@@ -9,12 +9,12 @@ use chrono::Utc;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoadedThreadStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -223,7 +223,6 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     // Page 1: limit 2 → expect next_cursor Some.
     let ThreadListResponse {
         data: data1,
-        statuses: statuses1,
         next_cursor: cursor1,
     } = list_threads(
         &mut mcp,
@@ -244,19 +243,13 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
-        assert_eq!(
-            statuses1.get(&thread.id),
-            Some(&LoadedThreadStatus::Idle),
-            "expected idle status for listed thread {}",
-            thread.id
-        );
+        assert_eq!(thread.status, ThreadStatus::Idle);
     }
     let cursor1 = cursor1.expect("expected nextCursor on first page");
 
     // Page 2: with cursor → expect next_cursor None when no more results.
     let ThreadListResponse {
         data: data2,
-        statuses: statuses2,
         next_cursor: cursor2,
     } = list_threads(
         &mut mcp,
@@ -277,12 +270,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
-        assert_eq!(
-            statuses2.get(&thread.id),
-            Some(&LoadedThreadStatus::Idle),
-            "expected idle status for listed thread {}",
-            thread.id
-        );
+        assert_eq!(thread.status, ThreadStatus::Idle);
     }
     assert_eq!(cursor2, None, "expected nextCursor to be null on last page");
 

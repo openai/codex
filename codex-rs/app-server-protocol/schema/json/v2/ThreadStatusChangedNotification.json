@@ -1,7 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "LoadedThreadStatus": {
+    "ThreadActiveFlag": {
+      "enum": [
+        "running",
+        "waitingPermission",
+        "waitingUserInput"
+      ],
+      "type": "string"
+    },
+    "ThreadStatus": {
       "oneOf": [
         {
           "properties": {
@@ -9,14 +17,14 @@
               "enum": [
                 "idle"
               ],
-              "title": "IdleLoadedThreadStatusType",
+              "title": "IdleThreadStatusType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "IdleLoadedThreadStatus",
+          "title": "IdleThreadStatus",
           "type": "object"
         },
         {
@@ -31,7 +39,7 @@
               "enum": [
                 "active"
               ],
-              "title": "ActiveLoadedThreadStatusType",
+              "title": "ActiveThreadStatusType",
               "type": "string"
             }
           },
@@ -39,7 +47,7 @@
             "activeFlags",
             "type"
           ],
-          "title": "ActiveLoadedThreadStatus",
+          "title": "ActiveThreadStatus",
           "type": "object"
         },
         {
@@ -51,7 +59,7 @@
               "enum": [
                 "terminal"
               ],
-              "title": "TerminalLoadedThreadStatusType",
+              "title": "TerminalThreadStatusType",
               "type": "string"
             }
           },
@@ -59,18 +67,10 @@
             "outcome",
             "type"
           ],
-          "title": "TerminalLoadedThreadStatus",
+          "title": "TerminalThreadStatus",
           "type": "object"
         }
       ]
-    },
-    "ThreadActiveFlag": {
-      "enum": [
-        "running",
-        "waitingPermission",
-        "waitingUserInput"
-      ],
-      "type": "string"
     },
     "ThreadTerminalOutcome": {
       "enum": [
@@ -84,7 +84,7 @@
   },
   "properties": {
     "status": {
-      "$ref": "#/definitions/LoadedThreadStatus"
+      "$ref": "#/definitions/ThreadStatus"
     },
     "threadId": {
       "type": "string"

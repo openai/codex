@@ -341,69 +341,6 @@
       },
       "type": "object"
     },
-    "LoadedThreadStatus": {
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "idle"
-              ],
-              "title": "IdleLoadedThreadStatusType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "IdleLoadedThreadStatus",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "activeFlags": {
-              "items": {
-                "$ref": "#/definitions/ThreadActiveFlag"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "active"
-              ],
-              "title": "ActiveLoadedThreadStatusType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "activeFlags",
-            "type"
-          ],
-          "title": "ActiveLoadedThreadStatus",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "outcome": {
-              "$ref": "#/definitions/ThreadTerminalOutcome"
-            },
-            "type": {
-              "enum": [
-                "terminal"
-              ],
-              "title": "TerminalLoadedThreadStatusType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "outcome",
-            "type"
-          ],
-          "title": "TerminalLoadedThreadStatus",
-          "type": "object"
-        }
-      ]
-    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -656,6 +593,14 @@
           ],
           "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
         },
+        "status": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadStatus"
+            }
+          ],
+          "description": "Current runtime status for the thread."
+        },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
           "items": {
@@ -677,6 +622,7 @@
         "modelProvider",
         "preview",
         "source",
+        "status",
         "turns",
         "updatedAt"
       ],
@@ -1165,6 +1111,69 @@
         }
       ]
     },
+    "ThreadStatus": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "idle"
+              ],
+              "title": "IdleThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "IdleThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "activeFlags": {
+              "items": {
+                "$ref": "#/definitions/ThreadActiveFlag"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "active"
+              ],
+              "title": "ActiveThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeFlags",
+            "type"
+          ],
+          "title": "ActiveThreadStatus",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "outcome": {
+              "$ref": "#/definitions/ThreadTerminalOutcome"
+            },
+            "type": {
+              "enum": [
+                "terminal"
+              ],
+              "title": "TerminalThreadStatusType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome",
+            "type"
+          ],
+          "title": "TerminalThreadStatus",
+          "type": "object"
+        }
+      ]
+    },
     "ThreadTerminalOutcome": {
       "enum": [
         "completed",
@@ -1468,15 +1477,11 @@
     }
   },
   "properties": {
-    "status": {
-      "$ref": "#/definitions/LoadedThreadStatus"
-    },
     "thread": {
       "$ref": "#/definitions/Thread"
     }
   },
   "required": [
-    "status",
     "thread"
   ],
   "title": "ThreadReadResponse",

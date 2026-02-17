@@ -9,12 +9,12 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoadedThreadStatus;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadActiveFlag;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::ThreadTerminalOutcome;
 use codex_app_server_protocol::TurnStartParams;
@@ -115,16 +115,16 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                     continue;
                 }
                 match notification.status {
-                    LoadedThreadStatus::Active { active_flags } => {
+                    ThreadStatus::Active { active_flags } => {
                         saw_waiting_user_input |=
                             active_flags.contains(&ThreadActiveFlag::WaitingUserInput);
                     }
-                    LoadedThreadStatus::Terminal { outcome } => {
+                    ThreadStatus::Terminal { outcome } => {
                         if outcome == ThreadTerminalOutcome::Completed {
                             saw_terminal_completed = true;
                         }
                     }
-                    LoadedThreadStatus::Idle => {}
+                    ThreadStatus::Idle => {}
                 }
             }
             _ => {}
