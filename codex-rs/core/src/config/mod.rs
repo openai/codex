@@ -1007,6 +1007,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
+
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1553,7 +1556,38 @@ impl Config {
         let did_user_set_custom_approval_policy_or_sandbox_mode =
             approval_policy_was_explicit || sandbox_mode_was_explicit;
 
+        let openai_base_url = cfg.openai_base_url.as_ref().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let openai_base_url_from_env = std::env::var("OPENAI_BASE_URL").ok().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        if openai_base_url_from_env.is_some() {
+            let message = if openai_base_url.is_some() {
+                "`OPENAI_BASE_URL` is deprecated and ignored because `openai_base_url` is set in config.toml. Remove `OPENAI_BASE_URL` from your environment."
+            } else {
+                "`OPENAI_BASE_URL` is deprecated. Set `openai_base_url` in config.toml instead."
+            };
+            startup_warnings.push(message.to_string());
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
         let mut model_providers = built_in_model_providers();
+        if let Some(base_url) = effective_openai_base_url
+            && let Some(openai_provider) = model_providers.get_mut("openai")
+        {
+            openai_provider.base_url = Some(base_url);
+        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -4071,6 +4105,40 @@ model_verbosity = "high"
     ///
     /// Note that profiles are the recommended way to specify a group of
     /// configuration options together.
+    #[test]
+    fn openai_base_url_overrides_builtin_openai_provider() -> std::io::Result<()> {
+        let mut fixture = create_test_fixture()?;
+        fixture.cfg.openai_base_url = Some("https://example-proxy.invalid/v1".to_string());
+        let cwd = fixture.cwd();
+        let codex_home = fixture.codex_home();
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg,
+            ConfigOverrides {
+                config_profile: Some("o3".to_string()),
+                cwd: Some(cwd),
+                ..Default::default()
+            },
+            codex_home,
+        )?;
+
+        assert_eq!(config.model_provider_id, "openai");
+        assert_eq!(
+            config.model_provider.base_url.as_deref(),
+            Some("https://example-proxy.invalid/v1")
+        );
+        assert_eq!(
+            config
+                .model_providers
+                .get("openai")
+                .and_then(|provider| provider.base_url.as_deref()),
+            Some("https://example-proxy.invalid/v1")
+        );
+        assert!(config.startup_warnings.is_empty());
+
+        Ok(())
+    }
+
     #[test]
     fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
         let fixture = create_test_fixture()?;

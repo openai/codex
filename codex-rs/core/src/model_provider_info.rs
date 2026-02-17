@@ -218,14 +218,7 @@ impl ModelProviderInfo {
     pub fn create_openai_provider() -> ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
-            // Allow users to override the default OpenAI endpoint by
-            // exporting `OPENAI_BASE_URL`. This is useful when pointing
-            // Codex at a proxy, mock server, or Azure-style deployment
-            // without requiring a full TOML override for the built-in
-            // OpenAI provider.
-            base_url: std::env::var("OPENAI_BASE_URL")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
+            base_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,

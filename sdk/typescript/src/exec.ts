@@ -78,6 +78,13 @@ export class CodexExec {
       }
     }
 
+    if (args.baseUrl) {
+      commandArgs.push(
+        "--config",
+        `openai_base_url=${toTomlValue(args.baseUrl, "openai_base_url")}`,
+      );
+    }
+
     if (args.model) {
       commandArgs.push("--model", args.model);
     }
@@ -149,9 +156,6 @@ export class CodexExec {
     }
     if (!env[INTERNAL_ORIGINATOR_ENV]) {
       env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
-    }
-    if (args.baseUrl) {
-      env.OPENAI_BASE_URL = args.baseUrl;
     }
     if (args.apiKey) {
       env.CODEX_API_KEY = args.apiKey;

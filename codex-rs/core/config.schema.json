@@ -1606,6 +1606,10 @@
       },
       "type": "array"
     },
+    "openai_base_url": {
+      "description": "Base URL override for the built-in `openai` model provider.",
+      "type": "string"
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
