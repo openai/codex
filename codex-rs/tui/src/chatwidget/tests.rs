@@ -5653,7 +5653,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
         );
     }
     let preset = open_confirmation_event.expect("expected full access confirmation event");
-    chat.open_full_access_confirmation(preset.clone());
+    chat.open_full_access_confirmation(preset);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
