@@ -162,6 +162,7 @@ use codex_protocol::protocol::ErrorEvent;
 #[cfg(test)]
 use codex_protocol::protocol::Event;
 #[cfg(test)]
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
@@ -176,6 +177,8 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
+use codex_protocol::protocol::EventMsg;
 #[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
 #[cfg(test)]
@@ -524,6 +527,43 @@ impl RateLimitWarningState {
     }
 }
 
+#[cfg(test)]
+fn is_interrupt_droppable_stream_event(msg: &EventMsg) -> bool {
+    match msg {
+        EventMsg::AgentMessage(_)
+        | EventMsg::AgentMessageDelta(_)
+        | EventMsg::PlanDelta(_)
+        | EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_)
+        | EventMsg::AgentMessageContentDelta(_)
+        | EventMsg::ReasoningContentDelta(_)
+        | EventMsg::ReasoningRawContentDelta(_) => true,
+        EventMsg::ItemCompleted(event) => matches!(
+            &event.item,
+            codex_protocol::items::TurnItem::AgentMessage(_)
+                | codex_protocol::items::TurnItem::Plan(_)
+        ),
+        _ => false,
+    }
+}
+
+fn is_interrupt_droppable_server_notification(notification: &ServerNotification) -> bool {
+    match notification {
+        ServerNotification::AgentMessageDelta(_)
+        | ServerNotification::PlanDelta(_)
+        | ServerNotification::ReasoningSummaryTextDelta(_)
+        | ServerNotification::ReasoningTextDelta(_) => true,
+        ServerNotification::ItemCompleted(notification) => matches!(
+            &notification.item,
+            ThreadItem::AgentMessage { .. } | ThreadItem::Plan { .. }
+        ),
+        _ => false,
+    }
+}
+
 pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     const MINUTES_PER_HOUR: i64 = 60;
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
@@ -803,6 +843,11 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// True once an interrupt was requested for the active turn.
+    ///
+    /// While this is set, inbound stream deltas are dropped locally so a large
+    /// queued backlog cannot keep rendering stale content after user interrupt.
+    interrupt_requested_for_turn: bool,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
@@ -2290,6 +2335,7 @@ impl ChatWidget {
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
+        self.interrupt_requested_for_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.last_plan_progress = None;
@@ -2360,6 +2406,7 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2723,6 +2770,7 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -4695,6 +4743,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
+            interrupt_requested_for_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -6396,6 +6445,13 @@ impl ChatWidget {
         if !is_resume_initial_replay && !is_retry_error {
             self.restore_retry_status_header_if_present();
         }
+        if !from_replay
+            && self.interrupt_requested_for_turn
+            && is_interrupt_droppable_server_notification(&notification)
+        {
+            tracing::trace!("dropping app-server stream notification while interrupt is pending");
+            return;
+        }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.set_token_info(Some(token_usage_info_from_app_server(
@@ -6898,6 +6954,15 @@ impl ChatWidget {
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+
+        if !from_replay
+            && self.interrupt_requested_for_turn
+            && is_interrupt_droppable_stream_event(&msg)
+        {
+            tracing::trace!("dropping stream event while interrupt is pending");
+            return;
+        }
+
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
@@ -10519,6 +10584,11 @@ impl ChatWidget {
         T: Into<AppCommand>,
     {
         let op: AppCommand = op.into();
+        if matches!(op.view(), crate::app_command::AppCommandView::Interrupt)
+            && self.agent_turn_running
+        {
+            self.interrupt_requested_for_turn = true;
+        }
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
