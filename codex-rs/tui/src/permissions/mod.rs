@@ -9,6 +9,7 @@ use codex_core::config::Config;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+#[cfg(target_os = "windows")]
 use codex_core::protocol_config_types::WindowsSandboxLevel;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
@@ -56,20 +57,16 @@ pub fn builtin_permissions_presets() -> Vec<PermissionsPreset> {
 pub(crate) fn visible_permissions_options(config: &Config) -> Vec<SelectionItem> {
     builtin_permissions_presets()
         .into_iter()
-        .filter(|preset| preset.is_visible(config))
+        .filter(PermissionsPreset::is_visible)
         .map(|preset| preset.to_selection_item(config))
         .collect()
 }
 
 impl PermissionsPreset {
-    pub(crate) fn is_visible(&self, config: &Config) -> bool {
+    fn is_visible(&self) -> bool {
         match self.id {
             "read-only" => cfg!(target_os = "windows"),
-            "auto" => {
-                !cfg!(target_os = "windows")
-                    || codex_core::windows_sandbox::windows_sandbox_level_from_config(config)
-                        == WindowsSandboxLevel::Disabled
-            }
+            "auto" => true,
             "full-access" => true,
             _ => false,
         }
