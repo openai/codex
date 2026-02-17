@@ -344,12 +344,10 @@ impl RealtimeWebsocketConnection {
         let Some(ws) = guard.as_ref() else {
             return Ok(());
         };
-        if let Err(err) = ws.close().await {
-            if !matches!(err, WsError::ConnectionClosed | WsError::AlreadyClosed) {
-                return Err(ApiError::Stream(format!(
-                    "failed to close websocket: {err}"
-                )));
-            }
+        if let Err(err) = ws.close().await
+            && !matches!(err, WsError::ConnectionClosed | WsError::AlreadyClosed)
+        {
+            return Err(ApiError::Stream(format!("failed to close websocket: {err}")));
         }
         *guard = None;
         Ok(())
