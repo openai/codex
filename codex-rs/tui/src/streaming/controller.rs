@@ -14,8 +14,8 @@
 //! Table rendering is inherently non-incremental: adding a new row can change
 //! every column's width and reshape all prior rows.  The holdback mechanism
 //! (`table_holdback_state`) detects pipe-table patterns (header + delimiter
-//! pair) in the accumulated source and keeps the entire rendered buffer as
-//! mutable tail until the stream finalizes.  Lines in `Outside` and `Markdown`
+//! pair) in the accumulated source and keeps content from the table header
+//! onward as mutable tail until the stream finalizes.  Lines in `Outside` and `Markdown`
 //! fence contexts are scanned; lines inside non-markdown fences are skipped.
 //!
 //! ## Resize handling
@@ -31,8 +31,8 @@
 //! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
 //! - `raw_source` is append-only until `reset()`; never modified mid-stream.
 //! - Tail starts exactly at `enqueued_stable_len`.
-//! - During confirmed table streaming: `enqueued_stable_len == emitted_stable_len == 0`
-//!   (everything is tail).
+//! - During confirmed table streaming, only lines from the table header onward
+//!   are forced into tail; pre-table lines may remain stable.
 
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
@@ -266,40 +266,37 @@ impl StreamCore {
     /// How many rendered lines to withhold as mutable tail.
     ///
     /// When a table is detected (`Confirmed` or `PendingHeader`), the entire
-    /// rendered buffer is held as tail because adding a row can reshape the
-    /// whole table. For `PendingHeader`, only content from the last speculative
+    /// table region is held as tail because adding a row can reshape table
+    /// column widths. For `PendingHeader`, only content from the speculative
     /// header line onward is kept mutable so earlier prose can continue
     /// streaming. When no table is detected, everything flows directly to
     /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&self) -> usize {
         match table_holdback_state(&self.raw_source) {
-            TableHoldbackState::Confirmed => self.rendered_lines.len(),
-            TableHoldbackState::PendingHeader => {
-                let mut last_nonblank_start = None;
-                let mut line_start = 0usize;
-                for line in self.raw_source.split('\n') {
-                    if !line.trim().is_empty() {
-                        last_nonblank_start = Some(line_start);
-                    }
-                    line_start = line_start.saturating_add(line.len()).saturating_add(1);
-                }
-
-                let Some(last_nonblank_start) = last_nonblank_start else {
-                    return 0;
-                };
-
-                let mut stable_prefix_render = Vec::new();
-                append_markdown_agent(
-                    &self.raw_source[..last_nonblank_start],
-                    self.width,
-                    &mut stable_prefix_render,
-                );
-                self.rendered_lines
-                    .len()
-                    .saturating_sub(stable_prefix_render.len())
+            TableHoldbackState::Confirmed { table_start } => {
+                self.tail_budget_from_source_start(table_start)
+            }
+            TableHoldbackState::PendingHeader { header_start } => {
+                self.tail_budget_from_source_start(header_start)
             }
             TableHoldbackState::None => 0,
         }
+    }
+
+    fn tail_budget_from_source_start(&self, source_start: usize) -> usize {
+        if source_start == 0 {
+            return self.rendered_lines.len();
+        }
+
+        let mut stable_prefix_render = Vec::new();
+        append_markdown_agent(
+            &self.raw_source[..source_start.min(self.raw_source.len())],
+            self.width,
+            &mut stable_prefix_render,
+        );
+        self.rendered_lines
+            .len()
+            .saturating_sub(stable_prefix_render.len())
     }
 }
 
@@ -566,6 +563,7 @@ fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
 struct ParsedLine<'a> {
     text: &'a str,
     fence_context: FenceContext,
+    source_start: usize,
 }
 
 /// Where a source line sits relative to fenced code blocks.
@@ -603,6 +601,7 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
     let mut fence_len = 0usize;
     let mut fence_context = FenceContext::Other;
     let mut lines = Vec::new();
+    let mut source_start = 0usize;
 
     for raw_line in source.split('\n') {
         lines.push(ParsedLine {
@@ -612,6 +611,7 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
             } else {
                 FenceContext::Outside
             },
+            source_start,
         });
 
         let leading_spaces = raw_line
@@ -643,6 +643,9 @@ fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
                 fence_context = FenceContext::Other;
             }
         }
+        source_start = source_start
+            .saturating_add(raw_line.len())
+            .saturating_add(1);
     }
 
     lines
@@ -680,10 +683,10 @@ enum TableHoldbackState {
     None,
     /// The last non-blank line looks like a table header row but no delimiter
     /// row has followed yet. Hold back in case the next delta is a delimiter.
-    PendingHeader,
+    PendingHeader { header_start: usize },
     /// A header + delimiter pair was found -- the source contains a confirmed
-    /// table. The entire rendered buffer is held as mutable tail.
-    Confirmed,
+    /// table. Content from the table header onward stays mutable.
+    Confirmed { table_start: usize },
 }
 
 /// Scan `source` for pipe-table patterns outside of non-markdown fenced code
@@ -717,20 +720,22 @@ fn table_holdback_state(source: &str) -> TableHoldbackState {
         };
 
         if is_table_header_line(header_text) && is_table_delimiter_line(delimiter_text) {
-            return TableHoldbackState::Confirmed;
+            return TableHoldbackState::Confirmed {
+                table_start: header_line.source_start,
+            };
         }
     }
 
     let pending_header = lines.iter().rev().find(|line| !line.text.trim().is_empty());
-    let pending_header = pending_header.is_some_and(|line| {
-        line.fence_context != FenceContext::Other
-            && table_candidate_text(line.text).is_some_and(is_table_header_line)
-    });
-    if pending_header {
-        TableHoldbackState::PendingHeader
-    } else {
-        TableHoldbackState::None
+    if let Some(line) = pending_header
+        && line.fence_context != FenceContext::Other
+        && table_candidate_text(line.text).is_some_and(is_table_header_line)
+    {
+        return TableHoldbackState::PendingHeader {
+            header_start: line.source_start,
+        };
     }
+    TableHoldbackState::None
 }
 
 #[cfg(test)]
@@ -1046,6 +1051,70 @@ mod tests {
         crate::markdown::append_markdown_agent(&source, Some(80), &mut rendered);
         let expected = lines_to_plain_strings(&rendered);
 
+        assert_eq!(streamed, expected);
+    }
+
+    #[test]
+    fn controller_keeps_pre_table_lines_queued_when_table_is_confirmed() {
+        let mut ctrl = StreamController::new(Some(80));
+
+        ctrl.push("Intro line before table.\n");
+        assert_eq!(ctrl.queued_lines(), 1);
+
+        ctrl.push("| Key | Value |\n");
+        ctrl.push("| --- | --- |\n");
+        assert_eq!(
+            ctrl.queued_lines(),
+            1,
+            "pre-table line should remain queued after table confirmation",
+        );
+
+        let (cell, idle) = ctrl.on_commit_tick();
+        let committed = cell
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        assert!(
+            committed
+                .iter()
+                .any(|line| line.contains("Intro line before table.")),
+            "expected pre-table line to commit independently: {committed:?}",
+        );
+        assert!(idle, "only pre-table content should have been queued");
+    }
+
+    #[test]
+    fn controller_set_width_during_confirmed_table_stream_matches_finalize_render() {
+        let mut ctrl = StreamController::new(Some(120));
+        let deltas = [
+            "| Key | Description |\n",
+            "| --- | --- |\n",
+            "| one | value that should wrap after resize |\n",
+        ];
+        for delta in deltas {
+            ctrl.push(delta);
+        }
+        assert_eq!(
+            ctrl.queued_lines(),
+            0,
+            "confirmed table should remain mutable"
+        );
+
+        ctrl.set_width(Some(32));
+
+        let (cell, source) = ctrl.finalize();
+        let source = source.expect("expected finalized source");
+        let streamed = lines_to_plain_strings(
+            &cell
+                .expect("expected finalized table")
+                .transcript_lines(u16::MAX),
+        )
+        .into_iter()
+        .map(|line| line.chars().skip(2).collect::<String>())
+        .collect::<Vec<_>>();
+
+        let mut rendered = Vec::new();
+        crate::markdown::append_markdown_agent(&source, Some(32), &mut rendered);
+        let expected = lines_to_plain_strings(&rendered);
         assert_eq!(streamed, expected);
     }
 
@@ -1384,7 +1453,7 @@ mod tests {
         let source = "| Key | Description |\n| --- | --- |\n";
         assert!(matches!(
             table_holdback_state(source),
-            TableHoldbackState::Confirmed
+            TableHoldbackState::Confirmed { .. }
         ));
     }
 
@@ -1393,7 +1462,7 @@ mod tests {
         let source = "| Only |\n| --- |\n";
         assert!(matches!(
             table_holdback_state(source),
-            TableHoldbackState::Confirmed
+            TableHoldbackState::Confirmed { .. }
         ));
     }
 
@@ -1410,7 +1479,10 @@ mod tests {
     fn table_holdback_state_treats_indented_fence_text_as_plain_content() {
         let source = "    ```sh\n| Key | Description |\n| --- | --- |\n";
         assert!(
-            matches!(table_holdback_state(source), TableHoldbackState::Confirmed),
+            matches!(
+                table_holdback_state(source),
+                TableHoldbackState::Confirmed { .. }
+            ),
             "indented fence-like text should not open a fence and should not block table detection",
         );
     }

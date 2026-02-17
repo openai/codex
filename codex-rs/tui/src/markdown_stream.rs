@@ -98,6 +98,10 @@ impl MarkdownStreamCollector {
     /// Render the full buffer and return only the newly completed logical lines
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
+    ///
+    /// This helper intentionally uses `append_markdown` (not
+    /// `append_markdown_agent`) so tests can isolate collector newline boundary
+    /// behavior without stream-controller holdback semantics.
     #[cfg(test)]
     pub fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
         let Some(commit_end) = self.buffer.rfind('\n').map(|idx| idx + 1) else {
@@ -132,8 +136,7 @@ impl MarkdownStreamCollector {
 
     /// Finalize the stream: emit all remaining lines beyond the last commit.
     /// If the buffer does not end with a newline, a temporary one is appended
-    /// for rendering. Optionally unwraps ```markdown language fences in
-    /// non-test builds.
+    /// for rendering.
     #[cfg(test)]
     pub fn finalize_and_drain(&mut self) -> Vec<Line<'static>> {
         let mut source = self.buffer.clone();
@@ -779,5 +782,41 @@ mod tests {
     #[tokio::test]
     async fn table_like_lines_inside_fenced_code_are_not_held() {
         assert_streamed_equals_full(&["```\n", "| a | b |\n", "```\n"]).await;
+    }
+
+    #[tokio::test]
+    async fn collector_source_chunks_round_trip_into_agent_fence_unwrapping() {
+        let deltas = [
+            "```md\n",
+            "| A | B |\n",
+            "|---|---|\n",
+            "| 1 | 2 |\n",
+            "```\n",
+        ];
+        let mut collector = super::MarkdownStreamCollector::new(None);
+        let mut raw_source = String::new();
+
+        for delta in deltas {
+            collector.push_delta(delta);
+            if delta.contains('\n')
+                && let Some(chunk) = collector.commit_complete_source()
+            {
+                raw_source.push_str(&chunk);
+            }
+        }
+        raw_source.push_str(&collector.finalize_and_drain_source());
+
+        let mut rendered = Vec::new();
+        crate::markdown::append_markdown_agent(&raw_source, None, &mut rendered);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+
+        assert!(
+            rendered_strs.iter().any(|line| line.contains('┌')),
+            "expected markdown-fenced table to render as boxed table: {rendered_strs:?}"
+        );
+        assert!(
+            !rendered_strs.iter().any(|line| line.trim() == "| A | B |"),
+            "did not expect raw table header after markdown-fence unwrapping: {rendered_strs:?}"
+        );
     }
 }
