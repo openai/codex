@@ -134,7 +134,11 @@ impl PermissionsPreset {
 
         let approval = self.approval;
         let sandbox = self.sandbox.clone();
-        let label = self.label.to_string();
+        let label = if self.id == "auto" && windows_degraded_sandbox_enabled(config) {
+            "Default (non-admin sandbox)".to_string()
+        } else {
+            self.label.to_string()
+        };
         vec![Box::new(move |tx: &AppEventSender| {
             let sandbox_clone = sandbox.clone();
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
