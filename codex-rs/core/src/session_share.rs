@@ -106,6 +106,22 @@ impl SessionObjectStore {
         }
     }
 
+    async fn put_object_if_absent(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<bool> {
+        match self {
+            SessionObjectStore::Http(store) => {
+                store.put_object_if_absent(key, data, content_type).await
+            }
+            SessionObjectStore::Azure(store) => {
+                store.put_object_if_absent(key, data, content_type).await
+            }
+        }
+    }
+
     async fn put_object_file(
         &self,
         key: &str,
@@ -194,11 +210,32 @@ pub async fn upload_rollout_with_owner(
                 created_at: now,
                 updated_at: now,
             };
-            upload_meta(&store, &meta_key, &meta).await?;
-            store
-                .put_object_file(&key, rollout_path, "application/x-ndjson")
-                .await
-                .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
+            let created = create_meta_if_absent(&store, &meta_key, &meta).await?;
+            if created {
+                store
+                    .put_object_file(&key, rollout_path, "application/x-ndjson")
+                    .await
+                    .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
+            } else {
+                let meta = fetch_meta(&store, &meta_key).await?.ok_or_else(|| {
+                    anyhow::anyhow!("failed to atomically create share metadata; try again")
+                })?;
+                if meta.owner != owner {
+                    return Err(anyhow::anyhow!(
+                        "remote session metadata already exists and belongs to another user"
+                    ));
+                }
+                store
+                    .put_object_file(&key, rollout_path, "application/x-ndjson")
+                    .await
+                    .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
+                let updated = SessionShareMeta {
+                    owner: meta.owner,
+                    created_at: meta.created_at,
+                    updated_at: now,
+                };
+                upload_meta(&store, &meta_key, &updated).await?;
+            }
         }
     }
 
@@ -282,6 +319,17 @@ async fn upload_meta(
     let payload = serde_json::to_vec(meta).with_context(|| "failed to serialize metadata")?;
     store.put_object(key, payload, "application/json").await?;
     Ok(())
+}
+
+async fn create_meta_if_absent(
+    store: &SessionObjectStore,
+    key: &str,
+    meta: &SessionShareMeta,
+) -> anyhow::Result<bool> {
+    let payload = serde_json::to_vec(meta).with_context(|| "failed to serialize metadata")?;
+    store
+        .put_object_if_absent(key, payload, "application/json")
+        .await
 }
 
 fn build_rollout_download_path(codex_home: &Path, session_id: ThreadId) -> anyhow::Result<PathBuf> {
@@ -370,6 +418,30 @@ impl HttpObjectStore {
                 "object store PUT failed with status {}",
                 response.status()
             ))
+        }
+    }
+
+    async fn put_object_if_absent(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<bool> {
+        let url = self.object_url(key)?;
+        let response = self
+            .client
+            .put(url)
+            .header(reqwest::header::IF_NONE_MATCH, "*")
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(data)
+            .send()
+            .await?;
+        match response.status() {
+            status if status.is_success() => Ok(true),
+            StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => Ok(false),
+            status => Err(anyhow::anyhow!(
+                "object store conditional PUT failed with status {status}"
+            )),
         }
     }
 
@@ -530,6 +602,35 @@ impl AzureObjectStore {
             Err(anyhow::anyhow!(
                 "azure blob PUT failed with status {status}{headers}{body_snippet}"
             ))
+        }
+    }
+
+    async fn put_object_if_absent(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<bool> {
+        let url = self.object_url(key)?;
+        let response = self
+            .authorized_request(
+                self.client
+                    .put(url)
+                    .header("x-ms-blob-type", "BlockBlob")
+                    .header(reqwest::header::IF_NONE_MATCH, "*")
+                    .header(reqwest::header::CONTENT_TYPE, content_type)
+                    .body(data),
+            )
+            .await?
+            .send()
+            .await?;
+        match response.status() {
+            status if status.is_success() => Ok(true),
+            StatusCode::PRECONDITION_FAILED => Ok(false),
+            status => Err(anyhow::anyhow!(
+                "azure blob conditional PUT failed with status {status}{}",
+                azure_response_context(response.headers())
+            )),
         }
     }
 
