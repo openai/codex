@@ -30,6 +30,10 @@ pub(crate) struct MarkdownStreamCollector {
 }
 
 impl MarkdownStreamCollector {
+    /// Create a collector that accumulates raw markdown deltas.
+    ///
+    /// `width` is only used by test-only rendering helpers; production stream
+    /// commits operate on raw source boundaries.
     pub fn new(width: Option<usize>) -> Self {
         Self {
             buffer: String::new(),
@@ -40,10 +44,12 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Update the rendering width used by test-only line-commit helpers.
     pub fn set_width(&mut self, width: Option<usize>) {
         self.width = width;
     }
 
+    /// Reset all buffered source and commit bookkeeping.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_source_len = 0;
@@ -53,6 +59,7 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Append a raw streaming delta to the internal source buffer.
     pub fn push_delta(&mut self, delta: &str) {
         tracing::trace!("push_delta: {delta:?}");
         self.buffer.push_str(delta);

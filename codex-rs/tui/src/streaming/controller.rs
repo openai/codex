@@ -505,6 +505,7 @@ fn source_bytes_for_rendered_count(
 // Table holdback infrastructure
 // ---------------------------------------------------------------------------
 
+/// Return fence marker character and run length for a potential fence line.
 fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
     let mut chars = line.chars();
     let first = chars.next()?;
@@ -555,6 +556,11 @@ fn is_markdown_fence(trimmed_line: &str, marker_len: usize) -> bool {
     info.eq_ignore_ascii_case("md") || info.eq_ignore_ascii_case("markdown")
 }
 
+/// Parse source into lines tagged with fenced-code context for table scanning.
+///
+/// Fence close markers must use the same marker character and at least the
+/// opening marker length, with no trailing content. This avoids accidentally
+/// closing on shorter markers that appear inside longer fences.
 fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
     let mut in_fence = false;
     let mut fence_char = '\0';
