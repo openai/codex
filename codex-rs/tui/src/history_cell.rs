@@ -36,7 +36,6 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
-use crate::wrapping::text_contains_url_like;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
@@ -2079,13 +2078,6 @@ impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
-            if !text_contains_url_like(text) {
-                return textwrap::wrap(text, wrap_width)
-                    .into_iter()
-                    .map(|s| s.to_string().dim().italic().into())
-                    .collect();
-            }
-
             let note = Line::from(text.to_string().dim().italic());
             let wrapped = adaptive_wrap_line(&note, RtOptions::new(wrap_width));
             let mut out = Vec::new();
@@ -2099,18 +2091,6 @@ impl HistoryCell for PlanUpdateCell {
                 StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
-            if !text_contains_url_like(text) {
-                let wrap_width = (width as usize)
-                    .saturating_sub(4)
-                    .saturating_sub(box_str.width())
-                    .max(1);
-                let parts = textwrap::wrap(text, wrap_width);
-                let step_text = parts
-                    .into_iter()
-                    .map(|s| s.to_string().set_style(step_style).into())
-                    .collect();
-                return prefix_lines(step_text, box_str.into(), "  ".into());
-            }
 
             let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
                 .initial_indent(box_str.into())
@@ -3793,6 +3773,43 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
+
+    #[test]
+    fn plan_update_does_not_split_url_like_tokens_in_note_or_step() {
+        let note_url =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let step_url = "example.test/api/v1/projects/beta-team/releases/2026-02-17/builds/0987654321/artifacts/reports/performance";
+        let update = UpdatePlanArgs {
+            explanation: Some(format!(
+                "Investigate failures under {note_url} immediately."
+            )),
+            plan: vec![PlanItemArg {
+                step: format!("Validate callbacks under {step_url} before rollout."),
+                status: StepStatus::InProgress,
+            }],
+        };
+
+        let cell = new_plan_update(update);
+        let rendered = render_lines(&cell.display_lines(30));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(note_url))
+                .count(),
+            1,
+            "expected full note URL-like token in one rendered line, got: {rendered:?}"
+        );
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(step_url))
+                .count(),
+            1,
+            "expected full step URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
     #[test]
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(

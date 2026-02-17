@@ -12,7 +12,6 @@ use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
-use crate::wrapping::word_wrap_line;
 use codex_ansi_escape::ansi_escape_line;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
@@ -340,7 +339,7 @@ impl ExecCell {
                 let line = Line::from(line);
                 let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
                 let subsequent_indent = " ".repeat(initial_indent.width()).into();
-                let wrapped = word_wrap_line(
+                let wrapped = adaptive_wrap_line(
                     &line,
                     RtOptions::new(width as usize)
                         .initial_indent(initial_indent)
@@ -837,6 +836,46 @@ mod tests {
             rendered.iter().filter(|line| line.contains(url)).count(),
             1,
             "expected full URL in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn exploring_display_does_not_split_long_url_like_search_query() {
+        let url_like = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path";
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "rg foo".into()],
+            parsed: vec![ParsedCommand::Search {
+                cmd: format!("rg {url_like}"),
+                query: Some(url_like.to_string()),
+                path: None,
+            }],
+            output: None,
+            source: ExecCommandSource::Agent,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, false);
+        let rendered: Vec<String> = cell
+            .display_lines(36)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like query in one rendered line, got: {rendered:?}"
         );
     }
 
