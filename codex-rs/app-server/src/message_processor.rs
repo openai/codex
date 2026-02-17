@@ -33,6 +33,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_core::AuthManager;
+use codex_core::OPENAI_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::ExternalAuthRefreshContext;
 use codex_core::auth::ExternalAuthRefreshReason;
@@ -169,10 +170,16 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let thread_manager = Arc::new(ThreadManager::new(
+        let openai_models_provider = config
+            .model_providers
+            .get(OPENAI_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_else(codex_core::ModelProviderInfo::create_openai_provider);
+        let thread_manager = Arc::new(ThreadManager::new_with_models_provider(
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
+            openai_models_provider,
         ));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {

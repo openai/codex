@@ -58,6 +58,19 @@ impl ModelsManager {
     ///
     /// Uses `codex_home` to store cached model metadata and initializes with built-in presets.
     pub fn new(codex_home: PathBuf, auth_manager: Arc<AuthManager>) -> Self {
+        Self::new_with_provider(
+            codex_home,
+            auth_manager,
+            ModelProviderInfo::create_openai_provider(),
+        )
+    }
+
+    /// Construct a manager with an explicit provider used for remote model refreshes.
+    pub fn new_with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
@@ -66,7 +79,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
-            provider: ModelProviderInfo::create_openai_provider(),
+            provider,
         }
     }
 
@@ -322,16 +335,7 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
-        let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        Self {
-            local_models: builtin_model_presets(auth_manager.auth_mode()),
-            remote_models: RwLock::new(Self::load_remote_models_from_file().unwrap_or_default()),
-            auth_manager,
-            etag: RwLock::new(None),
-            cache_manager,
-            provider,
-        }
+        Self::new_with_provider(codex_home, auth_manager, provider)
     }
 
     /// Get model identifier without consulting remote state or cache.
