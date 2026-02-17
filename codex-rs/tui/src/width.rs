@@ -1,8 +1,15 @@
-//! Shared width guards for transcript rendering.
+//! Width guards for transcript rendering with fixed prefix columns.
 //!
-//! Callers use these helpers when they reserve fixed prefix columns (for
-//! bullets, gutters, or labels) and need to know whether any content width
-//! remains.
+//! Several rendering paths reserve a fixed number of columns for bullets,
+//! gutters, or labels before laying out content.  When the terminal is very
+//! narrow, those reserved columns can consume the entire width, leaving zero
+//! or negative space for content.
+//!
+//! These helpers centralise the subtraction and enforce a strict-positive
+//! contract: they return `Some(n)` where `n > 0`, or `None` when no usable
+//! content width remains.  Callers treat `None` as "render prefix-only
+//! fallback" rather than attempting wrapped rendering at zero width, which
+//! would produce empty or unstable output.
 
 /// Returns usable content width after reserving fixed columns.
 ///
