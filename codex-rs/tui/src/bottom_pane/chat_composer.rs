@@ -5579,6 +5579,78 @@ mod tests {
     }
 
     #[test]
+    fn kill_buffer_persists_after_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        composer.textarea.insert_str("restore me");
+        composer.textarea.set_cursor(0);
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert!(composer.textarea.is_empty());
+
+        composer.textarea.insert_str("hello");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+        assert!(composer.textarea.is_empty());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(composer.textarea.text(), "restore me");
+    }
+
+    #[test]
+    fn kill_buffer_persists_after_slash_command_dispatch() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.textarea.insert_str("restore me");
+        composer.textarea.set_cursor(0);
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+        assert!(composer.textarea.is_empty());
+
+        composer.textarea.insert_str("/diff");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Command(cmd) => {
+                assert_eq!(cmd.command(), "diff");
+            }
+            _ => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(composer.textarea.text(), "restore me");
+    }
+
+    #[test]
     fn slash_command_disabled_while_task_running_keeps_text() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;

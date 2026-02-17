@@ -109,7 +109,6 @@ impl TextArea {
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
-        self.kill_buffer.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -1672,6 +1671,21 @@ mod tests {
         t.yank();
         assert_eq!(t.text(), "hello");
         assert_eq!(t.cursor(), 5);
+    }
+
+    #[test]
+    fn kill_buffer_persists_across_set_text() {
+        let mut t = ta_with("restore me");
+        t.set_cursor(0);
+        t.kill_to_end_of_line();
+        assert!(t.text().is_empty());
+
+        t.set_text_clearing_elements("/diff");
+        t.set_text_clearing_elements("");
+        t.yank();
+
+        assert_eq!(t.text(), "restore me");
+        assert_eq!(t.cursor(), "restore me".len());
     }
 
     #[test]
