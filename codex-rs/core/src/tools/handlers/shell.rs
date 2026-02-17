@@ -304,17 +304,14 @@ impl ShellHandler {
             .skills_manager
             .skills_for_cwd(&turn.cwd, false)
             .await;
-        let effective_sandbox_policy = resolve_skill_sandbox_extension_for_command(
-            &skills_outcome,
-            &exec_params.command,
-            &exec_params.cwd,
-        )
-        .map_or_else(
-            || turn.sandbox_policy.clone(),
-            |skill_sandbox_policy| {
-                extend_sandbox_policy(&turn.sandbox_policy, &skill_sandbox_policy)
-            },
-        );
+        let effective_sandbox_policy =
+            resolve_skill_sandbox_extension_for_command(&skills_outcome, &exec_params.cwd)
+                .map_or_else(
+                    || turn.sandbox_policy.clone(),
+                    |skill_sandbox_policy| {
+                        extend_sandbox_policy(&turn.sandbox_policy, &skill_sandbox_policy)
+                    },
+                );
 
         let exec_approval_requirement = session
             .services
