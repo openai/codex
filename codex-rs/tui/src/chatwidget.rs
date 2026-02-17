@@ -2689,9 +2689,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_steer_enabled(true);
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -2856,9 +2854,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_steer_enabled(true);
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -3012,9 +3008,7 @@ impl ChatWidget {
         };
 
         widget.prefetch_rate_limits();
-        widget
-            .bottom_pane
-            .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_steer_enabled(true);
         widget.bottom_pane.set_status_line_enabled(
             widget
                 .config
@@ -6023,9 +6017,6 @@ impl ChatWidget {
             self.config.features.enable(feature);
         } else {
             self.config.features.disable(feature);
-        }
-        if feature == Feature::Steer {
-            self.bottom_pane.set_steer_enabled(enabled);
         }
         if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
