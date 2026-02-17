@@ -927,6 +927,51 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
+        let policy = NetworkProxySettings {
+            allowed_domains: vec!["example.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://example.com:443")
+            .header("host", "example.com:443")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let (response, _request) = http_connect_accept(None, req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn http_connect_accept_denies_denylisted_host() {
+        let policy = NetworkProxySettings {
+            allowed_domains: vec!["**.openai.com".to_string()],
+            denied_domains: vec!["api.openai.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://api.openai.com:443")
+            .header("host", "api.openai.com:443")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_connect_accept(None, req).await.unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-denylist"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn http_plain_proxy_emits_block_decision_for_unix_socket_method_deny() {
         let state = Arc::new(network_proxy_state_for_policy(
