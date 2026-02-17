@@ -16,7 +16,7 @@ const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
-const PHASE2_CLAIM_COOLDOWN_SECONDS: i64 = 2 * 7_200;
+const PHASE2_CLAIM_COOLDOWN_SECONDS: i64 = 2 * 3_600;
 
 impl StateRuntime {
     /// Deletes all persisted memory state in one transaction.
