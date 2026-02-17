@@ -28,4 +28,5 @@ mod thread_start;
 mod thread_unarchive;
 mod turn_interrupt;
 mod turn_start;
+mod turn_start_zsh_fork;
 mod turn_steer;

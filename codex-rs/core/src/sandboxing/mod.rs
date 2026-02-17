@@ -164,12 +164,19 @@ impl SandboxManager {
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+                let zsh_exec_bridge_wrapper_socket = env
+                    .get(crate::zsh_exec_bridge::ZSH_EXEC_BRIDGE_WRAPPER_SOCKET_ENV_VAR)
+                    .map(PathBuf::from);
+                let zsh_exec_bridge_allowed_unix_sockets = zsh_exec_bridge_wrapper_socket
+                    .as_ref()
+                    .map_or_else(Vec::new, |path| vec![path.clone()]);
                 let mut args = create_seatbelt_command_args(
                     command.clone(),
                     policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
+                    &zsh_exec_bridge_allowed_unix_sockets,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
