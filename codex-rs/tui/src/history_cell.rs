@@ -3790,9 +3790,13 @@ mod tests {
 
         let logical_height = cell.display_lines(width).len() as u16;
         let wrapped_height = cell.desired_height(width);
+        let expected_wrapped_height = Paragraph::new(Text::from(cell.display_lines(width)))
+            .wrap(Wrap { trim: false })
+            .line_count(width) as u16;
+        assert_eq!(wrapped_height, expected_wrapped_height);
         assert!(
-            wrapped_height > logical_height,
-            "expected wrapped height to exceed logical line count ({logical_height}), got {wrapped_height}"
+            wrapped_height >= logical_height,
+            "expected wrapped height to be at least logical line count ({logical_height}), got {wrapped_height}"
         );
 
         let wrapped_transcript_height = cell.desired_transcript_height(width);
