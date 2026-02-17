@@ -9,6 +9,12 @@ fn detects_proc_mount_invalid_argument_failure() {
 }
 
 #[test]
+fn detects_proc_mount_operation_not_permitted_failure() {
+    let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
+    assert_eq!(is_proc_mount_failure(stderr), true);
+}
+
+#[test]
 fn ignores_non_proc_mount_errors() {
     let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
     assert_eq!(is_proc_mount_failure(stderr), false);
