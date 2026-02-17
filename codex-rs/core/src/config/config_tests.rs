@@ -160,6 +160,49 @@ consolidation_model = "gpt-5"
 }
 
 #[test]
+fn test_toml_parsing_rejects_reserved_model_provider_override_openai() {
+    let cfg = r#"
+[model_providers.openai]
+name = "OpenAI Custom"
+"#;
+
+    let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved provider");
+    let message = err.to_string();
+    assert!(message.contains("reserved built-in provider IDs"));
+    assert!(message.contains("`openai`"));
+}
+
+#[test]
+fn test_toml_parsing_rejects_multiple_reserved_model_provider_overrides() {
+    let cfg = r#"
+[model_providers.ollama]
+name = "Ollama Override"
+
+[model_providers.openai]
+name = "OpenAI Override"
+"#;
+
+    let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved providers");
+    let message = err.to_string();
+    assert!(message.contains("`openai`"));
+    assert!(message.contains("`ollama`"));
+}
+
+#[test]
+fn test_toml_parsing_allows_non_reserved_model_provider() {
+    let cfg = r#"
+[model_providers.openai-custom]
+name = "OpenAI Custom"
+base_url = "https://example.com/v1"
+env_key = "OPENAI_API_KEY"
+"#;
+
+    let parsed =
+        toml::from_str::<ConfigToml>(cfg).expect("non-reserved provider should deserialize");
+    assert!(parsed.model_providers.contains_key("openai-custom"));
+}
+
+#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
@@ -4925,6 +4968,29 @@ fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error() -> 
             .to_string()
             .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_load_config_rejects_programmatic_reserved_model_provider_override() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut cfg = ConfigToml::default();
+    cfg.model_providers.insert(
+        "openai".to_string(),
+        ModelProviderInfo::create_openai_provider(None),
+    );
+
+    let result = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    );
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("reserved built-in provider IDs"));
+    assert!(error.to_string().contains("`openai`"));
 
     Ok(())
 }
