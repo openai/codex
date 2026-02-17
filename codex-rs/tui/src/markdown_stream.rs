@@ -35,12 +35,11 @@ pub(crate) struct MarkdownStreamCollector {
 }
 
 impl MarkdownStreamCollector {
-    /// Create a collector that renders markdown using `cwd` for local file-link display.
+    /// Create a collector that accumulates raw markdown deltas.
     ///
-    /// The collector snapshots `cwd` into owned state because stream commits can happen long after
-    /// construction. The same `cwd` should be reused for the entire stream lifecycle; mixing
-    /// different working directories within one stream would make the same link render with
-    /// different path prefixes across incremental commits.
+    /// `width` and `cwd` are only used by test-only rendering helpers; production stream commits
+    /// operate on raw source boundaries. The collector snapshots `cwd` so test rendering keeps
+    /// local file-link display stable across incremental commits.
     pub fn new(width: Option<usize>, cwd: &Path) -> Self {
         #[cfg(not(test))]
         let _ = cwd;
@@ -56,10 +55,12 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Update the rendering width used by test-only line-commit helpers.
     pub fn set_width(&mut self, width: Option<usize>) {
         self.width = width;
     }
 
+    /// Reset all buffered source and commit bookkeeping.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_source_len = 0;
@@ -69,6 +70,7 @@ impl MarkdownStreamCollector {
         }
     }
 
+    /// Append a raw streaming delta to the internal source buffer.
     pub fn push_delta(&mut self, delta: &str) {
         tracing::trace!("push_delta: {delta:?}");
         self.buffer.push_str(delta);

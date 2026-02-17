@@ -1,5 +1,8 @@
-//! Markdown rendering for the TUI transcript.
+//! Low-level markdown event renderer for the TUI transcript.
 //!
+//! This module consumes `pulldown-cmark` events and emits styled `ratatui`
+//! lines, including table layout, width-aware wrapping, and local file-link
+//! display.
 //! This renderer intentionally treats local file links differently from normal web links. For
 //! local paths, the displayed text comes from the destination, not the markdown label, so
 //! transcripts show the real file target (including normalized location suffixes) and can shorten
@@ -198,11 +201,23 @@ struct TableColumnMetrics {
     kind: TableColumnKind,
 }
 
+/// Render markdown with default wrapping behavior.
+///
+/// Use this when the caller does not have a concrete render width yet (for
+/// example, snapshot tests or contexts that intentionally defer wrapping). If
+/// a viewport width is known, prefer [`render_markdown_text_with_width`] so
+/// table fallback and line wrapping decisions match the visible terminal.
 pub fn render_markdown_text(input: &str) -> Text<'static> {
     render_markdown_text_with_width(input, /*width*/ None)
 }
 
-/// Render markdown using the current process working directory for local file-link display.
+/// Render markdown constrained to a known terminal width.
+///
+/// The renderer preserves table structure when possible and falls back to
+/// pipe-table output when a box table cannot fit the available width. Passing
+/// `None` keeps intrinsic line widths and disables width-driven wrapping in the
+/// markdown writer. Local file links render relative to the current process
+/// working directory.
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let cwd = std::env::current_dir().ok();
     render_markdown_text_with_width_and_cwd(input, width, cwd.as_deref())
@@ -1240,6 +1255,8 @@ where
         out.push('|');
         for cell in row {
             out.push(' ');
+            // Preserve literal `|` inside cell text in markdown fallback mode so
+            // downstream markdown parsers keep the cell content intact.
             out.push_str(&cell.plain_text().replace('|', "\\|"));
             out.push(' ');
             out.push('|');
@@ -1374,6 +1391,9 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
+                // Link destinations are rendered as " (url)" suffixes. When parsing table cells,
+                // append the suffix into the active cell buffer rather than the outer paragraph
+                // line to avoid detached url lines.
                 if self.in_table_cell() {
                     self.push_span_to_table_cell(" (".into());
                     self.push_span_to_table_cell(Span::styled(link.destination, self.styles.link));
