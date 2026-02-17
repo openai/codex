@@ -1,6 +1,11 @@
 use anyhow::Result;
+use codex_core::config::types::Personality;
+use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -366,6 +371,104 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
         .filter(|text| text.contains("<model_switch>"))
         .count();
     assert_eq!(model_switch_count, 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_model_hydration_does_not_suppress_personality_update() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.2".to_string());
+    });
+    let initial = builder.build(&server).await?;
+    let home = initial.home.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    let initial_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-initial"),
+            ev_assistant_message("msg-1", "Completed first turn"),
+            ev_completed("resp-initial"),
+        ]),
+    )
+    .await;
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "seed resumed history".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let _ = initial_mock.single_request();
+
+    let resumed_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-resume"),
+            ev_assistant_message("msg-2", "Resumed turn"),
+            ev_completed("resp-resume"),
+        ]),
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_config(|config| {
+        config.model = Some("gpt-5.2-codex".to_string());
+        config.features.enable(Feature::Personality);
+        config.personality = Some(Personality::Pragmatic);
+    });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    resumed
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "first resumed turn with personality change".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: resumed.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: resumed.session_configured.model.clone(),
+            effort: resumed.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: Some(Personality::Friendly),
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = resumed_mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<model_switch>")),
+        "expected model switch message on first post-resume turn"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "expected personality update message when personality changes on first post-resume turn"
+    );
 
     Ok(())
 }

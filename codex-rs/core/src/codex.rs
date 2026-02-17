@@ -3472,20 +3472,33 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let mut previous_context_item = previous_context
+            let previous_context_item = previous_context
                 .as_ref()
                 .map(|context| context.to_turn_context_item(context.collaboration_mode.clone()));
-            if let Some(previous_model) = sess.previous_model().await
-                && let Some(previous_context_item) = previous_context_item.as_mut()
-            {
-                // Preserve resume/fork hydration behavior until previous/current context diffs are
-                // sourced solely from persisted TurnContextItem history.
-                previous_context_item.model = previous_model;
-            }
             let current_context_item =
                 current_context.to_turn_context_item(current_context.collaboration_mode.clone());
-            let update_items = sess
+            let mut update_items = sess
                 .build_settings_update_items(previous_context_item.as_ref(), &current_context_item);
+            if let Some(previous_model) = sess.previous_model().await
+                && let Some(previous_context_item) = previous_context_item.as_ref()
+                && previous_model != previous_context_item.model
+                && !update_items
+                    .iter()
+                    .any(Session::is_model_switch_developer_message)
+            {
+                // Apply resume/fork model hydration only to model-switch diffing so it does not
+                // suppress other updates (for example personality changes).
+                let mut previous_context_item_for_model_switch = previous_context_item.clone();
+                previous_context_item_for_model_switch.model = previous_model;
+                if let Some(model_switch_item) =
+                    crate::context_manager::updates::build_model_instructions_update_item(
+                        Some(&previous_context_item_for_model_switch),
+                        &current_context_item,
+                    )
+                {
+                    update_items.push(model_switch_item);
+                }
+            }
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
