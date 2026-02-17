@@ -1439,10 +1439,15 @@ impl App {
                             }
                             Ok(None) => {}
                             Err(err) => {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to read shared session metadata: {err}"
-                                ));
-                                return Ok(AppRunControl::Continue);
+                                tracing::warn!(
+                                    error = %err,
+                                    "failed to read shared session metadata; treating session as unshared"
+                                );
+                                self.chat_widget.add_info_message(
+                                    "Share metadata unreadable; proceeding without owner check."
+                                        .to_string(),
+                                    None,
+                                );
                             }
                         }
 

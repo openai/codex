@@ -52,6 +52,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
+use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -735,9 +736,9 @@ async fn run_ratatui_app(
             }
             Ok(None) => {}
             Err(err) => {
-                return fatal_exit(
-                    &mut tui,
-                    format!("Failed to read shared session metadata: {err}"),
+                warn!(
+                    error = %err,
+                    "failed to read shared session metadata; treating session as unshared"
                 );
             }
         }
