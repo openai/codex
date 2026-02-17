@@ -348,6 +348,16 @@ mod tests {
     }
 
     #[test]
+    fn append_markdown_agent_unwraps_markdown_fences_for_single_column_table() {
+        let src = "```md\n| Only |\n|---|\n| value |\n```\n";
+        let mut out = Vec::new();
+        append_markdown_agent(src, None, &mut out);
+        let rendered = lines_to_strings(&out);
+        assert!(rendered.iter().any(|line| line.contains("┌")));
+        assert!(!rendered.iter().any(|line| line.trim() == "| Only |"));
+    }
+
+    #[test]
     fn append_markdown_agent_keeps_non_markdown_fences_as_code() {
         let src = "```rust\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n";
         let mut out = Vec::new();
