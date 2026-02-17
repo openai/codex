@@ -5664,7 +5664,7 @@ impl ChatWidget {
                     name: "Go back".to_string(),
                     description: None,
                     actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenApprovalsPopup);
+                        tx.send(AppEvent::OpenPermissionsPopup);
                     })],
                     dismiss_on_select: true,
                     ..Default::default()

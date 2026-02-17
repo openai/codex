@@ -215,7 +215,7 @@ fn windows_permissions_actions(
 pub(crate) fn windows_degraded_sandbox_enabled(config: &Config) -> bool {
     let windows_sandbox_level =
         codex_core::windows_sandbox::windows_sandbox_level_from_config(config);
-    matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
+    matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
 }
 
 #[cfg(target_os = "windows")]
