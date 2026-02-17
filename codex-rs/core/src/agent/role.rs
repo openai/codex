@@ -147,14 +147,16 @@ Available roles:
 mod built_in {
     use super::*;
 
-    /// Returns the cached built-in role declarations parsed from
-    /// `builtins_agents_config.toml`.
+    /// Returns the cached built-in role declarations defined in this module.
     pub(super) fn configs() -> &'static BTreeMap<String, AgentRoleConfig> {
         static CONFIG: LazyLock<BTreeMap<String, AgentRoleConfig>> = LazyLock::new(|| {
             BTreeMap::from([
                 (
                     DEFAULT_ROLE_NAME.to_string(),
-                    AgentRoleConfig::default()
+                    AgentRoleConfig {
+                        description: Some("Default agent.".to_string()),
+                        config_file: None,
+                    }
                 ),
                 (
                     "explorer".to_string(),
@@ -386,7 +388,7 @@ mod tests {
 
         assert!(spec.contains("researcher: no description"));
         assert!(spec.contains("explorer: {\nuser override\n}"));
-        assert!(spec.contains("default: no description"));
+        assert!(spec.contains("default: {\nDefault agent.\n}"));
         assert!(!spec.contains("Explorers are fast and authoritative."));
     }
 
@@ -403,7 +405,7 @@ mod tests {
         let spec = spawn_tool_spec::build(&user_defined_roles);
         let user_index = spec.find("aaa: {\nfirst\n}").expect("find user role");
         let built_in_index = spec
-            .find("default: no description")
+            .find("default: {\nDefault agent.\n}")
             .expect("find built-in role");
 
         assert!(user_index < built_in_index);
