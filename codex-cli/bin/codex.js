@@ -166,12 +166,11 @@ if (existsSync(pathDir)) {
 const updatedPath = getUpdatedPath(additionalDirs);
 
 const env = { ...process.env, PATH: updatedPath };
-const packageManager = detectPackageManager();
-if (packageManager === "bun") {
-  env.CODEX_MANAGED_BY_BUN = "1";
-} else if (packageManager === "npm") {
-  env.CODEX_MANAGED_BY_NPM = "1";
-}
+const packageManagerEnvVar =
+  detectPackageManager() === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : "CODEX_MANAGED_BY_NPM";
+env[packageManagerEnvVar] = "1";
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",

@@ -48,14 +48,14 @@ fn detect_update_action(
     managed_by_npm: bool,
     managed_by_bun: bool,
 ) -> Option<UpdateAction> {
-    if managed_by_npm {
-        Some(UpdateAction::NpmGlobalLatest)
-    } else if managed_by_bun {
-        Some(UpdateAction::BunGlobalLatest)
-    } else if is_macos
+    if is_macos
         && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
     {
         Some(UpdateAction::BrewUpgrade)
+    } else if managed_by_npm {
+        Some(UpdateAction::NpmGlobalLatest)
+    } else if managed_by_bun {
+        Some(UpdateAction::BunGlobalLatest)
     } else {
         None
     }
@@ -93,6 +93,15 @@ mod tests {
                 true,
                 std::path::Path::new("/usr/local/bin/codex"),
                 false,
+                false
+            ),
+            Some(UpdateAction::BrewUpgrade)
+        );
+        assert_eq!(
+            detect_update_action(
+                true,
+                std::path::Path::new("/opt/homebrew/bin/codex"),
+                true,
                 false
             ),
             Some(UpdateAction::BrewUpgrade)
