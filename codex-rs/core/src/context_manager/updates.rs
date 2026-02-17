@@ -7,16 +7,6 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 
-pub(crate) struct BuildSettingsUpdateItemsParams<'a> {
-    pub(crate) previous: Option<&'a TurnContext>,
-    pub(crate) resumed_model: Option<&'a str>,
-    pub(crate) next: &'a TurnContext,
-    pub(crate) shell: &'a Shell,
-    pub(crate) exec_policy: &'a Policy,
-    pub(crate) request_rule_enabled: bool,
-    pub(crate) personality_feature_enabled: bool,
-}
-
 fn build_environment_update_item(
     previous: Option<&TurnContext>,
     next: &TurnContext,
@@ -127,38 +117,35 @@ pub(crate) fn build_model_instructions_update_item(
 }
 
 pub(crate) fn build_settings_update_items(
-    params: BuildSettingsUpdateItemsParams<'_>,
+    previous: Option<&TurnContext>,
+    resumed_model: Option<&str>,
+    next: &TurnContext,
+    shell: &Shell,
+    exec_policy: &Policy,
+    request_rule_enabled: bool,
+    personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
 
-    if let Some(env_item) =
-        build_environment_update_item(params.previous, params.next, params.shell)
-    {
+    if let Some(env_item) = build_environment_update_item(previous, next, shell) {
         update_items.push(env_item);
     }
-    if let Some(permissions_item) = build_permissions_update_item(
-        params.previous,
-        params.next,
-        params.exec_policy,
-        params.request_rule_enabled,
-    ) {
+    if let Some(permissions_item) =
+        build_permissions_update_item(previous, next, exec_policy, request_rule_enabled)
+    {
         update_items.push(permissions_item);
     }
-    if let Some(collaboration_mode_item) =
-        build_collaboration_mode_update_item(params.previous, params.next)
-    {
+    if let Some(collaboration_mode_item) = build_collaboration_mode_update_item(previous, next) {
         update_items.push(collaboration_mode_item);
     }
     if let Some(model_instructions_item) =
-        build_model_instructions_update_item(params.previous, params.resumed_model, params.next)
+        build_model_instructions_update_item(previous, resumed_model, next)
     {
         update_items.push(model_instructions_item);
     }
-    if let Some(personality_item) = build_personality_update_item(
-        params.previous,
-        params.next,
-        params.personality_feature_enabled,
-    ) {
+    if let Some(personality_item) =
+        build_personality_update_item(previous, next, personality_feature_enabled)
+    {
         update_items.push(personality_item);
     }
 

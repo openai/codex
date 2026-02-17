@@ -1992,15 +1992,13 @@ impl Session {
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
-            crate::context_manager::updates::BuildSettingsUpdateItemsParams {
-                previous: previous_context.map(Arc::as_ref),
-                resumed_model,
-                next: current_context,
-                shell: shell.as_ref(),
-                exec_policy: exec_policy.as_ref(),
-                request_rule_enabled: self.features.enabled(Feature::RequestRule),
-                personality_feature_enabled: self.features.enabled(Feature::Personality),
-            },
+            previous_context.map(Arc::as_ref),
+            resumed_model,
+            current_context,
+            shell.as_ref(),
+            exec_policy.as_ref(),
+            self.features.enabled(Feature::RequestRule),
+            self.features.enabled(Feature::Personality),
         )
     }
 
