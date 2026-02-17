@@ -1087,6 +1087,20 @@ fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
 }
 
 #[test]
+fn table_pipe_fallback_escapes_literal_pipes_in_cell_content() {
+    let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| keep | keep | keep | keep | keep | keep | keep | keep | a \\| b | keep |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(20));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+
+    assert!(lines.first().is_some_and(|line| line.starts_with('|')));
+    assert!(lines.iter().any(|line| line.contains("a \\| b")));
+}
+
+#[test]
 fn table_keeps_sparse_rows_with_empty_trailing_cells() {
     let md = "| A | B | C |\n|---|---|---|\n| a | | |\n";
     let text = render_markdown_text(md);

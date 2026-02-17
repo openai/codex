@@ -1083,7 +1083,7 @@ where
         out.push('|');
         for cell in row {
             out.push(' ');
-            out.push_str(&cell.plain_text());
+            out.push_str(&cell.plain_text().replace('|', "\\|"));
             out.push(' ');
             out.push('|');
         }
