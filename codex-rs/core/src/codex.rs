@@ -4695,13 +4695,15 @@ async fn maybe_run_previous_model_inline_compact(
     .await
     {
         Ok(()) => Ok(()),
-        Err(CodexErr::Interrupted) => Err(()),
         Err(err) => {
             if !pre_turn_context_items.is_empty() {
                 // Preserve model-visible settings updates even when pre-turn compaction fails
                 // before we can persist turn input.
                 sess.record_conversation_items(turn_context, pre_turn_context_items)
                     .await;
+            }
+            if matches!(err, CodexErr::Interrupted) {
+                return Err(());
             }
             let compact_error_prefix = if should_use_remote_compact_task(&turn_context.provider) {
                 "Error running remote compact task"
