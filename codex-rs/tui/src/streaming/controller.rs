@@ -168,7 +168,13 @@ impl StreamCore {
 
     /// Batch drain: dequeue up to `max_lines`, update the emitted count.
     fn tick_batch(&mut self, max_lines: usize) -> Vec<Line<'static>> {
-        let step = self.state.drain_n(max_lines.max(1));
+        if max_lines == 0 {
+            return Vec::new();
+        }
+        let step = self.state.drain_n(max_lines);
+        if step.is_empty() {
+            return step;
+        }
         let emitted_start = self.emitted_stable_len;
         self.emitted_stable_len += step.len();
         self.advance_emitted_source_boundary(emitted_start, self.emitted_stable_len);
@@ -194,6 +200,10 @@ impl StreamCore {
     fn current_tail_lines(&self) -> Vec<Line<'static>> {
         let start = self.enqueued_stable_len.min(self.rendered_lines.len());
         self.rendered_lines[start..].to_vec()
+    }
+
+    fn has_tail(&self) -> bool {
+        self.enqueued_stable_len < self.rendered_lines.len()
     }
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
@@ -532,7 +542,7 @@ impl StreamController {
     }
 
     pub(crate) fn has_live_tail(&self) -> bool {
-        !self.current_tail_lines().is_empty()
+        self.core.has_tail()
     }
 
     pub(crate) fn set_width(&mut self, width: Option<usize>) {
@@ -1122,6 +1132,35 @@ mod tests {
     }
 
     #[test]
+    fn controller_tick_batch_zero_is_noop() {
+        let mut ctrl = StreamController::new(Some(80));
+        assert!(ctrl.push("line one\n"));
+        assert_eq!(ctrl.queued_lines(), 1);
+
+        let (cell, idle) = ctrl.on_commit_tick_batch(0);
+        assert!(cell.is_none(), "batch size 0 should not emit lines");
+        assert!(!idle, "batch size 0 should not drain queued lines");
+        assert_eq!(
+            ctrl.queued_lines(),
+            1,
+            "queue depth should remain unchanged"
+        );
+    }
+
+    #[test]
+    fn controller_has_live_tail_reflects_tail_presence() {
+        let mut ctrl = StreamController::new(Some(80));
+        assert!(!ctrl.has_live_tail());
+
+        ctrl.core.rendered_lines = vec![Line::from("tail line")];
+        ctrl.core.enqueued_stable_len = 0;
+        assert!(ctrl.has_live_tail());
+
+        ctrl.core.enqueued_stable_len = 1;
+        assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
     fn controller_set_width_partial_drain_no_lost_lines() {
         let mut ctrl = StreamController::new(Some(40));
         ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
@@ -1216,8 +1255,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
+    #[test]
+    fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let mut ctrl = StreamController::new(None);
         let mut lines = Vec::new();
 
@@ -1334,8 +1373,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_streamed_table_matches_full_render_widths() {
+    #[test]
+    fn controller_streamed_table_matches_full_render_widths() {
         let deltas = vec![
             "| Key | Description |\n",
             "| --- | --- |\n",
@@ -1353,8 +1392,8 @@ mod tests {
         assert_eq!(streamed, expected);
     }
 
-    #[tokio::test]
-    async fn controller_holds_blockquoted_table_tail_until_stable() {
+    #[test]
+    fn controller_holds_blockquoted_table_tail_until_stable() {
         let deltas = vec![
             "> | A | B |\n",
             "> | --- | --- |\n",
@@ -1436,8 +1475,8 @@ mod tests {
         assert_eq!(streamed, expected);
     }
 
-    #[tokio::test]
-    async fn controller_does_not_hold_back_pipe_prose_without_table_delimiter() {
+    #[test]
+    fn controller_does_not_hold_back_pipe_prose_without_table_delimiter() {
         let mut ctrl = StreamController::new(Some(80));
 
         ctrl.push("status | owner | note\n");
@@ -1474,8 +1513,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_handles_table_immediately_after_heading() {
+    #[test]
+    fn controller_handles_table_immediately_after_heading() {
         let deltas = vec![
             "### 1) Basic table\n",
             "| Name | Role | Status |\n",
@@ -1495,8 +1534,8 @@ mod tests {
         assert_eq!(streamed, expected);
     }
 
-    #[tokio::test]
-    async fn controller_renders_unicode_for_multi_table_response_shape() {
+    #[test]
+    fn controller_renders_unicode_for_multi_table_response_shape() {
         let source = "Absolutely. Here are several different Markdown table patterns you can use for rendering tests.\n\n| Name  | Role      |
   Location |\n|-------|-----------|----------|\n| Ava   | Engineer  | NYC      |\n| Malik | Designer  | Berlin   |\n| Priya | PM        | Remote
   |\n\n| Item        | Qty | Price | In Stock |\n|:------------|----:|------:|:--------:|\n| Keyboard    |   2 | 49.99 |    Yes   |\n| Mouse       |  10
@@ -1517,8 +1556,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_renders_unicode_for_no_outer_pipes_table_shape() {
+    #[test]
+    fn controller_renders_unicode_for_no_outer_pipes_table_shape() {
         let source = "### 1) Basic\n\n| Name | Role | Active |\n|---|---|---|\n| Alice | Engineer | Yes |\n| Bob | Designer | No |\n\n### 2) No outer
   pipes\n\nCol A | Col B | Col C\n--- | --- | ---\nx | y | z\n10 | 20 | 30\n\n### 3) Another table\n\n| Key | Value |\n|---|---|\n| a | b |\n";
 
@@ -1543,8 +1582,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_stabilizes_first_no_outer_pipes_table_in_response() {
+    #[test]
+    fn controller_stabilizes_first_no_outer_pipes_table_in_response() {
         let deltas = vec![
             "### No outer pipes first\n\n",
             "Col A | Col B | Col C\n",
@@ -1574,8 +1613,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_stabilizes_two_column_no_outer_table_in_response() {
+    #[test]
+    fn controller_stabilizes_two_column_no_outer_table_in_response() {
         let deltas = vec![
             "A | B\n",
             "--- | ---\n",
@@ -1601,8 +1640,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_converts_no_outer_table_between_preboxed_sections() {
+    #[test]
+    fn controller_converts_no_outer_table_between_preboxed_sections() {
         let source = "  ┌───────┬──────────┬────────┐\n  │ Name  │ Role     │ Active │\n  ├───────┼──────────┼────────┤\n  │ Alice │ Engineer │ Yes    │\n  │ Bob   │ Designer │ No     │\n  │ Cara  │ PM       │ Yes    │\n  └───────┴──────────┴────────┘\n\n  ### 3) No outer pipes\n\n  Col A | Col B | Col C\n  --- | --- | ---\n  x | y | z\n  10 | 20 | 30\n\n  ┌─────────────────┬────────┬────────────────────────┐\n  │ Example         │ Output │ Notes                  │\n  ├─────────────────┼────────┼────────────────────────┤\n  │ a | b           │ `a     │ b`                     │\n  │ npm run test    │ ok     │ Inline code formatting │\n  │ SELECT * FROM t │ 3 rows │ SQL snippet            │\n  └─────────────────┴────────┴────────────────────────┘\n";
 
         let deltas = source
@@ -1629,8 +1668,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_keeps_markdown_fenced_tables_mutable_until_finalize() {
+    #[test]
+    fn controller_keeps_markdown_fenced_tables_mutable_until_finalize() {
         let source = "```md\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n";
         let deltas = vec![
             "```md\n",
@@ -1656,8 +1695,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_keeps_markdown_fenced_no_outer_tables_mutable_until_finalize() {
+    #[test]
+    fn controller_keeps_markdown_fenced_no_outer_tables_mutable_until_finalize() {
         let source =
             "```md\nCol A | Col B | Col C\n--- | --- | ---\nx | y | z\n10 | 20 | 30\n```\n";
         let deltas = vec![
@@ -1687,8 +1726,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn controller_keeps_non_markdown_fenced_tables_as_code() {
+    #[test]
+    fn controller_keeps_non_markdown_fenced_tables_as_code() {
         let source = "```sh\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n";
         let deltas = vec![
             "```sh\n",
@@ -1714,8 +1753,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn plan_controller_streamed_table_matches_finalize_render() {
+    #[test]
+    fn plan_controller_streamed_table_matches_finalize_render() {
         let deltas = vec![
             "## Build plan\n\n",
             "| Step | Owner |\n",
@@ -1742,8 +1781,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn plan_controller_streamed_markdown_fenced_table_matches_finalize_render() {
+    #[test]
+    fn plan_controller_streamed_markdown_fenced_table_matches_finalize_render() {
         let deltas = vec![
             "## Build plan\n\n",
             "```md\n",

@@ -4070,6 +4070,7 @@ mod tests {
             message: "tiny width coverage for wrapped user history".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
         };
         let agent_message_cell = AgentMessageCell::new(vec!["tiny width agent line".into()], true);
         let reasoning_cell = ReasoningSummaryCell::new(
@@ -4206,6 +4207,7 @@ mod tests {
             message: "hello".to_string(),
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>;
         let head = Arc::new(AgentMessageCell::new(vec![Line::from("line 1")], true))
             as Arc<dyn HistoryCell>;
