@@ -391,8 +391,28 @@ FROM threads
             .filter_map(|entry| entry.thread_id.as_deref())
             .collect();
         if !thread_ids.is_empty() {
-            let mut prune_threads = QueryBuilder::<Sqlite>::new(
-                r#"
+            let mut over_limit_threads_query =
+                QueryBuilder::<Sqlite>::new("SELECT thread_id FROM logs WHERE thread_id IN (");
+            {
+                let mut separated = over_limit_threads_query.separated(", ");
+                for thread_id in &thread_ids {
+                    separated.push_bind(*thread_id);
+                }
+            }
+            over_limit_threads_query.push(") GROUP BY thread_id HAVING SUM(");
+            over_limit_threads_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            over_limit_threads_query.push(") > ");
+            over_limit_threads_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_thread_ids: Vec<String> = over_limit_threads_query
+                .build()
+                .fetch_all(self.pool.as_ref())
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("thread_id"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_thread_ids.is_empty() {
+                let mut prune_threads = QueryBuilder::<Sqlite>::new(
+                    r#"
 DELETE FROM logs
 WHERE id IN (
     SELECT id
@@ -401,10 +421,10 @@ WHERE id IN (
             id,
             SUM(
 "#,
-            );
-            prune_threads.push(LOG_ROW_ESTIMATED_BYTES_SQL);
-            prune_threads.push(
-                r#"
+                );
+                prune_threads.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threads.push(
+                    r#"
             ) OVER (
                 PARTITION BY thread_id
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
@@ -412,23 +432,24 @@ WHERE id IN (
         FROM logs
         WHERE thread_id IN (
 "#,
-            );
-            {
-                let mut separated = prune_threads.separated(", ");
-                for thread_id in &thread_ids {
-                    separated.push_bind(*thread_id);
+                );
+                {
+                    let mut separated = prune_threads.separated(", ");
+                    for thread_id in &over_limit_thread_ids {
+                        separated.push_bind(thread_id);
+                    }
                 }
-            }
-            prune_threads.push(
-                r#"
+                prune_threads.push(
+                    r#"
         )
     )
     WHERE cumulative_bytes >
 "#,
-            );
-            prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
-            prune_threads.push("\n)");
-            prune_threads.build().execute(self.pool.as_ref()).await?;
+                );
+                prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threads.push("\n)");
+                prune_threads.build().execute(self.pool.as_ref()).await?;
+            }
         }
 
         let threadless_process_uuids: BTreeSet<&str> = entries
@@ -437,8 +458,29 @@ WHERE id IN (
             .filter_map(|entry| entry.process_uuid.as_deref())
             .collect();
         if !threadless_process_uuids.is_empty() {
-            let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
-                r#"
+            let mut over_limit_processes_query = QueryBuilder::<Sqlite>::new(
+                "SELECT process_uuid FROM logs WHERE thread_id IS NULL AND process_uuid IN (",
+            );
+            {
+                let mut separated = over_limit_processes_query.separated(", ");
+                for process_uuid in &threadless_process_uuids {
+                    separated.push_bind(*process_uuid);
+                }
+            }
+            over_limit_processes_query.push(") GROUP BY process_uuid HAVING SUM(");
+            over_limit_processes_query.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+            over_limit_processes_query.push(") > ");
+            over_limit_processes_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+            let over_limit_process_uuids: Vec<String> = over_limit_processes_query
+                .build()
+                .fetch_all(self.pool.as_ref())
+                .await?
+                .into_iter()
+                .map(|row| row.try_get("process_uuid"))
+                .collect::<Result<_, _>>()?;
+            if !over_limit_process_uuids.is_empty() {
+                let mut prune_threadless_process_logs = QueryBuilder::<Sqlite>::new(
+                    r#"
 DELETE FROM logs
 WHERE id IN (
     SELECT id
@@ -447,10 +489,10 @@ WHERE id IN (
             id,
             SUM(
 "#,
-            );
-            prune_threadless_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
-            prune_threadless_process_logs.push(
-                r#"
+                );
+                prune_threadless_process_logs.push(LOG_ROW_ESTIMATED_BYTES_SQL);
+                prune_threadless_process_logs.push(
+                    r#"
             ) OVER (
                 PARTITION BY process_uuid
                 ORDER BY ts DESC, ts_nanos DESC, id DESC
@@ -459,26 +501,27 @@ WHERE id IN (
         WHERE thread_id IS NULL
           AND process_uuid IN (
 "#,
-            );
-            {
-                let mut separated = prune_threadless_process_logs.separated(", ");
-                for process_uuid in &threadless_process_uuids {
-                    separated.push_bind(*process_uuid);
+                );
+                {
+                    let mut separated = prune_threadless_process_logs.separated(", ");
+                    for process_uuid in &over_limit_process_uuids {
+                        separated.push_bind(process_uuid);
+                    }
                 }
-            }
-            prune_threadless_process_logs.push(
-                r#"
+                prune_threadless_process_logs.push(
+                    r#"
           )
     )
     WHERE cumulative_bytes >
 "#,
-            );
-            prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
-            prune_threadless_process_logs.push("\n)");
-            prune_threadless_process_logs
-                .build()
-                .execute(self.pool.as_ref())
-                .await?;
+                );
+                prune_threadless_process_logs.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+                prune_threadless_process_logs.push("\n)");
+                prune_threadless_process_logs
+                    .build()
+                    .execute(self.pool.as_ref())
+                    .await?;
+            }
         }
         Ok(())
     }
