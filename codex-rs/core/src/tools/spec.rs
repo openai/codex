@@ -2,6 +2,7 @@ use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
@@ -36,6 +37,7 @@ pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
@@ -94,6 +96,7 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
@@ -101,6 +104,11 @@ impl ToolsConfig {
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
+    }
+
+    pub fn with_agent_roles(mut self, agent_roles: BTreeMap<String, AgentRoleConfig>) -> Self {
+        self.agent_roles = agent_roles;
+        self
     }
 }
 
@@ -522,7 +530,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn create_spawn_agent_tool() -> ToolSpec {
+fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -537,7 +545,9 @@ fn create_spawn_agent_tool() -> ToolSpec {
         (
             "agent_type".to_string(),
             JsonSchema::String {
-                description: Some(crate::agent::role::spawn_tool_spec::build()),
+                description: Some(crate::agent::role::spawn_tool_spec::build(
+                    &config.agent_roles,
+                )),
             },
         ),
     ]);
@@ -1564,7 +1574,7 @@ pub(crate) fn build_specs(
 
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
-        builder.push_spec(create_spawn_agent_tool());
+        builder.push_spec(create_spawn_agent_tool(config));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());

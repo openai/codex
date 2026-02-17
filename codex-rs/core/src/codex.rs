@@ -608,7 +608,8 @@ impl TurnContext {
             model_info: &model_info,
             features: &features,
             web_search_mode: self.tools_config.web_search_mode,
-        });
+        })
+        .with_agent_roles(config.agent_roles.clone());
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -942,7 +943,8 @@ impl Session {
             model_info: &model_info,
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
-        });
+        })
+        .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
@@ -4151,7 +4153,8 @@ async fn spawn_review_thread(
         model_info: &review_model_info,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
-    });
+    })
+    .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
