@@ -306,9 +306,10 @@ impl StreamCore {
                 };
 
                 let mut stable_prefix_render = Vec::new();
-                append_markdown_agent(
+                append_markdown_agent_with_cwd(
                     &self.raw_source[..last_nonblank_start],
                     self.width,
+                    Some(self.cwd.as_path()),
                     &mut stable_prefix_render,
                 );
                 self.rendered_lines

@@ -113,14 +113,14 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
 }
 
 #[tokio::test]
-async fn current_stream_width_returns_none_when_reserved_columns_exhaust_width() {
+async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_width() {
     let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.last_rendered_width.set(Some(2));
-    assert_eq!(chat.current_stream_width(2), None);
+    assert_eq!(chat.current_stream_width(2), Some(1));
 
     chat.last_rendered_width.set(Some(4));
-    assert_eq!(chat.current_stream_width(4), None);
+    assert_eq!(chat.current_stream_width(4), Some(1));
 
     chat.last_rendered_width.set(Some(5));
     assert_eq!(chat.current_stream_width(4), Some(1));
