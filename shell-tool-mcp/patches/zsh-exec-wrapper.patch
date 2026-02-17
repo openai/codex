@@ -1,34 +1,228 @@
 diff --git a/Src/exec.c b/Src/exec.c
-index 27bca11..baea760 100644
+index 27bca110c..c1770f6d2 100644
 --- a/Src/exec.c
 +++ b/Src/exec.c
-@@ -507,7 +507,9 @@ zexecve(char *pth, char **argv, char **newenvp)
+@@ -507,7 +507,12 @@ zexecve(char *pth, char **argv, char **newenvp)
  {
      int eno;
      static char buf[PATH_MAX * 2+1];
 -    char **eep;
-+    char **eep, **exec_argv;
++    char **eep, **exec_argv, **wrapper_envp;
 +    char *orig_pth = pth;
 +    char *exec_wrapper;
++    char wrapper_origin_buf[64];
++    int wrapper_origin_len;
++    int wrapper_envc, wrapper_origin_idx;
  
      unmetafy(pth, NULL);
      for (eep = argv; *eep; eep++)
-@@ -526,8 +528,17 @@ zexecve(char *pth, char **argv, char **newenvp)
+@@ -526,8 +531,51 @@ zexecve(char *pth, char **argv, char **newenvp)
  
      if (newenvp == NULL)
  	    newenvp = environ;
 +    exec_argv = argv;
++    /* Use the command env by default; wrapper mode may replace this with an
++     * explicitly rebuilt envp so origin metadata is guaranteed to be present
++     * even when execve does not use the process-global environ. */
++    wrapper_envp = newenvp;
 +    if ((exec_wrapper = getenv("EXEC_WRAPPER")) &&
 +	*exec_wrapper && !inblank(*exec_wrapper)) {
++	/* zexecve callers provide spare argv slots before argv[0] for
++	 * interpreter dispatch; reuse those slots to trampoline through the
++	 * wrapper binary while preserving the original target path. */
 +	exec_argv = argv - 2;
 +	exec_argv[0] = exec_wrapper;
 +	exec_argv[1] = orig_pth;
++	wrapper_origin_len = sprintf(wrapper_origin_buf,
++				     "CODEX_ZSH_SIDECAR_WRAPPER_ORIGIN=%d",
++				     zsh_exec_wrapper_origin);
++	if (wrapper_origin_len > 0 &&
++	    wrapper_origin_len < (int)sizeof(wrapper_origin_buf)) {
++	    wrapper_envc = 0;
++	    wrapper_origin_idx = -1;
++	    for (eep = newenvp; *eep; eep++) {
++		if (strncmp(*eep, "CODEX_ZSH_SIDECAR_WRAPPER_ORIGIN=",
++			    sizeof("CODEX_ZSH_SIDECAR_WRAPPER_ORIGIN=") - 1) == 0)
++		    wrapper_origin_idx = wrapper_envc;
++		wrapper_envc++;
++	    }
++	    wrapper_envp = zalloc((wrapper_envc + 2) * sizeof(char *));
++	    if (wrapper_origin_idx >= 0) {
++		for (wrapper_envc = 0; newenvp[wrapper_envc]; wrapper_envc++)
++		    wrapper_envp[wrapper_envc] =
++			wrapper_envc == wrapper_origin_idx ?
++			wrapper_origin_buf : newenvp[wrapper_envc];
++		wrapper_envp[wrapper_envc] = NULL;
++	    } else {
++		for (wrapper_envc = 0; newenvp[wrapper_envc]; wrapper_envc++)
++		    wrapper_envp[wrapper_envc] = newenvp[wrapper_envc];
++		wrapper_envp[wrapper_envc++] = wrapper_origin_buf;
++		wrapper_envp[wrapper_envc] = NULL;
++	    }
++	}
 +	pth = exec_wrapper;
 +    }
      winch_unblock();
 -    execve(pth, argv, newenvp);
-+    execve(pth, exec_argv, newenvp);
++    execve(pth, exec_argv, wrapper_envp);
 +    pth = orig_pth;
  
      /* If the execve returns (which in general shouldn't happen),   *
       * then check for an errno equal to ENOEXEC.  This errno is set *
+diff --git a/Src/init.c b/Src/init.c
+index 20b8cc7fd..b6d5c9c9a 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -59,6 +59,9 @@ int underscoreused;
+ /**/
+ int sourcelevel;
+ 
++/**/
++int zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_USER_COMMAND;
++
+ /* the shell tty fd */
+ 
+ /**/
+@@ -1450,14 +1453,25 @@ init_signals(void)
+ void
+ run_init_scripts(void)
+ {
++    int old_origin;
++
+     noerrexit = NOERREXIT_EXIT | NOERREXIT_RETURN | NOERREXIT_SIGNAL;
++    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_USER_COMMAND;
+ 
+     if (EMULATION(EMULATE_KSH|EMULATE_SH)) {
+-	if (islogin)
++	if (islogin) {
++	    old_origin = zsh_exec_wrapper_origin;
++	    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 	    source("/etc/profile");
++	    zsh_exec_wrapper_origin = old_origin;
++	}
+ 	if (unset(PRIVILEGED)) {
+-	    if (islogin)
++	    if (islogin) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 		sourcehome(".profile");
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ 
+ 	    if (interact) {
+ 		noerrs = 2;
+@@ -1467,16 +1481,26 @@ run_init_scripts(void)
+ 		    if (!parsestr(&s)) {
+ 			singsub(&s);
+ 			noerrs = 0;
++			old_origin = zsh_exec_wrapper_origin;
++			zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_RC_STARTUP;
+ 			source(s);
++			zsh_exec_wrapper_origin = old_origin;
+ 		    }
+ 		}
+ 		noerrs = 0;
+ 	    }
+-	} else
++	} else {
++	    old_origin = zsh_exec_wrapper_origin;
++	    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 	    source("/etc/suid_profile");
++	    zsh_exec_wrapper_origin = old_origin;
++	}
+     } else {
+ #ifdef GLOBAL_ZSHENV
++	old_origin = zsh_exec_wrapper_origin;
++	zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_RC_STARTUP;
+ 	source(GLOBAL_ZSHENV);
++	zsh_exec_wrapper_origin = old_origin;
+ #endif
+ 
+ 	if (isset(RCS) && unset(PRIVILEGED))
+@@ -1492,33 +1516,61 @@ run_init_scripts(void)
+ 		}
+ 	    }
+ 
++	    old_origin = zsh_exec_wrapper_origin;
++	    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_RC_STARTUP;
+ 	    sourcehome(".zshenv");
++	    zsh_exec_wrapper_origin = old_origin;
+ 	}
+ 	if (islogin) {
+ #ifdef GLOBAL_ZPROFILE
+-	    if (isset(RCS) && isset(GLOBALRCS))
++	    if (isset(RCS) && isset(GLOBALRCS)) {
++		    old_origin = zsh_exec_wrapper_origin;
++		    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 		    source(GLOBAL_ZPROFILE);
++		    zsh_exec_wrapper_origin = old_origin;
++	    }
+ #endif
+-	    if (isset(RCS) && unset(PRIVILEGED))
++	    if (isset(RCS) && unset(PRIVILEGED)) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 		sourcehome(".zprofile");
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ 	}
+ 	if (interact) {
+ #ifdef GLOBAL_ZSHRC
+-	    if (isset(RCS) && isset(GLOBALRCS))
++	    if (isset(RCS) && isset(GLOBALRCS)) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_RC_STARTUP;
+ 		source(GLOBAL_ZSHRC);
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ #endif
+-	    if (isset(RCS) && unset(PRIVILEGED))
++	    if (isset(RCS) && unset(PRIVILEGED)) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_RC_STARTUP;
+ 		sourcehome(".zshrc");
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ 	}
+ 	if (islogin) {
+ #ifdef GLOBAL_ZLOGIN
+-	    if (isset(RCS) && isset(GLOBALRCS))
++	    if (isset(RCS) && isset(GLOBALRCS)) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 		source(GLOBAL_ZLOGIN);
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ #endif
+-	    if (isset(RCS) && unset(PRIVILEGED))
++	    if (isset(RCS) && unset(PRIVILEGED)) {
++		old_origin = zsh_exec_wrapper_origin;
++		zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP;
+ 		sourcehome(".zlogin");
++		zsh_exec_wrapper_origin = old_origin;
++	    }
+ 	}
+     }
++    zsh_exec_wrapper_origin = EXEC_WRAPPER_ORIGIN_USER_COMMAND;
+     noerrexit = 0;
+     nohistsave = 0;
+ }
+diff --git a/Src/zsh.h b/Src/zsh.h
+index 5bda04e88..c0750cf45 100644
+--- a/Src/zsh.h
++++ b/Src/zsh.h
+@@ -2215,6 +2215,14 @@ enum source_return {
+     SOURCE_ERROR = 2
+ };
+ 
++enum exec_wrapper_origin {
++    EXEC_WRAPPER_ORIGIN_USER_COMMAND = 0,
++    EXEC_WRAPPER_ORIGIN_LOGIN_STARTUP = 1,
++    EXEC_WRAPPER_ORIGIN_RC_STARTUP = 2
++};
++
++extern int zsh_exec_wrapper_origin;
++
+ enum noerrexit_bits {
+     /* Suppress ERR_EXIT and traps: global */
+     NOERREXIT_EXIT = 1,
