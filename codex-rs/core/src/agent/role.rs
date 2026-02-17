@@ -6,11 +6,9 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use codex_app_server_protocol::ConfigLayerSource;
-use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
@@ -107,7 +105,7 @@ pub(crate) mod spawn_tool_spec {
     /// Builds the spawn-agent tool description text from built-in and configured roles.
     pub(crate) fn build(user_defined_agent_roles: &BTreeMap<String, AgentRoleConfig>) -> String {
         let built_in_roles = built_in::configs();
-        build_from_configs(built_in_roles, &user_defined_agent_roles)
+        build_from_configs(built_in_roles, user_defined_agent_roles)
     }
 
     // This function is not inlined for testing purpose.
@@ -208,6 +206,7 @@ mod tests {
     use crate::config_loader::ConfigLayerStackOrdering;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     async fn test_config_with_cli_overrides(
@@ -302,7 +301,7 @@ mod tests {
         let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
         let role_path = write_role_config(&home, "invalid-role.toml", "model = [")
             .await
-            .to_path_buf();
+            ;
         config.agent_roles.insert(
             "custom".to_string(),
             AgentRoleConfig {
