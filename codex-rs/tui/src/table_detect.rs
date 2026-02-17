@@ -1,9 +1,23 @@
-//! Shared pipe-table detection helpers.
+//! Canonical pipe-table structure detection for raw markdown source.
 //!
 //! Both the streaming controller (`streaming/controller.rs`) and the
 //! markdown-fence unwrapper (`markdown.rs`) need to identify pipe-table
-//! structure in raw markdown source. This module provides the canonical
+//! structure in raw markdown source.  This module provides the canonical
 //! implementations so fixes only need to happen in one place.
+//!
+//! ## Concepts
+//!
+//! A GFM pipe table is a sequence of lines where:
+//! - A **header line** contains pipe-separated segments with at least one
+//!   non-empty cell.
+//! - A **delimiter line** immediately follows the header and contains only
+//!   alignment markers (`---`, `:---`, `---:`, `:---:`), each with at least
+//!   three dashes.
+//! - **Body rows** follow the delimiter.
+//!
+//! The functions here operate on single lines and do not maintain cross-line
+//! state.  Callers (the streaming controller and fence unwrapper) are
+//! responsible for pairing consecutive lines to confirm a table.
 
 /// Split a pipe-delimited line into trimmed segments.
 ///
