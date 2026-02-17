@@ -1154,7 +1154,7 @@ where
     ///
     /// Heuristic: a row is spillover if its only non-empty cell is the first one
     /// AND (the row has only one cell, or the content looks like HTML, or it's a
-    /// label line followed by HTML content, or a trailing multi-word label line).
+    /// label line followed by HTML content, or a trailing HTML-intro label line).
     fn is_spillover_row(row: &[TableCell], next_row: Option<&Vec<TableCell>>) -> bool {
         let Some(first_text) = Self::first_non_empty_only_text(row) else {
             return false;
@@ -1179,10 +1179,9 @@ where
             }
 
             // pulldown can end the table before the corresponding HTML block line.
-            // In that case, treat multi-word label lines (e.g., "HTML block:") as
-            // spillover instead of keeping them inside the table grid.
-            let has_multiple_words = first_text.split_whitespace().nth(1).is_some();
-            if next_row.is_none() && has_multiple_words {
+            // In that case, treat trailing HTML-intro labels (e.g., "HTML block:")
+            // as spillover while keeping explicit sparse labels in real tables.
+            if next_row.is_none() && Self::looks_like_html_label_line(&first_text) {
                 return true;
             }
         }
@@ -1203,6 +1202,17 @@ where
 
     fn looks_like_html_content(text: &str) -> bool {
         text.contains('<') && text.contains('>')
+    }
+
+    fn looks_like_html_label_line(text: &str) -> bool {
+        let trimmed = text.trim();
+        if !trimmed.ends_with(':') {
+            return false;
+        }
+        let prefix = trimmed.trim_end_matches(':').trim();
+        prefix
+            .split_whitespace()
+            .any(|word| word.eq_ignore_ascii_case("html"))
     }
 
     fn spans_display_width(spans: &[Span<'_>]) -> usize {

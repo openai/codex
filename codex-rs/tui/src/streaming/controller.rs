@@ -1313,6 +1313,15 @@ mod tests {
     }
 
     #[test]
+    fn table_holdback_state_detects_single_column_header_plus_delimiter() {
+        let source = "| Only |\n| --- |\n";
+        assert!(matches!(
+            table_holdback_state(source),
+            TableHoldbackState::Confirmed
+        ));
+    }
+
+    #[test]
     fn table_holdback_state_ignores_table_like_lines_inside_unclosed_long_fence() {
         let source = "````sh\n```cmd\n| Key | Description |\n| --- | --- |\n````\n";
         assert!(

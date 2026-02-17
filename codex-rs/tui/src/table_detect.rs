@@ -7,11 +7,11 @@
 
 /// Split a pipe-delimited line into trimmed segments.
 ///
-/// Returns `None` if the line is empty or has fewer than two segments.
+/// Returns `None` if the line is empty or has no `|` marker.
 /// Leading/trailing pipes are stripped before splitting.
 pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
     let trimmed = line.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || !trimmed.contains('|') {
         return None;
     }
 
@@ -24,7 +24,7 @@ pub(crate) fn parse_table_segments(line: &str) -> Option<Vec<&str>> {
     }
 
     let segments: Vec<&str> = content.split('|').map(str::trim).collect();
-    (segments.len() >= 2).then_some(segments)
+    (!segments.is_empty()).then_some(segments)
 }
 
 /// Whether `line` looks like a table header row (has pipe-separated
@@ -86,8 +86,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_segments_single_segment_returns_none() {
-        assert_eq!(parse_table_segments("| only |"), None);
+    fn parse_table_segments_single_segment_is_allowed() {
+        assert_eq!(parse_table_segments("| only |"), Some(vec!["only"]));
+    }
+
+    #[test]
+    fn parse_table_segments_without_pipe_returns_none() {
+        assert_eq!(parse_table_segments("just text"), None);
     }
 
     #[test]
