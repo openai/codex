@@ -1759,6 +1759,21 @@ async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_wi
     assert_eq!(chat.current_stream_width(4), Some(1));
 }
 
+#[tokio::test]
+async fn on_terminal_resize_initial_width_requests_redraw() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (draw_tx, mut draw_rx) = tokio::sync::broadcast::channel(8);
+    chat.frame_requester = FrameRequester::new(draw_tx);
+    chat.last_rendered_width.set(None);
+
+    chat.on_terminal_resize(120);
+
+    let draw = tokio::time::timeout(std::time::Duration::from_millis(200), draw_rx.recv())
+        .await
+        .expect("timed out waiting for redraw request");
+    assert!(draw.is_ok(), "expected redraw notification to be sent");
+}
+
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
 fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

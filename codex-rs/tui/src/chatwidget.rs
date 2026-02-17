@@ -2354,12 +2354,15 @@ impl ChatWidget {
                 if w == 0 {
                     None
                 } else {
+                    // Keep a 1-column minimum for active stream controllers so they can
+                    // continue accepting deltas on ultra-narrow layouts.
                     Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
                 }
             })
     }
 
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
+        let had_rendered_width = self.last_rendered_width.get().is_some();
         self.last_rendered_width.set(Some(width as usize));
         let stream_width = self.current_stream_width(2);
         let plan_stream_width = self.current_stream_width(4);
@@ -2370,6 +2373,9 @@ impl ChatWidget {
             controller.set_width(plan_stream_width);
         }
         self.sync_active_stream_tail();
+        if !had_rendered_width {
+            self.request_redraw();
+        }
     }
 
     fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {

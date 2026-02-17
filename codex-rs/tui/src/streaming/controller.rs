@@ -30,6 +30,7 @@
 //!
 //! - `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()`.
 //! - `rendered_line_end_source_bytes.len() == rendered_lines.len()`.
+//! - `rendered_line_end_source_totals.len() == rendered_lines.len()`.
 //! - `raw_source` is append-only until `reset()`; never modified mid-stream.
 //! - Tail starts exactly at `enqueued_stable_len`.
 //! - During confirmed table streaming, only lines from the table header onward
@@ -49,6 +50,7 @@ use std::time::Instant;
 use crate::table_detect::is_table_delimiter_line;
 use crate::table_detect::is_table_header_line;
 use crate::table_detect::parse_table_segments;
+use std::collections::HashMap;
 
 use super::StreamState;
 
@@ -75,6 +77,8 @@ struct StreamCore {
     rendered_lines: Vec<Line<'static>>,
     /// Per-rendered-line source byte offsets (raw source coordinates).
     rendered_line_end_source_bytes: Vec<usize>,
+    /// Per-rendered-line total count of lines sharing that source byte offset.
+    rendered_line_end_source_totals: Vec<usize>,
     /// Lines enqueued into the commit-animation queue.
     enqueued_stable_len: usize,
     /// Lines actually emitted to scrollback.
@@ -105,6 +109,7 @@ impl StreamCore {
             raw_source: String::new(),
             rendered_lines: Vec::new(),
             rendered_line_end_source_bytes: Vec::new(),
+            rendered_line_end_source_totals: Vec::new(),
             enqueued_stable_len: 0,
             emitted_stable_len: 0,
             emitted_stable_source_bytes: 0,
@@ -218,6 +223,7 @@ impl StreamCore {
         self.raw_source.clear();
         self.rendered_lines.clear();
         self.rendered_line_end_source_bytes.clear();
+        self.rendered_line_end_source_totals.clear();
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
         self.emitted_stable_source_bytes = 0;
@@ -232,8 +238,21 @@ impl StreamCore {
         let rendered = render_markdown_agent_with_source_map(&self.raw_source, self.width);
         self.rendered_lines = rendered.lines;
         self.rendered_line_end_source_bytes = rendered.line_end_source_bytes;
+        let mut source_totals: HashMap<usize, usize> = HashMap::new();
+        for source_end in &self.rendered_line_end_source_bytes {
+            *source_totals.entry(*source_end).or_insert(0) += 1;
+        }
+        self.rendered_line_end_source_totals = self
+            .rendered_line_end_source_bytes
+            .iter()
+            .map(|source_end| source_totals.get(source_end).copied().unwrap_or(1))
+            .collect();
         debug_assert_eq!(
             self.rendered_line_end_source_bytes.len(),
+            self.rendered_lines.len()
+        );
+        debug_assert_eq!(
+            self.rendered_line_end_source_totals.len(),
             self.rendered_lines.len()
         );
     }
@@ -369,16 +388,19 @@ impl StreamCore {
         }
 
         let end = emitted_end.min(self.rendered_line_end_source_bytes.len());
-        for line_end_source in &self.rendered_line_end_source_bytes[emitted_start..end] {
+        for (offset, line_end_source) in self.rendered_line_end_source_bytes[emitted_start..end]
+            .iter()
+            .enumerate()
+        {
+            let line_index = emitted_start + offset;
             if *line_end_source > self.emitted_stable_source_bytes {
                 self.emitted_stable_source_bytes = *line_end_source;
                 self.emitted_stable_lines_at_source_byte = 1;
                 self.emitted_stable_lines_at_source_byte_total = self
-                    .rendered_line_end_source_bytes
-                    .iter()
-                    .filter(|source| **source == *line_end_source)
-                    .count()
-                    .max(1);
+                    .rendered_line_end_source_totals
+                    .get(line_index)
+                    .copied()
+                    .unwrap_or(1);
             } else if *line_end_source == self.emitted_stable_source_bytes {
                 self.emitted_stable_lines_at_source_byte += 1;
             }
@@ -433,11 +455,10 @@ impl StreamCore {
             .take_while(|line_end| **line_end == boundary)
             .count();
         let total_at_boundary = self
-            .rendered_line_end_source_bytes
-            .iter()
-            .filter(|line_end| **line_end == boundary)
-            .count()
-            .max(1);
+            .rendered_line_end_source_totals
+            .get(emitted_len - 1)
+            .copied()
+            .unwrap_or(1);
 
         self.emitted_stable_source_bytes = boundary;
         self.emitted_stable_lines_at_source_byte = emitted_at_boundary;
@@ -1160,6 +1181,38 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Item without newline")),
             "expected finalized plan content after resize, got {rendered:?}",
+        );
+    }
+
+    #[test]
+    fn remap_emitted_len_preserves_source_boundary_tie_breaks() {
+        let mut core = StreamCore::new(Some(80));
+        core.raw_source = "line\nline\nline\n".to_string();
+        core.rendered_lines = vec![
+            Line::from("row-0"),
+            Line::from("row-1"),
+            Line::from("row-2"),
+            Line::from("row-3"),
+            Line::from("row-4"),
+        ];
+        core.rendered_line_end_source_bytes = vec![5, 5, 9, 14, 14];
+        core.rendered_line_end_source_totals = vec![2, 2, 1, 2, 2];
+        core.emitted_stable_len = 3;
+        core.emitted_stable_source_bytes = 5;
+        core.emitted_stable_lines_at_source_byte_total = 2;
+
+        core.emitted_stable_lines_at_source_byte = 1;
+        assert_eq!(
+            core.remap_emitted_len_from_source_boundary(),
+            1,
+            "expected one emitted line at source boundary when one was previously emitted",
+        );
+
+        core.emitted_stable_lines_at_source_byte = 2;
+        assert_eq!(
+            core.remap_emitted_len_from_source_boundary(),
+            2,
+            "expected all lines at source boundary when boundary was fully emitted",
         );
     }
 

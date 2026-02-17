@@ -577,8 +577,24 @@ impl TranscriptOverlay {
         let clamped_end = range.end.min(self.cells.len());
         let clamped_start = range.start.min(clamped_end);
         if clamped_start < clamped_end {
+            let removed = clamped_end - clamped_start;
+            if let Some(highlight_cell) = self.highlight_cell.as_mut()
+                && *highlight_cell >= clamped_start
+            {
+                if *highlight_cell < clamped_end {
+                    *highlight_cell = clamped_start;
+                } else {
+                    *highlight_cell = highlight_cell.saturating_sub(removed.saturating_sub(1));
+                }
+            }
             self.cells
                 .splice(clamped_start..clamped_end, std::iter::once(consolidated));
+            if self
+                .highlight_cell
+                .is_some_and(|highlight_cell| highlight_cell >= self.cells.len())
+            {
+                self.highlight_cell = None;
+            }
             self.rebuild_renderables();
         }
         if follow_bottom {
@@ -1100,6 +1116,60 @@ mod tests {
         }));
 
         assert_eq!(overlay.view.scroll_offset, 0);
+    }
+
+    #[test]
+    fn transcript_overlay_consolidation_remaps_highlight_inside_range() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..6)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        overlay.set_highlight_cell(Some(3));
+
+        overlay.consolidate_cells(
+            2..5,
+            Arc::new(TestCell {
+                lines: vec![Line::from("consolidated")],
+            }),
+        );
+
+        assert_eq!(
+            overlay.highlight_cell,
+            Some(2),
+            "highlight inside consolidated range should point to replacement cell",
+        );
+    }
+
+    #[test]
+    fn transcript_overlay_consolidation_remaps_highlight_after_range() {
+        let mut overlay = TranscriptOverlay::new(
+            (0..7)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        overlay.set_highlight_cell(Some(6));
+
+        overlay.consolidate_cells(
+            2..5,
+            Arc::new(TestCell {
+                lines: vec![Line::from("consolidated")],
+            }),
+        );
+
+        assert_eq!(
+            overlay.highlight_cell,
+            Some(4),
+            "highlight after consolidated range should shift left by removed cells",
+        );
     }
 
     #[test]
