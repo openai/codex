@@ -3738,7 +3738,11 @@ impl ChatWidget {
             self.add_error_message("Current session is not ready to share yet.".to_string());
             return;
         };
-        if self.rollout_path().is_none() {
+        let Some(rollout_path) = self.rollout_path() else {
+            self.add_error_message("Current session is not ready to share yet.".to_string());
+            return;
+        };
+        if !rollout_path.exists() {
             self.add_error_message("Current session is not ready to share yet.".to_string());
             return;
         }
