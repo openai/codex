@@ -1999,7 +1999,6 @@ impl Session {
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
-            self.features.enabled(Feature::Personality),
         )
     }
 
@@ -2552,9 +2551,7 @@ impl Session {
         {
             items.push(collab_instructions.into());
         }
-        if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
-        {
+        if let Some(personality) = turn_context.personality {
             let model_info = turn_context.model_info.clone();
             let has_baked_personality = model_info.supports_personality()
                 && base_instructions == model_info.get_model_instructions(Some(personality));
@@ -7977,7 +7974,6 @@ mod tests {
                     }))
         })
             && let Some(p) = reconstruction_turn.personality
-            && session.features.enabled(Feature::Personality)
             && let Some(personality_message) = reconstruction_turn
                 .model_info
                 .model_messages

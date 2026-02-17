@@ -62,11 +62,7 @@ fn build_collaboration_mode_update_item(
 fn build_personality_update_item(
     previous: Option<&TurnContext>,
     next: &TurnContext,
-    personality_feature_enabled: bool,
 ) -> Option<ResponseItem> {
-    if !personality_feature_enabled {
-        return None;
-    }
     let previous = previous?;
     if next.model_info.slug != previous.model_info.slug {
         return None;
@@ -120,7 +116,6 @@ pub(crate) fn build_settings_update_items(
     next: &TurnContext,
     shell: &Shell,
     exec_policy: &Policy,
-    personality_feature_enabled: bool,
 ) -> Vec<ResponseItem> {
     let mut update_items = Vec::new();
 
@@ -138,9 +133,7 @@ pub(crate) fn build_settings_update_items(
     {
         update_items.push(model_instructions_item);
     }
-    if let Some(personality_item) =
-        build_personality_update_item(previous, next, personality_feature_enabled)
-    {
+    if let Some(personality_item) = build_personality_update_item(previous, next) {
         update_items.push(personality_item);
     }
 

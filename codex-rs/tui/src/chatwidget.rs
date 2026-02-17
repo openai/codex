@@ -3854,7 +3854,6 @@ impl ChatWidget {
         let personality = self
             .config
             .personality
-            .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
             items,
@@ -6043,9 +6042,6 @@ impl ChatWidget {
             self.refresh_model_display();
             self.request_redraw();
         }
-        if feature == Feature::Personality {
-            self.sync_personality_command_enabled();
-        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -6130,8 +6126,7 @@ impl ChatWidget {
     }
 
     fn sync_personality_command_enabled(&mut self) {
-        self.bottom_pane
-            .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+        self.bottom_pane.set_personality_command_enabled(true);
     }
 
     fn current_model_supports_personality(&self) -> bool {
