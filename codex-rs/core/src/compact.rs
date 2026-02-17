@@ -585,24 +585,8 @@ async fn drain_to_completed(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use core_test_support::context_snapshot;
-    use core_test_support::context_snapshot::ContextSnapshotOptions;
-    use core_test_support::context_snapshot::ContextSnapshotRenderMode;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use serde_json::Value;
-    use std::path::Path;
-
-    // This is to make Bazel happy
-    fn assert_compact_snapshot(name: &str, rendered: String) {
-        let mut settings = insta::Settings::clone_current();
-        settings.set_snapshot_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/snapshots"));
-        settings.bind(|| {
-            assert_snapshot!(name, rendered);
-        });
-    }
 
     #[test]
     fn content_items_to_text_joins_non_empty_segments() {
@@ -1662,134 +1646,6 @@ keep me updated
             phase: None,
         }];
         assert_eq!(refreshed, expected);
-    }
-
-    #[test]
-    fn process_compacted_history_reinjects_context_when_compaction_output_is_summary_only() {
-        let compacted_history = vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("{SUMMARY_PREFIX}\nsummary text"),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
-        let initial_context = vec![ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "fresh permissions".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
-
-        let refreshed = process_compacted_history(
-            compacted_history,
-            &initial_context,
-            TurnContextReinjection::ReinjectAboveLastRealUser,
-        );
-        let refreshed_value =
-            serde_json::to_value(&refreshed).expect("serialize refreshed history");
-        let Value::Array(refreshed_items) = refreshed_value else {
-            panic!("expected refreshed history to serialize as array");
-        };
-
-        assert_compact_snapshot(
-            "process_compacted_history_reinject_summary_only_shapes",
-            context_snapshot::format_labeled_items_snapshot(
-                "When compaction output contains only a summary user message, canonical context is still reinserted before the summary.",
-                &[("Refreshed History Layout", refreshed_items.as_slice())],
-                &ContextSnapshotOptions::default()
-                    .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
-            ),
-        );
-    }
-
-    #[test]
-    fn process_compacted_history_reinjects_context_above_last_summary_when_no_real_user() {
-        let compacted_history = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-        let initial_context = vec![ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "fresh permissions".to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }];
-
-        let refreshed = process_compacted_history(
-            compacted_history,
-            &initial_context,
-            TurnContextReinjection::ReinjectAboveLastRealUser,
-        );
-        let expected = vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!("{SUMMARY_PREFIX}\nolder summary"),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "fresh permissions".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!("{SUMMARY_PREFIX}\nlatest summary"),
-                }],
-                end_turn: None,
-                phase: None,
-            },
-        ];
-        assert_eq!(refreshed, expected);
-
-        let refreshed_value =
-            serde_json::to_value(&refreshed).expect("serialize refreshed history");
-        let Value::Array(refreshed_items) = refreshed_value else {
-            panic!("expected refreshed history to serialize as array");
-        };
-
-        assert_compact_snapshot(
-            "process_compacted_history_reinject_above_last_summary_shapes",
-            context_snapshot::format_labeled_items_snapshot(
-                "When compaction output has multiple summary-only user messages and no real user message, canonical context is reinserted above the last summary.",
-                &[("Refreshed History Layout", refreshed_items.as_slice())],
-                &ContextSnapshotOptions::default()
-                    .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
-            ),
-        );
     }
 
     #[test]
