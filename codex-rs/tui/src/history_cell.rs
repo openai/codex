@@ -34,8 +34,9 @@ use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::adaptive_wrap_line;
+use crate::wrapping::adaptive_wrap_lines;
+use crate::wrapping::text_contains_url_like;
 use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
@@ -266,7 +267,7 @@ impl HistoryCell for UserHistoryCell {
         let wrapped_remote_images = if self.remote_image_urls.is_empty() {
             None
         } else {
-            Some(word_wrap_lines(
+            Some(adaptive_wrap_lines(
                 self.remote_image_urls
                     .iter()
                     .enumerate()
@@ -282,7 +283,7 @@ impl HistoryCell for UserHistoryCell {
             None
         } else if self.text_elements.is_empty() {
             let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
-            let wrapped = word_wrap_lines(
+            let wrapped = adaptive_wrap_lines(
                 message_without_trailing_newlines
                     .split('\n')
                     .map(|line| Line::from(line).style(style)),
@@ -299,7 +300,7 @@ impl HistoryCell for UserHistoryCell {
                 style,
                 element_style,
             );
-            let wrapped = word_wrap_lines(
+            let wrapped = adaptive_wrap_lines(
                 raw_lines,
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
@@ -388,7 +389,7 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        word_wrap_lines(
+        adaptive_wrap_lines(
             &summary_lines,
             RtOptions::new(width as usize)
                 .initial_indent("• ".dim().into())
@@ -440,7 +441,7 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
+        adaptive_wrap_lines(
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
@@ -557,10 +558,7 @@ impl HistoryCell for PrefixedWrappedHistoryCell {
         let opts = RtOptions::new(width.max(1) as usize)
             .initial_indent(self.initial_prefix.clone())
             .subsequent_indent(self.subsequent_prefix.clone());
-        let wrapped = word_wrap_lines(&self.text, opts);
-        let mut out = Vec::new();
-        push_owned_lines(&wrapped, &mut out);
-        out
+        adaptive_wrap_lines(&self.text, opts)
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -605,7 +603,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
         let header = Line::from(header_spans);
 
         let mut out: Vec<Line<'static>> = Vec::new();
-        let header_wrapped = word_wrap_line(&header, RtOptions::new(wrap_width));
+        let header_wrapped = adaptive_wrap_line(&header, RtOptions::new(wrap_width));
         push_owned_lines(&header_wrapped, &mut out);
 
         if waited_only {
@@ -618,7 +616,7 @@ impl HistoryCell for UnifiedExecInteractionCell {
             .map(|line| Line::from(line.to_string()))
             .collect();
 
-        let input_wrapped = word_wrap_lines(
+        let input_wrapped = adaptive_wrap_lines(
             input_lines,
             RtOptions::new(wrap_width)
                 .initial_indent(Line::from("  └ ".dim()))
@@ -1397,7 +1395,7 @@ impl HistoryCell for McpToolCallCell {
             let opts = RtOptions::new((width as usize).saturating_sub(4))
                 .initial_indent("".into())
                 .subsequent_indent("    ".into());
-            let wrapped = word_wrap_line(&invocation_line, opts);
+            let wrapped = adaptive_wrap_line(&invocation_line, opts);
             let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
             lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
         }
@@ -1414,7 +1412,7 @@ impl HistoryCell for McpToolCallCell {
                             let text = Self::render_content_block(block, detail_wrap_width);
                             for segment in text.split('\n') {
                                 let line = Line::from(segment.to_string().dim());
-                                let wrapped = word_wrap_line(
+                                let wrapped = adaptive_wrap_line(
                                     &line,
                                     RtOptions::new(detail_wrap_width)
                                         .initial_indent("".into())
@@ -1432,7 +1430,7 @@ impl HistoryCell for McpToolCallCell {
                         width as usize,
                     );
                     let err_line = Line::from(err_text.dim());
-                    let wrapped = word_wrap_line(
+                    let wrapped = adaptive_wrap_line(
                         &err_line,
                         RtOptions::new(detail_wrap_width)
                             .initial_indent("".into())
@@ -1645,11 +1643,9 @@ impl HistoryCell for DeprecationNoticeCell {
         let wrap_width = width.saturating_sub(4).max(1) as usize;
 
         if let Some(details) = &self.details {
-            let line = textwrap::wrap(details, wrap_width)
-                .into_iter()
-                .map(|s| s.to_string().dim().into())
-                .collect::<Vec<_>>();
-            lines.extend(line);
+            let detail_line = Line::from(details.clone().dim());
+            let wrapped = adaptive_wrap_line(&detail_line, RtOptions::new(wrap_width));
+            push_owned_lines(&wrapped, &mut lines);
         }
 
         lines
@@ -1974,17 +1970,14 @@ fn wrap_with_prefix(
     subsequent_prefix: Span<'static>,
     style: Style,
 ) -> Vec<Line<'static>> {
-    let prefix_width = initial_prefix
-        .content
-        .width()
-        .max(subsequent_prefix.content.width());
-    let wrap_width = width.saturating_sub(prefix_width).max(1);
-    let wrapped = textwrap::wrap(text, wrap_width);
-    let wrapped_lines = wrapped
-        .into_iter()
-        .map(|segment| Span::from(segment.to_string()).set_style(style).into())
-        .collect::<Vec<Line<'static>>>();
-    prefix_lines(wrapped_lines, initial_prefix, subsequent_prefix)
+    let line = Line::from(vec![Span::from(text.to_string()).set_style(style)]);
+    let opts = RtOptions::new(width.max(1))
+        .initial_indent(Line::from(vec![initial_prefix]))
+        .subsequent_indent(Line::from(vec![subsequent_prefix]));
+    let wrapped = adaptive_wrap_line(&line, opts);
+    let mut out = Vec::new();
+    push_owned_lines(&wrapped, &mut out);
+    out
 }
 
 /// Split a request_user_input answer into option labels and an optional freeform note.
@@ -2077,10 +2070,18 @@ impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
-            textwrap::wrap(text, wrap_width)
-                .into_iter()
-                .map(|s| s.to_string().dim().italic().into())
-                .collect()
+            if !text_contains_url_like(text) {
+                return textwrap::wrap(text, wrap_width)
+                    .into_iter()
+                    .map(|s| s.to_string().dim().italic().into())
+                    .collect();
+            }
+
+            let note = Line::from(text.to_string().dim().italic());
+            let wrapped = adaptive_wrap_line(&note, RtOptions::new(wrap_width));
+            let mut out = Vec::new();
+            push_owned_lines(&wrapped, &mut out);
+            out
         };
 
         let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
@@ -2089,16 +2090,27 @@ impl HistoryCell for PlanUpdateCell {
                 StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
                 StepStatus::Pending => ("□ ", Style::default().dim()),
             };
-            let wrap_width = (width as usize)
-                .saturating_sub(4)
-                .saturating_sub(box_str.width())
-                .max(1);
-            let parts = textwrap::wrap(text, wrap_width);
-            let step_text = parts
-                .into_iter()
-                .map(|s| s.to_string().set_style(step_style).into())
-                .collect();
-            prefix_lines(step_text, box_str.into(), "  ".into())
+            if !text_contains_url_like(text) {
+                let wrap_width = (width as usize)
+                    .saturating_sub(4)
+                    .saturating_sub(box_str.width())
+                    .max(1);
+                let parts = textwrap::wrap(text, wrap_width);
+                let step_text = parts
+                    .into_iter()
+                    .map(|s| s.to_string().set_style(step_style).into())
+                    .collect();
+                return prefix_lines(step_text, box_str.into(), "  ".into());
+            }
+
+            let opts = RtOptions::new(width.saturating_sub(4).max(1) as usize)
+                .initial_indent(box_str.into())
+                .subsequent_indent("  ".into());
+            let step = Line::from(text.to_string().set_style(step_style));
+            let wrapped = adaptive_wrap_line(&step, opts);
+            let mut out = Vec::new();
+            push_owned_lines(&wrapped, &mut out);
+            out
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
@@ -2710,6 +2722,40 @@ mod tests {
                 "  wrapping happens this".to_string(),
                 "  time".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn prefixed_wrapped_history_cell_does_not_split_url_like_token() {
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let cell = PrefixedWrappedHistoryCell::new(Line::from(url_like), "✔ ".green(), "  ");
+        let rendered = render_lines(&cell.display_lines(24));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn unified_exec_interaction_cell_does_not_split_url_like_stdin_token() {
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let cell = UnifiedExecInteractionCell::new(Some("true".to_string()), url_like.to_string());
+        let rendered = render_lines(&cell.display_lines(24));
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
         );
     }
 

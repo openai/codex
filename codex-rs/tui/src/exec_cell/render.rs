@@ -10,8 +10,9 @@ use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_line;
+use crate::wrapping::adaptive_wrap_lines;
 use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ExecCommandSource;
@@ -21,7 +22,6 @@ use itertools::Itertools;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
-use textwrap::WordSeparator;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
@@ -215,7 +215,7 @@ impl HistoryCell for ExecCell {
             }
             let script = strip_bash_lc_and_escape(&call.command);
             let highlighted_script = highlight_bash_to_lines(&script);
-            let cmd_display = word_wrap_lines(
+            let cmd_display = adaptive_wrap_lines(
                 &highlighted_script,
                 RtOptions::new(width as usize)
                     .initial_indent("$ ".magenta().into())
@@ -228,7 +228,7 @@ impl HistoryCell for ExecCell {
                     let wrap_width = width.max(1) as usize;
                     let wrap_opts = RtOptions::new(wrap_width);
                     for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
-                        let wrapped = word_wrap_line(&unwrapped, wrap_opts.clone());
+                        let wrapped = adaptive_wrap_line(&unwrapped, wrap_opts.clone());
                         push_owned_lines(&wrapped, &mut lines);
                     }
                 }
@@ -392,22 +392,9 @@ impl ExecCell {
         };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
-        let contains_url = |line: &Line<'_>| {
-            let text: String = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect();
-            text.contains("http://") || text.contains("https://")
-        };
-
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
         let continuation_opts =
             RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-        let continuation_url_opts = RtOptions::new(continuation_wrap_width)
-            .word_separator(WordSeparator::AsciiSpace)
-            .word_splitter(WordSplitter::NoHyphenation)
-            .break_words(false);
 
         let mut continuation_lines: Vec<Line<'static>> = Vec::new();
 
@@ -415,22 +402,9 @@ impl ExecCell {
             let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
             let first_opts =
                 RtOptions::new(available_first_width).word_splitter(WordSplitter::NoHyphenation);
-            let first_url_opts = RtOptions::new(available_first_width)
-                .word_separator(WordSeparator::AsciiSpace)
-                .word_splitter(WordSplitter::NoHyphenation)
-                .break_words(false);
-
-            let selected_first_opts = if contains_url(first) {
-                first_url_opts
-            } else {
-                first_opts
-            };
 
             let mut first_wrapped: Vec<Line<'static>> = Vec::new();
-            push_owned_lines(
-                &word_wrap_line(first, selected_first_opts),
-                &mut first_wrapped,
-            );
+            push_owned_lines(&adaptive_wrap_line(first, first_opts), &mut first_wrapped);
             let mut first_wrapped_iter = first_wrapped.into_iter();
             if let Some(first_segment) = first_wrapped_iter.next() {
                 header_line.extend(first_segment);
@@ -438,14 +412,8 @@ impl ExecCell {
             continuation_lines.extend(first_wrapped_iter);
 
             for line in rest {
-                let selected_opts = if contains_url(line) {
-                    continuation_url_opts.clone()
-                } else {
-                    continuation_opts.clone()
-                };
-
                 push_owned_lines(
-                    &word_wrap_line(line, selected_opts),
+                    &adaptive_wrap_line(line, continuation_opts.clone()),
                     &mut continuation_lines,
                 );
             }
@@ -504,7 +472,7 @@ impl ExecCell {
                     RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
                 for line in &raw_output.lines {
                     push_owned_lines(
-                        &word_wrap_line(line, output_opts.clone()),
+                        &adaptive_wrap_line(line, output_opts.clone()),
                         &mut wrapped_output,
                     );
                 }
@@ -687,7 +655,7 @@ mod tests {
         let mut full_wrapped_output: Vec<Line<'static>> = Vec::new();
         for line in &raw_output.lines {
             push_owned_lines(
-                &word_wrap_line(line, output_opts.clone()),
+                &adaptive_wrap_line(line, output_opts.clone()),
                 &mut full_wrapped_output,
             );
         }
@@ -768,6 +736,44 @@ mod tests {
             rendered.iter().filter(|line| line.contains(url)).count(),
             1,
             "expected full URL in one rendered line, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn output_display_does_not_split_long_url_like_token_without_scheme() {
+        let url = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789jkl012mno345pqr678";
+
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                formatted_output: String::new(),
+                aggregated_output: url.to_string(),
+            }),
+            source: ExecCommandSource::UserShell,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+
+        let cell = ExecCell::new(call, false);
+        let rendered: Vec<String> = cell
+            .command_display_lines(36)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered.iter().filter(|line| line.contains(url)).count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
         );
     }
 }

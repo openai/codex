@@ -3,6 +3,7 @@ use std::io;
 use std::io::Write;
 
 use crate::wrapping::RtOptions;
+use crate::wrapping::line_contains_url_like;
 use crate::wrapping::word_wrap_line;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
@@ -46,8 +47,7 @@ where
     let mut wrapped_rows = 0usize;
 
     for line in &lines {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        if text.contains("http://") || text.contains("https://") {
+        if line_contains_url_like(line) {
             wrapped.push(line.clone());
             wrapped_rows += line.width().max(1).div_ceil(wrap_width);
         } else {
@@ -562,6 +562,34 @@ mod tests {
         assert!(
             rows.iter().any(|r| r.contains("│ http://a-long-url.com")),
             "expected prefix and URL on same row, rows: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|r| r.trim_end() == "│"),
+            "unexpected orphan prefix row, rows: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn vt100_prefixed_url_like_without_scheme_keeps_prefix_and_token_on_same_row() {
+        let width: u16 = 48;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let line: Line<'static> = Line::from(vec!["  │ ".into(), url_like.into()]);
+
+        insert_history_lines(&mut term, vec![line]).expect("insert history");
+
+        let rows: Vec<String> = term.backend().vt100().screen().rows(0, width).collect();
+
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("│ example.test/api/v1/projects")),
+            "expected prefix and URL-like token on same row, rows: {rows:?}"
         );
         assert!(
             !rows.iter().any(|r| r.trim_end() == "│"),

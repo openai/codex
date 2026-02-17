@@ -24,7 +24,8 @@ use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::style::user_message_style;
-use crate::wrapping::word_wrap_lines;
+use crate::wrapping::RtOptions;
+use crate::wrapping::adaptive_wrap_lines;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppLinkScreen {
@@ -234,7 +235,10 @@ impl AppLinkView {
         lines.push(Line::from(""));
         lines.push(Line::from(vec!["Setup URL:".dim()]));
         let url_line = Line::from(vec![self.url.clone().cyan().underlined()]);
-        lines.extend(word_wrap_lines(vec![url_line], usable_width));
+        lines.extend(adaptive_wrap_lines(
+            vec![url_line],
+            RtOptions::new(usable_width),
+        ));
 
         lines
     }
@@ -491,6 +495,47 @@ mod tests {
         assert_eq!(
             view.action_labels(),
             vec!["Manage on ChatGPT", "Enable app", "Back"]
+        );
+    }
+
+    #[test]
+    fn install_confirmation_does_not_split_long_url_like_token_without_scheme() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let url_like =
+            "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: None,
+                instructions: "Manage app".to_string(),
+                url: url_like.to_string(),
+                is_installed: true,
+                is_enabled: true,
+            },
+            tx,
+        );
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        let rendered: Vec<String> = view
+            .content_lines(40)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect();
+
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(url_like))
+                .count(),
+            1,
+            "expected full URL-like token in one rendered line, got: {rendered:?}"
         );
     }
 }
