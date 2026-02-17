@@ -208,7 +208,6 @@ mod tests {
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
     use codex_protocol::openai_models::ReasoningEffort;
-    use codex_protocol::protocol::SandboxPolicy;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -351,6 +350,7 @@ mod tests {
     #[tokio::test]
     #[cfg(not(windows))]
     async fn apply_role_does_not_materialize_default_sandbox_workspace_write_fields() {
+        use codex_protocol::protocol::SandboxPolicy;
         let (home, mut config) = test_config_with_cli_overrides(vec![
             (
                 "sandbox_mode".to_string(),
