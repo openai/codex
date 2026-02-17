@@ -1343,6 +1343,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
@@ -2249,7 +2252,38 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
+        let openai_base_url = cfg.openai_base_url.as_ref().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let openai_base_url_from_env = std::env::var("OPENAI_BASE_URL").ok().and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        if openai_base_url_from_env.is_some() {
+            let message = if openai_base_url.is_some() {
+                "`OPENAI_BASE_URL` is deprecated and ignored because `openai_base_url` is set in config.toml. Remove `OPENAI_BASE_URL` from your environment."
+            } else {
+                "`OPENAI_BASE_URL` is deprecated. Set `openai_base_url` in config.toml instead."
+            };
+            startup_warnings.push(message.to_string());
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
         let mut model_providers = built_in_model_providers();
+        if let Some(base_url) = effective_openai_base_url
+            && let Some(openai_provider) = model_providers.get_mut("openai")
+        {
+            openai_provider.base_url = Some(base_url);
+        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
