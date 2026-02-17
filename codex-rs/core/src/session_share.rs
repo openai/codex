@@ -259,15 +259,24 @@ pub async fn download_rollout_if_available(
         return Ok(None);
     }
     let meta_path = share_meta_path_for_rollout_path(&path);
-    match fetch_meta(&store, &meta_key).await? {
+    let meta = match fetch_meta(&store, &meta_key).await {
+        Ok(meta) => meta,
+        Err(err) => {
+            cleanup_downloaded_rollout(&path, &meta_path).await;
+            return Err(err);
+        }
+    };
+    match meta {
         Some(meta) => {
             let payload =
                 serde_json::to_vec(&meta).with_context(|| "failed to serialize metadata")?;
-            tokio::fs::write(&meta_path, payload)
+            if let Err(err) = tokio::fs::write(&meta_path, payload)
                 .await
-                .with_context(|| {
-                    format!("failed to write share metadata {}", meta_path.display())
-                })?;
+                .with_context(|| format!("failed to write share metadata {}", meta_path.display()))
+            {
+                cleanup_downloaded_rollout(&path, &meta_path).await;
+                return Err(err);
+            }
         }
         None => {
             let _ = tokio::fs::remove_file(&meta_path).await;
@@ -866,4 +875,9 @@ async fn write_response_to_file(path: &Path, response: reqwest::Response) -> any
     }
 
     Ok(())
+}
+
+async fn cleanup_downloaded_rollout(path: &Path, meta_path: &Path) {
+    let _ = tokio::fs::remove_file(path).await;
+    let _ = tokio::fs::remove_file(meta_path).await;
 }
