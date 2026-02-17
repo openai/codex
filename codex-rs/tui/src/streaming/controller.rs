@@ -87,6 +87,8 @@ struct StreamCore {
     emitted_stable_lines_at_source_byte_total: usize,
     /// Cached rendered line count for prefix-before-table keyed by source start and width.
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
+    /// Incremental holdback scanner state for append-only source updates.
+    holdback_scanner: TableHoldbackScanner,
 }
 
 struct StablePrefixLenCache {
@@ -109,6 +111,7 @@ impl StreamCore {
             emitted_stable_lines_at_source_byte: 0,
             emitted_stable_lines_at_source_byte_total: 0,
             stable_prefix_len_cache: None,
+            holdback_scanner: TableHoldbackScanner::new(),
         }
     }
 
@@ -125,6 +128,7 @@ impl StreamCore {
             && let Some(committed_source) = self.state.collector.commit_complete_source()
         {
             self.raw_source.push_str(&committed_source);
+            self.holdback_scanner.push_source_chunk(&committed_source);
             self.recompute_streaming_render();
             enqueued = self.sync_stable_queue();
         }
@@ -137,6 +141,7 @@ impl StreamCore {
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
             self.raw_source.push_str(&remainder_source);
+            self.holdback_scanner.push_source_chunk(&remainder_source);
         }
         let mut rendered = Vec::new();
         append_markdown_agent(&self.raw_source, self.width, &mut rendered);
@@ -219,6 +224,7 @@ impl StreamCore {
         self.emitted_stable_lines_at_source_byte = 0;
         self.emitted_stable_lines_at_source_byte_total = 0;
         self.stable_prefix_len_cache = None;
+        self.holdback_scanner.reset();
     }
 
     /// Re-render the full `raw_source` at current `width`.
@@ -291,7 +297,9 @@ impl StreamCore {
     /// streaming. When no table is detected, everything flows directly to
     /// stable. This is the core decision point for the holdback mechanism.
     fn active_tail_budget_lines(&mut self) -> usize {
-        match table_holdback_state(&self.raw_source) {
+        let scan_start = Instant::now();
+        let holdback_state = self.holdback_scanner.state();
+        let tail_budget = match holdback_state {
             TableHoldbackState::Confirmed { table_start } => {
                 self.tail_budget_from_source_start(table_start)
             }
@@ -299,7 +307,14 @@ impl StreamCore {
                 self.tail_budget_from_source_start(header_start)
             }
             TableHoldbackState::None => 0,
-        }
+        };
+        tracing::trace!(
+            state = ?holdback_state,
+            tail_budget,
+            elapsed_us = scan_start.elapsed().as_micros(),
+            "table holdback decision",
+        );
+        tail_budget
     }
 
     fn tail_budget_from_source_start(&mut self, source_start: usize) -> usize {
@@ -316,9 +331,16 @@ impl StreamCore {
             && cache.source_start == source_start
             && cache.width == self.width
         {
+            tracing::trace!(
+                source_start,
+                width = ?self.width,
+                stable_prefix_len = cache.stable_prefix_len,
+                "table holdback stable-prefix cache hit",
+            );
             return cache.stable_prefix_len;
         }
 
+        let render_start = Instant::now();
         let mut stable_prefix_render = Vec::new();
         append_markdown_agent(
             &self.raw_source[..source_start.min(self.raw_source.len())],
@@ -326,6 +348,13 @@ impl StreamCore {
             &mut stable_prefix_render,
         );
         let stable_prefix_len = stable_prefix_render.len();
+        tracing::trace!(
+            source_start,
+            width = ?self.width,
+            stable_prefix_len,
+            elapsed_us = render_start.elapsed().as_micros(),
+            "table holdback stable-prefix render",
+        );
         self.stable_prefix_len_cache = Some(StablePrefixLenCache {
             source_start,
             width: self.width,
@@ -630,6 +659,7 @@ fn parse_fence_marker(line: &str) -> Option<(char, usize)> {
 }
 
 /// A source line annotated with whether it falls inside a fenced code block.
+#[cfg(test)]
 struct ParsedLine<'a> {
     text: &'a str,
     fence_context: FenceContext,
@@ -665,6 +695,7 @@ fn is_markdown_fence(trimmed_line: &str, marker_len: usize) -> bool {
 /// Fence close markers must use the same marker character and at least the
 /// opening marker length, with no trailing content. This avoids accidentally
 /// closing on shorter markers that appear inside longer fences.
+#[cfg(test)]
 fn parse_lines_with_fence_state(source: &str) -> Vec<ParsedLine<'_>> {
     let mut in_fence = false;
     let mut fence_char = '\0';
@@ -748,6 +779,7 @@ fn table_candidate_text(line: &str) -> Option<&str> {
 /// commit rendered lines to the stable queue or withhold them as mutable tail.
 /// The scan is stateless: `table_holdback_state` re-evaluates the full source
 /// on every delta rather than maintaining incremental state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TableHoldbackState {
     /// No table detected -- all rendered lines can flow into the stable queue.
     None,
@@ -757,6 +789,167 @@ enum TableHoldbackState {
     /// A header + delimiter pair was found -- the source contains a confirmed
     /// table. Content from the table header onward stays mutable.
     Confirmed { table_start: usize },
+}
+
+#[derive(Clone, Copy)]
+struct PreviousLineState {
+    source_start: usize,
+    fence_context: FenceContext,
+    is_header: bool,
+}
+
+#[derive(Clone, Copy)]
+struct FenceScanState {
+    in_fence: bool,
+    fence_char: char,
+    fence_len: usize,
+    fence_context: FenceContext,
+}
+
+impl FenceScanState {
+    fn new() -> Self {
+        Self {
+            in_fence: false,
+            fence_char: '\0',
+            fence_len: 0,
+            fence_context: FenceContext::Other,
+        }
+    }
+}
+
+/// Incremental scanner for table holdback state on append-only source streams.
+struct TableHoldbackScanner {
+    source_offset: usize,
+    fence_state: FenceScanState,
+    previous_line: Option<PreviousLineState>,
+    pending_header_start: Option<usize>,
+    confirmed_table_start: Option<usize>,
+}
+
+impl TableHoldbackScanner {
+    fn new() -> Self {
+        Self {
+            source_offset: 0,
+            fence_state: FenceScanState::new(),
+            previous_line: None,
+            pending_header_start: None,
+            confirmed_table_start: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn state(&self) -> TableHoldbackState {
+        if let Some(table_start) = self.confirmed_table_start {
+            TableHoldbackState::Confirmed { table_start }
+        } else if let Some(header_start) = self.pending_header_start {
+            TableHoldbackState::PendingHeader { header_start }
+        } else {
+            TableHoldbackState::None
+        }
+    }
+
+    fn push_source_chunk(&mut self, source_chunk: &str) {
+        if source_chunk.is_empty() {
+            return;
+        }
+
+        let scan_start = Instant::now();
+        let mut lines = 0usize;
+        for source_line in source_chunk.split_inclusive('\n') {
+            lines += 1;
+            self.push_line(source_line);
+        }
+        tracing::trace!(
+            bytes = source_chunk.len(),
+            lines,
+            state = ?self.state(),
+            elapsed_us = scan_start.elapsed().as_micros(),
+            "table holdback incremental scan",
+        );
+    }
+
+    fn push_line(&mut self, source_line: &str) {
+        let line = source_line.strip_suffix('\n').unwrap_or(source_line);
+        let source_start = self.source_offset;
+        let fence_context = if self.fence_state.in_fence {
+            self.fence_state.fence_context
+        } else {
+            FenceContext::Outside
+        };
+
+        let candidate_text = if fence_context == FenceContext::Other {
+            None
+        } else {
+            table_candidate_text(line)
+        };
+        let is_header = candidate_text.is_some_and(is_table_header_line);
+        let is_delimiter = candidate_text.is_some_and(is_table_delimiter_line);
+
+        if self.confirmed_table_start.is_none()
+            && let Some(previous_line) = self.previous_line
+            && previous_line.fence_context != FenceContext::Other
+            && fence_context != FenceContext::Other
+            && previous_line.is_header
+            && is_delimiter
+        {
+            self.confirmed_table_start = Some(previous_line.source_start);
+            self.pending_header_start = None;
+        }
+
+        if self.confirmed_table_start.is_none() && !line.trim().is_empty() {
+            if fence_context != FenceContext::Other && is_header {
+                self.pending_header_start = Some(source_start);
+            } else {
+                self.pending_header_start = None;
+            }
+        }
+
+        self.previous_line = Some(PreviousLineState {
+            source_start,
+            fence_context,
+            is_header,
+        });
+
+        self.advance_fence_state(line);
+        self.source_offset = self.source_offset.saturating_add(source_line.len());
+    }
+
+    fn advance_fence_state(&mut self, raw_line: &str) {
+        let leading_spaces = raw_line
+            .as_bytes()
+            .iter()
+            .take_while(|byte| **byte == b' ')
+            .count();
+        if leading_spaces > 3 {
+            return;
+        }
+
+        let trimmed = &raw_line[leading_spaces..];
+        let fence_scan_text = strip_blockquote_prefix(trimmed);
+        if let Some((marker, len)) = parse_fence_marker(fence_scan_text) {
+            if !self.fence_state.in_fence {
+                self.fence_state.in_fence = true;
+                self.fence_state.fence_char = marker;
+                self.fence_state.fence_len = len;
+                self.fence_state.fence_context = if is_markdown_fence(fence_scan_text, len) {
+                    FenceContext::Markdown
+                } else {
+                    FenceContext::Other
+                };
+            } else if marker == self.fence_state.fence_char
+                && len >= self.fence_state.fence_len
+                && fence_scan_text[len..].trim().is_empty()
+            {
+                self.fence_state.in_fence = false;
+                self.fence_state.fence_char = '\0';
+                self.fence_state.fence_len = 0;
+                self.fence_state.fence_context = FenceContext::Other;
+            }
+        }
+    }
 }
 
 /// Scan `source` for pipe-table patterns outside of non-markdown fenced code
@@ -770,6 +963,7 @@ enum TableHoldbackState {
 /// If no confirmed table is found, checks whether the last non-blank line looks
 /// like a table header (speculative `PendingHeader`) to avoid premature commit
 /// of a potential table header before the delimiter arrives.
+#[cfg(test)]
 fn table_holdback_state(source: &str) -> TableHoldbackState {
     let lines = parse_lines_with_fence_state(source);
     for pair in lines.windows(2) {
@@ -1564,6 +1758,47 @@ mod tests {
         assert!(
             matches!(table_holdback_state(source), TableHoldbackState::None),
             "table holdback should ignore pipe lines inside non-markdown blockquoted fences",
+        );
+    }
+
+    #[test]
+    fn incremental_holdback_matches_stateless_scan_per_chunk() {
+        let chunks = [
+            "status | owner\n",
+            "\n",
+            "> ```sh\n",
+            "> | A | B |\n",
+            "> | --- | --- |\n",
+            "> ```\n",
+            "> | Key | Value |\n",
+            "> | --- | --- |\n",
+        ];
+
+        let mut scanner = TableHoldbackScanner::new();
+        let mut source = String::new();
+        for chunk in chunks {
+            source.push_str(chunk);
+            scanner.push_source_chunk(chunk);
+            assert_eq!(
+                scanner.state(),
+                table_holdback_state(&source),
+                "scanner mismatch after chunk: {chunk:?}\nsource:\n{source}",
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_holdback_detects_header_delimiter_across_chunk_boundary() {
+        let mut scanner = TableHoldbackScanner::new();
+        scanner.push_source_chunk("| A | B |\n");
+        assert_eq!(
+            scanner.state(),
+            TableHoldbackState::PendingHeader { header_start: 0 }
+        );
+        scanner.push_source_chunk("| --- | --- |\n");
+        assert_eq!(
+            scanner.state(),
+            TableHoldbackState::Confirmed { table_start: 0 }
         );
     }
 
