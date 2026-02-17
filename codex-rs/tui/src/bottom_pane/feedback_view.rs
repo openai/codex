@@ -353,6 +353,10 @@ fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String
             "Tell us more (bug)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
         ),
+        FeedbackCategory::SafetyCheck => (
+            "Tell us more (safety check)".to_string(),
+            "(optional) Share what was refused and why it should have been allowed".to_string(),
+        ),
         FeedbackCategory::Other => (
             "Tell us more (other)".to_string(),
             "(optional) Write a short description to help us further".to_string(),
@@ -365,6 +369,7 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
         FeedbackCategory::BadResult => "bad_result",
         FeedbackCategory::GoodResult => "good_result",
         FeedbackCategory::Bug => "bug",
+        FeedbackCategory::SafetyCheck => "safety_check",
         FeedbackCategory::Other => "other",
     }
 }
@@ -378,14 +383,15 @@ fn issue_url_for_category(
     // the external GitHub behavior identical while routing internal users to
     // the internal go link.
     match category {
-        FeedbackCategory::Bug | FeedbackCategory::BadResult | FeedbackCategory::Other => {
-            Some(match feedback_audience {
-                FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
-                FeedbackAudience::External => {
-                    format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
-                }
-            })
-        }
+        FeedbackCategory::Bug
+        | FeedbackCategory::BadResult
+        | FeedbackCategory::SafetyCheck
+        | FeedbackCategory::Other => Some(match feedback_audience {
+            FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
+            FeedbackAudience::External => {
+                format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
+            }
+        }),
         FeedbackCategory::GoodResult => None,
     }
 }
@@ -422,6 +428,12 @@ pub(crate) fn feedback_selection_params(
                 "good result",
                 "Helpful, correct, high‑quality, or delightful result worth celebrating.",
                 FeedbackCategory::GoodResult,
+            ),
+            make_feedback_item(
+                app_event_tx.clone(),
+                "safety check",
+                "Benign usage blocked due to safety checks or refusals.",
+                FeedbackCategory::SafetyCheck,
             ),
             make_feedback_item(
                 app_event_tx,
@@ -616,7 +628,14 @@ mod tests {
     }
 
     #[test]
-    fn issue_url_available_for_bug_bad_result_and_other() {
+    fn feedback_view_safety_check() {
+        let view = make_view(FeedbackCategory::SafetyCheck);
+        let rendered = render(&view, 60);
+        insta::assert_snapshot!("feedback_view_safety_check", rendered);
+    }
+
+    #[test]
+    fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
         let bug_url = issue_url_for_category(
             FeedbackCategory::Bug,
             "thread-1",
@@ -638,6 +657,13 @@ mod tests {
             FeedbackAudience::OpenAiEmployee,
         );
         assert!(other_url.is_some());
+
+        let safety_check_url = issue_url_for_category(
+            FeedbackCategory::SafetyCheck,
+            "thread-4",
+            FeedbackAudience::OpenAiEmployee,
+        );
+        assert!(safety_check_url.is_some());
 
         assert!(
             issue_url_for_category(

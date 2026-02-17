@@ -144,9 +144,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         vec!["exec_command", "write_stdin"]
     };
     expected_tools_names.extend([
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
         "update_plan",
         "request_user_input",
         "apply_patch",
