@@ -18,6 +18,7 @@ use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
+use codex_core::OPENAI_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -367,10 +368,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
-    let thread_manager = Arc::new(ThreadManager::new(
+    let openai_models_provider = config
+        .model_providers
+        .get(OPENAI_PROVIDER_ID)
+        .cloned()
+        .unwrap_or_else(codex_core::ModelProviderInfo::create_openai_provider);
+    let thread_manager = Arc::new(ThreadManager::new_with_models_provider(
         config.codex_home.clone(),
         auth_manager.clone(),
         SessionSource::Exec,
+        openai_models_provider,
     ));
     let default_model = thread_manager
         .get_models_manager()

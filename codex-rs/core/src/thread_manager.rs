@@ -142,6 +142,20 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
     ) -> Self {
+        Self::new_with_models_provider(
+            codex_home,
+            auth_manager,
+            session_source,
+            ModelProviderInfo::create_openai_provider(),
+        )
+    }
+
+    pub fn new_with_models_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        provider: ModelProviderInfo,
+    ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
@@ -149,7 +163,11 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager.clone())),
+                models_manager: Arc::new(ModelsManager::new_with_provider(
+                    codex_home,
+                    auth_manager.clone(),
+                    provider,
+                )),
                 skills_manager,
                 file_watcher,
                 auth_manager,
@@ -562,11 +580,16 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::models_manager::manager::RefreshStrategy;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::openai_models::ModelsResponse;
+    use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+    use wiremock::MockServer;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -670,6 +693,33 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn new_with_models_provider_uses_custom_provider_for_model_refresh() {
+        let server = MockServer::start().await;
+        let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let provider = ModelProviderInfo {
+            base_url: Some(server.uri()),
+            ..ModelProviderInfo::create_openai_provider()
+        };
+        let codex_home = tempdir().expect("create temp codex home");
+        let manager = ThreadManager::new_with_models_provider(
+            codex_home.path().to_path_buf(),
+            auth_manager,
+            SessionSource::Exec,
+            provider,
+        );
+
+        let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+        assert_eq!(
+            models_mock.requests().len(),
+            1,
+            "expected model refresh to use custom provider base URL"
         );
     }
 }

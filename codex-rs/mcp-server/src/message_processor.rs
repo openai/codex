@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_core::AuthManager;
+use codex_core::OPENAI_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
@@ -57,10 +58,16 @@ impl MessageProcessor {
             false,
             config.cli_auth_credentials_store_mode,
         );
-        let thread_manager = Arc::new(ThreadManager::new(
+        let openai_models_provider = config
+            .model_providers
+            .get(OPENAI_PROVIDER_ID)
+            .cloned()
+            .unwrap_or_else(codex_core::ModelProviderInfo::create_openai_provider);
+        let thread_manager = Arc::new(ThreadManager::new_with_models_provider(
             config.codex_home.clone(),
             auth_manager,
             SessionSource::Mcp,
+            openai_models_provider,
         ));
         Self {
             outgoing,
