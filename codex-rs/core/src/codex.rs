@@ -4841,6 +4841,19 @@ async fn run_pre_turn_auto_compaction_if_needed(
         return Err(());
     }
 
+    // If compaction no-oped because there was no user-turn boundary even after including incoming
+    // items, do not treat this as "compacted with incoming". The caller must persist incoming
+    // items explicitly in this case.
+    let has_user_turn_boundary_after_compaction = sess
+        .clone_history()
+        .await
+        .raw_items()
+        .iter()
+        .any(crate::context_manager::is_user_turn_boundary);
+    if !has_user_turn_boundary_after_compaction {
+        return Ok(PreTurnCompactionOutcome::NotNeeded);
+    }
+
     Ok(PreTurnCompactionOutcome::CompactedWithIncomingItems)
 }
 
@@ -6209,6 +6222,50 @@ mod tests {
         expected_history.push(response_item);
         let actual_history = session.clone_history().await.raw_items().to_vec();
         assert_eq!(actual_history, expected_history);
+    }
+
+    #[tokio::test]
+    async fn pre_turn_auto_compaction_noop_without_user_turn_boundary_returns_not_needed() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+
+        {
+            let mut state = session.state.lock().await;
+            state.set_token_info(Some(TokenUsageInfo {
+                total_token_usage: TokenUsage {
+                    total_tokens: 1_000,
+                    ..TokenUsage::default()
+                },
+                last_token_usage: TokenUsage {
+                    total_tokens: 1_000,
+                    ..TokenUsage::default()
+                },
+                model_context_window: turn_context.model_context_window(),
+            }));
+        }
+
+        let incoming_turn_items = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<user_shell_command>\necho hi\n</user_shell_command>".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }];
+        let outcome = run_pre_turn_auto_compaction_if_needed(
+            &session,
+            &turn_context,
+            10,
+            &incoming_turn_items,
+            &[],
+        )
+        .await
+        .expect("pre-turn compaction no-op should not fail");
+
+        assert_eq!(outcome, PreTurnCompactionOutcome::NotNeeded);
+        assert_eq!(session.clone_history().await.raw_items(), &[]);
     }
 
     #[test]
