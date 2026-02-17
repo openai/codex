@@ -1211,6 +1211,23 @@ impl NetworkToml {
             config.network.allow_local_binding = allow_local_binding;
         }
     }
+
+    pub(crate) fn to_network_proxy_config(&self) -> NetworkProxyConfig {
+        let mut config = NetworkProxyConfig::default();
+        self.apply_to_network_proxy_config(&mut config);
+        config
+    }
+}
+
+fn network_proxy_config_from_permissions(
+    permissions: Option<&PermissionsToml>,
+) -> NetworkProxyConfig {
+    permissions
+        .and_then(|permissions| permissions.network.as_ref())
+        .map_or_else(
+            NetworkProxyConfig::default,
+            NetworkToml::to_network_proxy_config,
+        )
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -1302,16 +1319,6 @@ pub struct GhostSnapshotToml {
 }
 
 impl ConfigToml {
-    pub(crate) fn network_proxy_config(&self) -> NetworkProxyConfig {
-        let mut config = NetworkProxyConfig::default();
-        if let Some(permissions) = self.permissions.as_ref()
-            && let Some(network) = permissions.network.as_ref()
-        {
-            network.apply_to_network_proxy_config(&mut config);
-        }
-        config
-    }
-
     /// Derive the effective sandbox policy from the configuration.
     fn derive_sandbox_policy(
         &self,
@@ -1604,7 +1611,8 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
-        let configured_network_proxy_config = cfg.network_proxy_config();
+        let configured_network_proxy_config =
+            network_proxy_config_from_permissions(cfg.permissions.as_ref());
 
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
