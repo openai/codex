@@ -946,6 +946,9 @@ impl ChatComposer {
         local_image_paths: Vec<PathBuf>,
         mention_bindings: Vec<MentionBinding>,
     ) {
+        #[cfg(not(target_os = "linux"))]
+        self.stop_all_transcription_spinners();
+
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
@@ -3850,7 +3853,12 @@ impl ChatComposer {
         }
     }
 
-    fn spawn_transcribing_spinner(&self, id: String) {
+    fn spawn_transcribing_spinner(&mut self, id: String) {
+        self.stop_transcription_spinner(&id);
+        let stop = Arc::new(AtomicBool::new(false));
+        self.spinner_stop_flags
+            .insert(id.clone(), Arc::clone(&stop));
+
         let tx = self.app_event_tx.clone();
         let task = move || {
             use std::time::Duration;
@@ -3859,6 +3867,9 @@ impl ChatComposer {
             // Safety stop after ~60s to avoid a runaway task if events are lost.
             let max_ticks = 600usize; // 600 * 100ms = 60s
             for _ in 0..max_ticks {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 let text = frames[i % frames.len()].to_string();
                 tx.send(crate::app_event::AppEvent::UpdateRecordingMeter {
                     id: id.clone(),
@@ -3876,7 +3887,20 @@ impl ChatComposer {
         }
     }
 
+    fn stop_transcription_spinner(&mut self, id: &str) {
+        if let Some(flag) = self.spinner_stop_flags.remove(id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn stop_all_transcription_spinners(&mut self) {
+        for (_id, flag) in self.spinner_stop_flags.drain() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
     pub fn replace_transcription(&mut self, id: &str, text: &str) {
+        self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, text);
     }
 
@@ -3885,6 +3909,7 @@ impl ChatComposer {
     }
 
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
+        self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, "");
     }
 }
@@ -6222,6 +6247,62 @@ mod tests {
         if composer.is_recording() {
             let _ = composer.stop_recording_and_start_transcription();
         }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn replace_transcription_stops_spinner_for_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let id = "voice-placeholder".to_string();
+        composer.textarea.insert_named_element("", id.clone());
+        let flag = Arc::new(AtomicBool::new(false));
+        composer
+            .spinner_stop_flags
+            .insert(id.clone(), Arc::clone(&flag));
+
+        composer.replace_transcription(&id, "transcribed text");
+
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(!composer.spinner_stop_flags.contains_key(&id));
+        assert_eq!(composer.textarea.text(), "transcribed text");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn set_text_content_stops_all_transcription_spinners() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let flag_one = Arc::new(AtomicBool::new(false));
+        let flag_two = Arc::new(AtomicBool::new(false));
+        composer
+            .spinner_stop_flags
+            .insert("voice-1".to_string(), Arc::clone(&flag_one));
+        composer
+            .spinner_stop_flags
+            .insert("voice-2".to_string(), Arc::clone(&flag_two));
+
+        composer.set_text_content("draft".to_string(), Vec::new(), Vec::new());
+
+        assert!(flag_one.load(Ordering::Relaxed));
+        assert!(flag_two.load(Ordering::Relaxed));
+        assert!(composer.spinner_stop_flags.is_empty());
     }
 
     #[test]
