@@ -511,8 +511,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
@@ -554,9 +554,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Experimental {
-            name: "Sub-agents",
+            name: "Multi-agents",
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Sub-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
         },
         default_enabled: false,
     },

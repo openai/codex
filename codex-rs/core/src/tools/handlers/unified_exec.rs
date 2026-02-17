@@ -142,14 +142,6 @@ impl ToolHandler for UnifiedExecHandler {
                     ..
                 } = args;
 
-                let features = session.features();
-                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-                let prefix_rule = if request_rule_enabled {
-                    prefix_rule
-                } else {
-                    None
-                };
-
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
                         context.turn.approval_policy,
