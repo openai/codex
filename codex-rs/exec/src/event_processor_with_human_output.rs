@@ -188,6 +188,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "warning:".style(self.yellow).style(self.bold)
                 );
             }
+            EventMsg::ModelReroute(_) => {}
             EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }) => {
                 ts_msg!(
                     self,

@@ -1029,11 +1029,11 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .get_default_model(&config.model, RefreshStrategy::Offline)
             .await;
         let available_models = thread_manager
             .get_models_manager()
-            .list_models(&config, RefreshStrategy::Offline)
+            .list_models(RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,

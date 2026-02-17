@@ -266,13 +266,12 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
-        .list_models(&test.config, RefreshStrategy::OnlineIfUncached)
+        .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
     let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         .to_string();
@@ -434,15 +433,12 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some(large_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    let available_models = models_manager
-        .list_models(&test.config, RefreshStrategy::Online)
-        .await;
+    let available_models = models_manager.list_models(RefreshStrategy::Online).await;
     assert!(
         available_models
             .iter()

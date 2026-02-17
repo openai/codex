@@ -206,6 +206,13 @@ pub struct Config {
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
 
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// - `None`: use default attribution (`Codex <noreply@openai.com>`)
+    /// - `Some("")` or whitespace-only: disable commit attribution
+    /// - `Some("...")`: use the provided attribution text verbatim
+    pub commit_attribution: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -297,6 +304,9 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+
+    /// User-defined role declarations keyed by role name.
+    pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
@@ -914,6 +924,11 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
+    /// Optional commit attribution text for commit message co-author trailers.
+    ///
+    /// Set to an empty string to disable automatic commit attribution.
+    pub commit_attribution: Option<String>,
+
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     #[serde(default)]
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -1148,6 +1163,35 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+
+    /// User-defined role declarations keyed by role name.
+    ///
+    /// Example:
+    /// ```toml
+    /// [agents.researcher]
+    /// description = "Research-focused role."
+    /// config_file = "./agents/researcher.toml"
+    /// ```
+    #[serde(default, flatten)]
+    pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentRoleConfig {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+    /// Path to a role-specific config layer.
+    pub config_file: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentRoleToml {
+    /// Human-facing role documentation used in spawn tool guidance.
+    pub description: Option<String>,
+
+    /// Path to a role-specific config layer.
+    pub config_file: Option<AbsolutePathBuf>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1590,6 +1634,28 @@ impl Config {
                 "agents.max_threads must be at least 1",
             ));
         }
+        let agent_roles = cfg
+            .agents
+            .as_ref()
+            .map(|agents| {
+                agents
+                    .roles
+                    .iter()
+                    .map(|(name, role)| {
+                        (
+                            name.clone(),
+                            AgentRoleConfig {
+                                description: role.description.clone(),
+                                config_file: role
+                                    .config_file
+                                    .as_ref()
+                                    .map(AbsolutePathBuf::to_path_buf),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1641,6 +1707,8 @@ impl Config {
                 Some(trimmed.to_string())
             }
         });
+
+        let commit_attribution = cfg.commit_attribution;
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -1762,6 +1830,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
+            commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
@@ -1787,6 +1856,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             codex_home,
             log_dir,
@@ -4115,6 +4185,7 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
                 codex_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
@@ -4136,6 +4207,7 @@ model_verbosity = "high"
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
+                commit_attribution: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
@@ -4226,6 +4298,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4247,6 +4320,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4335,6 +4409,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4356,6 +4431,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
@@ -4430,6 +4506,7 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             codex_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4451,6 +4528,7 @@ model_verbosity = "high"
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
+            commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
