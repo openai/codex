@@ -105,6 +105,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable git commit attribution guidance via model instructions.
+    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
     /// Persist rollout metadata to a local SQLite database.
@@ -466,6 +468,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::RuntimeMetrics,
         key: "runtime_metrics",
