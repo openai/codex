@@ -540,6 +540,10 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) shell_name: String,
+    pub(crate) permissions_instructions: String,
+    pub(crate) model_instructions: String,
+    pub(crate) personality_spec: String,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -610,6 +614,19 @@ impl TurnContext {
             web_search_mode: self.tools_config.web_search_mode,
         })
         .with_agent_roles(config.agent_roles.clone());
+        let personality_spec = if features.enabled(Feature::Personality) {
+            self.personality
+                .and_then(|personality| {
+                    crate::context_manager::updates::personality_message_for(
+                        &model_info,
+                        personality,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let model_instructions = model_info.get_model_instructions(self.personality);
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -624,6 +641,10 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            shell_name: self.shell_name.clone(),
+            permissions_instructions: self.permissions_instructions.clone(),
+            model_instructions,
+            personality_spec,
             cwd: self.cwd.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
@@ -667,11 +688,15 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             cwd: self.cwd.clone(),
+            shell: self.shell_name.clone(),
             approval_policy: self.approval_policy,
             sandbox_policy: self.sandbox_policy.clone(),
+            permissions_instructions: self.permissions_instructions.clone(),
             network: self.turn_context_network_item(),
             model: self.model_info.slug.clone(),
+            model_instructions: self.model_instructions.clone(),
             personality: self.personality,
+            personality_spec: self.personality_spec.clone(),
             collaboration_mode: Some(collaboration_mode),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
@@ -924,6 +949,10 @@ impl Session {
         per_turn_config: Config,
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
+        shell_name: String,
+        permissions_instructions: String,
+        model_instructions: String,
+        personality_spec: String,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
     ) -> TurnContext {
@@ -966,6 +995,10 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            shell_name,
+            permissions_instructions,
+            model_instructions,
+            personality_spec,
             cwd,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
@@ -1859,6 +1892,30 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let shell_name = self.user_shell().name().to_string();
+        let exec_policy = self.services.exec_policy.current();
+        let permissions_instructions = DeveloperInstructions::from_policy(
+            session_configuration.sandbox_policy.get(),
+            session_configuration.approval_policy.value(),
+            exec_policy.as_ref(),
+            &session_configuration.cwd,
+        )
+        .into_text();
+        let model_instructions =
+            model_info.get_model_instructions(session_configuration.personality);
+        let personality_spec = if per_turn_config.features.enabled(Feature::Personality) {
+            session_configuration
+                .personality
+                .and_then(|personality| {
+                    crate::context_manager::updates::personality_message_for(
+                        &model_info,
+                        personality,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_manager,
@@ -1870,6 +1927,10 @@ impl Session {
                 .network_proxy
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
+            shell_name,
+            permissions_instructions,
+            model_instructions,
+            personality_spec,
             sub_id,
             Arc::clone(&self.js_repl),
         );
@@ -1985,23 +2046,12 @@ impl Session {
     }
     fn build_settings_update_items(
         &self,
-        previous_context: Option<&Arc<TurnContext>>,
-        resumed_model: Option<&str>,
-        current_context: &TurnContext,
+        previous_context: Option<&TurnContextItem>,
+        current_context: &TurnContextItem,
     ) -> Vec<ResponseItem> {
-        // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
-        // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
-        // context (shell, exec policy, feature gates, resumed model bridge) should be persisted
-        // state or explicit non-state replay events.
-        let shell = self.user_shell();
-        let exec_policy = self.services.exec_policy.current();
         crate::context_manager::updates::build_settings_update_items(
-            previous_context.map(Arc::as_ref),
-            resumed_model,
+            previous_context,
             current_context,
-            shell.as_ref(),
-            exec_policy.as_ref(),
-            self.features.enabled(Feature::Personality),
         )
     }
 
@@ -3373,12 +3423,20 @@ mod handlers {
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let previous_model = sess.previous_model().await;
-            let update_items = sess.build_settings_update_items(
-                previous_context.as_ref(),
-                previous_model.as_deref(),
-                &current_context,
-            );
+            let mut previous_context_item = previous_context
+                .as_ref()
+                .map(|context| context.to_turn_context_item(context.collaboration_mode.clone()));
+            if let Some(previous_model) = sess.previous_model().await
+                && let Some(previous_context_item) = previous_context_item.as_mut()
+            {
+                // Preserve resume/fork hydration behavior until previous/current context diffs are
+                // sourced solely from persisted TurnContextItem history.
+                previous_context_item.model = previous_model;
+            }
+            let current_context_item =
+                current_context.to_turn_context_item(current_context.collaboration_mode.clone());
+            let update_items = sess
+                .build_settings_update_items(previous_context_item.as_ref(), &current_context_item);
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -4082,6 +4140,22 @@ async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        shell_name: parent_turn_context.shell_name.clone(),
+        permissions_instructions: parent_turn_context.permissions_instructions.clone(),
+        model_instructions: model_info.get_model_instructions(parent_turn_context.personality),
+        personality_spec: if review_features.enabled(Feature::Personality) {
+            parent_turn_context
+                .personality
+                .and_then(|personality| {
+                    crate::context_manager::updates::personality_message_for(
+                        &model_info,
+                        personality,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        },
         tools_config,
         features: parent_turn_context.features.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
@@ -6332,11 +6406,15 @@ mod tests {
         let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
+            shell: turn_context.shell_name.clone(),
             approval_policy: turn_context.approval_policy,
             sandbox_policy: turn_context.sandbox_policy.clone(),
+            permissions_instructions: turn_context.permissions_instructions.clone(),
             network: None,
             model: previous_model.to_string(),
+            model_instructions: turn_context.model_instructions.clone(),
             personality: turn_context.personality,
+            personality_spec: turn_context.personality_spec.clone(),
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
@@ -6551,11 +6629,15 @@ mod tests {
         let rollout_items = vec![RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
             cwd: turn_context.cwd.clone(),
+            shell: turn_context.shell_name.clone(),
             approval_policy: turn_context.approval_policy,
             sandbox_policy: turn_context.sandbox_policy.clone(),
+            permissions_instructions: turn_context.permissions_instructions.clone(),
             network: None,
             model: previous_model.to_string(),
+            model_instructions: turn_context.model_instructions.clone(),
             personality: turn_context.personality,
+            personality_spec: turn_context.personality_spec.clone(),
             collaboration_mode: Some(turn_context.collaboration_mode.clone()),
             effort: turn_context.reasoning_effort,
             summary: turn_context.reasoning_summary,
@@ -7271,6 +7353,8 @@ mod tests {
             config.js_repl_node_path.clone(),
             config.codex_home.clone(),
         ));
+        let model_instructions =
+            model_info.get_model_instructions(session_configuration.personality);
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -7280,6 +7364,10 @@ mod tests {
             per_turn_config,
             model_info,
             None,
+            "zsh".to_string(),
+            String::new(),
+            model_instructions,
+            String::new(),
             "turn_id".to_string(),
             Arc::clone(&js_repl),
         );
@@ -7419,6 +7507,8 @@ mod tests {
             config.js_repl_node_path.clone(),
             config.codex_home.clone(),
         ));
+        let model_instructions =
+            model_info.get_model_instructions(session_configuration.personality);
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -7428,6 +7518,10 @@ mod tests {
             per_turn_config,
             model_info,
             None,
+            "zsh".to_string(),
+            String::new(),
+            model_instructions,
+            String::new(),
             "turn_id".to_string(),
             Arc::clone(&js_repl),
         ));
@@ -7583,8 +7677,12 @@ mod tests {
         .expect("rebuild config layer stack with network requirements");
         current_context.config = Arc::new(config);
 
-        let update_items =
-            session.build_settings_update_items(Some(&previous_context), None, &current_context);
+        let previous_context_item =
+            previous_context.to_turn_context_item(previous_context.collaboration_mode.clone());
+        let current_context_item =
+            current_context.to_turn_context_item(current_context.collaboration_mode.clone());
+        let update_items = session
+            .build_settings_update_items(Some(&previous_context_item), &current_context_item);
 
         let environment_update = update_items
             .iter()
