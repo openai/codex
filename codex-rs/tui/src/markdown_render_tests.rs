@@ -1188,6 +1188,25 @@ fn escaped_pipes_render_in_table_cells() {
 }
 
 #[test]
+fn table_with_emoji_cells_uses_pipe_fallback_for_stable_alignment() {
+    let md = "| Task | State |\n|---|---|\n| Unit tests | ✅ |\n| Release notes | 📝 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(80));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    assert!(
+        lines.first().is_some_and(|line| line.starts_with('|')),
+        "expected pipe-table fallback for emoji content: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains('┌')),
+        "did not expect box-drawing table for emoji content: {lines:?}"
+    );
+}
+
+#[test]
 fn table_falls_back_to_pipe_rendering_if_it_cannot_fit() {
     let md = "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
   10 |\n";

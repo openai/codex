@@ -1504,6 +1504,48 @@ mod tests {
     }
 
     #[test]
+    fn controller_live_view_matches_render_during_interleaved_table_streaming() {
+        let source = "Project updates are easier to scan when narrative and structured data alternate.\n\n| Focus Area | Owner | Priority | Status |\n|---|---|---|---|\n| Authentication cleanup | Maya | High | 80% |\n| CLI error messages | Jordan | Medium | 55% |\n| Docs refresh | Lee | Low | 30% |\n\nThe first checkpoint shows progress, but we still have open risks.\n\n| Task | Command / Artifact | Due | State |\n|---|---|---|---|\n| Run unit tests | `cargo test -p codex-core` | Today | ✅ |\n| Snapshot review | `cargo insta pending-snapshots -p codex-tui` | Today | ⏳ |\n| Changelog draft | Release template (https://replacechangelog.com/) | Tomorrow | 📝 |\n\nFinal sign-off criteria are summarized below.\n";
+        let width = Some(72usize);
+        let mut ctrl = StreamController::new(width);
+        let mut emitted_lines: Vec<Line<'static>> = Vec::new();
+
+        for delta in source.split_inclusive('\n') {
+            ctrl.push(delta);
+            loop {
+                let (cell, idle) = ctrl.on_commit_tick();
+                if let Some(cell) = cell {
+                    emitted_lines.extend(cell.transcript_lines(u16::MAX).into_iter().map(|line| {
+                        let plain: String = line
+                            .spans
+                            .iter()
+                            .map(|s| s.content.clone())
+                            .collect::<Vec<_>>()
+                            .join("");
+                        Line::from(plain.chars().skip(2).collect::<String>())
+                    }));
+                }
+                if idle {
+                    break;
+                }
+            }
+
+            let mut visible = emitted_lines.clone();
+            visible.extend(ctrl.current_tail_lines());
+            let visible_plain = lines_to_plain_strings(&visible);
+
+            let mut expected = Vec::new();
+            crate::markdown::append_markdown_agent(&ctrl.core.raw_source, width, &mut expected);
+            let expected_plain = lines_to_plain_strings(&expected);
+
+            assert_eq!(
+                visible_plain, expected_plain,
+                "live view diverged after delta: {delta:?}"
+            );
+        }
+    }
+
+    #[test]
     fn controller_keeps_non_markdown_fenced_tables_as_code() {
         let source = "```sh\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n";
         let deltas = vec![
