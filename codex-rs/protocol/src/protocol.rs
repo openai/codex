@@ -377,9 +377,58 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
+    /// Fine-grained rejection controls for approval prompts.
+    ///
+    /// When a field is `true`, prompts of that category are automatically
+    /// rejected instead of shown to the user.
+    Reject {
+        /// Reject approval prompts related to sandbox escalation.
+        sandbox_approval: bool,
+        /// Reject prompts triggered by execpolicy `prompt` rules.
+        rules: bool,
+        /// Reject MCP elicitation prompts.
+        mcp_elicitations: bool,
+    },
+
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
     Never,
+}
+
+impl AskForApproval {
+    /// Backward-compatible defaults for `approval_policy = "reject"` in
+    /// `config.toml`.
+    pub const fn reject_defaults() -> Self {
+        Self::Reject {
+            sandbox_approval: true,
+            rules: false,
+            mcp_elicitations: false,
+        }
+    }
+
+    pub const fn rejects_sandbox_approval(self) -> bool {
+        matches!(
+            self,
+            Self::Reject {
+                sandbox_approval: true,
+                ..
+            }
+        )
+    }
+
+    pub const fn rejects_rules_approval(self) -> bool {
+        matches!(self, Self::Reject { rules: true, .. })
+    }
+
+    pub const fn rejects_mcp_elicitations(self) -> bool {
+        matches!(
+            self,
+            Self::Reject {
+                mcp_elicitations: true,
+                ..
+            }
+        )
+    }
 }
 
 /// Represents whether outbound network access is available to the agent.

@@ -893,7 +893,7 @@ pub struct ConfigToml {
     pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
-    pub approval_policy: Option<AskForApproval>,
+    pub approval_policy: Option<AskForApprovalToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -1113,7 +1113,7 @@ impl From<ConfigToml> for UserSavedConfig {
             .collect();
 
         Self {
-            approval_policy: config_toml.approval_policy,
+            approval_policy: config_toml.approval_policy.map(Into::into),
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
@@ -1126,6 +1126,48 @@ impl From<ConfigToml> for UserSavedConfig {
             profile: config_toml.profile,
             profiles,
         }
+    }
+}
+
+/// Version of [AskForApproval] that is deserializable from config.toml.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AskForApprovalToml {
+    #[serde(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    Reject,
+    Never,
+}
+
+impl AskForApprovalToml {
+    pub fn to_core(self) -> AskForApproval {
+        match self {
+            AskForApprovalToml::UnlessTrusted => AskForApproval::UnlessTrusted,
+            AskForApprovalToml::OnFailure => AskForApproval::OnFailure,
+            AskForApprovalToml::OnRequest => AskForApproval::OnRequest,
+            AskForApprovalToml::Reject => AskForApproval::reject_defaults(),
+            AskForApprovalToml::Never => AskForApproval::Never,
+        }
+    }
+}
+
+impl From<AskForApproval> for AskForApprovalToml {
+    fn from(value: AskForApproval) -> Self {
+        match value {
+            AskForApproval::UnlessTrusted => AskForApprovalToml::UnlessTrusted,
+            AskForApproval::OnFailure => AskForApprovalToml::OnFailure,
+            AskForApproval::OnRequest => AskForApprovalToml::OnRequest,
+            AskForApproval::Reject { .. } => AskForApprovalToml::Reject,
+            AskForApproval::Never => AskForApprovalToml::Never,
+        }
+    }
+}
+
+impl From<AskForApprovalToml> for AskForApproval {
+    fn from(value: AskForApprovalToml) -> Self {
+        value.to_core()
     }
 }
 
@@ -1571,7 +1613,7 @@ impl Config {
             || cfg.approval_policy.is_some();
         let mut approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
-            .or(cfg.approval_policy)
+            .or(cfg.approval_policy.map(Into::into))
             .unwrap_or_else(|| {
                 if active_project.is_trusted() {
                     AskForApproval::OnRequest
