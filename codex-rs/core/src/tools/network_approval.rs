@@ -1,4 +1,6 @@
 use crate::codex::Session;
+use crate::network_policy_decision::denied_network_policy_message;
+use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::NetworkDecision;
@@ -99,6 +101,12 @@ enum PendingApprovalDecision {
     Deny,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NetworkApprovalOutcome {
+    DeniedByUser,
+    DeniedByPolicy(String),
+}
+
 fn allows_network_prompt(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
 }
@@ -150,6 +158,7 @@ impl PendingHostApproval {
 }
 
 struct ActiveNetworkApprovalCall {
+    registration_id: String,
     turn_id: String,
     call_id: String,
     command: Vec<String>,
@@ -158,6 +167,7 @@ struct ActiveNetworkApprovalCall {
 
 pub(crate) struct NetworkApprovalService {
     active_calls: Mutex<IndexMap<String, Arc<ActiveNetworkApprovalCall>>>,
+    call_outcomes: Mutex<HashMap<String, NetworkApprovalOutcome>>,
     pending_host_approvals: Mutex<HashMap<HostApprovalKey, Arc<PendingHostApproval>>>,
     session_approved_hosts: Mutex<HashSet<HostApprovalKey>>,
 }
@@ -166,6 +176,7 @@ impl Default for NetworkApprovalService {
     fn default() -> Self {
         Self {
             active_calls: Mutex::new(IndexMap::new()),
+            call_outcomes: Mutex::new(HashMap::new()),
             pending_host_approvals: Mutex::new(HashMap::new()),
             session_approved_hosts: Mutex::new(HashSet::new()),
         }
@@ -182,9 +193,11 @@ impl NetworkApprovalService {
         cwd: PathBuf,
     ) {
         let mut active_calls = self.active_calls.lock().await;
+        let key = registration_id.clone();
         active_calls.insert(
-            registration_id,
+            key,
             Arc::new(ActiveNetworkApprovalCall {
+                registration_id,
                 turn_id,
                 call_id,
                 command,
@@ -196,6 +209,8 @@ impl NetworkApprovalService {
     pub(crate) async fn unregister_call(&self, registration_id: &str) {
         let mut active_calls = self.active_calls.lock().await;
         active_calls.shift_remove(registration_id);
+        let mut call_outcomes = self.call_outcomes.lock().await;
+        call_outcomes.remove(registration_id);
     }
 
     async fn owner_call_context(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
@@ -218,7 +233,37 @@ impl NetworkApprovalService {
         (created, true)
     }
 
-    pub(crate) async fn record_blocked_request(&self, _blocked: BlockedRequest) {}
+    async fn take_call_outcome(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
+        let mut call_outcomes = self.call_outcomes.lock().await;
+        call_outcomes.remove(registration_id)
+    }
+
+    async fn record_call_outcome(&self, registration_id: &str, outcome: NetworkApprovalOutcome) {
+        let mut call_outcomes = self.call_outcomes.lock().await;
+        if matches!(
+            call_outcomes.get(registration_id),
+            Some(NetworkApprovalOutcome::DeniedByUser)
+        ) {
+            return;
+        }
+        call_outcomes.insert(registration_id.to_string(), outcome);
+    }
+
+    pub(crate) async fn record_blocked_request(&self, blocked: BlockedRequest) {
+        let Some(message) = denied_network_policy_message(&blocked) else {
+            return;
+        };
+
+        let Some(owner_call) = self.owner_call_context().await else {
+            return;
+        };
+
+        self.record_call_outcome(
+            &owner_call.registration_id,
+            NetworkApprovalOutcome::DeniedByPolicy(message),
+        )
+        .await;
+    }
 
     pub(crate) async fn handle_inline_policy_request(
         &self,
@@ -257,12 +302,28 @@ impl NetworkApprovalService {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
+            self.record_call_outcome(
+                &owner_call.registration_id,
+                NetworkApprovalOutcome::DeniedByPolicy(format!(
+                    "Network access to \"{}\" was blocked by policy.",
+                    request.host
+                )),
+            )
+            .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
         if !allows_network_prompt(turn_context.approval_policy) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
+            self.record_call_outcome(
+                &owner_call.registration_id,
+                NetworkApprovalOutcome::DeniedByPolicy(format!(
+                    "Network access to \"{}\" was blocked by policy.",
+                    request.host
+                )),
+            )
+            .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
@@ -298,7 +359,14 @@ impl NetworkApprovalService {
                 PendingApprovalDecision::AllowOnce
             }
             ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,
-            ReviewDecision::Denied | ReviewDecision::Abort => PendingApprovalDecision::Deny,
+            ReviewDecision::Denied | ReviewDecision::Abort => {
+                self.record_call_outcome(
+                    &owner_call.registration_id,
+                    NetworkApprovalOutcome::DeniedByUser,
+                )
+                .await;
+                PendingApprovalDecision::Deny
+            }
         };
 
         if matches!(resolved, PendingApprovalDecision::AllowForSession) {
@@ -377,15 +445,30 @@ pub(crate) async fn begin_network_approval(
 pub(crate) async fn finish_immediate_network_approval(
     session: &Session,
     active: ActiveNetworkApproval,
-) {
+) -> Result<(), ToolError> {
     let Some(registration_id) = active.registration_id.as_deref() else {
-        return;
+        return Ok(());
     };
+
+    let approval_outcome = session
+        .services
+        .network_approval
+        .take_call_outcome(registration_id)
+        .await;
+
     session
         .services
         .network_approval
         .unregister_call(registration_id)
         .await;
+
+    match approval_outcome {
+        Some(NetworkApprovalOutcome::DeniedByUser) => {
+            Err(ToolError::Rejected("rejected by user".to_string()))
+        }
+        Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        None => Ok(()),
+    }
 }
 
 pub(crate) async fn finish_deferred_network_approval(
@@ -405,6 +488,7 @@ pub(crate) async fn finish_deferred_network_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_network_proxy::BlockedRequestArgs;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
 
@@ -489,5 +573,70 @@ mod tests {
         assert!(allows_network_prompt(AskForApproval::OnRequest));
         assert!(allows_network_prompt(AskForApproval::OnFailure));
         assert!(allows_network_prompt(AskForApproval::UnlessTrusted));
+    }
+
+    fn denied_blocked_request(host: &str) -> BlockedRequest {
+        BlockedRequest::new(BlockedRequestArgs {
+            host: host.to_string(),
+            reason: "not_allowed".to_string(),
+            client: None,
+            method: None,
+            mode: None,
+            protocol: "http".to_string(),
+            decision: Some("deny".to_string()),
+            source: Some("decider".to_string()),
+            port: Some(80),
+        })
+    }
+
+    #[tokio::test]
+    async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
+        let service = NetworkApprovalService::default();
+        service
+            .register_call(
+                "registration-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "example.com".to_string()],
+                PathBuf::from("/tmp"),
+            )
+            .await;
+
+        service
+            .record_blocked_request(denied_blocked_request("example.com"))
+            .await;
+
+        assert_eq!(
+            service.take_call_outcome("registration-1").await,
+            Some(NetworkApprovalOutcome::DeniedByPolicy(
+                "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn blocked_request_policy_does_not_override_user_denial_outcome() {
+        let service = NetworkApprovalService::default();
+        service
+            .register_call(
+                "registration-1".to_string(),
+                "turn-1".to_string(),
+                "call-1".to_string(),
+                vec!["curl".to_string(), "example.com".to_string()],
+                PathBuf::from("/tmp"),
+            )
+            .await;
+
+        service
+            .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
+            .await;
+        service
+            .record_blocked_request(denied_blocked_request("example.com"))
+            .await;
+
+        assert_eq!(
+            service.take_call_outcome("registration-1").await,
+            Some(NetworkApprovalOutcome::DeniedByUser)
+        );
     }
 }

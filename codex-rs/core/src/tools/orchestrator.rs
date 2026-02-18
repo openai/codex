@@ -78,7 +78,11 @@ impl ToolOrchestrator {
 
         match network_approval.mode() {
             NetworkApprovalMode::Immediate => {
-                finish_immediate_network_approval(tool_ctx.session, network_approval).await;
+                let finalize_result =
+                    finish_immediate_network_approval(tool_ctx.session, network_approval).await;
+                if let Err(err) = finalize_result {
+                    return (Err(err), None);
+                }
                 (run_result, None)
             }
             NetworkApprovalMode::Deferred => {
