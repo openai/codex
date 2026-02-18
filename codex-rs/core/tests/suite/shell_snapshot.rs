@@ -541,7 +541,10 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert_eq!(wait_for_file_contents(&target).await?, "hello from snapshot\n");
+    assert_eq!(
+        wait_for_file_contents(&target).await?,
+        "hello from snapshot\n"
+    );
 
     Ok(())
 }
