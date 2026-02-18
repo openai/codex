@@ -27,6 +27,7 @@ use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
@@ -371,6 +372,7 @@ FROM threads
             return Ok(());
         }
 
+        let mut tx = self.pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             "INSERT INTO logs (ts, ts_nanos, level, target, message, thread_id, process_uuid, module_path, file, line) ",
         );
@@ -386,8 +388,9 @@ FROM threads
                 .push_bind(&entry.file)
                 .push_bind(entry.line);
         });
-        builder.build().execute(self.pool.as_ref()).await?;
-        self.prune_logs_after_insert(entries).await?;
+        builder.build().execute(&mut *tx).await?;
+        self.prune_logs_after_insert(entries, &mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -401,7 +404,14 @@ FROM threads
     ///
     /// "Threadless" means the log row is not associated with any conversation
     /// thread, so retention is keyed by process identity instead.
-    async fn prune_logs_after_insert(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
+    ///
+    /// This runs inside the same transaction as the insert so callers never
+    /// observe "inserted but not yet pruned" rows.
+    async fn prune_logs_after_insert(
+        &self,
+        entries: &[LogEntry],
+        tx: &mut SqliteConnection,
+    ) -> anyhow::Result<()> {
         let thread_ids: BTreeSet<&str> = entries
             .iter()
             .filter_map(|entry| entry.thread_id.as_deref())
@@ -423,7 +433,7 @@ FROM threads
             over_limit_threads_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
             let over_limit_thread_ids: Vec<String> = over_limit_threads_query
                 .build()
-                .fetch_all(self.pool.as_ref())
+                .fetch_all(&mut *tx)
                 .await?
                 .into_iter()
                 .map(|row| row.try_get("thread_id"))
@@ -468,7 +478,7 @@ WHERE id IN (
                 );
                 prune_threads.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
                 prune_threads.push("\n)");
-                prune_threads.build().execute(self.pool.as_ref()).await?;
+                prune_threads.build().execute(&mut *tx).await?;
             }
         }
 
@@ -497,7 +507,7 @@ WHERE id IN (
             over_limit_processes_query.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
             let over_limit_process_uuids: Vec<String> = over_limit_processes_query
                 .build()
-                .fetch_all(self.pool.as_ref())
+                .fetch_all(&mut *tx)
                 .await?
                 .into_iter()
                 .map(|row| row.try_get("process_uuid"))
@@ -545,7 +555,7 @@ WHERE id IN (
                 prune_threadless_process_logs.push("\n)");
                 prune_threadless_process_logs
                     .build()
-                    .execute(self.pool.as_ref())
+                    .execute(&mut *tx)
                     .await?;
             }
         }
@@ -559,7 +569,7 @@ WHERE id IN (
             );
             let total_null_process_bytes: Option<i64> = null_process_usage_query
                 .build()
-                .fetch_one(self.pool.as_ref())
+                .fetch_one(&mut *tx)
                 .await?
                 .try_get("total_bytes")?;
 
@@ -593,7 +603,7 @@ WHERE id IN (
                 prune_threadless_null_process_logs.push("\n)");
                 prune_threadless_null_process_logs
                     .build()
-                    .execute(self.pool.as_ref())
+                    .execute(&mut *tx)
                     .await?;
             }
         }
