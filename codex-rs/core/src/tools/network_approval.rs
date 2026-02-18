@@ -132,10 +132,11 @@ impl PendingHostApproval {
 
     async fn wait_for_decision(&self) -> PendingApprovalDecision {
         loop {
+            let notified = self.notify.notified();
             if let Some(decision) = *self.decision.lock().await {
                 return decision;
             }
-            self.notify.notified().await;
+            notified.await;
         }
     }
 
