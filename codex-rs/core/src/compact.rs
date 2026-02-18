@@ -53,6 +53,14 @@ pub(crate) enum CompactCallsite {
     MidTurnContinuation,
 }
 
+// Canonical context reinjection policy for compacted replacement history:
+// - `MidTurnContinuation` and `PreSamplingModelSwitch`: reinsert canonical initial context above
+//   the last real user message because compaction is rewriting in-flight history that the model
+//   will continue sampling from immediately.
+// - `ManualCompact`: do not reinsert during compaction; `/compact` reseeds on the next user turn.
+// - `PreTurn*`: do not reinsert into replacement history; `run_turn` persists canonical context
+//   directly above the incoming user message after compaction.
+
 pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
     provider.is_openai()
 }
@@ -96,7 +104,7 @@ pub(crate) fn extract_latest_model_switch_update_from_items(
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let prompt = turn_context.compact_prompt().to_string();
@@ -106,14 +114,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(
-        sess,
-        turn_context,
-        input,
-        auto_compact_callsite,
-        incoming_items,
-    )
-    .await?;
+    run_compact_task_inner(sess, turn_context, input, compact_callsite, incoming_items).await?;
     Ok(())
 }
 
@@ -142,7 +143,7 @@ async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -240,7 +241,7 @@ async fn run_compact_task_inner(
                     // messages intact.
                     error!(
                         turn_id = %turn_context.sub_id,
-                        auto_compact_callsite = ?auto_compact_callsite,
+                        compact_callsite = ?compact_callsite,
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
                     history.remove_first_item();
@@ -251,7 +252,7 @@ async fn run_compact_task_inner(
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 error!(
                     turn_id = %turn_context.sub_id,
-                    auto_compact_callsite = ?auto_compact_callsite,
+                    compact_callsite = ?compact_callsite,
                     compact_error = %e,
                     "compaction failed after history truncation could not proceed"
                 );
@@ -272,7 +273,7 @@ async fn run_compact_task_inner(
                 }
                 error!(
                     turn_id = %turn_context.sub_id,
-                    auto_compact_callsite = ?auto_compact_callsite,
+                    compact_callsite = ?compact_callsite,
                     retries,
                     max_retries,
                     compact_error = %e,
@@ -294,7 +295,7 @@ async fn run_compact_task_inner(
         COMPACT_USER_MESSAGE_MAX_TOKENS,
     );
     let mut new_history = process_compacted_history(compacted_history);
-    match auto_compact_callsite {
+    match compact_callsite {
         CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
             // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
             // therefore must keep canonical context anchored above the latest real user turn.

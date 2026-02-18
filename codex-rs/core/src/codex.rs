@@ -4803,7 +4803,7 @@ async fn run_pre_turn_auto_compaction_if_needed(
             CodexErr::ContextWindowExceeded => {
                 error!(
                     turn_id = %turn_context.sub_id,
-                    auto_compact_callsite = ?CompactCallsite::PreTurnIncludingIncomingUserMessage,
+                    compact_callsite = ?CompactCallsite::PreTurnIncludingIncomingUserMessage,
                     incoming_items_tokens_estimate,
                     auto_compact_limit,
                     reason = "pre-turn compaction exceeded context window",
@@ -4859,14 +4859,14 @@ fn is_projected_submission_over_auto_compact_limit(
 async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let result = if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            auto_compact_callsite,
+            compact_callsite,
             incoming_items,
         )
         .await
@@ -4874,7 +4874,7 @@ async fn run_auto_compact(
         run_inline_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
-            auto_compact_callsite,
+            compact_callsite,
             incoming_items,
         )
         .await
@@ -4883,7 +4883,7 @@ async fn run_auto_compact(
     if let Err(err) = &result {
         error!(
             turn_id = %turn_context.sub_id,
-            auto_compact_callsite = ?auto_compact_callsite,
+            compact_callsite = ?compact_callsite,
             compact_error = %err,
             "auto compaction failed"
         );

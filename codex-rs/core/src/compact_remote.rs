@@ -32,11 +32,10 @@ use tracing::info;
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, auto_compact_callsite, incoming_items)
-        .await?;
+    run_remote_compact_task_inner(&sess, &turn_context, compact_callsite, incoming_items).await?;
     Ok(())
 }
 
@@ -57,20 +56,16 @@ pub(crate) async fn run_remote_compact_task(
 async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
-    if let Err(err) = run_remote_compact_task_inner_impl(
-        sess,
-        turn_context,
-        auto_compact_callsite,
-        incoming_items,
-    )
-    .await
+    if let Err(err) =
+        run_remote_compact_task_inner_impl(sess, turn_context, compact_callsite, incoming_items)
+            .await
     {
         error!(
             turn_id = %turn_context.sub_id,
-            auto_compact_callsite = ?auto_compact_callsite,
+            compact_callsite = ?compact_callsite,
             compact_error = %err,
             "remote compaction task failed"
         );
@@ -82,7 +77,7 @@ async fn run_remote_compact_task_inner(
 async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -116,7 +111,7 @@ async fn run_remote_compact_task_inner_impl(
     if deleted_items > 0 {
         info!(
             turn_id = %turn_context.sub_id,
-            auto_compact_callsite = ?auto_compact_callsite,
+            compact_callsite = ?compact_callsite,
             deleted_items,
             "trimmed history items before remote compaction"
         );
@@ -153,7 +148,7 @@ async fn run_remote_compact_task_inner_impl(
                 build_compact_request_log_data(&prompt.input, &prompt.base_instructions.text);
             log_remote_compact_failure(
                 turn_context,
-                auto_compact_callsite,
+                compact_callsite,
                 &compact_request_log_data,
                 total_usage_breakdown,
                 &err,
@@ -162,7 +157,7 @@ async fn run_remote_compact_task_inner_impl(
         })
         .await?;
     new_history = process_compacted_history(new_history);
-    match auto_compact_callsite {
+    match compact_callsite {
         CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
             // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
             // therefore must keep canonical context anchored above the latest real user turn.
@@ -275,14 +270,14 @@ fn remove_incoming_echoes_from_compacted_history(
 
 fn log_remote_compact_failure(
     turn_context: &TurnContext,
-    auto_compact_callsite: CompactCallsite,
+    compact_callsite: CompactCallsite,
     log_data: &CompactRequestLogData,
     total_usage_breakdown: TotalTokenUsageBreakdown,
     err: &CodexErr,
 ) {
     error!(
         turn_id = %turn_context.sub_id,
-        auto_compact_callsite = ?auto_compact_callsite,
+        compact_callsite = ?compact_callsite,
         last_api_response_total_tokens = total_usage_breakdown.last_api_response_total_tokens,
         all_history_items_model_visible_bytes = total_usage_breakdown.all_history_items_model_visible_bytes,
         estimated_tokens_of_items_added_since_last_successful_api_response = total_usage_breakdown.estimated_tokens_of_items_added_since_last_successful_api_response,
