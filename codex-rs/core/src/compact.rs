@@ -18,6 +18,7 @@ use crate::protocol::WarningEvent;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
+use crate::user_shell_command::is_user_shell_command_text;
 use crate::util::backoff;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
@@ -303,7 +304,24 @@ async fn run_compact_task_inner(
     let incoming_user_items = match incoming_items.as_ref() {
         Some(items) => items
             .iter()
-            .filter(|item| is_real_user_message(item))
+            .filter(|item| {
+                if is_real_user_message(item) {
+                    return true;
+                }
+                // TODO(ccunningham): Truncate user shell-command records before preserving them
+                // in incoming compaction items so they cannot cause repeated context-window
+                // overflows across pre-turn compaction attempts.
+                matches!(
+                    item,
+                    ResponseItem::Message { role, content, .. }
+                        if role == "user"
+                            && matches!(
+                                content.as_slice(),
+                                [ContentItem::InputText { text }]
+                                    if is_user_shell_command_text(text)
+                            )
+                )
+            })
             .cloned()
             .collect(),
         None => Vec::new(),
