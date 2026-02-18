@@ -304,12 +304,7 @@ async fn run_compact_task_inner(
     let incoming_user_items = match incoming_items.as_ref() {
         Some(items) => items
             .iter()
-            .filter(|item| {
-                // TODO(ccunningham): Truncate user shell-command records before preserving them
-                // in incoming compaction items so they cannot cause repeated context-window
-                // overflows across pre-turn compaction attempts.
-                should_keep_compacted_history_item(item) || is_user_shell_command_record(item)
-            })
+            .filter(|item| should_keep_compacted_history_item(item))
             .cloned()
             .collect(),
         None => Vec::new(),
@@ -478,6 +473,11 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             }
             if role != "user" {
                 return false;
+            }
+            if is_user_shell_command_record(item) {
+                // TODO(ccunningham): Truncate preserved user shell-command records so they cannot
+                // cause repeated context-window overflows across compaction attempts.
+                return true;
             }
 
             matches!(
@@ -1055,7 +1055,7 @@ do things
     }
 
     #[test]
-    fn should_keep_compacted_history_item_drops_user_session_prefix_and_user_shell_command() {
+    fn should_keep_compacted_history_item_drops_user_session_prefix_and_keeps_user_shell_command() {
         let session_prefix = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1077,7 +1077,7 @@ do things
         };
 
         assert!(!super::should_keep_compacted_history_item(&session_prefix));
-        assert!(!super::should_keep_compacted_history_item(
+        assert!(super::should_keep_compacted_history_item(
             &shell_command_user
         ));
     }
