@@ -30,6 +30,7 @@ use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 
 #[derive(Clone, PartialEq, Eq)]
 struct AccessibleConnectorsCacheKey {
@@ -161,10 +162,20 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     }
 
     let tools = mcp_connection_manager.list_all_tools().await;
-    let codex_apps_ready = if mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME) {
-        mcp_connection_manager
+    let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+        let immediate_ready = mcp_connection_manager
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
-            .await
+            .await;
+        if immediate_ready || !tools.is_empty() {
+            immediate_ready
+        } else {
+            let timeout = cfg
+                .startup_timeout_sec
+                .unwrap_or(CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS);
+            mcp_connection_manager
+                .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+                .await
+        }
     } else {
         false
     };
