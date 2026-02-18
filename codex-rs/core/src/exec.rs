@@ -75,7 +75,7 @@ pub struct ExecParams {
 }
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ExecExpiration {
     Timeout(Duration),
     DefaultTimeout,
@@ -97,7 +97,7 @@ impl From<u64> for ExecExpiration {
 }
 
 impl ExecExpiration {
-    async fn wait(self) {
+    pub(crate) async fn wait(self) {
         match self {
             ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
             ExecExpiration::DefaultTimeout => {

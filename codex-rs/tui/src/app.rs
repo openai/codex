@@ -2516,11 +2516,7 @@ impl App {
                     .await;
                 match apply_result {
                     Ok(()) => {
-                        self.config.tui_status_line = if ids.is_empty() {
-                            None
-                        } else {
-                            Some(ids.clone())
-                        };
+                        self.config.tui_status_line = Some(ids.clone());
                         self.chat_widget.setup_status_line(items);
                     }
                     Err(err) => {

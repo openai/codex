@@ -97,6 +97,7 @@ export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotif
 export type { McpToolCallResult } from "./McpToolCallResult";
 export type { McpToolCallStatus } from "./McpToolCallStatus";
 export type { MergeStrategy } from "./MergeStrategy";
+export type { MessagePhase } from "./MessagePhase";
 export type { Model } from "./Model";
 export type { ModelListParams } from "./ModelListParams";
 export type { ModelListResponse } from "./ModelListResponse";
@@ -204,5 +205,9 @@ export type { TurnSteerParams } from "./TurnSteerParams";
 export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
 export type { WebSearchAction } from "./WebSearchAction";
+export type { WindowsSandboxSetupCompletedNotification } from "./WindowsSandboxSetupCompletedNotification";
+export type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";
+export type { WindowsSandboxSetupStartParams } from "./WindowsSandboxSetupStartParams";
+export type { WindowsSandboxSetupStartResponse } from "./WindowsSandboxSetupStartResponse";
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
 export type { WriteStatus } from "./WriteStatus";

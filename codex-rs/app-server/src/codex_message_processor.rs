@@ -160,6 +160,10 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInfoResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
+use codex_app_server_protocol::WindowsSandboxSetupMode;
+use codex_app_server_protocol::WindowsSandboxSetupStartParams;
+use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -216,6 +220,8 @@ use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
+use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -657,6 +663,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::WindowsSandboxSetupStart { request_id, params } => {
+                self.windows_sandbox_setup_start(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::LoginAccount { request_id, params } => {
@@ -6054,6 +6064,56 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn windows_sandbox_setup_start(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: WindowsSandboxSetupStartParams,
+    ) {
+        self.outgoing
+            .send_response(
+                request_id.clone(),
+                WindowsSandboxSetupStartResponse { started: true },
+            )
+            .await;
+
+        let mode = match params.mode {
+            WindowsSandboxSetupMode::Elevated => CoreWindowsSandboxSetupMode::Elevated,
+            WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
+        };
+        let config = Arc::clone(&self.config);
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            Arc::clone(&self.outgoing),
+            vec![request_id.connection_id],
+        );
+
+        tokio::spawn(async move {
+            let setup_request = WindowsSandboxSetupRequest {
+                mode,
+                policy: config.permissions.sandbox_policy.get().clone(),
+                policy_cwd: config.cwd.clone(),
+                command_cwd: config.cwd.clone(),
+                env_map: std::env::vars().collect(),
+                codex_home: config.codex_home.clone(),
+                active_profile: config.active_profile.clone(),
+            };
+            let setup_result =
+                codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await;
+            let notification = WindowsSandboxSetupCompletedNotification {
+                mode: match mode {
+                    CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,
+                    CoreWindowsSandboxSetupMode::Unelevated => WindowsSandboxSetupMode::Unelevated,
+                },
+                success: setup_result.is_ok(),
+                error: setup_result.err().map(|err| err.to_string()),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::WindowsSandboxSetupCompleted(
+                    notification,
+                ))
+                .await;
+        });
     }
 
     async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {

@@ -15,7 +15,7 @@
               "$ref": "#/definitions/AbsolutePathBuf"
             }
           ],
-          "description": "Path to a role-specific config layer."
+          "description": "Path to a role-specific config layer. Relative paths are resolved relative to the `config.toml` that defines them."
         },
         "description": {
           "description": "Human-facing role documentation used in spawn tool guidance.",
@@ -401,6 +401,9 @@
             "shell_tool": {
               "type": "boolean"
             },
+            "shell_zsh_fork": {
+              "type": "boolean"
+            },
             "skill_env_var_dependency_prompt": {
               "type": "boolean"
             },
@@ -436,6 +439,13 @@
         },
         "include_apply_patch_tool": {
           "type": "boolean"
+        },
+        "js_repl_node_module_dirs": {
+          "description": "Ordered list of directories to search for Node modules in `js_repl`.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
         },
         "js_repl_node_path": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -489,6 +499,14 @@
             }
           ],
           "default": null
+        },
+        "zsh_path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
         }
       },
       "type": "object"
@@ -608,14 +626,6 @@
         }
       },
       "type": "object"
-    },
-    "ModeKind": {
-      "description": "Initial collaboration mode to use when the TUI starts.",
-      "enum": [
-        "plan",
-        "default"
-      ],
-      "type": "string"
     },
     "ModelProviderInfo": {
       "additionalProperties": false,
@@ -1259,15 +1269,6 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
-        "experimental_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ModeKind"
-            }
-          ],
-          "default": null,
-          "description": "Start the TUI in the specified collaboration mode (plan/default). Defaults to unset."
-        },
         "notification_method": {
           "allOf": [
             {
@@ -1293,7 +1294,7 @@
         },
         "status_line": {
           "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and `current-dir`.",
           "items": {
             "type": "string"
           },
@@ -1541,6 +1542,9 @@
         "shell_tool": {
           "type": "boolean"
         },
+        "shell_zsh_fork": {
+          "type": "boolean"
+        },
         "skill_env_var_dependency_prompt": {
           "type": "boolean"
         },
@@ -1629,6 +1633,13 @@
     "instructions": {
       "description": "System instructions.",
       "type": "string"
+    },
+    "js_repl_node_module_dirs": {
+      "description": "Ordered list of directories to search for Node modules in `js_repl`.",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      },
+      "type": "array"
     },
     "js_repl_node_path": {
       "allOf": [
@@ -1897,6 +1908,14 @@
     "windows_wsl_setup_acknowledged": {
       "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
       "type": "boolean"
+    },
+    "zsh_path": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
     }
   },
   "title": "ConfigToml",
