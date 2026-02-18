@@ -99,7 +99,9 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
             "type": "response.created",
             "response": {
                 "id": "resp-1",
-                "model": SERVER_MODEL,
+                "headers": {
+                    "OpenAI-Model": SERVER_MODEL
+                }
             }
         }),
         responses::ev_assistant_message("msg-1", "Done"),

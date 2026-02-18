@@ -110,6 +110,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     .request_command_approval(
                         turn,
                         call_id,
+                        None,
                         command,
                         cwd,
                         reason,

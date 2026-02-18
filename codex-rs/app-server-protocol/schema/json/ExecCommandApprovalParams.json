@@ -117,6 +117,13 @@
     }
   },
   "properties": {
+    "approvalId": {
+      "description": "Identifier for this specific approval callback.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "callId": {
       "description": "Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent] and [codex_core::protocol::ExecCommandEndEvent].",
       "type": "string"

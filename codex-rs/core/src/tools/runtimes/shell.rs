@@ -109,6 +109,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     .request_command_approval(
                         turn,
                         call_id,
+                        None,
                         command,
                         cwd,
                         reason,
