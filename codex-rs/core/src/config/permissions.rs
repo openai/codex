@@ -5,7 +5,8 @@ use serde::Serialize;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionsToml {
-    /// Network proxy settings used by managed network mode.
+    /// Network proxy settings from `[permissions.network]`.
+    /// User config can enable the proxy; managed requirements may still constrain values.
     pub network: Option<NetworkToml>,
 }
 
