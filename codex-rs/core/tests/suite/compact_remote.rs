@@ -1428,18 +1428,20 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
     .await?;
     let codex = harness.test().codex.clone();
 
-    let responses_mock = responses::mount_sse_sequence(
+    let initial_turn_request_mock = responses::mount_sse_once(
         harness.server(),
-        vec![
-            responses::sse(vec![
-                responses::ev_assistant_message("m1", "BEFORE_SWITCH_REPLY"),
-                responses::ev_completed_with_tokens("r1", 500),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("m2", "AFTER_SWITCH_REPLY"),
-                responses::ev_completed_with_tokens("r2", 80),
-            ]),
-        ],
+        responses::sse(vec![
+            responses::ev_assistant_message("m1", "BEFORE_SWITCH_REPLY"),
+            responses::ev_completed_with_tokens("r1", 500),
+        ]),
+    )
+    .await;
+    let post_compact_turn_request_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m2", "AFTER_SWITCH_REPLY"),
+            responses::ev_completed_with_tokens("r2", 80),
+        ]),
     )
     .await;
     let compact_mock = responses::mount_compact_user_history_with_summary_once(
@@ -1488,14 +1490,20 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         1,
         "expected a single remote pre-turn compaction request"
     );
-    let requests = responses_mock.requests();
     assert_eq!(
-        requests.len(),
-        2,
-        "expected initial turn request and post-compaction follow-up request"
+        initial_turn_request_mock.requests().len(),
+        1,
+        "expected initial turn request"
+    );
+    assert_eq!(
+        post_compact_turn_request_mock.requests().len(),
+        1,
+        "expected post-compaction follow-up request"
     );
 
+    let initial_turn_request = initial_turn_request_mock.single_request();
     let compact_request = compact_mock.single_request();
+    let post_compact_turn_request = post_compact_turn_request_mock.single_request();
     let compact_body = compact_request.body_json().to_string();
     assert!(
         !compact_body.contains("AFTER_SWITCH_USER"),
@@ -1506,7 +1514,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         "pre-turn remote compaction request should strip incoming model-switch update item"
     );
 
-    let follow_up_body = requests[1].body_json().to_string();
+    let follow_up_body = post_compact_turn_request.body_json().to_string();
     assert!(
         follow_up_body.contains("BEFORE_SWITCH_USER"),
         "post-compaction follow-up should preserve older user messages when they fit"
@@ -1525,9 +1533,12 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         format_labeled_requests_snapshot(
             "Remote pre-turn compaction during model switch currently excludes incoming user input, strips incoming <model_switch> from the compact request payload, and restores it in the post-compaction follow-up request.",
             &[
-                ("Initial Request (Previous Model)", &requests[0]),
+                ("Initial Request (Previous Model)", &initial_turn_request),
                 ("Remote Compaction Request", &compact_request),
-                ("Remote Post-Compaction History Layout", &requests[1]),
+                (
+                    "Remote Post-Compaction History Layout",
+                    &post_compact_turn_request
+                ),
             ]
         )
     );
@@ -1804,18 +1815,20 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
     .await?;
     let codex = harness.test().codex.clone();
 
-    let responses_mock = responses::mount_sse_sequence(
+    let setup_turn_request_mock = responses::mount_sse_once(
         harness.server(),
-        vec![
-            responses::sse(vec![
-                responses::ev_assistant_message("setup", "REMOTE_SETUP_REPLY"),
-                responses::ev_completed_with_tokens("setup-response", 60),
-            ]),
-            responses::sse(vec![
-                responses::ev_shell_command_call("call-remote-multi-summary", "echo multi-summary"),
-                responses::ev_completed_with_tokens("r1", 1_000),
-            ]),
-        ],
+        responses::sse(vec![
+            responses::ev_assistant_message("setup", "REMOTE_SETUP_REPLY"),
+            responses::ev_completed_with_tokens("setup-response", 60),
+        ]),
+    )
+    .await;
+    let second_turn_request_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_shell_command_call("call-remote-multi-summary", "echo multi-summary"),
+            responses::ev_completed_with_tokens("r1", 1_000),
+        ]),
     )
     .await;
 
@@ -1854,11 +1867,15 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(compact_mock.requests().len(), 2);
-    let requests = responses_mock.requests();
     assert_eq!(
-        requests.len(),
-        2,
-        "expected setup turn request and second-turn pre-compaction request"
+        setup_turn_request_mock.requests().len(),
+        1,
+        "expected setup turn request"
+    );
+    assert_eq!(
+        second_turn_request_mock.requests().len(),
+        1,
+        "expected second-turn pre-compaction request"
     );
 
     let compact_requests = compact_mock.requests();
@@ -1868,6 +1885,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
         "expected one setup compact and one mid-turn compact request"
     );
     let compact_request = compact_requests[1].clone();
+    let second_turn_request = second_turn_request_mock.single_request();
     assert!(
         compact_request.body_contains_text("REMOTE_OLDER_SUMMARY"),
         "older summary should round-trip from conversation history into the next compact request"
@@ -1879,7 +1897,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
             &[
                 (
                     "Second Turn Request (Before Mid-Turn Compaction)",
-                    &requests[1]
+                    &second_turn_request
                 ),
                 ("Remote Compaction Request", &compact_request),
             ]
