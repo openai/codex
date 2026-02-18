@@ -4729,15 +4729,6 @@ async fn persist_pre_turn_items_for_compaction_outcome(
                 sess.record_conversation_items(turn_context, &initial_context)
                     .await;
             }
-            let model_switch_updates: Vec<ResponseItem> = pre_turn_context_items
-                .iter()
-                .filter(|item| Session::is_model_switch_developer_message(item))
-                .cloned()
-                .collect();
-            if !model_switch_updates.is_empty() {
-                sess.record_conversation_items(turn_context, &model_switch_updates)
-                    .await;
-            }
             sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
                 .await;
         }

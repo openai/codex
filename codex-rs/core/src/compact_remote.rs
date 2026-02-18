@@ -175,12 +175,9 @@ async fn run_remote_compact_task_inner_impl(
             .collect();
         remove_incoming_echoes_from_compacted_history(&mut new_history, &incoming_history_items);
     }
-    // Reattach stripped model-switch updates only for compaction paths that do not carry
-    // incoming turn items. Pre-turn compaction appends turn context and user input after
-    // compaction in run_turn.
-    if incoming_items.is_none()
-        && let Some(model_switch_item) = stripped_model_switch_item
-    {
+    // Reattach stripped model-switch updates into replacement history so post-compaction
+    // sampling keeps model-switch guidance regardless of compaction callsite.
+    if let Some(model_switch_item) = stripped_model_switch_item {
         new_history.push(model_switch_item);
     }
 
