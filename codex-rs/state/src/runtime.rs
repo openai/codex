@@ -2120,10 +2120,20 @@ WHERE kind = 'memory_stage1'
         assert_eq!(outputs[0].thread_id, thread_id_b);
         assert_eq!(outputs[0].rollout_summary, "summary b");
         assert_eq!(outputs[0].rollout_slug.as_deref(), Some("rollout-b"));
+        assert_eq!(outputs[0].rollout_summary_filename, None);
+        assert_eq!(
+            outputs[0].rollout_path,
+            codex_home.join(format!("rollout-{thread_id_b}.jsonl"))
+        );
         assert_eq!(outputs[0].cwd, codex_home.join("workspace-b"));
         assert_eq!(outputs[1].thread_id, thread_id_a);
         assert_eq!(outputs[1].rollout_summary, "summary a");
         assert_eq!(outputs[1].rollout_slug, None);
+        assert_eq!(outputs[1].rollout_summary_filename, None);
+        assert_eq!(
+            outputs[1].rollout_path,
+            codex_home.join(format!("rollout-{thread_id_a}.jsonl"))
+        );
         assert_eq!(outputs[1].cwd, codex_home.join("workspace-a"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
@@ -2193,7 +2203,300 @@ VALUES (?, ?, ?, ?, ?)
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].thread_id, thread_id_non_empty);
         assert_eq!(outputs[0].rollout_summary, "summary");
+        assert_eq!(outputs[0].rollout_summary_filename, None);
+        assert_eq!(
+            outputs[0].rollout_path,
+            codex_home.join(format!("rollout-{thread_id_non_empty}.jsonl"))
+        );
         assert_eq!(outputs[0].cwd, codex_home.join("workspace-non-empty"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn set_rollout_summary_filenames_for_global_updates_and_clears_stale_rows() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_a,
+                    ownership_token.as_str(),
+                    100,
+                    "raw memory a",
+                    "summary a",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output a"
+        );
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_b,
+                    ownership_token.as_str(),
+                    101,
+                    "raw memory b",
+                    "summary b",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output b"
+        );
+
+        runtime
+            .set_rollout_summary_filenames_for_global(&[
+                (thread_id_a, "2026-02-17T19-22-07-alpha.md".to_string()),
+                (thread_id_b, "2026-02-17T19-22-08-beta.md".to_string()),
+            ])
+            .await
+            .expect("set rollout summary filenames");
+
+        let first = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list outputs after first filename update");
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first[0].rollout_summary_filename.as_deref(),
+            Some("2026-02-17T19-22-08-beta.md")
+        );
+        assert_eq!(
+            first[1].rollout_summary_filename.as_deref(),
+            Some("2026-02-17T19-22-07-alpha.md")
+        );
+
+        runtime
+            .set_rollout_summary_filenames_for_global(&[(
+                thread_id_b,
+                "2026-02-17T19-22-08-beta-renamed.md".to_string(),
+            )])
+            .await
+            .expect("set rollout summary filename for retained row only");
+
+        let second = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list outputs after clearing stale filename");
+        assert_eq!(second.len(), 2);
+        assert_eq!(
+            second[0].rollout_summary_filename.as_deref(),
+            Some("2026-02-17T19-22-08-beta-renamed.md")
+        );
+        assert_eq!(second[1].rollout_summary_filename, None);
+
+        runtime
+            .set_rollout_summary_filenames_for_global(&[])
+            .await
+            .expect("clear rollout summary filenames");
+
+        let cleared = runtime
+            .list_stage1_outputs_for_global(10)
+            .await
+            .expect("list outputs after clearing all filenames");
+        assert_eq!(cleared[0].rollout_summary_filename, None);
+        assert_eq!(cleared[1].rollout_summary_filename, None);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn get_stage1_output_by_rollout_summary_filename_returns_matching_row() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    100,
+                    "raw memory",
+                    "summary",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "stage1 success should persist output"
+        );
+
+        let file_name = "2026-02-17T19-22-07-summary.md".to_string();
+        runtime
+            .set_rollout_summary_filenames_for_global(&[(thread_id, file_name.clone())])
+            .await
+            .expect("set rollout summary filename");
+
+        let output = runtime
+            .get_stage1_output_by_rollout_summary_filename(file_name.as_str())
+            .await
+            .expect("lookup by rollout summary filename")
+            .expect("row should exist");
+        assert_eq!(output.thread_id, thread_id);
+        assert_eq!(output.rollout_summary, "summary");
+        assert_eq!(
+            output.rollout_summary_filename.as_deref(),
+            Some(file_name.as_str())
+        );
+        assert_eq!(
+            output.rollout_path,
+            codex_home.join(format!("rollout-{thread_id}.jsonl"))
+        );
+
+        let missing = runtime
+            .get_stage1_output_by_rollout_summary_filename("missing.md")
+            .await
+            .expect("lookup missing rollout summary filename");
+        assert_eq!(missing, None);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn set_rollout_summary_filenames_for_global_rejects_duplicate_file_names() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let thread_id_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let thread_id_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_a,
+                codex_home.join("workspace-a"),
+            ))
+            .await
+            .expect("upsert thread a");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id_b,
+                codex_home.join("workspace-b"),
+            ))
+            .await
+            .expect("upsert thread b");
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_a, owner, 100, 3600, 64)
+            .await
+            .expect("claim stage1 a");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_a,
+                    ownership_token.as_str(),
+                    100,
+                    "raw memory a",
+                    "summary a",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded a"),
+            "stage1 success should persist output a"
+        );
+
+        let claim = runtime
+            .try_claim_stage1_job(thread_id_b, owner, 101, 3600, 64)
+            .await
+            .expect("claim stage1 b");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id_b,
+                    ownership_token.as_str(),
+                    101,
+                    "raw memory b",
+                    "summary b",
+                    None,
+                )
+                .await
+                .expect("mark stage1 succeeded b"),
+            "stage1 success should persist output b"
+        );
+
+        let result = runtime
+            .set_rollout_summary_filenames_for_global(&[
+                (thread_id_a, "2026-02-17T19-22-07-duplicate.md".to_string()),
+                (thread_id_b, "2026-02-17T19-22-07-duplicate.md".to_string()),
+            ])
+            .await;
+        assert!(
+            result.is_err(),
+            "duplicate filenames should violate the unique index"
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -25,7 +25,7 @@ Folder structure (under {{ memory_root }}/):
   - Temporary file: merged raw memories from Phase 1. Input for Phase 2.
 - skills/<skill-name>/
   - Reusable procedures. Entrypoint: SKILL.md; may include scripts/, templates/, examples/.
-- rollout_summaries/<rollout_slug>.md
+- rollout_summaries/<timestamp>-<slug>.md
   - Recap of the rollout, including lessons learned, reusable knowledge,
     pointers/references, and pruned raw evidence snippets. Distilled version of
     everything valuable from the raw rollout.
