@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use codex_protocol::models::ContentItem;
@@ -7,6 +8,10 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 
+use crate::agent::AgentStatus;
+use crate::session_prefix::is_session_prefix;
+use crate::session_prefix::parse_subagent_notification;
+use crate::tools::handlers::multi_agents::wait::parse_wait_output_statuses;
 use crate::util::error_or_panic;
 use tracing::info;
 
@@ -209,6 +214,85 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
     }
 }
 
+pub(crate) fn drop_subagent_notifications_covered_by_wait(items: &mut Vec<ResponseItem>) {
+    // Track the most recent status emitted by `wait` for each sub-agent id.
+    let mut latest_wait_status_by_agent: HashMap<String, (AgentStatus, usize)> = HashMap::new();
+    let mut wait_call_ids = HashSet::new();
+    let mut notification_indexes_to_drop = HashSet::new();
+    // Index of the most recent item that is not a user session-prefix message.
+    // We only dedupe when the `wait` output and notification are separated solely by
+    // session-prefix user messages.
+    let mut last_non_prefix_index: Option<usize> = None;
+
+    for (index, item) in items.iter().enumerate() {
+        let is_user_session_prefix_message = matches!(
+            item,
+            ResponseItem::Message { role, content, .. }
+                if role == "user"
+                    && content.iter().all(|content_item| match content_item {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            is_session_prefix(text)
+                        }
+                        ContentItem::InputImage { .. } => false,
+                    })
+        );
+
+        match item {
+            ResponseItem::FunctionCall { name, call_id, .. } if name == "wait" => {
+                wait_call_ids.insert(call_id.clone());
+            }
+            ResponseItem::FunctionCallOutput { call_id, output } => {
+                // Deduping is only for outputs that correspond to explicit `wait` calls.
+                if wait_call_ids.contains(call_id)
+                    && let Some(statuses) = parse_wait_output_statuses(output)
+                {
+                    for (agent_id, status) in statuses {
+                        latest_wait_status_by_agent.insert(agent_id.to_string(), (status, index));
+                    }
+                }
+            }
+            ResponseItem::Message { role, content, .. }
+                if role == "user" && is_user_session_prefix_message =>
+            {
+                let notification = content.iter().find_map(|content_item| match content_item {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        parse_subagent_notification(text)
+                    }
+                    ContentItem::InputImage { .. } => None,
+                });
+                if let Some(notification) = notification
+                    && let Some((wait_status, wait_output_index)) =
+                        latest_wait_status_by_agent.get(&notification.agent_id)
+                {
+                    let no_non_prefix_between = match last_non_prefix_index {
+                        Some(last_non_prefix) => last_non_prefix <= *wait_output_index,
+                        None => true,
+                    };
+                    if no_non_prefix_between && wait_status == &notification.status {
+                        notification_indexes_to_drop.insert(index);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if !is_user_session_prefix_message {
+            last_non_prefix_index = Some(index);
+        }
+    }
+
+    if notification_indexes_to_drop.is_empty() {
+        return;
+    }
+
+    *items = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            (!notification_indexes_to_drop.contains(&index)).then_some(item.clone())
+        })
+        .collect();
+}
 fn remove_first_matching<F>(items: &mut Vec<ResponseItem>, predicate: F)
 where
     F: Fn(&ResponseItem) -> bool,

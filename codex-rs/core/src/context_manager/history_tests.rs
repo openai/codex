@@ -2,6 +2,7 @@ use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
+use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -14,6 +15,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AgentStatus;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -571,6 +573,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -591,6 +596,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
     ];
@@ -610,6 +618,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
     ];
 
     let mut history = create_history_with_items(vec![
@@ -622,6 +633,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -640,6 +654,9 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg(
+            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
+        ),
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         user_input_text_msg("turn 2 user"),
@@ -909,6 +926,441 @@ fn normalize_adds_missing_output_for_function_call() {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
+        ]
+    );
+}
+
+#[test]
+fn normalize_dedupes_subagent_notification_with_matching_wait_result() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>\n{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}\n</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+        ]
+    );
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_when_wait_output_has_no_matching_status() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(
+                r#"{"status":{},"timed_out":true}"#.to_string(),
+            ),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_when_wait_status_differs() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"completed"}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_when_non_prefix_item_is_between_wait_and_notification() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        assistant_msg("anything non-prefix in between should keep the notification"),
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_for_non_wait_output_shape_match() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "read_file".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "read-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "read-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_when_wait_output_precedes_wait_call() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_dedupes_subagent_notification_when_only_prefix_messages_intervene() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg("<environment_context>\nfoo\n</environment_context>"),
+        user_input_text_msg("<turn_aborted>{\"reason\":\"interrupt\"}</turn_aborted>"),
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+            user_input_text_msg("<environment_context>\nfoo\n</environment_context>"),
+            user_input_text_msg("<turn_aborted>{\"reason\":\"interrupt\"}</turn_aborted>"),
+        ]
+    );
+}
+
+#[test]
+fn normalize_keeps_notification_when_user_message_contains_mixed_prefix_and_non_prefix_content() {
+    let agent_id = ThreadId::new().to_string();
+    let mixed_content_message = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: format!(
+                    "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+                ),
+            },
+            ContentItem::InputText {
+                text: "normal text".to_string(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    };
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        mixed_content_message.clone(),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+            mixed_content_message,
+        ]
+    );
+}
+
+#[test]
+fn normalize_keeps_subagent_notification_when_wait_output_is_malformed() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("{\"status\":".to_string()),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items.clone());
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), items);
+}
+
+#[test]
+fn normalize_dedupes_only_matching_subagent_notification_when_multiple_notifications_present() {
+    let deduped_agent = ThreadId::new().to_string();
+    let kept_agent = ThreadId::new().to_string();
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{deduped_agent}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{deduped_agent}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{deduped_agent}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{kept_agent}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{deduped_agent}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{deduped_agent}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+            user_input_text_msg(&format!(
+                "<subagent_notification>{{\"agent_id\":\"{kept_agent}\",\"status\":\"shutdown\"}}</subagent_notification>"
+            )),
+        ]
+    );
+}
+
+#[test]
+fn normalize_uses_latest_wait_status_for_dedupe() {
+    let agent_id = ThreadId::new().to_string();
+    let completed_status_json =
+        serde_json::to_string(&AgentStatus::Completed(Some("done".to_string())))
+            .expect("status should serialize");
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-2".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-2".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":{completed_status_json}}},"timed_out":false}}"#
+            )),
+        },
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+        )),
+        user_input_text_msg(&format!(
+            "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":{completed_status_json}}}</subagent_notification>"
+        )),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-2".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-2".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":{completed_status_json}}},"timed_out":false}}"#
+                )),
+            },
+            user_input_text_msg(&format!(
+                "<subagent_notification>{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}</subagent_notification>"
+            )),
         ]
     );
 }
