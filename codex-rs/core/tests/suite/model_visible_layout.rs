@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -43,6 +44,14 @@ fn format_labeled_requests_snapshot(
         sections,
         &context_snapshot_options(),
     )
+}
+
+fn agents_message_count(request: &ResponsesRequest) -> usize {
+    request
+        .message_input_texts("user")
+        .iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .count()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,6 +137,113 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             &[
                 ("First Request (Baseline)", &requests[0]),
                 ("Second Request (Turn Overrides)", &requests[1]),
+            ]
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "turn one complete"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "turn two complete"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_model("gpt-5.2-codex");
+    let test = builder.build(&server).await?;
+    let cwd_one = test.cwd_path().join("agents_one");
+    let cwd_two = test.cwd_path().join("agents_two");
+    fs::create_dir_all(&cwd_one)?;
+    fs::create_dir_all(&cwd_two)?;
+    fs::write(
+        cwd_one.join("AGENTS.md"),
+        "# AGENTS one\n\n<INSTRUCTIONS>\nTurn one agents instructions.\n</INSTRUCTIONS>\n",
+    )?;
+    fs::write(
+        cwd_two.join("AGENTS.md"),
+        "# AGENTS two\n\n<INSTRUCTIONS>\nTurn two agents instructions.\n</INSTRUCTIONS>\n",
+    )?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "first turn in agents_one".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd_one.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "second turn in agents_two".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd_two,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+    assert_eq!(
+        agents_message_count(&requests[0]),
+        1,
+        "expected exactly one AGENTS message in first request"
+    );
+    assert_eq!(
+        agents_message_count(&requests[1]),
+        1,
+        "expected AGENTS to refresh after cwd change, but current behavior only keeps history AGENTS"
+    );
+    insta::assert_snapshot!(
+        "model_visible_layout_cwd_change_does_not_refresh_agents",
+        format_labeled_requests_snapshot(
+            "Second turn changes cwd to a directory with different AGENTS.md; current behavior does not emit refreshed AGENTS instructions.",
+            &[
+                ("First Request (agents_one)", &requests[0]),
+                ("Second Request (agents_two cwd)", &requests[1]),
             ]
         )
     );
