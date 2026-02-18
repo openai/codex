@@ -199,7 +199,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -> Result<()> {
+async fn thread_compact_start_without_history_emits_started_and_completed_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
