@@ -2,6 +2,61 @@ use ratatui::text::Line;
 
 use crate::markdown;
 
+const MEMORY_CITATION_PREFIX: &str = "Memory used:";
+
+fn strip_trailing_memory_citation_section(input: &str) -> String {
+    let Some(citation_start) = find_trailing_memory_citation_start(input) else {
+        return input.to_string();
+    };
+    trim_trailing_blank_lines(&input[..citation_start]).to_string()
+}
+
+fn find_trailing_memory_citation_start(input: &str) -> Option<usize> {
+    let mut line_start = 0usize;
+    let mut candidate_start = None;
+
+    loop {
+        let rest = &input[line_start..];
+        let next_newline = rest.find('\n');
+        let line_end = next_newline.map_or(input.len(), |offset| line_start + offset);
+        let line = &input[line_start..line_end];
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim_start().starts_with(MEMORY_CITATION_PREFIX) {
+            candidate_start = Some(line_start);
+        }
+
+        match next_newline {
+            Some(_) => line_start = line_end + 1,
+            None => break,
+        }
+    }
+
+    let citation_start = candidate_start?;
+    let citation_line_end = input[citation_start..]
+        .find('\n')
+        .map_or(input.len(), |offset| citation_start + offset);
+    let after_citation_line = &input[citation_line_end..];
+    after_citation_line
+        .chars()
+        .all(char::is_whitespace)
+        .then_some(citation_start)
+}
+
+fn trim_trailing_blank_lines(input: &str) -> &str {
+    let mut end = input.len();
+    while end > 0 {
+        let line_start = input[..end].rfind('\n').map_or(0, |idx| idx + 1);
+        let line = &input[line_start..end];
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim().is_empty() {
+            end = line_start.saturating_sub(1);
+        } else {
+            break;
+        }
+    }
+    &input[..end]
+}
+
 /// Newline-gated accumulator that renders markdown and commits only fully
 /// completed logical lines.
 pub(crate) struct MarkdownStreamCollector {
@@ -40,6 +95,7 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
+        let source = strip_trailing_memory_citation_section(&source);
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
@@ -72,6 +128,7 @@ impl MarkdownStreamCollector {
         if !source.ends_with('\n') {
             source.push('\n');
         }
+        source = strip_trailing_memory_citation_section(&source);
         tracing::debug!(
             raw_len = raw_buffer.len(),
             source_len = source.len(),
@@ -118,7 +175,32 @@ pub(crate) fn simulate_stream_markdown_for_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use ratatui::style::Color;
+
+    #[test]
+    fn strip_trailing_memory_citation_canonical_format() {
+        let input = "Answer body\n\nMemory used: `notes.md:1-2`, `MEMORY.md:10-20`\n";
+        assert_eq!(strip_trailing_memory_citation_section(input), "Answer body");
+    }
+
+    #[test]
+    fn strip_trailing_memory_citation_plain_text_with_blank_tail() {
+        let input = "Answer body\n\nMemory used: notes.md:1-2, MEMORY.md:10-20\n\n";
+        assert_eq!(strip_trailing_memory_citation_section(input), "Answer body");
+    }
+
+    #[test]
+    fn preserve_memory_used_when_not_trailing_footer() {
+        let input = "Answer body\nMemory used: notes.md:1-2\nAdditional details\n";
+        assert_eq!(strip_trailing_memory_citation_section(input), input);
+    }
+
+    #[test]
+    fn no_op_when_memory_footer_absent() {
+        let input = "Answer body\nNo footer here\n";
+        assert_eq!(strip_trailing_memory_citation_section(input), input);
+    }
 
     #[tokio::test]
     async fn no_commit_until_newline() {
@@ -247,6 +329,16 @@ mod tests {
                 l.spans[0].style.fg
             );
         }
+    }
+
+    #[tokio::test]
+    async fn streamed_memory_footer_arriving_in_chunks_is_filtered() {
+        let out = super::simulate_stream_markdown_for_tests(
+            &["Final answer line\n", "Memory", " used: `notes.md:1-2`\n"],
+            true,
+        );
+        let rendered = lines_to_plain_strings(&out);
+        assert_eq!(rendered, vec!["Final answer line"]);
     }
 
     #[tokio::test]
