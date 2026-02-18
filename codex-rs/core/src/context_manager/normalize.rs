@@ -217,6 +217,8 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
 pub(crate) fn drop_subagent_notifications_covered_by_wait(items: &mut Vec<ResponseItem>) {
     // Track the most recent status emitted by `wait` for each sub-agent id.
     let mut latest_wait_status_by_agent: HashMap<String, (AgentStatus, usize)> = HashMap::new();
+    // Track the latest sub-agent notification encountered so later wait outputs can cover it.
+    let mut latest_notification_by_agent: HashMap<String, (AgentStatus, usize)> = HashMap::new();
     let mut wait_call_ids = HashSet::new();
     let mut notification_indexes_to_drop = HashSet::new();
     // Index of the most recent item that is not a user session-prefix message.
@@ -247,7 +249,15 @@ pub(crate) fn drop_subagent_notifications_covered_by_wait(items: &mut Vec<Respon
                     && let Some(statuses) = parse_wait_output_statuses(output)
                 {
                     for (agent_id, status) in statuses {
-                        latest_wait_status_by_agent.insert(agent_id.to_string(), (status, index));
+                        let agent_id = agent_id.to_string();
+                        if let Some((notification_status, notification_index)) =
+                            latest_notification_by_agent.get(&agent_id)
+                            && notification_status == &status
+                            && *notification_index < index
+                        {
+                            notification_indexes_to_drop.insert(*notification_index);
+                        }
+                        latest_wait_status_by_agent.insert(agent_id, (status, index));
                     }
                 }
             }
@@ -260,16 +270,21 @@ pub(crate) fn drop_subagent_notifications_covered_by_wait(items: &mut Vec<Respon
                     }
                     ContentItem::InputImage { .. } => None,
                 });
-                if let Some(notification) = notification
-                    && let Some((wait_status, wait_output_index)) =
+                if let Some(notification) = notification {
+                    latest_notification_by_agent.insert(
+                        notification.agent_id.clone(),
+                        (notification.status.clone(), index),
+                    );
+                    if let Some((wait_status, wait_output_index)) =
                         latest_wait_status_by_agent.get(&notification.agent_id)
-                {
-                    let no_non_prefix_between = match last_non_prefix_index {
-                        Some(last_non_prefix) => last_non_prefix <= *wait_output_index,
-                        None => true,
-                    };
-                    if no_non_prefix_between && wait_status == &notification.status {
-                        notification_indexes_to_drop.insert(index);
+                    {
+                        let no_non_prefix_between = match last_non_prefix_index {
+                            Some(last_non_prefix) => last_non_prefix <= *wait_output_index,
+                            None => true,
+                        };
+                        if no_non_prefix_between && wait_status == &notification.status {
+                            notification_indexes_to_drop.insert(index);
+                        }
                     }
                 }
             }

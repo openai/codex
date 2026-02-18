@@ -974,6 +974,51 @@ fn normalize_dedupes_subagent_notification_with_matching_wait_result() {
 }
 
 #[test]
+fn normalize_dedupes_subagent_notification_when_matching_wait_output_comes_later() {
+    let agent_id = ThreadId::new().to_string();
+    let items = vec![
+        user_input_text_msg(&format!(
+            "<subagent_notification>\n{{\"agent_id\":\"{agent_id}\",\"status\":\"shutdown\"}}\n</subagent_notification>"
+        )),
+        user_input_text_msg("wait for child completion"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+            call_id: "wait-call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "wait-call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(format!(
+                r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+            )),
+        },
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            user_input_text_msg("wait for child completion"),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                arguments: format!(r#"{{"ids":["{agent_id}"],"timeout_ms":1000}}"#),
+                call_id: "wait-call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "wait-call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(format!(
+                    r#"{{"status":{{"{agent_id}":"shutdown"}},"timed_out":false}}"#
+                )),
+            },
+        ]
+    );
+}
+
+#[test]
 fn normalize_keeps_subagent_notification_when_wait_output_has_no_matching_status() {
     let agent_id = ThreadId::new().to_string();
     let items = vec![

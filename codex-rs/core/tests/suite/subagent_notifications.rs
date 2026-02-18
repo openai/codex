@@ -127,14 +127,18 @@ async fn setup_turn_one_with_spawned_child(
     let child_request_log = if let Some(delay) = child_response_delay {
         mount_response_once_match(
             server,
-            |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+            |req: &wiremock::Request| {
+                body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+            },
             sse_response(child_sse).set_delay(delay),
         )
         .await
     } else {
         mount_sse_once_match(
             server,
-            |req: &wiremock::Request| body_contains(req, CHILD_PROMPT),
+            |req: &wiremock::Request| {
+                body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+            },
             child_sse,
         )
         .await
