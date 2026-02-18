@@ -365,7 +365,6 @@ impl HistoryCell for UserHistoryCell {
         lines.push(Line::from("").style(style));
         lines
     }
-
 }
 
 #[derive(Debug)]
