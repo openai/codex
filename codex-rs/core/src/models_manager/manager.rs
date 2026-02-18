@@ -128,27 +128,8 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let remote = Self::find_model_by_longest_prefix(
-            model,
-            &self.get_effective_remote_models(config).await,
-        );
-        let resolved_slug = remote
-            .as_ref()
-            .map(|remote| remote.slug.clone())
-            .unwrap_or_else(|| model.to_string());
-        let model_info = if let Some(remote) = remote {
-            ModelInfo {
-                slug: model.to_string(),
-                used_fallback_model_metadata: false,
-                ..remote
-            }
-        } else {
-            model_info::model_info_from_slug(model)
-        };
-        let mut model_info =
-            model_info::with_model_info_patches(model_info, &resolved_slug, model, config);
-        model_info = model_info::with_config_overrides(model_info, config);
-        model_info
+        let remote_models = self.get_effective_remote_models(config).await;
+        Self::construct_model_info_from_candidates(model, &remote_models, config)
     }
 
     fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
@@ -167,6 +148,30 @@ impl ModelsManager {
             }
         }
         best
+    }
+
+    fn construct_model_info_from_candidates(
+        model: &str,
+        candidates: &[ModelInfo],
+        config: &Config,
+    ) -> ModelInfo {
+        let remote = Self::find_model_by_longest_prefix(model, candidates);
+        let resolved_slug = remote
+            .as_ref()
+            .map(|remote| remote.slug.clone())
+            .unwrap_or_else(|| model.to_string());
+
+        let mut model_info = if let Some(remote) = remote {
+            ModelInfo {
+                slug: model.to_string(),
+                used_fallback_model_metadata: false,
+                ..remote
+            }
+        } else {
+            model_info::model_info_from_slug(model)
+        };
+        model_info = model_info::with_model_info_patches(model_info, &resolved_slug, model, config);
+        model_info::with_config_overrides(model_info, config)
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
@@ -383,30 +388,13 @@ impl ModelsManager {
         model: &str,
         config: &Config,
     ) -> ModelInfo {
-        let remote = config
-            .model_info
-            .catalog_json
-            .as_ref()
-            .and_then(|catalog_json| {
-                Self::find_model_by_longest_prefix(model, &catalog_json.models)
-            });
-        let resolved_slug = remote
-            .as_ref()
-            .map(|remote| remote.slug.clone())
-            .unwrap_or_else(|| model.to_string());
-        let model_info = if let Some(remote) = remote {
-            ModelInfo {
-                slug: model.to_string(),
-                used_fallback_model_metadata: false,
-                ..remote
-            }
-        } else {
-            model_info::model_info_from_slug(model)
-        };
-        let mut model_info =
-            model_info::with_model_info_patches(model_info, &resolved_slug, model, config);
-        model_info = model_info::with_config_overrides(model_info, config);
-        model_info
+        let candidates: &[ModelInfo] =
+            if let Some(catalog_json) = config.model_info.catalog_json.as_ref() {
+                &catalog_json.models
+            } else {
+                &[]
+            };
+        Self::construct_model_info_from_candidates(model, candidates, config)
     }
 }
 
