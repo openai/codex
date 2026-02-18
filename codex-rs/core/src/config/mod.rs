@@ -893,7 +893,7 @@ pub struct ConfigToml {
     pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
-    pub approval_policy: Option<AskForApproval>,
+    pub approval_policy: Option<AskForApprovalToml>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -1113,7 +1113,9 @@ impl From<ConfigToml> for UserSavedConfig {
             .collect();
 
         Self {
-            approval_policy: config_toml.approval_policy,
+            approval_policy: config_toml
+                .approval_policy
+                .map(|approval_policy| Into::into(approval_policy.to_core())),
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
@@ -1126,6 +1128,60 @@ impl From<ConfigToml> for UserSavedConfig {
             profile: config_toml.profile,
             profiles,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AskForApprovalToml {
+    /// Under this policy, only "known safe" commands—those matching
+    /// `is_safe_command()` and performing read-only file operations—are
+    /// auto-approved. Everything else will ask the user to approve.
+    #[serde(rename = "untrusted")]
+    UnlessTrusted,
+
+    /// DEPRECATED: *All* commands are auto-approved, but they are expected to
+    /// run inside a sandbox where network access is disabled and writes are
+    /// confined to a specific set of paths. If the command fails, it will be
+    /// escalated to the user to approve execution without a sandbox.
+    /// Prefer `OnRequest` for interactive runs or `Never` for non-interactive
+    /// runs.
+    OnFailure,
+
+    /// The model decides when to ask the user for approval.
+    #[default]
+    OnRequest,
+
+    /// Never ask the user to approve commands. Failures are immediately returned
+    /// to the model, and never escalated to the user for approval.
+    Never,
+}
+
+impl AskForApprovalToml {
+    pub fn to_core(self) -> AskForApproval {
+        match self {
+            AskForApprovalToml::UnlessTrusted => AskForApproval::UnlessTrusted,
+            AskForApprovalToml::OnFailure => AskForApproval::OnFailure,
+            AskForApprovalToml::OnRequest => AskForApproval::OnRequest,
+            AskForApprovalToml::Never => AskForApproval::Never,
+        }
+    }
+}
+
+impl From<AskForApproval> for AskForApprovalToml {
+    fn from(value: AskForApproval) -> Self {
+        match value {
+            AskForApproval::UnlessTrusted => AskForApprovalToml::UnlessTrusted,
+            AskForApproval::OnFailure => AskForApprovalToml::OnFailure,
+            AskForApproval::OnRequest => AskForApprovalToml::OnRequest,
+            AskForApproval::Never => AskForApprovalToml::Never,
+        }
+    }
+}
+
+impl From<AskForApprovalToml> for AskForApproval {
+    fn from(value: AskForApprovalToml) -> Self {
+        value.to_core()
     }
 }
 
@@ -1570,8 +1626,12 @@ impl Config {
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some();
         let mut approval_policy = approval_policy_override
-            .or(config_profile.approval_policy)
-            .or(cfg.approval_policy)
+            .or_else(|| {
+                config_profile
+                    .approval_policy
+                    .map(AskForApprovalToml::to_core)
+            })
+            .or_else(|| cfg.approval_policy.map(AskForApprovalToml::to_core))
             .unwrap_or_else(|| {
                 if active_project.is_trusted() {
                     AskForApproval::OnRequest

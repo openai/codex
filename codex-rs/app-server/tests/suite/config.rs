@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::test_tmp_path;
 use app_test_support::to_response;
+use codex_app_server_protocol::AskForApprovalProtocolV1;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Profile;
@@ -9,7 +10,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxSettings;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
-use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -83,7 +83,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
     let writable_root = test_tmp_path();
     let expected = GetUserSavedConfigResponse {
         config: UserSavedConfig {
-            approval_policy: Some(AskForApproval::OnRequest),
+            approval_policy: Some(AskForApprovalProtocolV1::OnRequest),
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             sandbox_settings: Some(SandboxSettings {
                 writable_roots: vec![writable_root],
@@ -106,7 +106,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
                 "test".into(),
                 Profile {
                     model: Some("gpt-4o".into()),
-                    approval_policy: Some(AskForApproval::OnRequest),
+                    approval_policy: Some(AskForApprovalProtocolV1::OnRequest),
                     model_reasoning_effort: Some(ReasoningEffort::High),
                     model_reasoning_summary: Some(ReasoningSummary::Detailed),
                     model_verbosity: Some(Verbosity::Medium),
