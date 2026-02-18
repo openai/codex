@@ -20,7 +20,6 @@ use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::AutoCompactCallsite;
-use crate::compact::TurnContextReinjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -2407,16 +2406,9 @@ impl Session {
 
     pub(crate) async fn process_compacted_history(
         &self,
-        turn_context: &TurnContext,
         compacted_history: Vec<ResponseItem>,
-        turn_context_reinjection: TurnContextReinjection,
     ) -> Vec<ResponseItem> {
-        let initial_context = self.build_initial_context(turn_context).await;
-        compact::process_compacted_history(
-            compacted_history,
-            &initial_context,
-            turn_context_reinjection,
-        )
+        compact::process_compacted_history(compacted_history)
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -4533,7 +4525,6 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         AutoCompactCallsite::MidTurnContinuation,
-                        TurnContextReinjection::Skip,
                         None,
                     )
                     .await
@@ -4687,7 +4678,6 @@ async fn maybe_run_previous_model_inline_compact(
         // We use previous turn context here because we compact with the previous model
         &previous_turn_context,
         AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-        TurnContextReinjection::Skip,
         None,
     )
     .await
@@ -4811,7 +4801,6 @@ async fn run_pre_turn_auto_compaction_if_needed(
         sess,
         turn_context,
         AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
-        TurnContextReinjection::Skip,
         Some(incoming_turn_items.to_vec()),
     )
     .await;
@@ -4887,7 +4876,6 @@ async fn run_auto_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     auto_compact_callsite: AutoCompactCallsite,
-    turn_context_reinjection: TurnContextReinjection,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let result = if should_use_remote_compact_task(&turn_context.provider) {
@@ -4895,7 +4883,6 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             auto_compact_callsite,
-            turn_context_reinjection,
             incoming_items,
         )
         .await
@@ -4904,7 +4891,6 @@ async fn run_auto_compact(
             Arc::clone(sess),
             Arc::clone(turn_context),
             auto_compact_callsite,
-            turn_context_reinjection,
             incoming_items,
         )
         .await
@@ -6192,7 +6178,8 @@ mod tests {
         .await;
 
         let actual = session.clone_history().await.raw_items().to_vec();
-        let expected = vec![stale_pre_turn_context_items[0].clone(), response_item];
+        let mut expected = session.build_initial_context(turn_context.as_ref()).await;
+        expected.push(response_item);
         assert_eq!(actual, expected);
     }
 

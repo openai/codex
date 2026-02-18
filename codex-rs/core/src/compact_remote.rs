@@ -4,7 +4,6 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::AutoCompactCallsite;
-use crate::compact::TurnContextReinjection;
 use crate::compact::extract_latest_model_switch_update_from_items;
 use crate::compact::extract_trailing_model_switch_update_for_compaction_request;
 use crate::compact::should_keep_compacted_history_item;
@@ -32,18 +31,10 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     auto_compact_callsite: AutoCompactCallsite,
-    // Controls whether canonical turn context should be reinserted into compacted history.
-    turn_context_reinjection: TurnContextReinjection,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(
-        &sess,
-        &turn_context,
-        auto_compact_callsite,
-        turn_context_reinjection,
-        incoming_items,
-    )
-    .await?;
+    run_remote_compact_task_inner(&sess, &turn_context, auto_compact_callsite, incoming_items)
+        .await?;
     Ok(())
 }
 
@@ -62,9 +53,6 @@ pub(crate) async fn run_remote_compact_task(
         &sess,
         &turn_context,
         AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-        // Manual `/compact` should not reinsert turn context into compacted history; we reseed
-        // canonical initial context before the next user turn.
-        TurnContextReinjection::Skip,
         None,
     )
     .await
@@ -74,14 +62,12 @@ async fn run_remote_compact_task_inner(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     auto_compact_callsite: AutoCompactCallsite,
-    turn_context_reinjection: TurnContextReinjection,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     if let Err(err) = run_remote_compact_task_inner_impl(
         sess,
         turn_context,
         auto_compact_callsite,
-        turn_context_reinjection,
         incoming_items,
     )
     .await
@@ -101,7 +87,6 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     auto_compact_callsite: AutoCompactCallsite,
-    turn_context_reinjection: TurnContextReinjection,
     incoming_items: Option<Vec<ResponseItem>>,
 ) -> CodexResult<()> {
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -180,9 +165,7 @@ async fn run_remote_compact_task_inner_impl(
             Err(err)
         })
         .await?;
-    new_history = sess
-        .process_compacted_history(turn_context, new_history, turn_context_reinjection)
-        .await;
+    new_history = sess.process_compacted_history(new_history).await;
     if let Some(incoming_items) = incoming_items.as_ref() {
         let incoming_history_items: Vec<ResponseItem> = incoming_items
             .iter()
