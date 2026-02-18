@@ -4533,7 +4533,7 @@ pub(crate) async fn run_turn(
                         &sess,
                         &turn_context,
                         AutoCompactCallsite::MidTurnContinuation,
-                        TurnContextReinjection::ReinjectAboveLastRealUser,
+                        TurnContextReinjection::Skip,
                         None,
                     )
                     .await
@@ -4687,8 +4687,7 @@ async fn maybe_run_previous_model_inline_compact(
         // We use previous turn context here because we compact with the previous model
         &previous_turn_context,
         AutoCompactCallsite::PreTurnExcludingIncomingUserMessage,
-        // User message and turn context diff is injected in the pre-compaction NotNeeded case later
-        TurnContextReinjection::ReinjectAboveLastRealUser,
+        TurnContextReinjection::Skip,
         None,
     )
     .await
@@ -4738,11 +4737,28 @@ async fn persist_pre_turn_items_for_compaction_outcome(
     response_item: ResponseItem,
 ) {
     match outcome {
-        PreTurnCompactionOutcome::CompactedWithIncomingItems
-        | PreTurnCompactionOutcome::NotNeeded => {
-            // Pre-turn compaction includes incoming items only for the compaction model's request.
-            // We always persist canonical pre-turn updates and the current user item after the
-            // compaction summary so model-visible layout is stable regardless of compaction mode.
+        PreTurnCompactionOutcome::CompactedWithIncomingItems => {
+            // Pre-turn compaction includes incoming items only for the compaction request itself.
+            // Persist canonical turn context directly above the incoming user item so context
+            // applies to the latest user message in post-compaction history.
+            let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+            if !initial_context.is_empty() {
+                sess.record_conversation_items(turn_context, &initial_context)
+                    .await;
+            }
+            let model_switch_updates: Vec<ResponseItem> = pre_turn_context_items
+                .iter()
+                .filter(|item| Session::is_model_switch_developer_message(item))
+                .cloned()
+                .collect();
+            if !model_switch_updates.is_empty() {
+                sess.record_conversation_items(turn_context, &model_switch_updates)
+                    .await;
+            }
+            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), input, response_item)
+                .await;
+        }
+        PreTurnCompactionOutcome::NotNeeded => {
             if !pre_turn_context_items.is_empty() {
                 sess.record_conversation_items(turn_context, pre_turn_context_items)
                     .await;
@@ -4795,7 +4811,7 @@ async fn run_pre_turn_auto_compaction_if_needed(
         sess,
         turn_context,
         AutoCompactCallsite::PreTurnIncludingIncomingUserMessage,
-        TurnContextReinjection::ReinjectAboveLastRealUser,
+        TurnContextReinjection::Skip,
         Some(incoming_turn_items.to_vec()),
     )
     .await;

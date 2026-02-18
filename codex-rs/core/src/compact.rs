@@ -55,6 +55,7 @@ pub(crate) enum AutoCompactCallsite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnContextReinjection {
     /// Insert canonical context immediately above the last real user message in compacted history.
+    #[allow(dead_code)]
     ReinjectAboveLastRealUser,
     /// Do not reinsert canonical context while processing compacted history.
     Skip,
