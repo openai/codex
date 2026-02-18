@@ -1066,6 +1066,30 @@
             },
             "method": {
               "enum": [
+                "windowsSandbox/setupStart"
+              ],
+              "title": "WindowsSandbox/setupStartRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "WindowsSandbox/setupStartRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/login/start"
               ],
               "title": "Account/login/startRequestMethod",
@@ -8732,6 +8756,26 @@
           "properties": {
             "method": {
               "enum": [
+                "windowsSandbox/setupCompleted"
+              ],
+              "title": "WindowsSandbox/setupCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WindowsSandbox/setupCompletedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "account/login/completed"
               ],
               "title": "Account/login/completedNotificationMethod",
@@ -15387,6 +15431,17 @@
               "id": {
                 "type": "string"
               },
+              "phase": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/MessagePhase"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "text": {
                 "type": "string"
               },
@@ -17197,6 +17252,62 @@
           "live"
         ],
         "type": "string"
+      },
+      "WindowsSandboxSetupCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "success"
+        ],
+        "title": "WindowsSandboxSetupCompletedNotification",
+        "type": "object"
+      },
+      "WindowsSandboxSetupMode": {
+        "enum": [
+          "elevated",
+          "unelevated"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxSetupStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "WindowsSandboxSetupStartParams",
+        "type": "object"
+      },
+      "WindowsSandboxSetupStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "started": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "started"
+        ],
+        "title": "WindowsSandboxSetupStartResponse",
+        "type": "object"
       },
       "WindowsWorldWritableWarningNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

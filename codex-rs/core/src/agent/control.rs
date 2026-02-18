@@ -6,6 +6,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -151,6 +152,16 @@ impl AgentControl {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
+    }
+
+    pub(crate) async fn get_total_token_usage(&self, agent_id: ThreadId) -> Option<TokenUsage> {
+        let Ok(state) = self.upgrade() else {
+            return None;
+        };
+        let Ok(thread) = state.get_thread(agent_id).await else {
+            return None;
+        };
+        thread.total_token_usage().await
     }
 
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {

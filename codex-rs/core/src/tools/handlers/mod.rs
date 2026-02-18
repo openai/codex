@@ -12,7 +12,7 @@ mod request_user_input;
 mod search_tool_bm25;
 mod shell;
 mod test_sync;
-mod unified_exec;
+pub(crate) mod unified_exec;
 mod view_image;
 
 pub use plan::PLAN_TOOL;
