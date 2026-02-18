@@ -167,6 +167,7 @@ struct ResponseCompletedOutputTokensDetails {
 pub struct ResponsesStreamEvent {
     #[serde(rename = "type")]
     pub(crate) kind: String,
+    headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
     delta: Option<String>,
@@ -179,15 +180,26 @@ impl ResponsesStreamEvent {
         &self.kind
     }
 
+    /// Returns the effective model reported by the server, if present.
+    ///
+    /// Precedence:
+    /// 1. `response.headers` for standard Responses stream events.
+    /// 2. top-level `headers` for websocket metadata events (for example
+    ///    `codex.response.metadata`).
     pub fn response_model(&self) -> Option<String> {
-        self.response.as_ref().and_then(extract_server_model)
+        self.response
+            .as_ref()
+            .and_then(|response| {
+                response
+                    .get("headers")
+                    .and_then(header_openai_model_value_from_json)
+            })
+            .or_else(|| {
+                self.headers
+                    .as_ref()
+                    .and_then(header_openai_model_value_from_json)
+            })
     }
-}
-
-fn extract_server_model(value: &Value) -> Option<String> {
-    value
-        .get("headers")
-        .and_then(header_openai_model_value_from_json)
 }
 
 fn header_openai_model_value_from_json(value: &Value) -> Option<String> {
@@ -1055,6 +1067,44 @@ mod tests {
                 token_usage: None,
                 can_append: false
             } if response_id == "resp-1"
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_response_model_reads_top_level_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "codex.response.metadata",
+            "headers": {
+                "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS,
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
+        );
+    }
+
+    #[test]
+    fn responses_stream_event_response_model_prefers_response_headers() {
+        let ev: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.created",
+            "headers": {
+                "openai-model": "top-level-model"
+            },
+            "response": {
+                "id": "resp-1",
+                "headers": {
+                    "openai-model": CYBER_RESTRICTED_MODEL_FOR_TESTS
+                }
+            }
+        }))
+        .expect("expected event to deserialize");
+
+        assert_eq!(
+            ev.response_model().as_deref(),
+            Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
         );
     }
 

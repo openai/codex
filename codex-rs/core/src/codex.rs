@@ -2440,7 +2440,9 @@ impl Session {
         server_model: String,
     ) -> bool {
         let requested_model = turn_context.model_info.slug.clone();
-        if server_model == requested_model {
+        let server_model_normalized = server_model.to_ascii_lowercase();
+        let requested_model_normalized = requested_model.to_ascii_lowercase();
+        if server_model_normalized == requested_model_normalized {
             info!("server reported model {server_model} (matches requested model)");
             return false;
         }
