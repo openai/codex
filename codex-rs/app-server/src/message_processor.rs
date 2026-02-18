@@ -149,7 +149,7 @@ pub(crate) struct MessageProcessorArgs {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+    pub(crate) fn new(args: MessageProcessorArgs, single_client_mode: bool) -> Self {
         let MessageProcessorArgs {
             outgoing,
             codex_linux_sandbox_exe,
@@ -183,6 +183,7 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            single_client_mode,
             feedback,
         });
         let config_api = ConfigApi::new(

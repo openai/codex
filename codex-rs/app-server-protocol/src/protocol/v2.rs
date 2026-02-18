@@ -2570,6 +2570,26 @@ pub enum ThreadItem {
     ContextCompaction { id: String },
 }
 
+impl ThreadItem {
+    pub fn item_id(&self) -> &str {
+        match self {
+            ThreadItem::UserMessage { id, .. }
+            | ThreadItem::AgentMessage { id, .. }
+            | ThreadItem::Plan { id, .. }
+            | ThreadItem::Reasoning { id, .. }
+            | ThreadItem::CommandExecution { id, .. }
+            | ThreadItem::FileChange { id, .. }
+            | ThreadItem::McpToolCall { id, .. }
+            | ThreadItem::CollabAgentToolCall { id, .. }
+            | ThreadItem::WebSearch { id, .. }
+            | ThreadItem::ImageView { id, .. }
+            | ThreadItem::EnteredReviewMode { id, .. }
+            | ThreadItem::ExitedReviewMode { id, .. }
+            | ThreadItem::ContextCompaction { id, .. } => id,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", rename_all = "camelCase")]

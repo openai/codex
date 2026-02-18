@@ -42,7 +42,6 @@ use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
-use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
@@ -78,7 +77,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::FileChange as CoreFileChange;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -180,7 +178,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 // Until we migrate the core to be aware of a first class FileChangeItem
                 // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                 let item_id = call_id.clone();
-                let patch_changes = convert_patch_changes(&changes);
+                let patch_changes = codex_app_server_protocol::convert_patch_changes(&changes);
 
                 let first_start = {
                     let mut state = thread_state.lock().await;
@@ -907,7 +905,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             if first_start {
                 let item = ThreadItem::FileChange {
                     id: item_id.clone(),
-                    changes: convert_patch_changes(&patch_begin_event.changes),
+                    changes: codex_app_server_protocol::convert_patch_changes(
+                        &patch_begin_event.changes,
+                    ),
                     status: PatchApplyStatus::InProgress,
                 };
                 let notification = ItemStartedNotification {
@@ -926,7 +926,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item_id = patch_end_event.call_id.clone();
 
             let status: PatchApplyStatus = (&patch_end_event.status).into();
-            let changes = convert_patch_changes(&patch_end_event.changes);
+            let changes =
+                codex_app_server_protocol::convert_patch_changes(&patch_end_event.changes);
             complete_file_change_item(
                 conversation_id,
                 item_id,
@@ -1643,46 +1644,6 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
         REVIEW_FALLBACK_MESSAGE.to_string()
     } else {
         sections.join("\n\n")
-    }
-}
-
-fn convert_patch_changes(changes: &HashMap<PathBuf, CoreFileChange>) -> Vec<FileUpdateChange> {
-    let mut converted: Vec<FileUpdateChange> = changes
-        .iter()
-        .map(|(path, change)| FileUpdateChange {
-            path: path.to_string_lossy().into_owned(),
-            kind: map_patch_change_kind(change),
-            diff: format_file_change_diff(change),
-        })
-        .collect();
-    converted.sort_by(|a, b| a.path.cmp(&b.path));
-    converted
-}
-
-fn map_patch_change_kind(change: &CoreFileChange) -> V2PatchChangeKind {
-    match change {
-        CoreFileChange::Add { .. } => V2PatchChangeKind::Add,
-        CoreFileChange::Delete { .. } => V2PatchChangeKind::Delete,
-        CoreFileChange::Update { move_path, .. } => V2PatchChangeKind::Update {
-            move_path: move_path.clone(),
-        },
-    }
-}
-
-fn format_file_change_diff(change: &CoreFileChange) -> String {
-    match change {
-        CoreFileChange::Add { content } => content.clone(),
-        CoreFileChange::Delete { content } => content.clone(),
-        CoreFileChange::Update {
-            unified_diff,
-            move_path,
-        } => {
-            if let Some(path) = move_path {
-                format!("{unified_diff}\n\nMoved to: {}", path.display())
-            } else {
-                unified_diff.clone()
-            }
-        }
     }
 }
 
