@@ -55,8 +55,8 @@ pub(crate) enum CompactCallsite {
 
 // Canonical context reinjection policy for compacted replacement history:
 // - `MidTurnContinuation` and `PreSamplingModelSwitch`: reinsert canonical initial context above
-//   the last real user message because compaction is rewriting in-flight history that the model
-//   will continue sampling from immediately.
+//   the last real user message because those paths do not persist/reseed canonical context in a
+//   later post-compaction step.
 // - `ManualCompact`: do not reinsert during compaction; `/compact` reseeds on the next user turn.
 // - `PreTurn*`: do not reinsert into replacement history; `run_turn` persists canonical context
 //   directly above the incoming user message after compaction.
@@ -297,8 +297,8 @@ async fn run_compact_task_inner(
     let mut new_history = process_compacted_history(compacted_history);
     match compact_callsite {
         CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
-            // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
-            // therefore must keep canonical context anchored above the latest real user turn.
+            // These callsites do not get a later post-compaction canonical-context write in
+            // `run_turn`, so replacement history must carry canonical context directly.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
             insert_initial_context_before_last_real_user(&mut new_history, initial_context);
         }

@@ -159,8 +159,8 @@ async fn run_remote_compact_task_inner_impl(
     new_history = process_compacted_history(new_history);
     match compact_callsite {
         CompactCallsite::MidTurnContinuation | CompactCallsite::PreSamplingModelSwitch => {
-            // Mid-turn and pre-sampling model-switch compaction continue the in-flight turn and
-            // therefore must keep canonical context anchored above the latest real user turn.
+            // These callsites do not get a later post-compaction canonical-context write in
+            // `run_turn`, so replacement history must carry canonical context directly.
             let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
             insert_initial_context_before_last_real_user(&mut new_history, initial_context);
         }
