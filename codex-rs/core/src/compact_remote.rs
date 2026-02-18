@@ -229,40 +229,35 @@ fn remove_incoming_echoes_from_compacted_history(
     incoming_history_items: &[ResponseItem],
 ) {
     for incoming_item in incoming_history_items {
-        if let Some(index) = new_history.iter().rposition(|candidate| {
-            response_items_match_for_compaction_merge(candidate, incoming_item)
-        }) {
+        if let Some(index) =
+            new_history
+                .iter()
+                .rposition(|candidate| match (candidate, incoming_item) {
+                    (
+                        ResponseItem::Message {
+                            role: candidate_role,
+                            content: candidate_content,
+                            ..
+                        },
+                        ResponseItem::Message {
+                            role: incoming_role,
+                            content: incoming_content,
+                            ..
+                        },
+                    ) => candidate_role == incoming_role && candidate_content == incoming_content,
+                    (
+                        ResponseItem::Compaction {
+                            encrypted_content: candidate_content,
+                        },
+                        ResponseItem::Compaction {
+                            encrypted_content: incoming_content,
+                        },
+                    ) => candidate_content == incoming_content,
+                    _ => candidate == incoming_item,
+                })
+        {
             new_history.remove(index);
         }
-    }
-}
-
-fn response_items_match_for_compaction_merge(
-    candidate: &ResponseItem,
-    incoming_item: &ResponseItem,
-) -> bool {
-    match (candidate, incoming_item) {
-        (
-            ResponseItem::Message {
-                role: candidate_role,
-                content: candidate_content,
-                ..
-            },
-            ResponseItem::Message {
-                role: incoming_role,
-                content: incoming_content,
-                ..
-            },
-        ) => candidate_role == incoming_role && candidate_content == incoming_content,
-        (
-            ResponseItem::Compaction {
-                encrypted_content: candidate_content,
-            },
-            ResponseItem::Compaction {
-                encrypted_content: incoming_content,
-            },
-        ) => candidate_content == incoming_content,
-        _ => candidate == incoming_item,
     }
 }
 
